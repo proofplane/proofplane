@@ -1,12 +1,12 @@
-# 003 - Configuration System
+# 004 - Configuration System
 
 ## Goal
 
-Load application configuration from YAML, selected by the `PROOFPLANE_ENV` environment variable.
+Load application configuration from YAML, selected by the `PROOFPLANE_CONFIG` environment variable.
 
 ## Design
 
-Implement a typed configuration crate. `PROOFPLANE_ENV` points to a YAML file path, not just an environment name.
+Implement a typed configuration crate. `PROOFPLANE_CONFIG` points to a YAML file path.
 
 Configuration should cover:
 
@@ -19,11 +19,11 @@ Configuration should cover:
 - worker concurrency and retry settings
 - liveness and readiness settings
 
-Configuration parsing should separate deserialization from validation. Validation must use the applicative validation framework introduced in story 004 when that story lands; before then it can expose a placeholder API.
+Configuration parsing should separate deserialization from validation. Validation must use the applicative validation framework from story 003.
 
 ## Acceptance Criteria
 
-- All binaries fail fast with a clear error if `PROOFPLANE_ENV` is unset, unreadable, malformed, or invalid.
+- All binaries fail fast with a clear error if `PROOFPLANE_CONFIG` is unset, unreadable, malformed, or invalid.
 - YAML config supports local development and integration test examples.
 - Config validation accumulates all field errors instead of returning only the first error.
 - Sensitive values are not printed in logs or debug output.
@@ -38,6 +38,6 @@ Configuration parsing should separate deserialization from validation. Validatio
 
 ## QA Guide
 
-1. Run a binary with `PROOFPLANE_ENV` unset and confirm it exits clearly.
+1. Run a binary with `PROOFPLANE_CONFIG` unset and confirm it exits clearly.
 2. Run a binary with a valid local YAML config and confirm startup proceeds.
 3. Break multiple config fields and confirm all validation errors are reported together.

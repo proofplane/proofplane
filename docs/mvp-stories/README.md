@@ -6,8 +6,8 @@ The sequence intentionally front-loads platform scaffolding before product featu
 
 1. [Repository and Crate Scaffold](./001-repository-and-workspace-scaffold.md)
 2. [Local Docker Compose Dependencies](./002-local-docker-compose-dependencies.md)
-3. [Configuration System](./003-configuration-system.md)
-4. [Applicative Validation Framework](./004-applicative-validation-framework.md)
+3. [Applicative Validation Framework](./003-applicative-validation-framework.md)
+4. [Configuration System](./004-configuration-system.md)
 5. [Error, Retry, and Result Extensions](./005-error-retry-and-result-extensions.md)
 6. [Observability Scaffold](./006-observability-scaffold.md)
 7. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md)
