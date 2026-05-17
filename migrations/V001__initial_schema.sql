@@ -1,0 +1,2 @@
+-- Initial schema placeholder.
+-- Story 008 replaces this placeholder with the first refinery-managed schema.

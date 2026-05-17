@@ -32,7 +32,7 @@ Use concrete implementations for Google Pub/Sub/emulator. Support:
 - Subscribers recover from transient connection failures.
 - Message attributes preserve event type, aggregate ID, causation ID, correlation ID, and attempt metadata.
 - Dead-letter messages include original payload and failure metadata.
-- Retry classification uses the shared `Retryable` trait.
+- Publish and subscription reconnection retry loops use the shared retry API where appropriate.
 
 ## Tests
 

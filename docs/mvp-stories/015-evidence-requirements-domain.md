@@ -26,7 +26,7 @@ API endpoints should support create, list, get, update, list due, and list stale
 
 - Requirement table is migrated.
 - Repository supports create, get, list, update, list due, and list stale.
-- Service enforces domain invariants and uses retry helpers for retryable repository errors.
+- Service enforces domain invariants and uses retry helpers for repository errors where retries are appropriate.
 - API exposes requirement endpoints.
 - Seed data includes realistic demo requirements.
 - Handlers contain no SQL and services contain no HTTP DTOs.
