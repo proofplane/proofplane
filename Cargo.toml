@@ -27,7 +27,6 @@ path = "src/bin/seed.rs"
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
-harness = false
 
 [dependencies]
 

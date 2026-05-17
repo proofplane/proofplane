@@ -1,0 +1,30 @@
+environment: local
+
+server:
+  api_bind: "127.0.0.1:3000"
+  worker_bind: "127.0.0.1:3001"
+  mcp_bind: "127.0.0.1:3002"
+
+postgres:
+  host: "127.0.0.1"
+  port: 5432
+  database: "proofplane"
+  username: "proofplane"
+  password: "proofplane"
+
+pubsub:
+  project_id: "proofplane-local"
+  emulator_host: "127.0.0.1:8085"
+  topics:
+    outbox: "proofplane-outbox"
+    dead_letter: "proofplane-dead-letter"
+  subscriptions:
+    worker: "proofplane-worker"
+
+object_storage:
+  backend: "filesystem"
+  root: ".local/storage"
+
+observability:
+  log_format: "json"
+  default_filter: "info"

@@ -41,7 +41,7 @@ Attachments use GCS/object storage for bytes and Postgres for metadata. Submissi
 
 ## QA Guide
 
-1. Start API and storage emulator.
+1. Start API with filesystem-backed object storage config.
 2. Submit evidence against a seeded requirement.
 3. Upload or register an attachment.
 4. Retrieve submission status.

@@ -10,7 +10,7 @@ The integration suite lives at `tests/integration/main.rs` and is registered in 
 
 - starting Postgres
 - starting Pub/Sub emulator
-- starting object storage emulator
+- creating temporary filesystem object storage roots
 - generating temporary YAML config
 - running migrations
 - running seeds

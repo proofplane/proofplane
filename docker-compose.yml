@@ -1,3 +1,33 @@
 name: proofplane
 
-services: {}
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: proofplane
+      POSTGRES_USER: proofplane
+      POSTGRES_PASSWORD: proofplane
+    ports:
+      - "5432:5432"
+    volumes:
+      - proofplane-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proofplane -d proofplane"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  pubsub:
+    image: ghcr.io/jeffijoe/deltio:latest
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8085"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  proofplane-postgres-data:
