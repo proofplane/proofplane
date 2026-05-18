@@ -26,8 +26,8 @@ object_storage:
   root: ".local/storage"
 
 observability:
-  log_format: "json"
-  default_filter: "info"
+  log_format: "pretty"
+  default_filter: "debug"
 
 auth:
   api_key_header: "x-proofplane-api-key"

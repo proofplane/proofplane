@@ -11,8 +11,8 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 003. [Applicative Validation Framework](./003-applicative-validation-framework.md) | Done | Generic `Validation<T, E>` API and `validate!` macro are implemented and tested. |
 | 004. [Configuration System](./004-configuration-system.md) | Done | Typed YAML config loads through `PROOFPLANE_CONFIG`, validates with story 003, and redacts secrets. |
 | 005. [Error, Retry, and Result Extensions](./005-error-retry-and-result-extensions.md) | Done | Shared async retry helper is in place, existing config/storage errors use `thiserror`, and retry logging/metrics are deferred to 006. |
-| 006. [Observability Scaffold](./006-observability-scaffold.md) | Next | Not started. |
-| 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Planned | Not started. |
+| 006. [Observability Scaffold](./006-observability-scaffold.md) | Done | Structured logging initializes through `tracing_subscriber`; metrics are deferred until real runtime boundaries exist. |
+| 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Next | Not started. |
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Planned | Not started. |
 | 009. [Integration Test Harness](./009-integration-test-harness.md) | Planned | Not started. |
 | 010. [Authentication, Actors, and Request Middleware](./010-authentication-actors-and-request-middleware.md) | Planned | Not started. |
@@ -41,7 +41,7 @@ Shared gates:
 
 Near-term parallel lanes:
 
-- Story 006 is the next mainline task and should add observability before retry logging or metrics.
+- Story 007 is the next mainline task and should introduce the first real HTTP runtime boundary.
 - Story 008 can proceed in parallel with 007 if both agree on repository boundaries and readiness needs.
 - Story 009 can proceed in parallel with 007/008 after 004 defines temp config generation.
 
