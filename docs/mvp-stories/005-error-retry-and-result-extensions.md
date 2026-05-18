@@ -2,23 +2,16 @@
 
 ## Goal
 
-Standardize error handling with `thiserror` and provide retry behavior for fallible async operations.
+Standardize the real error boundaries that exist today with `thiserror` and provide retry behavior for fallible async operations.
 
 ## Design
 
-Define error enums per boundary:
+Use `thiserror` for concrete error types at real boundaries:
 
 - configuration errors
-- validation errors
-- repository errors
-- service errors
-- Pub/Sub errors
 - storage errors
-- API errors
-- worker errors
-- MCP errors
 
-Use `thiserror` for all error enums.
+Do not introduce placeholder error enums for API, worker, MCP, Pub/Sub, repositories, or services before those stories create real behavior at those boundaries.
 
 Introduce a `Retryable` trait:
 
@@ -48,7 +41,7 @@ let response: Result<&str, ErrorType> = ErrorType::retry(|| async {
 .await;
 ```
 
-Every `Err(ErrorType)` returned by the operation is retried until the configured retry count is exhausted. `retry_with_attempts(5, ...)` means one initial operation attempt plus up to five retries, for six total possible executions. Do not require individual error variants to classify themselves as retryable or non-retryable. Later implementation can add configurable backoff, jitter, max retry attempts, and cancellation behavior.
+Every `Err(ErrorType)` returned by the operation is retried until the configured retry count is exhausted. `retry_with_attempts(5, ...)` means one initial operation attempt plus up to five retries, for six total possible executions. Do not require individual error variants to classify themselves as retryable or non-retryable. Later implementation can add logging, metrics, configurable backoff, jitter, max retry attempts, timeout, and cancellation behavior.
 
 ## Acceptance Criteria
 
@@ -57,18 +50,22 @@ Every `Err(ErrorType)` returned by the operation is retried until the configured
 - Retry helper supports a default retry count and an explicit retry count.
 - Retry helper retries every returned `Err(E)` until retry attempts are exhausted.
 - Explicit retry counts are additional retries after the initial operation attempt.
-- Retry attempts are logged and emit metrics once observability is available.
+- Retry logging and metrics are deferred to story 006, when observability is available.
+- Future boundary error enums are introduced when their stories create real boundaries.
 
 ## Tests
 
 - Unit tests cover success after N failures.
 - Unit tests cover max retry attempts exhaustion.
 - Unit tests cover explicit retry count and default retry count.
-- Unit tests cover elapsed timeout or cancellation if supported.
-- Service-layer tests verify repository errors are retried through the shared API.
+- Unit tests cover `retry_with_attempts(0)` running exactly once.
+- Unit tests cover use with any test error type implementing `Retryable`.
+- Error tests cover stable `StorageError` display output and `ConfigFieldError` display output.
 
 ## QA Guide
 
 1. Run error and retry crate tests.
 2. Use a fake operation that fails twice and succeeds, then verify exactly three attempts.
 3. Use a fake operation that always fails and verify it runs once plus the configured retry count.
+4. Run `make check`.
+5. Run `make test-integration`.

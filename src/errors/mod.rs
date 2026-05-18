@@ -32,27 +32,29 @@ pub trait Retryable: Sized {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaffoldError {
-    Failed,
-}
-
-impl Retryable for ScaffoldError {}
-
 #[cfg(test)]
 mod tests {
-    use super::{Retryable, ScaffoldError};
+    use super::Retryable;
     use std::cell::Cell;
+    use thiserror::Error;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+    enum TransientTestError {
+        #[error("temporary failure {0}")]
+        Failed(usize),
+    }
+
+    impl Retryable for TransientTestError {}
 
     #[tokio::test]
-    async fn retries_until_success_with_default_attempts() {
+    async fn retries_until_success_with_explicit_retry_count() {
         let attempts = Cell::new(0);
 
-        let result = ScaffoldError::retry(|| async {
+        let result = TransientTestError::retry_with_attempts(3, || async {
             attempts.set(attempts.get() + 1);
 
-            if attempts.get() < ScaffoldError::DEFAULT_RETRY_ATTEMPTS {
-                Err(ScaffoldError::Failed)
+            if attempts.get() < 3 {
+                Err(TransientTestError::Failed(attempts.get()))
             } else {
                 Ok("ok")
             }
@@ -60,20 +62,20 @@ mod tests {
         .await;
 
         assert_eq!(result, Ok("ok"));
-        assert_eq!(attempts.get(), ScaffoldError::DEFAULT_RETRY_ATTEMPTS);
+        assert_eq!(attempts.get(), 3);
     }
 
     #[tokio::test]
-    async fn returns_last_error_after_retry_attempts_are_exhausted() {
+    async fn exhaustion_returns_last_error() {
         let attempts = Cell::new(0);
 
-        let result = ScaffoldError::retry_with_attempts(2, || async {
+        let result = TransientTestError::retry_with_attempts(2, || async {
             attempts.set(attempts.get() + 1);
-            Err::<&str, _>(ScaffoldError::Failed)
+            Err::<&str, _>(TransientTestError::Failed(attempts.get()))
         })
         .await;
 
-        assert_eq!(result, Err(ScaffoldError::Failed));
+        assert_eq!(result, Err(TransientTestError::Failed(3)));
         assert_eq!(attempts.get(), 3);
     }
 
@@ -81,13 +83,35 @@ mod tests {
     async fn zero_retry_attempts_still_runs_once() {
         let attempts = Cell::new(0);
 
-        let result = ScaffoldError::retry_with_attempts(0, || async {
+        let result = TransientTestError::retry_with_attempts(0, || async {
             attempts.set(attempts.get() + 1);
-            Ok::<_, ScaffoldError>("ok")
+            Ok::<_, TransientTestError>("ok")
         })
         .await;
 
         assert_eq!(result, Ok("ok"));
         assert_eq!(attempts.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn default_retry_count_runs_initial_attempt_plus_default_retries() {
+        let attempts = Cell::new(0);
+
+        let result = TransientTestError::retry(|| async {
+            attempts.set(attempts.get() + 1);
+            Err::<&str, _>(TransientTestError::Failed(attempts.get()))
+        })
+        .await;
+
+        assert_eq!(
+            result,
+            Err(TransientTestError::Failed(
+                TransientTestError::DEFAULT_RETRY_ATTEMPTS + 1
+            ))
+        );
+        assert_eq!(
+            attempts.get(),
+            TransientTestError::DEFAULT_RETRY_ATTEMPTS + 1
+        );
     }
 }

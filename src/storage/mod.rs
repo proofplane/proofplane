@@ -1,9 +1,10 @@
 use std::{
-    fmt,
     future::Future,
     io,
     path::{Component, Path, PathBuf},
 };
+
+use thiserror::Error;
 
 mod local;
 
@@ -60,27 +61,12 @@ pub struct ObjectMetadata {
     pub checksum: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("invalid object key: {0}")]
     InvalidKey(String),
-    Io(io::Error),
-}
-
-impl fmt::Display for StorageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidKey(key) => write!(formatter, "invalid object key: {key}"),
-            Self::Io(error) => write!(formatter, "object storage I/O error: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for StorageError {}
-
-impl From<io::Error> for StorageError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
+    #[error("object storage I/O error: {0}")]
+    Io(#[from] io::Error),
 }
 
 pub trait ObjectStore {
@@ -102,12 +88,30 @@ pub trait ObjectStore {
 
 #[cfg(test)]
 mod tests {
-    use super::ObjectKey;
+    use super::{ObjectKey, StorageError};
+    use std::io;
 
     #[test]
     fn stores_object_key() {
         let key = ObjectKey::new("workspace/evidence.txt");
 
         assert_eq!(key.as_str(), "workspace/evidence.txt");
+    }
+
+    #[test]
+    fn invalid_key_error_display_is_stable() {
+        let error = StorageError::InvalidKey("../outside.txt".to_owned());
+
+        assert_eq!(error.to_string(), "invalid object key: ../outside.txt");
+    }
+
+    #[test]
+    fn io_error_display_is_stable() {
+        let error = StorageError::Io(io::Error::new(io::ErrorKind::NotFound, "missing object"));
+
+        assert_eq!(
+            error.to_string(),
+            "object storage I/O error: missing object"
+        );
     }
 }

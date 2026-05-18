@@ -120,7 +120,8 @@ pub struct HostPort {
     pub port: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{path}: {message}")]
 pub struct ConfigFieldError {
     pub path: String,
     pub message: String,
@@ -368,6 +369,16 @@ health:
         }
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn config_field_error_display_includes_path_and_message() {
+        let error = ConfigFieldError::new("server.api_bind", "must be a socket address");
+
+        assert_eq!(
+            error.to_string(),
+            "server.api_bind: must be a socket address"
+        );
     }
 
     #[test]
