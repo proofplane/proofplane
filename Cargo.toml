@@ -29,6 +29,11 @@ name = "integration"
 path = "tests/integration/main.rs"
 
 [dependencies]
+config = { version = "0.15", default-features = false, features = ["yaml"] }
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+url = "2"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["macros", "rt"] }

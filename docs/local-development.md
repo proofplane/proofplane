@@ -31,7 +31,7 @@ make reset-local
 - Postgres: `127.0.0.1:5432`
 - Pub/Sub emulator: `127.0.0.1:8085`
 
-The local config file is `config/local.yaml`. It sets the defaults used by the `Makefile`.
+The local config file is `config/local.yaml`. It sets the defaults used by the `Makefile` through `PROOFPLANE_CONFIG`.
 
 ## Object Storage
 

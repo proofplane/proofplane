@@ -10,7 +10,7 @@ postgres:
   port: 5432
   database: "proofplane"
   username: "proofplane"
-  password: "proofplane"
+  password: "proofplane-local-password"
 
 pubsub:
   project_id: "proofplane-local"
@@ -28,3 +28,17 @@ object_storage:
 observability:
   log_format: "json"
   default_filter: "info"
+
+auth:
+  api_key_header: "x-proofplane-api-key"
+  credential_hash_pepper: "proofplane-local-pepper"
+
+worker:
+  concurrency: 4
+  retry_attempts: 3
+  shutdown_grace_seconds: 30
+
+health:
+  live_path: "/livez"
+  ready_path: "/readyz"
+  dependency_timeout_ms: 1000

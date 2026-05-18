@@ -1,6 +1,6 @@
 .PHONY: help fmt fmt-check lint test test-integration check build up down health reset-local migrate seed api worker mcp
 
-PROOFPLANE_ENV ?= config/local.yaml
+PROOFPLANE_CONFIG ?= config/local.yaml
 
 help:
 	@printf '%s\n' \
@@ -58,16 +58,16 @@ reset-local:
 	docker compose up -d
 
 migrate:
-	PROOFPLANE_ENV=$(PROOFPLANE_ENV) cargo run --bin seed
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
 
 seed:
-	PROOFPLANE_ENV=$(PROOFPLANE_ENV) cargo run --bin seed
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
 
 api:
-	PROOFPLANE_ENV=$(PROOFPLANE_ENV) cargo run --bin api
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api
 
 worker:
-	PROOFPLANE_ENV=$(PROOFPLANE_ENV) cargo run --bin worker
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin worker
 
 mcp:
-	PROOFPLANE_ENV=$(PROOFPLANE_ENV) cargo run --bin mcp
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp

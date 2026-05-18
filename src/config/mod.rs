@@ -1,11 +1,393 @@
-pub const PROOFPLANE_ENV: &str = "PROOFPLANE_ENV";
+use crate::{validate, validation::Validation};
+use secrecy::SecretString;
+use std::{
+    env, fs, io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
+use url::Url;
+
+use raw::RawAppConfig;
+
+mod helpers;
+mod raw;
+
+pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
+
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub postgres: PostgresConfig,
+    pub pubsub: PubSubConfig,
+    pub object_storage: ObjectStorageConfig,
+    pub observability: ObservabilityConfig,
+    pub auth: AuthConfig,
+    pub worker: WorkerConfig,
+    pub health: HealthConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerConfig {
+    pub api_bind: SocketAddr,
+    pub worker_bind: SocketAddr,
+    pub mcp_bind: SocketAddr,
+}
+
+#[derive(Debug, Clone)]
+pub struct PostgresConfig {
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub password: SecretString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubSubConfig {
+    pub project_id: String,
+    pub emulator_host: HostPort,
+    pub topics: PubSubTopicsConfig,
+    pub subscriptions: PubSubSubscriptionsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubSubTopicsConfig {
+    pub outbox: String,
+    pub dead_letter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubSubSubscriptionsConfig {
+    pub worker: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectStorageConfig {
+    Filesystem { root: PathBuf },
+    Gcs(GcsObjectStorageConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcsObjectStorageConfig {
+    pub bucket: String,
+    pub endpoint_override: Option<Url>,
+    pub credentials_mode: GcsCredentialsMode,
+    pub object_key_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GcsCredentialsMode {
+    ApplicationDefault,
+    Anonymous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservabilityConfig {
+    pub log_format: LogFormat,
+    pub default_filter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogFormat {
+    Json,
+    Pretty,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    pub api_key_header: String,
+    pub credential_hash_pepper: SecretString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerConfig {
+    pub concurrency: u16,
+    pub retry_attempts: u16,
+    pub shutdown_grace_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HealthConfig {
+    pub live_path: String,
+    pub ready_path: String,
+    pub dependency_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostPort {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigFieldError {
+    pub path: String,
+    pub message: String,
+}
+
+impl ConfigFieldError {
+    fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("environment variable {0} is required")]
+    MissingEnv(&'static str),
+    #[error("failed to read config file {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to load config file {path}: {source}")]
+    Load {
+        path: PathBuf,
+        #[source]
+        source: config::ConfigError,
+    },
+    #[error("config validation failed: {0:?}")]
+    Validation(Vec<ConfigFieldError>),
+}
+
+pub fn load_from_env() -> Result<AppConfig, ConfigError> {
+    let path =
+        env::var(PROOFPLANE_CONFIG).map_err(|_| ConfigError::MissingEnv(PROOFPLANE_CONFIG))?;
+
+    load_from_path(path)
+}
+
+pub fn load_from_path(path: impl AsRef<Path>) -> Result<AppConfig, ConfigError> {
+    let path = path.as_ref();
+    let path_buf = path.to_path_buf();
+
+    fs::read_to_string(path).map_err(|source| ConfigError::Read {
+        path: path_buf.clone(),
+        source,
+    })?;
+
+    let raw = config::Config::builder()
+        .add_source(config::File::from(path_buf.clone()).format(config::FileFormat::Yaml))
+        .build()
+        .map_err(|source| ConfigError::Load {
+            path: path_buf.clone(),
+            source,
+        })?
+        .try_deserialize::<RawAppConfig>()
+        .map_err(|source| ConfigError::Load {
+            path: path_buf.clone(),
+            source,
+        })?;
+
+    validate_raw_config(raw)
+        .into_result()
+        .map_err(ConfigError::Validation)
+}
+
+fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldError> {
+    validate! {
+        server <- raw.server.validate(),
+        postgres <- raw.postgres.validate(),
+        pubsub <- raw.pubsub.validate(),
+        object_storage <- raw.object_storage.validate(),
+        observability <- raw.observability.validate(),
+        auth <- raw.auth.validate(),
+        worker <- raw.worker.validate(),
+        health <- raw.health.validate(),
+        => AppConfig {
+            server,
+            postgres,
+            pubsub,
+            object_storage,
+            observability,
+            auth,
+            worker,
+            health,
+        },
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::PROOFPLANE_ENV;
+    use secrecy::ExposeSecret;
+
+    use super::*;
+    use std::{
+        fs,
+        sync::Mutex,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn defines_environment_variable_name() {
-        assert_eq!(PROOFPLANE_ENV, "PROOFPLANE_ENV");
+    fn defines_config_environment_variable_name() {
+        assert_eq!(PROOFPLANE_CONFIG, "PROOFPLANE_CONFIG");
+    }
+
+    #[test]
+    fn local_config_loads_successfully() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+
+        assert_eq!(config.server.api_bind.to_string(), "127.0.0.1:3000");
+        assert!(matches!(
+            config.object_storage,
+            ObjectStorageConfig::Filesystem { .. }
+        ));
+    }
+
+    #[test]
+    fn missing_env_var_returns_error() {
+        let _lock = ENV_LOCK.lock().expect("env lock is available");
+        let previous = env::var(PROOFPLANE_CONFIG).ok();
+
+        env::remove_var(PROOFPLANE_CONFIG);
+
+        let error = load_from_env().expect_err("env var is missing");
+
+        if let Some(previous) = previous {
+            env::set_var(PROOFPLANE_CONFIG, previous);
+        }
+
+        assert!(matches!(error, ConfigError::MissingEnv(PROOFPLANE_CONFIG)));
+    }
+
+    #[test]
+    fn missing_file_returns_read_error() {
+        let error = load_from_path("config/does-not-exist.yaml").expect_err("file is missing");
+
+        assert!(matches!(error, ConfigError::Read { .. }));
+    }
+
+    #[test]
+    fn malformed_yaml_returns_load_error() {
+        let path = write_temp_config("malformed: [");
+        let error = load_from_path(&path).expect_err("yaml is malformed");
+
+        assert!(matches!(error, ConfigError::Load { .. }));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_required_fields_fail_during_deserialization() {
+        let path = write_temp_config(
+            r#"
+environment: ""
+server: {}
+postgres: {}
+pubsub: {}
+object_storage: {}
+observability: {}
+auth: {}
+worker: {}
+health: {}
+"#,
+        );
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert!(matches!(error, ConfigError::Load { .. }));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_values_are_rejected() {
+        let path = write_temp_config(
+            r#"
+environment: local
+server:
+  api_bind: "not-a-socket"
+  worker_bind: "127.0.0.1:3001"
+  mcp_bind: "127.0.0.1:3002"
+postgres:
+  host: "-the-host"
+  port: 0
+  database: "proofplane"
+  username: "proofplane"
+  password: "proofplane"
+pubsub:
+  project_id: "proofplane-local"
+  emulator_host: "127.0.0.1:0"
+  topics:
+    outbox: "proofplane-outbox"
+    dead_letter: "proofplane-dead-letter"
+  subscriptions:
+    worker: "proofplane-worker"
+object_storage:
+  backend: "gcs"
+  bucket: "proofplane"
+  endpoint_override: "not-a-url"
+  credentials_mode: "unknown"
+  object_key_prefix: "evidence"
+observability:
+  log_format: "xml"
+  default_filter: "info"
+auth:
+  api_key_header: "x-proofplane-api-key"
+  credential_hash_pepper: "pepper"
+worker:
+  concurrency: 0
+  retry_attempts: 0
+  shutdown_grace_seconds: 0
+health:
+  live_path: "livez"
+  ready_path: "/readyz"
+  dependency_timeout_ms: 0
+"#,
+        );
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        match error {
+            ConfigError::Validation(errors) => {
+                let paths = errors
+                    .iter()
+                    .map(|error| error.path.as_str())
+                    .collect::<Vec<_>>();
+
+                assert!(paths.contains(&"server.api_bind"));
+                assert!(paths.contains(&"postgres.host"));
+                assert!(paths.contains(&"postgres.port"));
+                assert!(paths.contains(&"pubsub.emulator_host"));
+                assert!(paths.contains(&"object_storage.endpoint_override"));
+                assert!(paths.contains(&"object_storage.credentials_mode"));
+                assert!(paths.contains(&"observability.log_format"));
+                assert!(paths.contains(&"worker.concurrency"));
+                assert!(paths.contains(&"worker.shutdown_grace_seconds"));
+                assert!(paths.contains(&"health.live_path"));
+                assert!(paths.contains(&"health.dependency_timeout_ms"));
+            }
+            error => panic!("unexpected error: {error:?}"),
+        }
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn secrets_are_redacted_in_debug_output() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.postgres);
+
+        assert!(!debug.contains(config.postgres.password.expose_secret()));
+        assert!(debug.contains("Secret"));
+    }
+
+    fn write_temp_config(contents: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is after unix epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!("proofplane-config-test-{nanos}.yaml"));
+
+        fs::write(&path, contents).expect("temp config is written");
+
+        path
     }
 }

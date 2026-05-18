@@ -6,7 +6,7 @@ Load application configuration from YAML, selected by the `PROOFPLANE_CONFIG` en
 
 ## Design
 
-Implement a typed configuration crate. `PROOFPLANE_CONFIG` points to a YAML file path.
+Implement a typed configuration module. `PROOFPLANE_CONFIG` points to a YAML file path. Use the Rust `config` crate for file loading/deserialization, then validate into public config types with the applicative validation framework from story 003.
 
 Configuration should cover:
 
@@ -21,6 +21,8 @@ Configuration should cover:
 
 Configuration parsing should separate deserialization from validation. Validation must use the applicative validation framework from story 003.
 
+Secrets should use a redacting wrapper so passwords and credential material do not appear in debug output.
+
 ## Acceptance Criteria
 
 - All binaries fail fast with a clear error if `PROOFPLANE_CONFIG` is unset, unreadable, malformed, or invalid.
@@ -28,6 +30,7 @@ Configuration parsing should separate deserialization from validation. Validatio
 - Config validation accumulates all field errors instead of returning only the first error.
 - Sensitive values are not printed in logs or debug output.
 - Config structs are shared by API, worker, MCP, seed, and integration tests.
+- `PROOFPLANE_ENV` is fully replaced by `PROOFPLANE_CONFIG`.
 
 ## Tests
 
