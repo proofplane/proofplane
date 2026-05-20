@@ -15,12 +15,12 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Done | Axum API runtime serves health, readiness, version, metrics, stable errors, and structured request logs. |
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Done | Refinery migrations, Postgres pool wiring, startup migrations, and idempotent local seed data are in place. |
 | 009. [Integration Test Harness](./009-integration-test-harness.md) | Deferred | Not started. Introduce this when feature work needs process or infrastructure integration coverage. |
-| 010. [Authentication, Actors, and Request Middleware](./010-authentication-actors-and-request-middleware.md) | Next | Not started. |
+| 010. [Authentication, Actors, and Request Middleware](./010-authentication-actors-and-request-middleware.md) | Deferred | Use local hashed API keys when implemented. Defer until real endpoints clarify authorization rules. |
 | 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Planned | Not started. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Planned | Not started. |
 | 013. [Worker Runtime and Outbox Dequeuer](./013-worker-runtime-and-outbox-dequeuer.md) | Planned | Not started. |
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Planned | Not started. |
-| 015. [Evidence Requirements Domain](./015-evidence-requirements-domain.md) | Planned | Not started. |
+| 015. [Evidence Requirements Domain](./015-evidence-requirements-domain.md) | Next | Not started. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Planned | Not started. |
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Planned | Not started. |
 | 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
@@ -41,8 +41,9 @@ Shared gates:
 
 Near-term parallel lanes:
 
-- Story 010 is the next mainline feature task.
+- Story 015 is the next mainline feature task.
 - Story 009 should be added alongside the first feature or infrastructure boundary that needs end-to-end verification, with reusable Postgres, Pub/Sub, config, and binary helpers.
+- Story 010 is deferred until product endpoints make the authentication and authorization boundaries concrete. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
 Infrastructure lanes after config:
 
@@ -52,10 +53,10 @@ Infrastructure lanes after config:
 
 Product lanes:
 
-- Story 010 depends on 007 and 008 because it needs API middleware and actor persistence.
-- Story 015 depends on 004, 007, 008, and 010, then becomes the base for the main product model. Add story 009 before or alongside it if repository/API behavior needs integration coverage.
+- Story 010 depends on 007, 008, and concrete product routes because it needs API middleware, actor persistence, and real authorization decisions.
+- Story 015 depends on 004, 007, and 008, then becomes the base for the main product model. Keep endpoints public or locally gated until story 010 defines auth. Add story 009 before or alongside it if repository/API behavior needs integration coverage.
 - Story 016 depends on 015.
-- Story 017 depends on 014 and 015, and should also use 010 actor context.
+- Story 017 depends on 014 and 015, and should introduce or coordinate with story 010 when submitter actor context becomes necessary.
 - Story 018 depends on 016 and 017.
 - Story 019 depends on the evidence/control/submission model from 015-018.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
