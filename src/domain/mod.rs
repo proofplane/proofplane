@@ -1,12 +1,10 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkspaceId(pub u64);
+mod error;
+mod evidence_request;
+mod ids;
 
-#[cfg(test)]
-mod tests {
-    use super::WorkspaceId;
-
-    #[test]
-    fn workspace_id_is_value_type() {
-        assert_eq!(WorkspaceId(1), WorkspaceId(1));
-    }
-}
+pub use error::DomainError;
+pub use evidence_request::{
+    EvidenceRequest, EvidenceRequestCadence, EvidenceRequestStatus, EvidenceRequestUpdate,
+    NewEvidenceRequest,
+};
+pub use ids::{EvidenceRequestId, WorkspaceId};

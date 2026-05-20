@@ -10,7 +10,7 @@ Implement a scripted demo:
 
 1. Bootstrap a workspace and actors.
 2. Register an AI agent actor and credentials.
-3. Query due or stale evidence requirements.
+3. Query due Evidence Requests.
 4. Submit evidence against an existing requirement.
 5. Approve the submission.
 6. Verify linked control status updates.

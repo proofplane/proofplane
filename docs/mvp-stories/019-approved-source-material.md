@@ -9,7 +9,7 @@ Create the trusted source layer that downstream questionnaire agents can query.
 Approved source material contains approved facts or answer fragments linked to:
 
 - controls
-- evidence requirements
+- Evidence Requests
 - current approved submissions
 - freshness metadata
 - approval actor

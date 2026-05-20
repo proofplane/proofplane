@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::domain::DomainError;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("database error")]
@@ -7,4 +9,7 @@ pub enum Error {
 
     #[error("connection pool error")]
     Pool(#[from] deadpool_postgres::PoolError),
+
+    #[error("invalid persisted data")]
+    InvalidData(#[from] DomainError),
 }
