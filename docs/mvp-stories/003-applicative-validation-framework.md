@@ -44,4 +44,3 @@ Every binding in the macro must return `Validation<T, E>`. The macro itself retu
 ## QA Guide
 
 1. Run `make check`.
-2. Run `make test-integration`.

@@ -24,9 +24,8 @@ This story does not add OpenTelemetry traces, distributed trace propagation, cus
 ## Tests
 
 - Unit tests verify log filter parsing for valid and invalid `RUST_LOG` values.
-- Integration tests verify API, worker, MCP, and seed startup logs are structured JSON.
-- Integration tests verify `RUST_LOG=off` suppresses startup info logs.
-- Integration tests verify missing config still fails with a clear stderr error.
+- Unit tests verify log filter behavior.
+- Binary startup log coverage is deferred to story 009.
 
 ## QA Guide
 
@@ -35,4 +34,3 @@ This story does not add OpenTelemetry traces, distributed trace propagation, cus
 3. Run with `RUST_LOG=off` and confirm startup info logs are suppressed.
 4. Confirm no configured secrets appear in logs.
 5. Run `make check`.
-6. Run `make test-integration`.

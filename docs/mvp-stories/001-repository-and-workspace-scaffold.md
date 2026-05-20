@@ -19,9 +19,8 @@ Use internal modules for:
 
 - domain types
 - application services
-- repository traits and starter in-memory implementations
+- repository and store scaffolding
 - Pub/Sub value types
-- object storage traits and a filesystem-backed local implementation
 - configuration
 - observability
 - validation
@@ -38,30 +37,28 @@ proofplane/
     V001__initial_schema.sql
   src/
     lib.rs
+    app.rs
     bin/
       api.rs
       worker.rs
       mcp.rs
       seed.rs
-    api/
+    routes/
     worker/
     mcp/
     domain/
     services/
-    repositories/
+    repository/
+    store/
     pubsub/
-    storage/
     config/
     observability/
     validation/
     errors/
     migrations/
-  tests/
-    integration/
-      main.rs
 ```
 
-The integration suite should be a dedicated Cargo test target backed by `tests/integration/main.rs`, configured in `Cargo.toml` with `[[test]]`. Early integration tests should avoid external dependency assumptions and can exercise local implementations such as the filesystem object store.
+The dedicated integration suite is deferred to story 009. The initial scaffold should rely on unit tests and compile checks until real process and infrastructure behavior needs integration coverage.
 
 ## Acceptance Criteria
 
@@ -77,12 +74,10 @@ The integration suite should be a dedicated Cargo test target backed by `tests/i
 
 - Add smoke unit tests for the initial internal modules.
 - Add a repository-level CI-equivalent command that runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
-- Add an integration test target under `tests/integration/main.rs` that compiles and runs without external services.
+- Defer the integration test target to story 009.
 
 ## QA Guide
 
 1. Run `make build`.
 2. Run `make check`.
-3. Run `make test-integration`.
-4. Run `cargo run --bin api`, `cargo run --bin worker`, `cargo run --bin mcp`, and `cargo run --bin seed` and confirm each prints its scaffold startup message.
-5. Confirm the integration test target uses `tests/integration/main.rs`.
+3. Run `cargo run --bin api`, `cargo run --bin worker`, `cargo run --bin mcp`, and `cargo run --bin seed` with local config and dependencies as needed.

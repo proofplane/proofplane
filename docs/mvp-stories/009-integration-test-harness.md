@@ -2,15 +2,17 @@
 
 ## Goal
 
-Create a dedicated integration test target that can spin up required dependencies with testcontainers.
+Create the dedicated integration test target and harness when feature work needs process or infrastructure integration coverage.
 
 ## Design
 
-The integration suite lives at `tests/integration/main.rs` and is registered in `Cargo.toml` with `[[test]]`. It should expose reusable harness helpers for:
+This story is intentionally deferred until there is product behavior worth validating across a real process or external dependency boundary. No Postgres/testcontainers coverage exists before this story; this story owns adding it.
+
+Add an integration suite at `tests/integration/main.rs` and register it in `Cargo.toml` with `[[test]]`. It should expose reusable harness helpers for:
 
 - starting Postgres
-- starting Pub/Sub emulator
-- creating temporary filesystem object storage roots
+- starting the Pub/Sub emulator when a Pub/Sub story needs it
+- creating temporary filesystem object storage roots when object storage exists
 - generating temporary YAML config
 - running migrations
 - running seeds
@@ -31,7 +33,7 @@ Tests should exercise public process and network boundaries whenever possible.
 - Harness self-test starts all dependencies and verifies health.
 - Harness self-test runs migrations and seed data.
 - API smoke test starts API and calls `/readyz`.
-- Worker smoke test starts worker and verifies it can connect to Pub/Sub.
+- Worker smoke test starts worker and verifies it can connect to Pub/Sub once the worker and Pub/Sub runtime exist.
 
 ## QA Guide
 

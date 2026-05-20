@@ -6,14 +6,14 @@ Create the API server runtime with health probes, metrics, middleware slots, and
 
 ## Design
 
-Use a Rust async HTTP framework compatible with `tokio` and tower-style middleware.
+Use `tokio`, `axum`, and `tower-http` for HTTP.
 
 Expose:
 
 - `GET /livez`
 - `GET /readyz`
 - `GET /metrics`
-- version endpoint
+- `GET /version`
 
 Handlers must follow the target architecture:
 
@@ -23,25 +23,30 @@ request DTO -> request validation -> domain type -> service -> response DTO or e
 
 The service layer handles domain logic, repository calls, and retrying. The repository layer handles SQL.
 
+For this scaffold, `/readyz` checks Postgres through the shared pool. Pub/Sub readiness is deferred until story 011 introduces a real Pub/Sub client.
+
 ## Acceptance Criteria
 
 - API binary starts with config-loaded bind address.
 - `/livez` returns success when the process event loop is healthy.
-- `/readyz` checks critical dependencies such as Postgres and Pub/Sub.
+- `/readyz` checks Postgres and returns unavailable when Postgres cannot be reached.
 - Error responses use a stable JSON shape.
 - Handler modules do not contain SQL.
 - Service modules do not depend on HTTP request or response types.
+- HTTP requests logged at INFO level and include path, method, response status code, and response time
+- `/metrics` returns Prometheus text with stable `proofplane_` metric names.
 
 ## Tests
 
 - Unit tests cover DTO mapping and error DTO mapping.
-- API integration tests cover liveness, readiness success, readiness dependency failure, metrics, and unknown route.
+- API integration tests for liveness, readiness success, metrics, version, unknown route, and structured request logs are deferred to story 009.
+- Unit tests cover response shaping where practical until the integration harness exists.
 - Compile-time dependency boundaries are enforced by crate layout.
-- Tests verify validation failure returns all accumulated field errors.
 
 ## QA Guide
 
 1. Start local dependencies.
 2. Run the API with local config.
-3. Call `/livez`, `/readyz`, and `/metrics`.
-4. Stop Postgres and confirm `/readyz` fails while `/livez` still succeeds.
+3. Call `/livez`, `/readyz`, `/version`, and `/metrics`.
+4. Inspect structured request logs for method, path, status, and latency.
+5. Stop Postgres and confirm `/readyz` fails while `/livez` still succeeds.

@@ -6,7 +6,7 @@ Add SQL migrations using `refinery` and a maintained seed script.
 
 ## Design
 
-Use `refinery` with pure SQL migration files. Keep migration definitions in the migrations crate and expose a runner that API, worker, seed, and integration tests can call.
+Use `refinery` with pure SQL migration files. Keep shared database startup utilities in `store`, including the migration runner used by API, worker, MCP, and seed.
 
 Initial schema should include only platform tables needed by near-term stories:
 
@@ -17,7 +17,7 @@ Initial schema should include only platform tables needed by near-term stories:
 - audit events placeholder
 - outbox messages placeholder
 
-The seed binary should be idempotent and safe to run repeatedly in local development.
+The seed binary should run migrations, then idempotently create local workspace, actor, and API credential placeholder data.
 
 ## Acceptance Criteria
 
@@ -25,14 +25,14 @@ The seed binary should be idempotent and safe to run repeatedly in local develop
 - SQL files are the source of truth.
 - Seed script creates useful local actors, credentials, and workspace data.
 - Seed script is maintained as stories add tables and demo data.
-- Migration runner can be used in integration tests against ephemeral Postgres.
+- Migrations are run on startup for API, worker, and MCP
+- Seed is idempotent and safe to run repeatedly.
 
 ## Tests
 
 - Unit tests cover migration discovery where practical.
-- Integration tests run migrations against a fresh testcontainers Postgres.
-- Integration tests run the seed binary twice and verify idempotency.
-- Repository smoke tests verify seeded records are queryable.
+- Postgres/testcontainers migration and seed coverage is deferred to story 009.
+- Repository smoke tests are deferred until repository behavior exists.
 
 ## QA Guide
 

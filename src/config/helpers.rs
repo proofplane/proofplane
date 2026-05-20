@@ -19,6 +19,16 @@ pub(super) fn secret_value(value: SecretString) -> Result<SecretString, String> 
     }
 }
 
+pub(super) fn postgres_connection_string(value: SecretString) -> Result<SecretString, String> {
+    let value = secret_value(value)?;
+
+    value
+        .expose_secret()
+        .parse::<tokio_postgres::Config>()
+        .map(|_| value)
+        .map_err(|_| "must be a valid Postgres connection string".into())
+}
+
 pub(super) fn nonzero_u16(value: u16) -> Result<u16, String> {
     if value == 0 {
         Err("must be greater than zero".into())
@@ -67,12 +77,6 @@ pub(super) fn host_port(value: String) -> Result<HostPort, String> {
         host: host.to_owned(),
         port,
     })
-}
-
-pub(super) fn hostname(value: String) -> Result<String, String> {
-    let value = trim_required(value)?;
-    validate_hostname(&value)?;
-    Ok(value)
 }
 
 pub(super) fn validate_hostname(host: &str) -> Result<(), String> {

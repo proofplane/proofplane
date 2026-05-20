@@ -1,4 +1,4 @@
-pub mod api;
+pub mod app;
 pub mod config;
 pub mod domain;
 pub mod errors;
@@ -6,9 +6,10 @@ pub mod mcp;
 pub mod migrations;
 pub mod observability;
 pub mod pubsub;
-pub mod repositories;
+pub mod repository;
+pub mod routes;
 pub mod services;
-pub mod storage;
+pub mod store;
 pub mod validation;
 pub mod worker;
 

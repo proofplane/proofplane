@@ -35,4 +35,4 @@ The local config file is `config/local.yaml`. It sets the defaults used by the `
 
 ## Object Storage
 
-Object storage is not run in Docker Compose for the MVP. Local development and automated tests use a filesystem-backed `ObjectStore` implementation rooted at `.local/storage`.
+Object storage is not run in Docker Compose for the MVP. Local configuration reserves `.local/storage` for the filesystem-backed object storage adapter planned in story 014.

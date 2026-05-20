@@ -9,7 +9,7 @@ Standardize the real error boundaries that exist today with `thiserror` and prov
 Use `thiserror` for concrete error types at real boundaries:
 
 - configuration errors
-- storage errors
+- database startup and repository errors
 
 Do not introduce placeholder error enums for API, worker, MCP, Pub/Sub, repositories, or services before those stories create real behavior at those boundaries.
 
@@ -68,4 +68,3 @@ Every `Err(ErrorType)` returned by the operation is retried until the configured
 2. Use a fake operation that fails twice and succeeds, then verify exactly three attempts.
 3. Use a fake operation that always fails and verify it runs once plus the configured retry count.
 4. Run `make check`.
-5. Run `make test-integration`.

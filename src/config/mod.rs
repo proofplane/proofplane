@@ -18,7 +18,7 @@ pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
-    pub postgres: PostgresConfig,
+    pub postgres: SecretString,
     pub pubsub: PubSubConfig,
     pub object_storage: ObjectStorageConfig,
     pub observability: ObservabilityConfig,
@@ -32,15 +32,6 @@ pub struct ServerConfig {
     pub api_bind: SocketAddr,
     pub worker_bind: SocketAddr,
     pub mcp_bind: SocketAddr,
-}
-
-#[derive(Debug, Clone)]
-pub struct PostgresConfig {
-    pub host: String,
-    pub port: u16,
-    pub database: String,
-    pub username: String,
-    pub password: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,7 +184,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Result<AppConfig, ConfigError> 
 fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldError> {
     validate! {
         server <- raw.server.validate(),
-        postgres <- raw.postgres.validate(),
+        postgres <- raw::validate_postgres_connection_string(raw.postgres),
         pubsub <- raw.pubsub.validate(),
         object_storage <- raw.object_storage.validate(),
         observability <- raw.observability.validate(),
@@ -220,11 +211,14 @@ mod tests {
     use super::*;
     use std::{
         fs,
-        sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Mutex,
+        },
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static TEMP_CONFIG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn defines_config_environment_variable_name() {
@@ -307,12 +301,7 @@ server:
   api_bind: "not-a-socket"
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
-postgres:
-  host: "-the-host"
-  port: 0
-  database: "proofplane"
-  username: "proofplane"
-  password: "proofplane"
+postgres: ""
 pubsub:
   project_id: "proofplane-local"
   emulator_host: "127.0.0.1:0"
@@ -354,8 +343,7 @@ health:
                     .collect::<Vec<_>>();
 
                 assert!(paths.contains(&"server.api_bind"));
-                assert!(paths.contains(&"postgres.host"));
-                assert!(paths.contains(&"postgres.port"));
+                assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.emulator_host"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
@@ -383,19 +371,21 @@ health:
 
     #[test]
     fn secrets_are_redacted_in_debug_output() {
-        let config = load_from_path("config/local.yaml").expect("local config loads");
-        let debug = format!("{:?}", config.postgres);
+        let postgres = SecretString::from(
+            "postgres://proofplane:unique-secret-password@127.0.0.1:5432/proofplane",
+        );
+        let debug = format!("{:?}", postgres);
 
-        assert!(!debug.contains(config.postgres.password.expose_secret()));
+        assert!(!debug.contains(postgres.expose_secret()));
         assert!(debug.contains("Secret"));
     }
 
     fn write_temp_config(contents: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time is after unix epoch")
-            .as_nanos();
-        let path = env::temp_dir().join(format!("proofplane-config-test-{nanos}.yaml"));
+        let suffix = TEMP_CONFIG_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "proofplane-config-test-{}-{suffix}.yaml",
+            std::process::id()
+        ));
 
         fs::write(&path, contents).expect("temp config is written");
 

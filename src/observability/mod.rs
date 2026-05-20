@@ -11,34 +11,38 @@ pub fn default_log_filter() -> &'static str {
     "info"
 }
 
-pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), ObservabilityError> {
+pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), Error> {
     let filter = log_filter(config)?;
 
     match config.log_format {
         LogFormat::Json => tracing_subscriber::fmt()
             .json()
+            .with_file(false)
+            .with_line_number(false)
             .with_writer(io::stderr)
             .with_env_filter(filter)
             .try_init()
-            .map_err(ObservabilityError::subscriber_init),
+            .map_err(Error::subscriber_init),
         LogFormat::Pretty => tracing_subscriber::fmt()
             .pretty()
+            .with_file(false)
+            .with_line_number(false)
             .with_writer(io::stderr)
             .with_env_filter(filter)
             .try_init()
-            .map_err(ObservabilityError::subscriber_init),
+            .map_err(Error::subscriber_init),
     }
 }
 
 #[derive(Debug, Error)]
-pub enum ObservabilityError {
+pub enum Error {
     #[error("invalid log filter `{filter}`: {message}")]
     InvalidFilter { filter: String, message: String },
     #[error("failed to initialize tracing subscriber: {0}")]
     SubscriberInit(String),
 }
 
-impl ObservabilityError {
+impl Error {
     fn invalid_filter(filter: impl Into<String>, error: impl fmt::Display) -> Self {
         Self::InvalidFilter {
             filter: filter.into(),
@@ -51,17 +55,17 @@ impl ObservabilityError {
     }
 }
 
-fn log_filter(config: &ObservabilityConfig) -> Result<EnvFilter, ObservabilityError> {
+fn log_filter(config: &ObservabilityConfig) -> Result<EnvFilter, Error> {
     let filter = configured_log_filter(config)?;
 
-    EnvFilter::try_new(&filter).map_err(|error| ObservabilityError::invalid_filter(filter, error))
+    EnvFilter::try_new(&filter).map_err(|error| Error::invalid_filter(filter, error))
 }
 
-fn configured_log_filter(config: &ObservabilityConfig) -> Result<String, ObservabilityError> {
+fn configured_log_filter(config: &ObservabilityConfig) -> Result<String, Error> {
     match env::var(RUST_LOG) {
         Ok(value) => Ok(value),
         Err(env::VarError::NotPresent) => Ok(config.default_filter.clone()),
-        Err(env::VarError::NotUnicode(_)) => Err(ObservabilityError::InvalidFilter {
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidFilter {
             filter: RUST_LOG.to_owned(),
             message: "must be valid unicode".to_owned(),
         }),
@@ -74,9 +78,7 @@ mod tests {
 
     use crate::config::{LogFormat, ObservabilityConfig};
 
-    use super::{
-        configured_log_filter, default_log_filter, log_filter, ObservabilityError, RUST_LOG,
-    };
+    use super::{configured_log_filter, default_log_filter, log_filter, Error, RUST_LOG};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -122,7 +124,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ObservabilityError::InvalidFilter { ref filter, .. } if filter == "proofplane=definitely-not-a-level"
+            Error::InvalidFilter { ref filter, .. } if filter == "proofplane=definitely-not-a-level"
         ));
         restore_rust_log(previous);
     }
@@ -138,7 +140,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ObservabilityError::InvalidFilter { ref filter, .. } if filter == "proofplane=definitely-not-a-level"
+            Error::InvalidFilter { ref filter, .. } if filter == "proofplane=definitely-not-a-level"
         ));
         restore_rust_log(previous);
     }

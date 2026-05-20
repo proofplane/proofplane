@@ -8,17 +8,17 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        gcs_credentials_mode, host_port, hostname, nonzero_u16, nonzero_u64, optional_url,
-        parse_log_format, path_string, secret_value, string_value, ConfigValidationExt,
+        gcs_credentials_mode, host_port, nonzero_u16, nonzero_u64, optional_url, parse_log_format,
+        path_string, postgres_connection_string, secret_value, string_value, ConfigValidationExt,
     },
     AuthConfig, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PostgresConfig, PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, WorkerConfig,
+    PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawAppConfig {
     pub(super) server: RawServerConfig,
-    pub(super) postgres: RawPostgresConfig,
+    pub(super) postgres: SecretString,
     pub(super) pubsub: RawPubSubConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) observability: RawObservabilityConfig,
@@ -28,6 +28,12 @@ pub(super) struct RawAppConfig {
 }
 
 impl RawAppConfig {}
+
+pub(super) fn validate_postgres_connection_string(
+    value: SecretString,
+) -> Validation<SecretString, ConfigFieldError> {
+    postgres_connection_string(value).at("postgres")
+}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawServerConfig {
@@ -46,34 +52,6 @@ impl RawServerConfig {
                 api_bind,
                 worker_bind,
                 mcp_bind,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawPostgresConfig {
-    host: String,
-    port: u16,
-    database: String,
-    username: String,
-    password: SecretString,
-}
-
-impl RawPostgresConfig {
-    pub(super) fn validate(self) -> Validation<PostgresConfig, ConfigFieldError> {
-        validate! {
-            host <- hostname(self.host).at("postgres.host"),
-            port <- nonzero_u16(self.port).at("postgres.port"),
-            database <- string_value(self.database).at("postgres.database"),
-            username <- string_value(self.username).at("postgres.username"),
-            password <- secret_value(self.password).at("postgres.password"),
-            => PostgresConfig {
-                host,
-                port,
-                database,
-                username,
-                password,
             },
         }
     }

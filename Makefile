@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test test-integration check build up down health reset-local migrate seed api worker mcp
+.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate seed api worker mcp
 
 PROOFPLANE_CONFIG ?= config/local.yaml
 
@@ -9,7 +9,6 @@ help:
 		'  make fmt-check         Check Rust formatting' \
 		'  make lint              Run clippy with warnings denied' \
 		'  make test              Run all tests' \
-		'  make test-integration  Run integration test target' \
 		'  make check             Run fmt-check, lint, and test' \
 		'  make build             Build package' \
 		'  make up                Start local Docker dependencies' \
@@ -33,9 +32,6 @@ lint:
 
 test:
 	cargo test
-
-test-integration:
-	cargo test --test integration
 
 check: fmt-check lint test
 

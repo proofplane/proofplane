@@ -1,0 +1,162 @@
+# Proofplane Architecture Notes
+
+This document captures architectural decisions that should guide future work.
+It is intentionally practical: keep it aligned with the code as the system
+evolves.
+
+## API Runtime
+
+The API binary owns runtime assembly and process lifecycle. It should stay as
+the place where infrastructure dependencies are created, startup tasks run, and
+the HTTP server is launched.
+
+The expected API startup flow is:
+
+1. Load configuration from `PROOFPLANE_CONFIG`.
+2. Initialize structured logging through `observability`.
+3. Open a one-off Postgres connection for startup work.
+4. Run database migrations before serving traffic.
+5. Build the long-lived Postgres connection pool.
+6. Wrap the pool in `repository::Postgres`.
+7. Initialize metrics.
+8. Bind the TCP listener.
+9. Build the Axum app from `app::AppDependencies`.
+10. Serve with graceful shutdown.
+
+The binary should compose dependencies explicitly, then hand them to the app
+layer. HTTP route modules should not load config, initialize tracing, run
+migrations, or construct database pools.
+
+## Other Binaries
+
+Non-API binaries should also own their startup orchestration: load config,
+initialize tracing, run required startup database work, then enter their runtime
+or command behavior.
+
+Shared database startup utilities belong in `store`, including direct
+connections, connection pools, and migrations. Seed data is different: it is
+owned by the `seed` binary because seeding is a maintenance command, not shared
+infrastructure for application code.
+
+The `mcp` and `worker` binaries should stay minimal until real runtimes exist.
+They may run startup database work, but should not build pools, repositories, or
+placeholder abstractions before those process boundaries need them.
+
+## Module Boundaries
+
+### `src/bin/api.rs`
+
+`api.rs` is the API process entry point. It owns:
+
+- process startup and shutdown;
+- config loading;
+- tracing initialization;
+- startup database connection and migrations;
+- long-lived pool construction;
+- repository construction;
+- metrics recorder installation;
+- TCP listener binding;
+- final `axum::serve` call.
+
+The preferred shape is a small `main()` that delegates to `run()`.
+
+### `src/store`
+
+`store` is the low-level database infrastructure layer. It owns direct
+integration with database libraries:
+
+- `tokio_postgres` connections;
+- `deadpool_postgres` pools;
+- `refinery` migrations.
+
+This module may know about connection strings, Postgres clients, pools, and
+migration runners. Higher layers should not duplicate this setup logic.
+
+### `src/repository`
+
+`repository` is the application-facing database gateway. It wraps lower-level
+pool types and provides methods that route and service code can depend on.
+
+The current Postgres repository owns a `deadpool_postgres::Pool` internally.
+It exposes:
+
+- `get()` for direct pool access needed by infrastructure checks like
+  readiness;
+- `get_client()` for future repository operations that should use a wrapped
+  repository client.
+
+As product behavior grows, query methods and transaction helpers should live
+here or in submodules below this boundary. Route handlers should avoid reaching
+through to `store` for normal application data access.
+
+### `src/app.rs`
+
+`app` is HTTP composition. It owns construction of the root Axum `Router`.
+
+`create_app` should take a single `AppDependencies` struct. This keeps app
+construction stable as new routers and dependencies are added.
+
+The app layer owns:
+
+- nesting route modules under their configured paths;
+- building per-router state from `AppDependencies`;
+- attaching root HTTP middleware, including request logging.
+
+It should not create infrastructure dependencies. Those are built by the binary
+and passed in.
+
+### `src/routes`
+
+`routes` owns HTTP endpoint behavior. Each route module should expose a router
+constructor and define the state required by that router.
+
+Routes may depend on already-constructed application dependencies, such as
+`Arc<repository::Postgres>` or a metrics handle. They should not load config,
+run migrations, construct pools, or initialize global process state.
+
+Route errors should map to stable HTTP responses in `routes::error`.
+
+## Dependency Direction
+
+The API dependency direction should remain:
+
+```text
+src/bin/api.rs
+  -> app::create_app(AppDependencies)
+  -> routes::{health, metrics, version, error}
+  -> repository
+  -> store
+```
+
+The binary is allowed to depend on every layer because it assembles the process.
+Routes and app code should depend only on the dependencies they are handed.
+Lower layers should not depend on HTTP modules.
+
+## Configuration
+
+Postgres configuration is a connection string stored as a `SecretString`.
+This keeps the runtime interface simple for `tokio_postgres` and avoids
+spreading host, port, database, username, and password fields through the app.
+
+The connection string may be exposed only at infrastructure boundaries that need
+to pass it into database libraries.
+
+## Observability
+
+Proofplane uses `tracing_subscriber` for structured logging. We are not building
+OpenTelemetry tracing, distributed traces, or span-exporter infrastructure at
+this stage.
+
+HTTP request logging belongs on the root router in `app`, so all routes receive
+consistent request logs.
+
+## Practical Rules
+
+- Keep startup orchestration in binaries.
+- Keep database library setup in `store`.
+- Keep app-facing database access in `repository`.
+- Keep HTTP composition in `app`.
+- Keep endpoint behavior in `routes`.
+- Pass dependencies explicitly through structs instead of reaching for globals.
+- Prefer a single dependency struct at app construction boundaries.
+- Do not add placeholder abstractions before a real boundary needs them.

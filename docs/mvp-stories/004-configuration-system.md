@@ -26,10 +26,10 @@ Secrets should use a redacting wrapper so passwords and credential material do n
 ## Acceptance Criteria
 
 - All binaries fail fast with a clear error if `PROOFPLANE_CONFIG` is unset, unreadable, malformed, or invalid.
-- YAML config supports local development and integration test examples.
+- YAML config supports local development and can be reused by generated integration configs when story 009 adds that harness.
 - Config validation accumulates all field errors instead of returning only the first error.
 - Sensitive values are not printed in logs or debug output.
-- Config structs are shared by API, worker, MCP, seed, and integration tests.
+- Config structs are shared by API, worker, MCP, and seed.
 - `PROOFPLANE_ENV` is fully replaced by `PROOFPLANE_CONFIG`.
 
 ## Tests
@@ -37,7 +37,7 @@ Secrets should use a redacting wrapper so passwords and credential material do n
 - Unit tests cover valid config loading.
 - Unit tests cover missing file, invalid YAML, missing required fields, invalid numeric ranges, and invalid URLs.
 - Validation tests assert multiple field errors are returned at once.
-- Integration tests boot at least one binary with a generated temp config file.
+- Binary boot coverage with generated temp config is deferred to story 009.
 
 ## QA Guide
 

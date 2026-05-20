@@ -5,12 +5,7 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
 
-postgres:
-  host: "127.0.0.1"
-  port: 5432
-  database: "proofplane"
-  username: "proofplane"
-  password: "proofplane-local-password"
+postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
 
 pubsub:
   project_id: "proofplane-local"

@@ -1,6 +1,26 @@
-use proofplane::{config, observability, worker, VERSION};
+use proofplane::{config, observability, store, worker, VERSION};
+use secrecy::ExposeSecret;
+use thiserror::Error;
+use tracing::{debug, error, info};
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
+        error!("{}", e);
+        std::process::exit(1);
+    }
+}
+
+#[derive(Debug, Error)]
+enum Error {
+    #[error("postgres connection error")]
+    StoreConnection(#[from] store::conn::Error),
+
+    #[error("database migration error")]
+    Migrations(#[from] refinery::Error),
+}
+
+async fn run() -> Result<(), Error> {
     let config = match config::load_from_env() {
         Ok(config) => config,
         Err(error) => {
@@ -14,10 +34,18 @@ fn main() {
         std::process::exit(1);
     }
 
-    tracing::info!(
+    let mut client = store::conn(config.postgres.expose_secret()).await?;
+
+    debug!("running migrations");
+    store::migrate(&mut client).await?;
+    debug!("done running migrations");
+
+    info!(
         binary = "worker",
         version = VERSION,
         "{}",
         worker::startup_message()
     );
+
+    Ok(())
 }
