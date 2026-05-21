@@ -10,10 +10,12 @@ use crate::{
     repository::Postgres,
     routes::{
         error::not_found,
+        evidence_requests::{self, EvidenceRequestState},
         health::{self, ReadyState},
         metrics::{self, MetricsState},
         version,
     },
+    services::evidence_requests::EvidenceRequestService,
 };
 
 pub struct AppDependencies {
@@ -31,7 +33,7 @@ pub fn create_app(dependencies: AppDependencies) -> Router {
         .nest(
             &ready_path,
             health::readyz_router(ReadyState {
-                postgres: dependencies.postgres,
+                postgres: dependencies.postgres.clone(),
                 dependency_timeout_ms: dependencies.config.health.dependency_timeout_ms,
             }),
         )
@@ -41,6 +43,9 @@ pub fn create_app(dependencies: AppDependencies) -> Router {
                 handle: dependencies.metrics,
             }),
         )
+        .merge(evidence_requests::router(EvidenceRequestState {
+            service: EvidenceRequestService::new(dependencies.postgres.clone()),
+        }))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(

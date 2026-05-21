@@ -25,8 +25,10 @@ name = "seed"
 path = "src/bin/seed.rs"
 
 [dependencies]
+async-trait = "0.1"
 axum = "0.8.9"
 config = { version = "0.15", default-features = false, features = ["yaml"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 deadpool-postgres = "0.14.1"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -35,9 +37,16 @@ secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1.52.3", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
-tokio-postgres = "0.7.17"
+tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-uuid-1"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.10", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+axum-test = "20"
+serde_json = "1"
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

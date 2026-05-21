@@ -10,9 +10,9 @@ Create the `proofplane-mcp` binary. It should use the same domain services as th
 
 Initial tools:
 
-- `list_evidence_requirements`
-- `get_evidence_requirement`
-- `list_due_evidence_requirements`
+- `list_evidence_requests`
+- `get_evidence_request`
+- `list_due_evidence_requests`
 - `submit_evidence_for_requirement`
 - `get_submission_status`
 - `get_latest_approved_submission`
@@ -49,6 +49,6 @@ Initial tools:
 
 1. Start dependencies and seed data.
 2. Start MCP server.
-3. Call `list_due_evidence_requirements`.
+3. Call `list_due_evidence_requests`.
 4. Submit evidence through MCP and approve it.
 5. Query control status through both MCP and API and compare results.

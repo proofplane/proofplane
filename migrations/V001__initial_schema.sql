@@ -1,12 +1,15 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS workspaces (
-    id TEXT PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug TEXT UNIQUE,
     name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS actors (
     id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
     actor_type TEXT NOT NULL,
     display_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -22,7 +25,7 @@ CREATE TABLE IF NOT EXISTS api_credentials (
 
 CREATE TABLE IF NOT EXISTS audit_events (
     id BIGSERIAL PRIMARY KEY,
-    workspace_id TEXT REFERENCES workspaces(id),
+    workspace_id UUID REFERENCES workspaces(id),
     actor_id TEXT REFERENCES actors(id),
     event_type TEXT NOT NULL,
     event_payload JSONB NOT NULL DEFAULT '{}'::jsonb,

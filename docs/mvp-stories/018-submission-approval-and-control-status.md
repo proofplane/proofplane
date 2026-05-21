@@ -8,7 +8,7 @@ Support approval and rejection of evidence submissions and derive control status
 
 Authorized actors can approve or reject pending submissions. Approval means the submission satisfies the requirement for the relevant period. Control status is derived from:
 
-- linked evidence requirements
+- linked Evidence Requests
 - latest approved submissions
 - freshness and expiry rules
 - missing evidence
