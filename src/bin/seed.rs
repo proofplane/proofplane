@@ -2,11 +2,11 @@ use chrono::{DateTime, Utc};
 use proofplane::{
     config,
     domain::{
-        DomainError, EvidenceRequestCadence, EvidenceRequestStatus, EvidenceRequestUpdate,
-        NewEvidenceRequest, WorkspaceId,
+        CreateEvidenceRequestPayload, EvidenceRequestCadence, EvidenceRequestStatus,
+        UpdateEvidenceRequestPayload, WorkspaceId,
     },
     migrations, observability,
-    repository::{EvidenceRequestRepository, Postgres},
+    repository::Postgres,
     store, VERSION,
 };
 use secrecy::ExposeSecret;
@@ -36,9 +36,6 @@ enum Error {
 
     #[error("repository error")]
     Repository(#[from] proofplane::repository::Error),
-
-    #[error("seed validation error")]
-    SeedValidation(Vec<DomainError>),
 
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
@@ -81,10 +78,7 @@ async fn run() -> Result<(), Error> {
     Ok(())
 }
 
-async fn seed_local_data(
-    client: &Client,
-    evidence_requests: &impl EvidenceRequestRepository,
-) -> Result<(), Error> {
+async fn seed_local_data(client: &Client, evidence_requests: &Postgres) -> Result<(), Error> {
     client
         .batch_execute(
             r#"
@@ -106,24 +100,31 @@ ON CONFLICT (id) DO NOTHING;
     seed_evidence_requests(evidence_requests).await
 }
 
-async fn seed_evidence_requests(repository: &impl EvidenceRequestRepository) -> Result<(), Error> {
+async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
-    let existing = repository
-        .list_evidence_requests_by_workspace(&workspace_id)
-        .await?;
+    let seeds = demo_evidence_requests()?;
 
-    for seed in demo_evidence_requests()? {
-        if let Some(existing_request) = existing.iter().find(|request| request.title == seed.title)
-        {
-            let update = seed.clone().into_update().validate().into_result()?;
-            repository
-                .replace_evidence_request(existing_request.id, &update)
-                .await?;
-        } else {
-            let request = seed.into_new(workspace_id).validate().into_result()?;
-            repository.create_evidence_request(&request).await?;
-        }
-    }
+    repository
+        .in_workspace(workspace_id, async move |context| {
+            let existing = context.list_evidence_requests().await?;
+
+            for seed in seeds {
+                if let Some(existing_request) =
+                    existing.iter().find(|request| request.title == seed.title)
+                {
+                    let update = seed.clone().into_update();
+                    context
+                        .replace_evidence_request(existing_request.id, &update)
+                        .await?;
+                } else {
+                    let request = seed.into_new(workspace_id);
+                    context.create_evidence_request(&request).await?;
+                }
+            }
+
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -141,8 +142,8 @@ struct SeedEvidenceRequest {
 }
 
 impl SeedEvidenceRequest {
-    fn into_new(self, workspace_id: WorkspaceId) -> NewEvidenceRequest {
-        NewEvidenceRequest {
+    fn into_new(self, workspace_id: WorkspaceId) -> CreateEvidenceRequestPayload {
+        CreateEvidenceRequestPayload {
             workspace_id,
             title: self.title,
             description: self.description,
@@ -155,8 +156,8 @@ impl SeedEvidenceRequest {
         }
     }
 
-    fn into_update(self) -> EvidenceRequestUpdate {
-        EvidenceRequestUpdate {
+    fn into_update(self) -> UpdateEvidenceRequestPayload {
+        UpdateEvidenceRequestPayload {
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,
@@ -220,10 +221,4 @@ fn local_workspace_id() -> WorkspaceId {
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     DateTime::parse_from_rfc3339(value).map(|datetime| datetime.with_timezone(&Utc))
-}
-
-impl From<Vec<DomainError>> for Error {
-    fn from(errors: Vec<DomainError>) -> Self {
-        Self::SeedValidation(errors)
-    }
 }

@@ -1,56 +1,21 @@
-use async_trait::async_trait;
+use std::ops::AsyncFnOnce;
+
 use chrono::{DateTime, Utc};
-use deadpool_postgres::{Object, Pool, Transaction};
+use deadpool_postgres::{Object, Pool};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{
-    EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
-    EvidenceRequestUpdate, NewEvidenceRequest, WorkspaceId,
+use crate::{
+    domain::{
+        CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
+        EvidenceRequestStatus, UpdateEvidenceRequestPayload, WorkspaceId,
+    },
+    services::ServiceContext,
 };
 
 pub mod error;
 
 pub use error::Error;
-
-#[async_trait]
-pub trait EvidenceRequestRepository {
-    async fn create_evidence_request(
-        &self,
-        request: &NewEvidenceRequest,
-    ) -> Result<EvidenceRequest, Error>;
-
-    async fn get_evidence_request(
-        &self,
-        id: EvidenceRequestId,
-    ) -> Result<Option<EvidenceRequest>, Error>;
-
-    async fn list_evidence_requests_by_workspace(
-        &self,
-        workspace_id: &WorkspaceId,
-    ) -> Result<Vec<EvidenceRequest>, Error>;
-
-    async fn replace_evidence_request(
-        &self,
-        id: EvidenceRequestId,
-        update: &EvidenceRequestUpdate,
-    ) -> Result<Option<EvidenceRequest>, Error>;
-
-    async fn list_due_evidence_requests(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<EvidenceRequest>, Error>;
-}
-
-pub struct Client {
-    client: Object,
-}
-
-impl Client {
-    pub async fn txn(&mut self) -> Result<Transaction<'_>, Error> {
-        Ok(self.client.transaction().await?)
-    }
-}
 
 pub struct Postgres {
     pool: Pool,
@@ -65,21 +30,36 @@ impl Postgres {
         self.pool.get().await
     }
 
-    pub async fn get_client(&self) -> Result<Client, Error> {
-        let client = self.pool.get().await?;
+    pub async fn in_workspace<T, F>(
+        &self,
+        workspace_id: WorkspaceId,
+        operation: F,
+    ) -> Result<T, Error>
+    where
+        T: Send,
+        F: for<'context, 'transaction> AsyncFnOnce(
+                &'context mut ServiceContext<'transaction>,
+            ) -> Result<T, Error>
+            + Send,
+    {
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let mut context = ServiceContext::new(workspace_id, transaction);
+        let result = operation(&mut context).await?;
 
-        Ok(Client { client })
+        context.commit().await?;
+
+        Ok(result)
     }
 }
 
-#[async_trait]
-impl EvidenceRequestRepository for Postgres {
-    async fn create_evidence_request(
+impl ServiceContext<'_> {
+    pub async fn create_evidence_request(
         &self,
-        request: &NewEvidenceRequest,
+        request: &CreateEvidenceRequestPayload,
     ) -> Result<EvidenceRequest, Error> {
-        let client = self.get().await?;
-        let row = client
+        let row = self
+            .transaction
             .query_one(
                 r#"
 INSERT INTO evidence_requests (
@@ -109,7 +89,7 @@ RETURNING
     updated_at
 "#,
                 &[
-                    &Uuid::from(request.workspace_id),
+                    &Uuid::from(self.workspace_id),
                     &request.title,
                     &request.description,
                     &request.collection_instructions,
@@ -125,12 +105,12 @@ RETURNING
         evidence_request_from_row(row)
     }
 
-    async fn get_evidence_request(
+    pub async fn get_evidence_request(
         &self,
         id: EvidenceRequestId,
     ) -> Result<Option<EvidenceRequest>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let rows = self
+            .transaction
             .query(
                 r#"
 SELECT
@@ -148,8 +128,9 @@ SELECT
     updated_at
 FROM evidence_requests
 WHERE id = $1
+  AND workspace_id = $2
 "#,
-                &[&Uuid::from(id)],
+                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
@@ -159,12 +140,9 @@ WHERE id = $1
             .transpose()
     }
 
-    async fn list_evidence_requests_by_workspace(
-        &self,
-        workspace_id: &WorkspaceId,
-    ) -> Result<Vec<EvidenceRequest>, Error> {
-        let client = self.get().await?;
-        let rows = client
+    pub async fn list_evidence_requests(&self) -> Result<Vec<EvidenceRequest>, Error> {
+        let rows = self
+            .transaction
             .query(
                 r#"
 SELECT
@@ -184,20 +162,20 @@ FROM evidence_requests
 WHERE workspace_id = $1
 ORDER BY due_at, title
 "#,
-                &[&Uuid::from(*workspace_id)],
+                &[&Uuid::from(self.workspace_id)],
             )
             .await?;
 
         rows.into_iter().map(evidence_request_from_row).collect()
     }
 
-    async fn replace_evidence_request(
+    pub async fn replace_evidence_request(
         &self,
         id: EvidenceRequestId,
-        update: &EvidenceRequestUpdate,
+        update: &UpdateEvidenceRequestPayload,
     ) -> Result<Option<EvidenceRequest>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let rows = self
+            .transaction
             .query(
                 r#"
 UPDATE evidence_requests
@@ -212,6 +190,7 @@ SET
     status = $9,
     updated_at = now()
 WHERE id = $1
+  AND workspace_id = $10
 RETURNING
     id,
     workspace_id,
@@ -236,6 +215,7 @@ RETURNING
                     &update.schedule_anchor_at,
                     &update.freshness_window_days,
                     &update.status.as_str(),
+                    &Uuid::from(self.workspace_id),
                 ],
             )
             .await?;
@@ -246,12 +226,12 @@ RETURNING
             .transpose()
     }
 
-    async fn list_due_evidence_requests(
+    pub async fn list_due_evidence_requests(
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<EvidenceRequest>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let rows = self
+            .transaction
             .query(
                 r#"
 SELECT
@@ -270,9 +250,10 @@ SELECT
 FROM evidence_requests
 WHERE status = 'active'
   AND due_at <= $1
+  AND workspace_id = $2
 ORDER BY due_at, title
 "#,
-                &[&now],
+                &[&now, &Uuid::from(self.workspace_id)],
             )
             .await?;
 

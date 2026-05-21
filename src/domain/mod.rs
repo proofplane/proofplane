@@ -4,7 +4,7 @@ mod ids;
 
 pub use error::DomainError;
 pub use evidence_request::{
-    EvidenceRequest, EvidenceRequestCadence, EvidenceRequestStatus, EvidenceRequestUpdate,
-    NewEvidenceRequest,
+    CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestStatus,
+    UpdateEvidenceRequestPayload,
 };
 pub use ids::{EvidenceRequestId, WorkspaceId};

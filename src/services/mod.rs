@@ -1,22 +1,31 @@
 use crate::domain::WorkspaceId;
+use thiserror::Error;
 
-pub struct ServiceContext {
-    pub workspace_id: WorkspaceId,
+pub mod evidence_requests;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("repository error")]
+    Repository(#[from] crate::repository::Error),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ServiceContext;
-    use crate::domain::WorkspaceId;
-    use uuid::Uuid;
+pub struct ServiceContext<'transaction> {
+    pub workspace_id: WorkspaceId,
+    pub(crate) transaction: deadpool_postgres::Transaction<'transaction>,
+}
 
-    #[test]
-    fn stores_workspace_context() {
-        let workspace_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
-        let context = ServiceContext {
-            workspace_id: WorkspaceId::from(workspace_id),
-        };
+impl<'transaction> ServiceContext<'transaction> {
+    pub(crate) fn new(
+        workspace_id: WorkspaceId,
+        transaction: deadpool_postgres::Transaction<'transaction>,
+    ) -> Self {
+        Self {
+            workspace_id,
+            transaction,
+        }
+    }
 
-        assert_eq!(context.workspace_id, WorkspaceId::from(workspace_id));
+    pub(crate) async fn commit(self) -> Result<(), tokio_postgres::Error> {
+        self.transaction.commit().await
     }
 }

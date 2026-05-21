@@ -2,7 +2,7 @@
 
 ## Goal
 
-Implement the non-API foundation for Evidence Requests.
+Implement Evidence Request domain, persistence, service, and API behavior.
 
 An Evidence Request is Proofplane's scheduled request for proof that a workspace is meeting an external requirement. Uploaded evidence, attachment bytes, approval, and freshness/staleness based on submissions are later concerns.
 
@@ -15,7 +15,7 @@ Slice 1 includes:
 - repository methods
 - seed data
 
-Later slice:
+Slice 2 includes:
 
 - API endpoints
 - service orchestration
@@ -36,6 +36,12 @@ Explicit slice 1 decisions:
 - no auth
 - no stale query
 
+Explicit slice 2 decisions:
+
+- add create, get, list by workspace, full replace update, and list due API endpoints
+- route workspace scope through a path workspace UUID until auth middleware exists
+- keep stale query, submissions, attachments, owner/team, source-system, and uploaded-evidence semantics out of story 015
+
 ## Design
 
 Evidence Requests are durable scheduled objects describing what evidence should be collected. Include:
@@ -54,22 +60,30 @@ Cadence is schedule-owned through `schedule_anchor_at`. Late submissions must no
 
 Repository methods should support create, list by workspace, get, full replace update, and list due. `list_due` returns active Evidence Requests where `due_at <= now`, ordered by `due_at`.
 
+API endpoints should support create, list by workspace, get, full replace update, and list due. Request handlers validate DTOs with the applicative validation macro, map to domain types, invoke services, and map results to response DTOs.
+
 ## Acceptance Criteria
 
 - Evidence Request table is migrated.
 - Repository supports create, get, list by workspace, full replace update, and list due.
-- Domain model enforces slice 1 invariants.
+- Domain model enforces Evidence Request invariants.
+- Service validates Evidence Request input and delegates persistence through the repository trait.
+- API exposes Evidence Request endpoints.
 - Seed data includes realistic demo Evidence Requests.
-- No API endpoints, auth behavior, service orchestration, stale query, owner/team, source-system, or uploaded-evidence semantics are introduced in this slice.
+- No auth behavior, stale query, owner/team, source-system, or uploaded-evidence semantics are introduced in story 015.
 
 ## Tests
 
 - Domain unit tests cover parsing and invariants.
+- Validation tests cover accumulated field errors.
 - Repository code is compile-checked.
+- API and service code are compile-checked.
 - Database-backed repository tests remain deferred until story 009 introduces the integration harness.
 
 ## QA Guide
 
 1. Run migrations and seed.
-2. Confirm the `evidence_requests` table exists.
-3. Confirm seeded local Evidence Requests exist for the workspace with slug `local-workspace`.
+2. Start API.
+3. List seeded Evidence Requests for the local workspace UUID.
+4. Create an Evidence Request with multiple invalid fields and confirm field errors return.
+5. Create a valid Evidence Request and retrieve it by ID.

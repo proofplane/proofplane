@@ -6,6 +6,10 @@ use axum::{
 use deadpool_postgres::PoolError;
 use serde::Serialize;
 
+use crate::{
+    domain::DomainError, repository::Error as RepositoryError, services::Error as ServiceError,
+};
+
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: ErrorBody,
@@ -20,6 +24,8 @@ struct ErrorBody {
 
 #[derive(Debug)]
 pub enum ApiError {
+    BadRequest(Vec<String>),
+    Internal,
     NotFound,
     ReadinessTimeout,
     Pool(PoolError),
@@ -29,6 +35,8 @@ pub enum ApiError {
 impl ApiError {
     fn status(&self) -> StatusCode {
         match self {
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
@@ -38,6 +46,8 @@ impl ApiError {
 
     fn code(&self) -> &'static str {
         match self {
+            Self::BadRequest(_) => "bad_request",
+            Self::Internal => "internal_error",
             Self::NotFound => "not_found",
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => "not_ready",
         }
@@ -45,6 +55,8 @@ impl ApiError {
 
     fn message(&self) -> &'static str {
         match self {
+            Self::BadRequest(_) => "request validation failed",
+            Self::Internal => "internal server error",
             Self::NotFound => "route not found",
             Self::ReadinessTimeout => "readiness check timed out",
             Self::Pool(_) | Self::Postgres(_) => "Postgres readiness check failed",
@@ -56,15 +68,21 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         match &self {
+            Self::Internal => tracing::error!("internal API error"),
+            Self::BadRequest(_) => {}
             Self::Pool(error) => tracing::warn!(%error, "Postgres pool readiness check failed"),
             Self::Postgres(error) => tracing::warn!(%error, "Postgres readiness query failed"),
             Self::NotFound | Self::ReadinessTimeout => {}
         }
+        let details = match &self {
+            Self::BadRequest(details) => details.clone(),
+            _ => Vec::new(),
+        };
         let body = ErrorResponse {
             error: ErrorBody {
                 code: self.code(),
                 message: self.message(),
-                details: Vec::new(),
+                details,
             },
         };
 
@@ -74,6 +92,23 @@ impl IntoResponse for ApiError {
 
 pub async fn not_found() -> ApiError {
     ApiError::NotFound
+}
+
+impl From<ServiceError> for ApiError {
+    fn from(error: ServiceError) -> Self {
+        match error {
+            ServiceError::Repository(error) => repository_error(error),
+        }
+    }
+}
+
+pub fn domain_errors(errors: Vec<DomainError>) -> ApiError {
+    ApiError::BadRequest(errors.into_iter().map(|error| error.to_string()).collect())
+}
+
+fn repository_error(error: RepositoryError) -> ApiError {
+    tracing::error!(%error, "repository error");
+    ApiError::Internal
 }
 
 #[cfg(test)]
