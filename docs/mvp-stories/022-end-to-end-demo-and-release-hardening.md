@@ -1,4 +1,4 @@
-# 023 - End-to-End Demo and Release Hardening
+# 022 - End-to-End Demo and Release Hardening
 
 ## Goal
 

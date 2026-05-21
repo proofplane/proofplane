@@ -15,7 +15,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Done | Axum API runtime serves health, readiness, version, metrics, stable errors, and structured request logs. |
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Done | Refinery migrations, Postgres pool wiring, startup migrations, and idempotent local seed data are in place. |
 | 009. [Integration Test Harness](./009-integration-test-harness.md) | Done | Postgres/testcontainers API harness and Evidence Request integration coverage are in place; later stories add dependency-specific coverage as needed. |
-| 010. [Authentication, Actors, Request Middleware, and Authorization Boundary](./010-authentication-actors-and-request-middleware.md) | Next | Authenticate actors, protect Evidence Request routes, add an authorization boundary, and run a bounded SpiceDB design spike. |
+| 010. [Authentication, Actors, Request Middleware, and SpiceDB Authorization](./010-authentication-actors-and-request-middleware.md) | Next | Add API-key auth and local SpiceDB-backed workspace authorization for Evidence Request routes in slices. |
 | 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Planned | Not started. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Planned | Not started. |
 | 013. [Worker Runtime and Outbox Dequeuer](./013-worker-runtime-and-outbox-dequeuer.md) | Planned | Not started. |
@@ -26,9 +26,8 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
-| 021. [SpiceDB Authorization Integration](./021-spicedb-authorization-integration.md) | Planned | Integrate the fine-grained authorization backend after more domain entities and actions exist. |
-| 022. [MCP Server](./022-mcp-server.md) | Planned | Not started. |
-| 023. [End-to-End Demo and Release Hardening](./023-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
+| 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
+| 022. [End-to-End Demo and Release Hardening](./022-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
 
 ## Parallelization Notes
 
@@ -42,7 +41,7 @@ Shared gates:
 
 Near-term parallel lanes:
 
-- Story 010 is the next mainline task now that Evidence Request endpoints give authentication and the first authorization boundary a concrete API surface.
+- Story 010 is the next mainline task now that Evidence Request endpoints give authentication and the first SpiceDB authorization checks a concrete API surface.
 - Later stories should extend the integration harness with reusable Pub/Sub, object-storage, config, and binary helpers when those boundaries exist.
 - Story 016 follows story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
@@ -54,16 +53,15 @@ Infrastructure lanes after config:
 
 Product lanes:
 
-- Story 010 depends on 007, 008, and the Evidence Request routes from 015. It adds actor-aware API auth, an initial workspace-scoped authorization boundary, and a small SpiceDB design spike without integrating SpiceDB yet.
+- Story 010 depends on 007, 008, and the Evidence Request routes from 015. It adds actor-aware API auth, local SpiceDB runtime/bootstrap, and initial workspace-scoped authorization checks.
 - Story 015 is complete and provides the Evidence Request base for the main product model. Story 010 protects its endpoints.
 - Story 016 depends on 010 and 015.
 - Story 017 depends on 014 and 015, and should introduce or coordinate with story 010 when submitter actor context becomes necessary.
 - Story 018 depends on 016 and 017.
 - Story 019 depends on the evidence/control/submission model from 015-018.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
-- Story 021 depends on the authorization boundary from 010 and the richer domain/action surface from 016-020 before integrating SpiceDB.
-- Story 022 depends on the domain services created by 015-021.
-- Story 023 should remain last because it validates the complete system.
+- Story 021 depends on the domain services created by 015-020 and should use the authentication and authorization model introduced in 010.
+- Story 022 should remain last because it validates the complete system.
 
 Definition of done for every story:
 
