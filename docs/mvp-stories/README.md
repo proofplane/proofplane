@@ -6,7 +6,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 
 | Story | Status | Notes |
 | --- | --- | --- |
-| 001. [Repository and Crate Scaffold](./001-repository-and-workspace-scaffold.md) | Done | Single-package Rust scaffold, binaries, core modules, and Makefile are in place. Integration tests are deferred to 009. |
+| 001. [Repository and Crate Scaffold](./001-repository-and-workspace-scaffold.md) | Done | Single-package Rust scaffold, binaries, core modules, and Makefile are in place. Integration coverage was added later under 009. |
 | 002. [Local Docker Compose Dependencies](./002-local-docker-compose-dependencies.md) | Done | Docker Compose covers Postgres and the Pub/Sub emulator; local config reserves `.local/storage` for future filesystem object storage. |
 | 003. [Applicative Validation Framework](./003-applicative-validation-framework.md) | Done | Generic `Validation<T, E>` API and `validate!` macro are implemented and tested. |
 | 004. [Configuration System](./004-configuration-system.md) | Done | Typed YAML config loads through `PROOFPLANE_CONFIG`, validates with story 003, and redacts secrets. |
@@ -14,20 +14,21 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 006. [Observability Scaffold](./006-observability-scaffold.md) | Done | Structured logging initializes through `tracing_subscriber`; metrics are deferred until real runtime boundaries exist. |
 | 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Done | Axum API runtime serves health, readiness, version, metrics, stable errors, and structured request logs. |
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Done | Refinery migrations, Postgres pool wiring, startup migrations, and idempotent local seed data are in place. |
-| 009. [Integration Test Harness](./009-integration-test-harness.md) | Deferred | Not started. Introduce this when feature work needs process or infrastructure integration coverage. |
-| 010. [Authentication, Actors, and Request Middleware](./010-authentication-actors-and-request-middleware.md) | Deferred | Use local hashed API keys when implemented. Defer until real endpoints clarify authorization rules. |
+| 009. [Integration Test Harness](./009-integration-test-harness.md) | Done | Postgres/testcontainers API harness and Evidence Request integration coverage are in place; later stories add dependency-specific coverage as needed. |
+| 010. [Authentication, Actors, Request Middleware, and Authorization Boundary](./010-authentication-actors-and-request-middleware.md) | Next | Authenticate actors, protect Evidence Request routes, add an authorization boundary, and run a bounded SpiceDB design spike. |
 | 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Planned | Not started. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Planned | Not started. |
 | 013. [Worker Runtime and Outbox Dequeuer](./013-worker-runtime-and-outbox-dequeuer.md) | Planned | Not started. |
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Planned | Not started. |
-| 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Next | Not started. |
-| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Planned | Not started. |
+| 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
+| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Planned | Add the control registry and durable Evidence Request-control mappings after the first auth boundary. |
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Planned | Not started. |
 | 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
-| 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
-| 022. [End-to-End Demo and Release Hardening](./022-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
+| 021. [SpiceDB Authorization Integration](./021-spicedb-authorization-integration.md) | Planned | Integrate the fine-grained authorization backend after more domain entities and actions exist. |
+| 022. [MCP Server](./022-mcp-server.md) | Planned | Not started. |
+| 023. [End-to-End Demo and Release Hardening](./023-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
 
 ## Parallelization Notes
 
@@ -37,13 +38,13 @@ Shared gates:
 
 - Stories 001-004 are complete and unblock the next layer of platform work.
 - Story 005 standardized the retry helper and concrete `thiserror` boundary errors before deeper runtime work.
-- Story 009 is deferred until feature work needs process or infrastructure integration coverage. No Postgres/testcontainers coverage has been pulled forward.
+- Story 009 provides the Postgres/testcontainers API harness used by the Evidence Request integration tests. Later stories should add dependency-specific process, Pub/Sub, and object-storage coverage when they introduce those boundaries.
 
 Near-term parallel lanes:
 
-- Story 015 is the next mainline feature task.
-- Story 009 should be added alongside the first feature or infrastructure boundary that needs end-to-end verification, with reusable Postgres, Pub/Sub, config, and binary helpers.
-- Story 010 is deferred until product endpoints make the authentication and authorization boundaries concrete. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
+- Story 010 is the next mainline task now that Evidence Request endpoints give authentication and the first authorization boundary a concrete API surface.
+- Later stories should extend the integration harness with reusable Pub/Sub, object-storage, config, and binary helpers when those boundaries exist.
+- Story 016 follows story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
 Infrastructure lanes after config:
 
@@ -53,15 +54,16 @@ Infrastructure lanes after config:
 
 Product lanes:
 
-- Story 010 depends on 007, 008, and concrete product routes because it needs API middleware, actor persistence, and real authorization decisions.
-- Story 015 depends on 004, 007, and 008, then becomes the base for the main product model. Keep endpoints public or locally gated until story 010 defines auth. Add story 009 before or alongside it if repository/API behavior needs integration coverage.
-- Story 016 depends on 015.
+- Story 010 depends on 007, 008, and the Evidence Request routes from 015. It adds actor-aware API auth, an initial workspace-scoped authorization boundary, and a small SpiceDB design spike without integrating SpiceDB yet.
+- Story 015 is complete and provides the Evidence Request base for the main product model. Story 010 protects its endpoints.
+- Story 016 depends on 010 and 015.
 - Story 017 depends on 014 and 015, and should introduce or coordinate with story 010 when submitter actor context becomes necessary.
 - Story 018 depends on 016 and 017.
 - Story 019 depends on the evidence/control/submission model from 015-018.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
-- Story 021 depends on the domain services created by 015-020.
-- Story 022 should remain last because it validates the complete system.
+- Story 021 depends on the authorization boundary from 010 and the richer domain/action surface from 016-020 before integrating SpiceDB.
+- Story 022 depends on the domain services created by 015-021.
+- Story 023 should remain last because it validates the complete system.
 
 Definition of done for every story:
 
