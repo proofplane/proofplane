@@ -44,3 +44,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+axum-test = "20"
+serde_json = "1"
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }
