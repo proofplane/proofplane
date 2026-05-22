@@ -1,3 +1,5 @@
+// TODO: rewrite all the helpers that use if/else to return after if so we don't need else
+
 use std::net::SocketAddr;
 
 use secrecy::{ExposeSecret, SecretString};
@@ -112,6 +114,10 @@ pub(super) fn optional_url(value: Option<String>) -> Result<Option<Url>, String>
             .map_err(|_| "must be a valid URL".into()),
         None => Ok(None),
     }
+}
+
+pub(super) fn string_url(value: String) -> Result<Url, String> {
+    Url::parse(trim_required(value)?.as_str()).map_err(|_| "must be a valid URL".into())
 }
 
 pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {

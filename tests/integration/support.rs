@@ -7,7 +7,7 @@ use proofplane::{
     config::{
         AppConfig, AuthConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig,
         ObservabilityConfig, PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig,
-        ServerConfig, WorkerConfig,
+        ServerConfig, SpiceDbConfig, WorkerConfig,
     },
     repository::Postgres,
     store,
@@ -114,6 +114,10 @@ fn config(database_url: String) -> AppConfig {
             subscriptions: PubSubSubscriptionsConfig {
                 worker: "integration-worker".to_owned(),
             },
+        },
+        spicedb: SpiceDbConfig {
+            endpoint: url::Url::parse("http://127.0.0.1:1").expect("SpiceDB endpoint parses"),
+            preshared_key: SecretString::from("integration-spicedb-key"),
         },
         object_storage: ObjectStorageConfig::Filesystem {
             root: PathBuf::from(".integration-storage"),

@@ -44,13 +44,14 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = store::conn(&config.postgres.expose_secret()).await?;
+    let mut client = store::conn(config.postgres.expose_secret()).await?;
 
     debug!("running migrations");
     store::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = store::conn_pool(&config.postgres.expose_secret(), 200).await?;
+    // TODO: add a postgres configuration for the db pool size
+    let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
     let postgres = repository::Postgres::new(pool);
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
@@ -59,9 +60,9 @@ async fn run() -> Result<(), Error> {
     info!("listening on {}", config.server.api_bind);
 
     let deps = AppDependencies {
-        config: config,
+        config,
         postgres: Arc::new(postgres),
-        metrics: metrics,
+        metrics,
     };
 
     let app = create_app(deps);

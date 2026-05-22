@@ -9,10 +9,11 @@ use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
         gcs_credentials_mode, host_port, nonzero_u16, nonzero_u64, optional_url, parse_log_format,
-        path_string, postgres_connection_string, secret_value, string_value, ConfigValidationExt,
+        path_string, postgres_connection_string, secret_value, string_url, string_value,
+        ConfigValidationExt,
     },
     AuthConfig, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, WorkerConfig,
+    PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -20,6 +21,7 @@ pub(super) struct RawAppConfig {
     pub(super) server: RawServerConfig,
     pub(super) postgres: SecretString,
     pub(super) pubsub: RawPubSubConfig,
+    pub(super) spicedb: RawSpiceDbConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) observability: RawObservabilityConfig,
     pub(super) auth: RawAuthConfig,
@@ -33,6 +35,25 @@ pub(super) fn validate_postgres_connection_string(
     value: SecretString,
 ) -> Validation<SecretString, ConfigFieldError> {
     postgres_connection_string(value).at("postgres")
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawSpiceDbConfig {
+    endpoint: String,
+    preshared_key: SecretString,
+}
+
+impl RawSpiceDbConfig {
+    pub(super) fn validate(self) -> Validation<SpiceDbConfig, ConfigFieldError> {
+        validate! {
+            endpoint <- string_url(self.endpoint).at("spicedb.endpoint"),
+            preshared_key <- secret_value(self.preshared_key).at("spicedb.preshared_key"),
+            => SpiceDbConfig {
+                endpoint,
+                preshared_key,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

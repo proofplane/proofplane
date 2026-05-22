@@ -29,5 +29,52 @@ services:
       retries: 12
       start_period: 5s
 
+  spicedb-db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: proofplane
+    command:
+      - sh
+      - -ec
+      - |
+        if ! psql -h postgres -U proofplane -d postgres -tAc \
+          "SELECT 1 FROM pg_database WHERE datname = 'proofplane_spicedb'" | grep -q 1; then
+          createdb -h postgres -U proofplane proofplane_spicedb
+        fi
+
+  spicedb-migrate:
+    image: authzed/spicedb:v1.53.0
+    depends_on:
+      spicedb-db-init:
+        condition: service_completed_successfully
+    command:
+      - datastore
+      - migrate
+      - head
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://proofplane:proofplane@postgres:5432/proofplane_spicedb?sslmode=disable
+
+  spicedb:
+    image: authzed/spicedb:v1.53.0
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    command:
+      - serve
+      - --grpc-preshared-key=proofplane-local-spicedb-key
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://proofplane:proofplane@postgres:5432/proofplane_spicedb?sslmode=disable
+    ports:
+      - "50051:50051"
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "--addr=127.0.0.1:50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
 volumes:
   proofplane-postgres-data:
