@@ -23,7 +23,7 @@ Use named volumes for Postgres developer state and a documented clean-reset comm
 - `.local/storage` is created for filesystem-backed object storage and ignored by Git.
 - Compose health checks cover Postgres and the Pub/Sub emulator.
 - `make up`, `make down`, `make health`, and `make reset-local` are documented.
-- `docs/local-development.md` documents local service endpoints and the filesystem object-storage decision.
+- `CONTRIBUTING.md` documents local service endpoints and the filesystem object-storage decision.
 
 ## Tests
 

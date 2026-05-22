@@ -41,6 +41,7 @@ pub(super) fn validate_postgres_connection_string(
 pub(super) struct RawSpiceDbConfig {
     endpoint: String,
     preshared_key: SecretString,
+    schema_path: String,
 }
 
 impl RawSpiceDbConfig {
@@ -48,9 +49,11 @@ impl RawSpiceDbConfig {
         validate! {
             endpoint <- string_url(self.endpoint).at("spicedb.endpoint"),
             preshared_key <- secret_value(self.preshared_key).at("spicedb.preshared_key"),
+            schema_path <- string_value(self.schema_path).at("spicedb.schema_path"),
             => SpiceDbConfig {
                 endpoint,
                 preshared_key,
+                schema_path: PathBuf::from(schema_path),
             },
         }
     }

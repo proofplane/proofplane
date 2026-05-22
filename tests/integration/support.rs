@@ -4,6 +4,7 @@ use axum_test::TestServer;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
+    authorization::spicedb::SpiceDbClient,
     config::{
         AppConfig, AuthConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig,
         ObservabilityConfig, PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig,
@@ -14,33 +15,55 @@ use proofplane::{
 };
 use secrecy::SecretString;
 use serde_json::Value;
-use testcontainers::{runners::AsyncRunner, ContainerAsync};
+use testcontainers::{
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
+    ContainerAsync, GenericImage, ImageExt,
+};
 use testcontainers_modules::postgres;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
+const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
+
 pub struct TestApp {
-    // Dropping the Testcontainers handle removes Postgres while the test app still needs it.
+    // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
+    _spicedb_container: ContainerAsync<GenericImage>,
     database: Client,
+    spicedb: SpiceDbClient,
     server: TestServer,
 }
 
 impl TestApp {
     pub async fn start() -> Self {
-        let container = postgres::Postgres::default()
+        let postgres_container = postgres::Postgres::default()
             .start()
             .await
             .expect("Postgres test container starts");
-        let host = container
+        let host = postgres_container
             .get_host()
             .await
             .expect("Postgres test container has a host");
-        let port = container
+        let port = postgres_container
             .get_host_port_ipv4(5432)
             .await
             .expect("Postgres test container exposes Postgres");
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+
+        let spicedb_container = start_spicedb().await;
+        let app_config = config(
+            database_url.clone(),
+            spicedb_endpoint(&spicedb_container).await,
+        );
+        let spicedb = SpiceDbClient::from_config(&app_config.spicedb)
+            .await
+            .expect("SpiceDB client connects");
+        spicedb
+            .write_schema(SPICEDB_SCHEMA)
+            .await
+            .expect("SpiceDB schema applies");
 
         let mut database = store::conn(&database_url)
             .await
@@ -54,14 +77,16 @@ impl TestApp {
             .expect("application Postgres pool opens");
         let recorder = PrometheusBuilder::new().build_recorder();
         let dependencies = AppDependencies {
-            config: config(database_url),
+            config: app_config,
             postgres: Arc::new(Postgres::new(pool)),
             metrics: recorder.handle(),
         };
 
         Self {
-            _postgres_container: container,
+            _postgres_container: postgres_container,
+            _spicedb_container: spicedb_container,
             database,
+            spicedb,
             server: TestServer::new(create_app(dependencies)),
         }
     }
@@ -91,9 +116,36 @@ impl TestApp {
     pub fn server(&self) -> &TestServer {
         &self.server
     }
+
+    pub fn spicedb(&self) -> &SpiceDbClient {
+        &self.spicedb
+    }
 }
 
-fn config(database_url: String) -> AppConfig {
+async fn start_spicedb() -> ContainerAsync<GenericImage> {
+    GenericImage::new("authzed/spicedb", "v1.53.0")
+        .with_exposed_port(50051.tcp())
+        .with_wait_for(WaitFor::seconds(2))
+        .with_cmd(["serve-testing"])
+        .start()
+        .await
+        .expect("SpiceDB test server starts")
+}
+
+async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
+    let host = spicedb
+        .get_host()
+        .await
+        .expect("SpiceDB test server has a host");
+    let port = spicedb
+        .get_host_port_ipv4(50051)
+        .await
+        .expect("SpiceDB test server exposes gRPC");
+
+    url::Url::parse(&format!("http://{host}:{port}")).expect("SpiceDB endpoint parses")
+}
+
+fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
     AppConfig {
         server: ServerConfig {
             api_bind: socket_addr("127.0.0.1:0"),
@@ -116,8 +168,9 @@ fn config(database_url: String) -> AppConfig {
             },
         },
         spicedb: SpiceDbConfig {
-            endpoint: url::Url::parse("http://127.0.0.1:1").expect("SpiceDB endpoint parses"),
-            preshared_key: SecretString::from("integration-spicedb-key"),
+            endpoint: spicedb_endpoint,
+            preshared_key: SecretString::from(SPICEDB_PRESHARED_KEY),
+            schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
         },
         object_storage: ObjectStorageConfig::Filesystem {
             root: PathBuf::from(".integration-storage"),

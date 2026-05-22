@@ -58,6 +58,7 @@ pub struct PubSubSubscriptionsConfig {
 pub struct SpiceDbConfig {
     pub endpoint: Url,
     pub preshared_key: SecretString,
+    pub schema_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +240,10 @@ mod tests {
         let config = load_from_path("config/local.yaml").expect("local config loads");
 
         assert_eq!(config.server.api_bind.to_string(), "127.0.0.1:3000");
+        assert_eq!(
+            config.spicedb.schema_path,
+            PathBuf::from("authz/spicedb/proofplane.zed")
+        );
         assert!(matches!(
             config.object_storage,
             ObjectStorageConfig::Filesystem { .. }
@@ -323,6 +328,7 @@ pubsub:
 spicedb:
   endpoint: ""
   preshared_key: ""
+  schema_path: ""
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -360,6 +366,7 @@ health:
                 assert!(paths.contains(&"pubsub.emulator_host"));
                 assert!(paths.contains(&"spicedb.endpoint"));
                 assert!(paths.contains(&"spicedb.preshared_key"));
+                assert!(paths.contains(&"spicedb.schema_path"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"observability.log_format"));

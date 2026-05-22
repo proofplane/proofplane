@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate seed api worker mcp
+.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate authz-schema-validate authz-schema seed api worker mcp
 
 PROOFPLANE_CONFIG ?= config/local.yaml
 
@@ -16,6 +16,8 @@ help:
 		'  make health            Check local dependency readiness' \
 		'  make reset-local       Destroy and recreate local dependency state' \
 		'  make migrate           Run migrations' \
+		'  make authz-schema-validate Validate SpiceDB schema fixtures with zed' \
+		'  make authz-schema      Apply the configured SpiceDB schema' \
 		'  make seed              Run seed binary' \
 		'  make api               Run API binary' \
 		'  make worker            Run worker binary' \
@@ -55,6 +57,12 @@ reset-local:
 
 migrate:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
+
+authz-schema-validate:
+	zed validate authz/spicedb/proofplane.validation.yaml
+
+authz-schema:
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin authz-schema
 
 seed:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed

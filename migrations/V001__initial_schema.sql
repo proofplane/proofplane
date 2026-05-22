@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 CREATE TABLE IF NOT EXISTS actors (
     id TEXT PRIMARY KEY,
-    workspace_id UUID NOT NULL REFERENCES workspaces(id),
     actor_type TEXT NOT NULL,
     display_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

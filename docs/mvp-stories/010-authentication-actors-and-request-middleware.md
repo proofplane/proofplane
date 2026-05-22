@@ -76,16 +76,15 @@ service, but provision a separate SpiceDB database so SpiceDB owns its own
 datastore migrations and tables. Proofplane should use generated Tonic bindings
 from pinned Authzed protobuf definitions to call the SpiceDB gRPC API.
 
-API startup owns the first bootstrap flow:
+The first schema deployment is an explicit maintenance flow. Validate the
+authored schema fixtures with `zed`, then run Proofplane's schema deployment
+command to apply the configured schema file. API startup does not apply schema.
 
-- connect to SpiceDB
-- apply or ensure the authored schema
-- idempotently synchronize existing Postgres actor-to-workspace memberships into
-  SpiceDB relationships
-
-This startup sync is sufficient while actors and memberships are seeded
-maintenance data. When a later story adds runtime actor or membership writes,
-that write path must keep SpiceDB relationships in sync.
+Postgres keeps actor identity rows for credentials, display metadata, and audit
+references. Workspace membership is authorization data owned only by SpiceDB.
+Local seed writes its initial membership relationship directly to SpiceDB after
+the schema is deployed. When a later story adds runtime membership writes, that
+write path must write the authorization relationship explicitly.
 
 ### Implementation Slices
 
@@ -106,12 +105,12 @@ generated client.
 Make Proofplane own the initial authorization model:
 
 - add `authz/spicedb/proofplane.zed`
-- apply the schema at API startup
-- synchronize Postgres actor-to-workspace memberships into SpiceDB
-  idempotently
-- test repeated schema and relationship bootstrap
+- validate schema fixtures with `zed`
+- apply the configured schema through an explicit maintenance command
+- write seeded SpiceDB workspace membership relationships idempotently
+- test repeated schema deploy and seed relationship writes
 
-This slice is done when repeated API startup leaves the schema and seeded
+This slice is done when repeated schema deployment and local seeding leave
 workspace memberships usable for permission checks.
 
 #### Slice 3 - API-Key Authentication and Request Context
@@ -155,9 +154,10 @@ Middleware responsibilities:
 - Authenticated requests include actor context available to handlers and services.
 - Local dependencies start a usable SpiceDB service backed by its own database on
   the local Postgres service.
-- Proofplane owns and applies the initial SpiceDB `.zed` schema.
-- API startup idempotently synchronizes seeded actor-to-workspace membership
-  relationships into SpiceDB.
+- Proofplane owns, validates, and explicitly deploys the initial SpiceDB `.zed`
+  schema.
+- Seed writes the local actor-to-workspace membership relationship to SpiceDB
+  idempotently.
 - Evidence Request endpoints reject cross-workspace access for authenticated actors.
 - Evidence Request authorization uses SpiceDB workspace permission checks through
   an explicit Proofplane authorization adapter.
@@ -173,7 +173,7 @@ Middleware responsibilities:
 - Unit tests cover credential hashing and verification.
 - API tests cover missing auth, invalid auth, valid auth, and actor context propagation.
 - API tests cover same-workspace Evidence Request access and cross-workspace rejection.
-- SpiceDB tests cover schema/bootstrap idempotency and allowed/denied workspace
+- SpiceDB tests cover schema deployment idempotency and allowed/denied workspace
   permission checks.
 - Authorization adapter tests cover the initial Evidence Request read and write
   actions.
@@ -183,9 +183,10 @@ Middleware responsibilities:
 ## QA Guide
 
 1. Start local dependencies and confirm SpiceDB is ready.
-2. Run migrations and seed.
-3. Start API and confirm it applies the schema and membership relationships.
-4. Call a protected endpoint without credentials and confirm `401`.
-5. Call with seeded credentials and confirm success.
-6. Call an Evidence Request path in a different workspace and confirm access is rejected.
-7. Inspect logs and confirm request ID and actor ID are present but the credential is absent.
+2. Validate and deploy the SpiceDB schema.
+3. Run migrations and seed.
+4. Start API.
+5. Call a protected endpoint without credentials and confirm `401`.
+6. Call with seeded credentials and confirm success.
+7. Call an Evidence Request path in a different workspace and confirm access is rejected.
+8. Inspect logs and confirm request ID and actor ID are present but the credential is absent.

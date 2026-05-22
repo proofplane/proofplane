@@ -24,6 +24,10 @@ path = "src/bin/mcp.rs"
 name = "seed"
 path = "src/bin/seed.rs"
 
+[[bin]]
+name = "authz-schema"
+path = "src/bin/authz_schema.rs"
+
 [dependencies]
 async-trait = "0.1"
 axum = "0.8.9"

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use proofplane::{
+    authorization::spicedb,
     config,
     domain::{
         CreateEvidenceRequestPayload, EvidenceRequestCadence, EvidenceRequestStatus,
@@ -39,6 +40,9 @@ enum Error {
 
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
+
+    #[error("SpiceDB error")]
+    SpiceDb(#[from] spicedb::ClientError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -66,6 +70,7 @@ async fn run() -> Result<(), Error> {
 
     debug!("seeding local data");
     seed_local_data(&client, &postgres).await?;
+    seed_local_membership(&config.spicedb).await?;
     debug!("done seeding local data");
 
     info!(
@@ -86,8 +91,8 @@ INSERT INTO workspaces (id, slug, name)
 VALUES ('00000000-0000-4000-8000-000000000001', 'local-workspace', 'Local Workspace')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO actors (id, workspace_id, actor_type, display_name)
-VALUES ('system-actor', '00000000-0000-4000-8000-000000000001', 'system', 'System')
+INSERT INTO actors (id, actor_type, display_name)
+VALUES ('system-actor', 'system', 'System')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO api_credentials (id, actor_id, name, credential_hash)
@@ -98,6 +103,15 @@ ON CONFLICT (id) DO NOTHING;
         .await?;
 
     seed_evidence_requests(evidence_requests).await
+}
+
+async fn seed_local_membership(config: &config::SpiceDbConfig) -> Result<(), Error> {
+    let client = spicedb::SpiceDbClient::from_config(config).await?;
+    client
+        .write_workspace_membership(local_workspace_id(), "system-actor")
+        .await?;
+
+    Ok(())
 }
 
 async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
