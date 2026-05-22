@@ -23,7 +23,6 @@ pub struct AppConfig {
     pub spicedb: SpiceDbConfig,
     pub object_storage: ObjectStorageConfig,
     pub observability: ObservabilityConfig,
-    pub auth: AuthConfig,
     pub worker: WorkerConfig,
     pub health: HealthConfig,
 }
@@ -91,12 +90,6 @@ pub struct ObservabilityConfig {
 pub enum LogFormat {
     Json,
     Pretty,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthConfig {
-    pub api_key_header: String,
-    pub credential_hash_pepper: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +190,6 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         spicedb <- raw.spicedb.validate(),
         object_storage <- raw.object_storage.validate(),
         observability <- raw.observability.validate(),
-        auth <- raw.auth.validate(),
         worker <- raw.worker.validate(),
         health <- raw.health.validate(),
         => AppConfig {
@@ -207,7 +199,6 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             spicedb,
             object_storage,
             observability,
-            auth,
             worker,
             health,
         },
@@ -294,7 +285,6 @@ pubsub: {}
 spicedb: {}
 object_storage: {}
 observability: {}
-auth: {}
 worker: {}
 health: {}
 "#,
@@ -338,9 +328,6 @@ object_storage:
 observability:
   log_format: "xml"
   default_filter: "info"
-auth:
-  api_key_header: "x-proofplane-api-key"
-  credential_hash_pepper: "pepper"
 worker:
   concurrency: 0
   retry_attempts: 0

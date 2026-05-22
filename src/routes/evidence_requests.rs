@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    middleware,
     routing::{get, post},
     Json, Router,
 };
@@ -12,25 +13,24 @@ use crate::{
         CreateEvidenceRequestPayload, DomainError, EvidenceRequest, EvidenceRequestCadence,
         EvidenceRequestId, EvidenceRequestStatus, UpdateEvidenceRequestPayload, WorkspaceId,
     },
-    routes::error::{domain_errors, ApiError},
+    routes::{
+        authentication::{require_api_key, ApiKeyState},
+        error::{domain_errors, ApiError},
+    },
     services::evidence_requests::EvidenceRequestService,
     validate,
     validation::Validation,
 };
 
+#[derive(Clone)]
 pub struct EvidenceRequestState {
     pub service: EvidenceRequestService,
-}
-
-impl Clone for EvidenceRequestState {
-    fn clone(&self) -> Self {
-        Self {
-            service: self.service.clone(),
-        }
-    }
+    pub api_key_auth: ApiKeyState,
 }
 
 pub fn router(state: EvidenceRequestState) -> Router {
+    let api_key_auth = state.api_key_auth.clone();
+
     Router::new()
         .route(
             "/workspaces/{workspace_id}/evidence-requests",
@@ -44,6 +44,10 @@ pub fn router(state: EvidenceRequestState) -> Router {
             "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}",
             get(get_evidence_request).put(replace_evidence_request),
         )
+        .route_layer(middleware::from_fn_with_state(
+            api_key_auth,
+            require_api_key,
+        ))
         .with_state(state)
 }
 

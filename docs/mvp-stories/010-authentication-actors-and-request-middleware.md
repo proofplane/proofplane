@@ -18,16 +18,18 @@ Model actors as first-class domain objects:
 - service account
 - integration
 - policy automation
+- system
 
 Use locally managed, hashed API keys for the MVP. Auth0 is not part of the
 current plan. If Proofplane later needs Auth0 or another external identity
 provider, handle that as a future migration or additional auth provider rather
 than shaping the MVP around it now.
 
-API keys must be stored hashed at rest. For generated high-entropy API keys,
-prefer a simple deterministic keyed hash using the configured credential pepper
-unless later requirements call for a different scheme. Do not store raw API
-keys.
+API keys must be stored hashed at rest. Slice 3 uses crate-generated API keys,
+stores the stable key ID plus crate-managed Argon2 PHC hash material, and shows
+the raw key only at issuance. Do not store raw API keys. Each actor owns at most
+one API credential; issuing a new key for the same actor rotates that credential
+row, while an independently valid key requires a new actor identity.
 
 Protect the Evidence Request API in this story. The initial authorization policy
 is deliberately narrow: authenticated actors may read and write Evidence
@@ -117,20 +119,22 @@ workspace memberships usable for permission checks.
 
 Identify the caller:
 
-- add real API-key hashing and verification
+- add generated API-key issuance and verification
 - resolve credentials to actor context
-- seed one actor for each MVP actor type and one documented fixture API key
+- seed one actor for each MVP actor type and print a generated local system key
+  that rotates on each seed run
+- require API keys only for Evidence Request routes
 - assign or propagate request IDs and include actor/request context in logs
 - map missing or invalid credentials to `401`
 
-This slice is done when protected routes can distinguish authenticated and
-unauthenticated callers.
+This slice is limited to authentication and request context and is done when
+protected routes can distinguish authenticated and unauthenticated callers.
+SpiceDB authorization remains Slice 4.
 
 #### Slice 4 - Evidence Request Authorization
 
 Protect the first product surface:
 
-- require API keys only for Evidence Request routes
 - call SpiceDB workspace read/write permissions through the authorization
   adapter
 - conceal authenticated cross-workspace Evidence Request access with `404`

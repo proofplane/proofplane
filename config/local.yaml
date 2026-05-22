@@ -29,10 +29,6 @@ observability:
   log_format: "pretty"
   default_filter: "debug"
 
-auth:
-  api_key_header: "x-proofplane-api-key"
-  credential_hash_pepper: "proofplane-local-pepper"
-
 worker:
   concurrency: 4
   retry_attempts: 3

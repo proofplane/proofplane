@@ -1,16 +1,20 @@
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 
+use api_keys_simplified::{Environment, ExposeSecret};
 use axum_test::TestServer;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
+    authentication::{ApiKeyAuthenticator, ApiKeyManager},
     authorization::spicedb::SpiceDbClient,
     config::{
-        AppConfig, AuthConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig,
-        ObservabilityConfig, PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig,
-        ServerConfig, SpiceDbConfig, WorkerConfig,
+        AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
+        WorkerConfig,
     },
+    domain::{ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload},
     repository::Postgres,
+    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
     store,
 };
 use secrecy::SecretString;
@@ -21,23 +25,33 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 use testcontainers_modules::postgres;
-use tokio_postgres::Client;
 use uuid::Uuid;
 
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
+pub const INTEGRATION_ACTOR_ID: &str = "integration-system";
 
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
-    database: Client,
+    postgres: Arc<Postgres>,
     spicedb: SpiceDbClient,
     server: TestServer,
+    api_key: String,
 }
 
 impl TestApp {
     pub async fn start() -> Self {
+        Self::start_with_default_auth(true).await
+    }
+
+    pub async fn start_without_default_auth() -> Self {
+        Self::start_with_default_auth(false).await
+    }
+
+    async fn start_with_default_auth(default_auth: bool) -> Self {
+        // TODO(low priority): allow dependency containers to be toggled for health tests.
         let postgres_container = postgres::Postgres::default()
             .start()
             .await
@@ -75,31 +89,48 @@ impl TestApp {
         let pool = store::conn_pool(&database_url, 8)
             .await
             .expect("application Postgres pool opens");
+        let postgres = Arc::new(Postgres::new(pool));
+        let api_key = insert_api_credential(&postgres).await;
         let recorder = PrometheusBuilder::new().build_recorder();
+        // It's safe to unwrap the result of returning the new ApiKeyManager because
+        // we're in a test and it really shouldn't panic anyways.
+        let authenticator =
+            ApiKeyAuthenticator::new(ApiKeyManager::new().unwrap(), postgres.clone());
+
         let dependencies = AppDependencies {
             config: app_config,
-            postgres: Arc::new(Postgres::new(pool)),
+            postgres: postgres.clone(),
             metrics: recorder.handle(),
+            authenticator,
         };
+
+        let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
+        if default_auth {
+            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
+            server.add_header(API_KEY_HEADER, &api_key);
+        }
 
         Self {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
-            database,
+            postgres,
             spicedb,
-            server: TestServer::new(create_app(dependencies)),
+            server,
+            api_key,
         }
     }
 
     pub async fn insert_workspace(&self, name: &str) -> Uuid {
-        self.database
-            .query_one(
-                "INSERT INTO workspaces (name) VALUES ($1) RETURNING id",
-                &[&name],
-            )
+        self.postgres
+            .create_workspace(&CreateWorkspacePayload {
+                id: None,
+                slug: None,
+                name: name.to_owned(),
+            })
             .await
             .expect("workspace fixture inserts")
-            .get("id")
+            .id
+            .into()
     }
 
     pub async fn create_evidence_request(&self, workspace_id: Uuid, body: &Value) -> Value {
@@ -120,6 +151,45 @@ impl TestApp {
     pub fn spicedb(&self) -> &SpiceDbClient {
         &self.spicedb
     }
+
+    pub fn postgres(&self) -> &Postgres {
+        &self.postgres
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+}
+
+async fn insert_api_credential(postgres: &Postgres) -> String {
+    let issued = ApiKeyManager::new()
+        .expect("API key manager builds")
+        .issue(Environment::test())
+        .expect("integration API key issues");
+    let api_key = issued.raw_key.expose_secret().to_owned();
+
+    postgres
+        .create_actor(&CreateActorPayload {
+            id: INTEGRATION_ACTOR_ID.to_owned(),
+            kind: ActorKind::System,
+            display_name: "Integration System".to_owned(),
+        })
+        .await
+        .expect("integration actor inserts");
+    postgres
+        .create_api_credential(&CreateApiCredentialPayload {
+            id: "integration-api-key".to_owned(),
+            actor_id: INTEGRATION_ACTOR_ID.to_owned(),
+            name: "Integration API Key".to_owned(),
+            key_id: issued.key_id,
+            credential_hash: issued.credential_hash,
+            expires_at: None,
+            revoked_at: None,
+        })
+        .await
+        .expect("integration API credential inserts");
+
+    api_key
 }
 
 async fn start_spicedb() -> ContainerAsync<GenericImage> {
@@ -178,10 +248,6 @@ fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,
             default_filter: "info".to_owned(),
-        },
-        auth: AuthConfig {
-            api_key_header: "x-proofplane-api-key".to_owned(),
-            credential_hash_pepper: SecretString::from("integration-pepper"),
         },
         worker: WorkerConfig {
             concurrency: 1,

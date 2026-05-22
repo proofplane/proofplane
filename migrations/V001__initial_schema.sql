@@ -16,9 +16,12 @@ CREATE TABLE IF NOT EXISTS actors (
 
 CREATE TABLE IF NOT EXISTS api_credentials (
     id TEXT PRIMARY KEY,
-    actor_id TEXT NOT NULL REFERENCES actors(id),
+    actor_id TEXT NOT NULL UNIQUE REFERENCES actors(id),
     name TEXT NOT NULL,
+    key_id TEXT NOT NULL,
     credential_hash TEXT NOT NULL,
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -40,3 +43,46 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS evidence_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    collection_instructions TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK (cadence IN ('once', 'monthly', 'quarterly', 'annually')),
+    due_at TIMESTAMPTZ NOT NULL,
+    schedule_anchor_at TIMESTAMPTZ NOT NULL,
+    freshness_window_days INTEGER CHECK (freshness_window_days IS NULL OR freshness_window_days > 0),
+    status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'retired')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_requests_workspace_id
+    ON evidence_requests (workspace_id);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_requests_due_active
+    ON evidence_requests (due_at)
+    WHERE status = 'active';
+
+-- Auth resolves the actor's single API credential from the claimed actor ID.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_credentials_actor_id
+    ON api_credentials (actor_id);
+
+-- Workspace lists are returned in creation order with ID as the stable tie-breaker.
+CREATE INDEX IF NOT EXISTS idx_workspaces_created_id
+    ON workspaces (created_at, id);
+
+-- Workspace-scoped Evidence Request lists are ordered by due time and title.
+-- The left prefix still supports workspace-only filtering.
+DROP INDEX IF EXISTS idx_evidence_requests_workspace_id;
+CREATE INDEX IF NOT EXISTS idx_evidence_requests_workspace_due_title
+    ON evidence_requests (workspace_id, due_at, title);
+
+-- Due reads constrain active requests by workspace and then scan due time in
+-- response order.
+DROP INDEX IF EXISTS idx_evidence_requests_due_active;
+CREATE INDEX IF NOT EXISTS idx_evidence_requests_active_workspace_due_title
+    ON evidence_requests (workspace_id, due_at, title)
+    WHERE status = 'active';

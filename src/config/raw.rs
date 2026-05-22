@@ -12,8 +12,8 @@ use super::{
         path_string, postgres_connection_string, secret_value, string_url, string_value,
         ConfigValidationExt,
     },
-    AuthConfig, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, WorkerConfig,
+    GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
+    PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,7 +24,6 @@ pub(super) struct RawAppConfig {
     pub(super) spicedb: RawSpiceDbConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) observability: RawObservabilityConfig,
-    pub(super) auth: RawAuthConfig,
     pub(super) worker: RawWorkerConfig,
     pub(super) health: RawHealthConfig,
 }
@@ -200,26 +199,6 @@ impl RawObservabilityConfig {
             => ObservabilityConfig {
                 log_format,
                 default_filter,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawAuthConfig {
-    api_key_header: String,
-    credential_hash_pepper: SecretString,
-}
-
-impl RawAuthConfig {
-    pub(super) fn validate(self) -> Validation<AuthConfig, ConfigFieldError> {
-        validate! {
-            api_key_header <- string_value(self.api_key_header).at("auth.api_key_header"),
-            credential_hash_pepper <- secret_value(self.credential_hash_pepper)
-                .at("auth.credential_hash_pepper"),
-            => AuthConfig {
-                api_key_header,
-                credential_hash_pepper,
             },
         }
     }

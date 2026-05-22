@@ -1,4 +1,4 @@
-// TODO: rewrite all the helpers that use if/else to return after if so we don't need else
+// TODO(low priority): rewrite helpers that can return early instead of using `else`.
 
 use std::net::SocketAddr;
 

@@ -1,18 +1,20 @@
+use api_keys_simplified::{Environment, ExposeSecret};
 use chrono::{DateTime, Utc};
 use proofplane::{
-    authorization::spicedb,
-    config,
+    authentication::ApiKeyManager,
+    authorization::spicedb::{ClientError, SpiceDbClient},
+    config::{load_from_env, SpiceDbConfig},
     domain::{
-        CreateEvidenceRequestPayload, EvidenceRequestCadence, EvidenceRequestStatus,
-        UpdateEvidenceRequestPayload, WorkspaceId,
+        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateEvidenceRequestPayload,
+        CreateWorkspacePayload, EvidenceRequestCadence, EvidenceRequestStatus, UpdateActorPayload,
+        UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
+        WorkspaceId,
     },
     migrations, observability,
     repository::Postgres,
     store, VERSION,
 };
-use secrecy::ExposeSecret;
 use thiserror::Error;
-use tokio_postgres::Client;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
@@ -32,9 +34,6 @@ enum Error {
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
 
-    #[error("seed data error")]
-    SeedData(#[from] tokio_postgres::Error),
-
     #[error("repository error")]
     Repository(#[from] proofplane::repository::Error),
 
@@ -42,11 +41,14 @@ enum Error {
     Timestamp(#[from] chrono::ParseError),
 
     #[error("SpiceDB error")]
-    SpiceDb(#[from] spicedb::ClientError),
+    SpiceDb(#[from] ClientError),
+
+    #[error("API key generation error")]
+    ApiKey(#[from] proofplane::authentication::Error),
 }
 
 async fn run() -> Result<(), Error> {
-    let config = match config::load_from_env() {
+    let config = match load_from_env() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}");
@@ -69,7 +71,7 @@ async fn run() -> Result<(), Error> {
     let postgres = Postgres::new(pool);
 
     debug!("seeding local data");
-    seed_local_data(&client, &postgres).await?;
+    seed_local_data(&postgres).await?;
     seed_local_membership(&config.spicedb).await?;
     debug!("done seeding local data");
 
@@ -83,30 +85,129 @@ async fn run() -> Result<(), Error> {
     Ok(())
 }
 
-async fn seed_local_data(client: &Client, evidence_requests: &Postgres) -> Result<(), Error> {
-    client
-        .batch_execute(
-            r#"
-INSERT INTO workspaces (id, slug, name)
-VALUES ('00000000-0000-4000-8000-000000000001', 'local-workspace', 'Local Workspace')
-ON CONFLICT (id) DO NOTHING;
+async fn seed_local_data(repository: &Postgres) -> Result<(), Error> {
+    seed_workspace(repository).await?;
+    seed_actors(repository).await?;
+    seed_api_credential(repository).await?;
 
-INSERT INTO actors (id, actor_type, display_name)
-VALUES ('system-actor', 'system', 'System')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO api_credentials (id, actor_id, name, credential_hash)
-VALUES ('local-api-key', 'system-actor', 'Local API Key', 'local-development-credential-hash')
-ON CONFLICT (id) DO NOTHING;
-"#,
-        )
-        .await?;
-
-    seed_evidence_requests(evidence_requests).await
+    seed_evidence_requests(repository).await
 }
 
-async fn seed_local_membership(config: &config::SpiceDbConfig) -> Result<(), Error> {
-    let client = spicedb::SpiceDbClient::from_config(config).await?;
+async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
+    let id = local_workspace_id();
+    let slug = Some("local-workspace".to_owned());
+    let name = "Local Workspace".to_owned();
+
+    if repository.get_workspace(id).await?.is_some() {
+        repository
+            .update_workspace(id, &UpdateWorkspacePayload { slug, name })
+            .await?;
+
+        return Ok(());
+    }
+
+    repository
+        .create_workspace(&CreateWorkspacePayload {
+            id: Some(id),
+            slug,
+            name,
+        })
+        .await?;
+
+    Ok(())
+}
+
+async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
+    for (id, kind, display_name) in [
+        ("local-human-user", ActorKind::HumanUser, "Local Human User"),
+        ("local-ai-agent", ActorKind::AiAgent, "Local AI Agent"),
+        (
+            "local-service-account",
+            ActorKind::ServiceAccount,
+            "Local Service Account",
+        ),
+        (
+            "local-integration",
+            ActorKind::Integration,
+            "Local Integration",
+        ),
+        (
+            "local-policy-automation",
+            ActorKind::PolicyAutomation,
+            "Local Policy Automation",
+        ),
+        ("system-actor", ActorKind::System, "System"),
+    ] {
+        if repository.get_actor(id).await?.is_some() {
+            repository
+                .update_actor(
+                    id,
+                    &UpdateActorPayload {
+                        kind,
+                        display_name: display_name.to_owned(),
+                    },
+                )
+                .await?;
+
+            continue;
+        }
+
+        repository
+            .create_actor(&CreateActorPayload {
+                id: id.to_owned(),
+                kind,
+                display_name: display_name.to_owned(),
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn seed_api_credential(repository: &Postgres) -> Result<(), Error> {
+    let id = "local-api-key";
+    let actor_id = "system-actor".to_owned();
+    let name = "Local API Key".to_owned();
+    let issued = ApiKeyManager::new()?.issue(Environment::dev())?;
+
+    if repository.get_api_credential(id).await?.is_some() {
+        repository
+            .update_api_credential(
+                id,
+                &UpdateApiCredentialPayload {
+                    actor_id,
+                    name,
+                    key_id: issued.key_id.clone(),
+                    credential_hash: issued.credential_hash.clone(),
+                    expires_at: None,
+                    revoked_at: None,
+                },
+            )
+            .await?;
+    } else {
+        repository
+            .create_api_credential(&CreateApiCredentialPayload {
+                id: id.to_owned(),
+                actor_id,
+                name,
+                key_id: issued.key_id.clone(),
+                credential_hash: issued.credential_hash.clone(),
+                expires_at: None,
+                revoked_at: None,
+            })
+            .await?;
+    }
+
+    println!(
+        "local system actor API key (rotated by this seed run): {}",
+        issued.raw_key.expose_secret()
+    );
+
+    Ok(())
+}
+
+async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
+    let client = SpiceDbClient::from_config(config).await?;
     client
         .write_workspace_membership(local_workspace_id(), "system-actor")
         .await?;

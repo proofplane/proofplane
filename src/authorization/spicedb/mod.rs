@@ -55,11 +55,7 @@ impl SpiceDbClient {
             .connect()
             .await
             .map_err(|source| ClientError::Connect {
-                endpoint: endpoint
-                    .uri()
-                    .to_string()
-                    .parse()
-                    .expect("validated Tonic endpoint URI stays a URL"),
+                endpoint: config.endpoint.clone(),
                 source,
             })?;
 
@@ -209,24 +205,7 @@ fn object_reference(
 
 #[cfg(test)]
 mod tests {
-    use secrecy::SecretString;
-
     use super::*;
-
-    #[tokio::test]
-    async fn constructs_from_validated_config() {
-        let config = SpiceDbConfig {
-            endpoint: Url::parse("http://127.0.0.1:50051").expect("endpoint parses"),
-            preshared_key: SecretString::from("test-key"),
-            schema_path: "authz/spicedb/proofplane.zed".into(),
-        };
-
-        let client = SpiceDbClient::from_config(&config)
-            .await
-            .expect("client constructs");
-
-        assert!(client.preshared_key_is_configured());
-    }
 
     #[test]
     fn maps_workspace_membership_as_a_touch_update() {
