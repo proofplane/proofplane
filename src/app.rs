@@ -7,12 +7,12 @@ use tracing::Span;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
+    authorization::evidence_requests::EvidenceRequestAuthorizer,
     config::AppConfig,
     repository::Postgres,
     routes::{
-        authentication::ApiKeyState,
         error::not_found,
-        evidence_requests::{self, EvidenceRequestState},
+        evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
         health::{self, ReadyState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
@@ -26,6 +26,7 @@ pub struct AppDependencies {
     pub postgres: Arc<Postgres>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
+    pub evidence_request_authorizer: EvidenceRequestAuthorizer,
 }
 
 pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authentication::Error> {
@@ -49,8 +50,9 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
         )
         .merge(evidence_requests::router(EvidenceRequestState {
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
-            api_key_auth: ApiKeyState {
+            route_auth: EvidenceRequestRouteAuthState {
                 authenticator: dependencies.authenticator,
+                authorizer: dependencies.evidence_request_authorizer,
             },
         }))
         .nest("/version", version::router())

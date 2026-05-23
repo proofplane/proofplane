@@ -77,7 +77,15 @@ async fn run() -> Result<(), Error> {
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded local workspace, actors, API credential, SpiceDB membership, and demo evidence requests"
+        "Seeded local workspaces, actors, API credential, authorized SpiceDB membership, and demo evidence requests"
+    );
+    println!(
+        "authorized workspace: {}",
+        Uuid::from(local_authorized_workspace_id())
+    );
+    println!(
+        "unauthorized workspace: {}",
+        Uuid::from(local_unauthorized_workspace_id())
     );
     println!("local system actor API key (rotated by this seed run): {api_key}");
 
@@ -95,25 +103,34 @@ async fn seed_local_data(repository: &Postgres) -> Result<String, Error> {
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
-    let id = local_workspace_id();
-    let slug = Some("local-workspace".to_owned());
-    let name = "Local Workspace".to_owned();
+    for (id, slug, name) in [
+        (
+            local_authorized_workspace_id(),
+            Some("local-workspace".to_owned()),
+            "Local Workspace".to_owned(),
+        ),
+        (
+            local_unauthorized_workspace_id(),
+            Some("local-unauthorized-workspace".to_owned()),
+            "Local Unauthorized Workspace".to_owned(),
+        ),
+    ] {
+        if repository.get_workspace(id).await?.is_some() {
+            repository
+                .update_workspace(id, &UpdateWorkspacePayload { slug, name })
+                .await?;
 
-    if repository.get_workspace(id).await?.is_some() {
+            continue;
+        }
+
         repository
-            .update_workspace(id, &UpdateWorkspacePayload { slug, name })
+            .create_workspace(&CreateWorkspacePayload {
+                id: Some(id),
+                slug,
+                name,
+            })
             .await?;
-
-        return Ok(());
     }
-
-    repository
-        .create_workspace(&CreateWorkspacePayload {
-            id: Some(id),
-            slug,
-            name,
-        })
-        .await?;
 
     Ok(())
 }
@@ -205,7 +222,7 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
 async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
     let client = SpiceDbClient::from_config(config).await?;
     client
-        .write_workspace_membership(local_workspace_id(), "system-actor")
+        .write_workspace_membership(local_authorized_workspace_id(), "system-actor")
         .await?;
 
     Ok(())
@@ -327,7 +344,15 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
 }
 
 fn local_workspace_id() -> WorkspaceId {
+    local_authorized_workspace_id()
+}
+
+fn local_authorized_workspace_id() -> WorkspaceId {
     WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap())
+}
+
+fn local_unauthorized_workspace_id() -> WorkspaceId {
+    WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap())
 }
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {

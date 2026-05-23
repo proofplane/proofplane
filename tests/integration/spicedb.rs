@@ -11,6 +11,9 @@ async fn schema_and_workspace_membership_are_idempotent_and_check_permissions() 
     let workspace_id = WorkspaceId::from(
         Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("workspace id parses"),
     );
+    let unauthorized_workspace_id = WorkspaceId::from(
+        Uuid::parse_str("00000000-0000-4000-8000-000000000002").expect("workspace id parses"),
+    );
 
     let schema_write = client.write_schema(schema).await;
     assert!(
@@ -86,5 +89,29 @@ async fn schema_and_workspace_membership_are_idempotent_and_check_permissions() 
     assert!(
         matches!(non_member_write, Ok(false)),
         "non-member should not be allowed to write evidence requests: {non_member_write:?}"
+    );
+
+    let unauthorized_read = client
+        .check_workspace_permission(
+            unauthorized_workspace_id,
+            WorkspacePermission::ReadEvidenceRequests,
+            "system-actor",
+        )
+        .await;
+    assert!(
+        matches!(unauthorized_read, Ok(false)),
+        "system actor should not read the unauthorized workspace: {unauthorized_read:?}"
+    );
+
+    let unauthorized_write = client
+        .check_workspace_permission(
+            unauthorized_workspace_id,
+            WorkspacePermission::WriteEvidenceRequests,
+            "system-actor",
+        )
+        .await;
+    assert!(
+        matches!(unauthorized_write, Ok(false)),
+        "system actor should not write the unauthorized workspace: {unauthorized_write:?}"
     );
 }

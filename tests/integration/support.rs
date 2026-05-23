@@ -6,13 +6,16 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
-    authorization::spicedb::SpiceDbClient,
+    authorization::{evidence_requests::EvidenceRequestAuthorizer, spicedb::SpiceDbClient},
     config::{
         AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
         PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
         WorkerConfig,
     },
-    domain::{ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload},
+    domain::{
+        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
+        WorkspaceId,
+    },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
     store,
@@ -102,6 +105,7 @@ impl TestApp {
             postgres: postgres.clone(),
             metrics: recorder.handle(),
             authenticator,
+            evidence_request_authorizer: EvidenceRequestAuthorizer::new(spicedb.clone()),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
@@ -121,6 +125,16 @@ impl TestApp {
     }
 
     pub async fn insert_workspace(&self, name: &str) -> Uuid {
+        let workspace_id: Uuid = self.insert_workspace_without_membership(name).await;
+        self.spicedb
+            .write_workspace_membership(WorkspaceId::from(workspace_id), INTEGRATION_ACTOR_ID)
+            .await
+            .expect("workspace fixture membership writes");
+
+        workspace_id
+    }
+
+    pub async fn insert_workspace_without_membership(&self, name: &str) -> Uuid {
         self.postgres
             .create_workspace(&CreateWorkspacePayload {
                 id: None,

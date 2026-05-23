@@ -5,6 +5,10 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
+    authorization::{
+        evidence_requests::EvidenceRequestAuthorizer,
+        spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
+    },
     config, observability, repository, store,
 };
 use secrecy::ExposeSecret;
@@ -32,6 +36,9 @@ enum Error {
 
     #[error("authentication initialization error")]
     Authentication(#[from] proofplane::authentication::Error),
+
+    #[error("SpiceDB client initialization error")]
+    SpiceDb(#[from] SpiceDbClientError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -64,12 +71,15 @@ async fn run() -> Result<(), Error> {
     info!("listening on {}", config.server.api_bind);
 
     let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
+    let evidence_request_authorizer =
+        EvidenceRequestAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
 
     let deps = AppDependencies {
         config,
         postgres,
         metrics,
         authenticator,
+        evidence_request_authorizer,
     };
 
     let app = create_app(deps)?;

@@ -8,5 +8,7 @@ assertions:
     - workspace:00000000-0000-4000-8000-000000000001#read_evidence_requests@actor:system-actor
     - workspace:00000000-0000-4000-8000-000000000001#write_evidence_requests@actor:system-actor
   assertFalse:
+    - workspace:00000000-0000-4000-8000-000000000002#read_evidence_requests@actor:system-actor
+    - workspace:00000000-0000-4000-8000-000000000002#write_evidence_requests@actor:system-actor
     - workspace:00000000-0000-4000-8000-000000000001#read_evidence_requests@actor:outside-actor
     - workspace:00000000-0000-4000-8000-000000000001#write_evidence_requests@actor:outside-actor

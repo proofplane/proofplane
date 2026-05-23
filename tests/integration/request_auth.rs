@@ -62,6 +62,26 @@ async fn evidence_request_routes_require_valid_api_keys() {
 }
 
 #[tokio::test]
+async fn authentication_runs_before_workspace_authorization() {
+    let app = TestApp::start_without_default_auth().await;
+    let workspace_id = app
+        .insert_workspace_without_membership("Unauthorized auth-order workspace")
+        .await;
+    let path = format!("/workspaces/{workspace_id}/evidence-requests");
+
+    let missing = app.server().get(&path).await;
+    assert_unauthorized(&missing.json(), missing.status_code());
+
+    let invalid = app
+        .server()
+        .get(&path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid.json(), invalid.status_code());
+}
+
+#[tokio::test]
 async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
     let app = TestApp::start_without_default_auth().await;
     let workspace_id = app.insert_workspace("Lifecycle workspace").await;

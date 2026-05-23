@@ -265,6 +265,117 @@ async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() 
     assert_eq!(owned, original);
 }
 
+#[tokio::test]
+async fn authorized_actor_can_create_list_due_get_and_replace_requests() {
+    let app = TestApp::start().await;
+    let workspace_id = app.insert_workspace("Authorized lifecycle workspace").await;
+    let body = evidence_request("Authorized request", "2026-05-20T12:00:00Z", "active");
+
+    let created = app.create_evidence_request(workspace_id, &body).await;
+    let id = created_id(&created);
+
+    app.server()
+        .get(&collection_path(workspace_id))
+        .await
+        .assert_status_ok();
+    app.server()
+        .get(&format!(
+            "{}/due?now=2026-05-21T12%3A00%3A00Z",
+            collection_path(workspace_id)
+        ))
+        .await
+        .assert_status_ok();
+    app.server()
+        .get(&item_path(workspace_id, id))
+        .await
+        .assert_status_ok();
+    app.server()
+        .put(&item_path(workspace_id, id))
+        .json(&evidence_request(
+            "Authorized replacement",
+            "2026-06-20T12:00:00Z",
+            "paused",
+        ))
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn ungranted_workspace_returns_not_found_for_evidence_request_routes() {
+    let app = TestApp::start().await;
+    let workspace_id = app
+        .insert_workspace_without_membership("Ungranted workspace")
+        .await;
+    let request_id = Uuid::new_v4();
+
+    app.server()
+        .get(&collection_path(workspace_id))
+        .await
+        .assert_status_not_found();
+    app.server()
+        .get(&format!(
+            "{}/due?now=2026-05-21T12%3A00%3A00Z",
+            collection_path(workspace_id)
+        ))
+        .await
+        .assert_status_not_found();
+    app.server()
+        .post(&collection_path(workspace_id))
+        .json(&evidence_request(
+            "Denied create",
+            "2026-05-20T12:00:00Z",
+            "active",
+        ))
+        .await
+        .assert_status_not_found();
+    app.server()
+        .get(&item_path(workspace_id, request_id))
+        .await
+        .assert_status_not_found();
+    app.server()
+        .put(&item_path(workspace_id, request_id))
+        .json(&evidence_request(
+            "Denied replacement",
+            "2026-05-20T12:00:00Z",
+            "active",
+        ))
+        .await
+        .assert_status_not_found();
+}
+
+#[tokio::test]
+async fn ungranted_cross_workspace_replace_does_not_modify_owner_copy() {
+    let app = TestApp::start().await;
+    let workspace_id = app.insert_workspace("Granted owner workspace").await;
+    let ungranted_workspace_id = app
+        .insert_workspace_without_membership("Ungranted replace workspace")
+        .await;
+    let original = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Protected owner copy", "2026-02-01T00:00:00Z", "active"),
+        )
+        .await;
+    let id = created_id(&original);
+
+    app.server()
+        .put(&item_path(ungranted_workspace_id, id))
+        .json(&evidence_request(
+            "Unauthorized cross workspace update",
+            "2027-02-01T00:00:00Z",
+            "retired",
+        ))
+        .await
+        .assert_status_not_found();
+
+    let owned = app
+        .server()
+        .get(&item_path(workspace_id, id))
+        .await
+        .json::<Value>();
+    assert_eq!(owned, original);
+}
+
 fn evidence_request(title: &str, due_at: &str, status: &str) -> Value {
     json!({
         "title": title,

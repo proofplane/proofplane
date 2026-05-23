@@ -1,6 +1,9 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
+    http::Method,
     middleware,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -9,12 +12,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    authentication::ApiKeyAuthenticator,
+    authorization::evidence_requests::EvidenceRequestAuthorizer,
     domain::{
-        CreateEvidenceRequestPayload, DomainError, EvidenceRequest, EvidenceRequestCadence,
-        EvidenceRequestId, EvidenceRequestStatus, UpdateEvidenceRequestPayload, WorkspaceId,
+        ActorContext, CreateEvidenceRequestPayload, DomainError, EvidenceRequest,
+        EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
+        UpdateEvidenceRequestPayload, WorkspaceId,
     },
     routes::{
-        authentication::{require_api_key, ApiKeyState},
+        authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
         error::{domain_errors, ApiError},
     },
     services::evidence_requests::EvidenceRequestService,
@@ -25,11 +31,17 @@ use crate::{
 #[derive(Clone)]
 pub struct EvidenceRequestState {
     pub service: EvidenceRequestService,
-    pub api_key_auth: ApiKeyState,
+    pub route_auth: EvidenceRequestRouteAuthState,
+}
+
+#[derive(Clone)]
+pub struct EvidenceRequestRouteAuthState {
+    pub authenticator: ApiKeyAuthenticator,
+    pub authorizer: EvidenceRequestAuthorizer,
 }
 
 pub fn router(state: EvidenceRequestState) -> Router {
-    let api_key_auth = state.api_key_auth.clone();
+    let route_auth = state.route_auth.clone();
 
     Router::new()
         .route(
@@ -45,10 +57,102 @@ pub fn router(state: EvidenceRequestState) -> Router {
             get(get_evidence_request).put(replace_evidence_request),
         )
         .route_layer(middleware::from_fn_with_state(
-            api_key_auth,
-            require_api_key,
+            route_auth,
+            authorize_evidence_request_route,
         ))
         .with_state(state)
+}
+
+async fn authorize_evidence_request_route(
+    State(state): State<EvidenceRequestRouteAuthState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let api_key = match header_value(&request, API_KEY_HEADER) {
+        Some(api_key) => api_key,
+        None => return ApiError::Unauthorized.into_response(),
+    };
+    let actor_id = match header_value(&request, ACTOR_ID_HEADER) {
+        Some(actor_id) => actor_id,
+        None => return ApiError::Unauthorized.into_response(),
+    };
+
+    let actor = match authenticate_request(&state.authenticator, actor_id, api_key).await {
+        Ok(actor) => actor,
+        Err(error) => return error.into_response(),
+    };
+    let workspace_id = match workspace_id_from_path(request.uri().path()) {
+        Some(workspace_id) => workspace_id,
+        None => return ApiError::NotFound.into_response(),
+    };
+
+    let allowed = match *request.method() {
+        Method::GET => {
+            state
+                .authorizer
+                .can_read_evidence_requests(&actor.id, workspace_id)
+                .await
+        }
+        Method::POST | Method::PUT => {
+            state
+                .authorizer
+                .can_write_evidence_requests(&actor.id, workspace_id)
+                .await
+        }
+        _ => Ok(true),
+    }
+    .map_err(|error| {
+        tracing::error!(%error, "Evidence Request authorization failed");
+        ApiError::Internal
+    });
+
+    let allowed = match allowed {
+        Ok(allowed) => allowed,
+        Err(error) => return error.into_response(),
+    };
+
+    if !allowed {
+        return ApiError::NotFound.into_response();
+    }
+
+    tracing::Span::current().record("actor_id", actor.id.as_str());
+    request.extensions_mut().insert(actor);
+
+    next.run(request).await
+}
+
+async fn authenticate_request(
+    authenticator: &ApiKeyAuthenticator,
+    actor_id: String,
+    api_key: String,
+) -> Result<ActorContext, ApiError> {
+    authenticator
+        .authenticate(&actor_id, &api_key)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "API key authentication failed");
+            ApiError::Internal
+        })?
+        .ok_or(ApiError::Unauthorized)
+}
+
+fn header_value(request: &Request, header: &'static str) -> Option<String> {
+    request
+        .headers()
+        .get(header)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn workspace_id_from_path(path: &str) -> Option<WorkspaceId> {
+    let mut segments = path.trim_start_matches('/').split('/');
+
+    match (segments.next(), segments.next()) {
+        (Some("workspaces"), Some(workspace_id)) => {
+            Uuid::parse_str(workspace_id).ok().map(WorkspaceId::from)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Deserialize)]
