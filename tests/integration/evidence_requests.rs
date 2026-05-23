@@ -6,8 +6,12 @@ use super::support::TestApp;
 
 #[tokio::test]
 async fn create_returns_the_evidence_request() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Create workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Create workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let body = evidence_request("Access review", "2026-03-31T09:00:00Z", "active");
 
     let response = app
@@ -27,8 +31,12 @@ async fn create_returns_the_evidence_request() {
 
 #[tokio::test]
 async fn create_maps_validation_errors_to_bad_request() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Invalid create workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Invalid create workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
 
     let response = app
         .server()
@@ -41,9 +49,15 @@ async fn create_maps_validation_errors_to_bad_request() {
 
 #[tokio::test]
 async fn list_returns_requests_for_a_workspace_in_due_date_then_title_order() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("List workspace").await;
-    let other_workspace_id = app.insert_workspace("Other list workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "List workspace")
+        .with_default_membership()
+        .workspace("other_workspace", "Other list workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other_workspace");
 
     app.create_evidence_request(
         workspace_id,
@@ -83,8 +97,12 @@ async fn list_returns_requests_for_a_workspace_in_due_date_then_title_order() {
 
 #[tokio::test]
 async fn list_returns_an_empty_array_for_an_empty_workspace() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Empty workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Empty workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
 
     let response = app.server().get(&collection_path(workspace_id)).await;
 
@@ -94,9 +112,15 @@ async fn list_returns_an_empty_array_for_an_empty_workspace() {
 
 #[tokio::test]
 async fn list_due_returns_only_active_due_requests_for_the_workspace() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Due workspace").await;
-    let other_workspace_id = app.insert_workspace("Other due workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Due workspace")
+        .with_default_membership()
+        .workspace("other_workspace", "Other due workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other_workspace");
 
     app.create_evidence_request(
         workspace_id,
@@ -139,9 +163,15 @@ async fn list_due_returns_only_active_due_requests_for_the_workspace() {
 
 #[tokio::test]
 async fn get_returns_a_request_and_not_found_for_missing_or_cross_workspace_ids() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Get workspace").await;
-    let other_workspace_id = app.insert_workspace("Other get workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Get workspace")
+        .with_default_membership()
+        .workspace("other_workspace", "Other get workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other_workspace");
     let body = evidence_request("SOC report", "2026-06-01T00:00:00Z", "active");
     let created = app.create_evidence_request(workspace_id, &body).await;
     let id = created_id(&created);
@@ -163,8 +193,12 @@ async fn get_returns_a_request_and_not_found_for_missing_or_cross_workspace_ids(
 
 #[tokio::test]
 async fn replace_updates_all_mutable_fields_but_keeps_identity() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Replace workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Replace workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let created = app
         .create_evidence_request(
             workspace_id,
@@ -200,8 +234,12 @@ async fn replace_updates_all_mutable_fields_but_keeps_identity() {
 
 #[tokio::test]
 async fn replace_maps_validation_errors_to_bad_request() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Invalid replace workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Invalid replace workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let created = app
         .create_evidence_request(
             workspace_id,
@@ -220,8 +258,12 @@ async fn replace_maps_validation_errors_to_bad_request() {
 
 #[tokio::test]
 async fn replace_returns_not_found_for_a_missing_request() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Missing replace workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Missing replace workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
 
     app.server()
         .put(&item_path(workspace_id, Uuid::new_v4()))
@@ -236,9 +278,15 @@ async fn replace_returns_not_found_for_a_missing_request() {
 
 #[tokio::test]
 async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Owning replace workspace").await;
-    let other_workspace_id = app.insert_workspace("Other replace workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Owning replace workspace")
+        .with_default_membership()
+        .workspace("other_workspace", "Other replace workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other_workspace");
     let original = app
         .create_evidence_request(
             workspace_id,
@@ -267,8 +315,12 @@ async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() 
 
 #[tokio::test]
 async fn authorized_actor_can_create_list_due_get_and_replace_requests() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Authorized lifecycle workspace").await;
+    let app = TestApp::builder()
+        .workspace("workspace", "Authorized lifecycle workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let body = evidence_request("Authorized request", "2026-05-20T12:00:00Z", "active");
 
     let created = app.create_evidence_request(workspace_id, &body).await;
@@ -302,10 +354,12 @@ async fn authorized_actor_can_create_list_due_get_and_replace_requests() {
 
 #[tokio::test]
 async fn ungranted_workspace_returns_not_found_for_evidence_request_routes() {
-    let app = TestApp::start().await;
-    let workspace_id = app
-        .insert_workspace_without_membership("Ungranted workspace")
+    let app = TestApp::builder()
+        .workspace("workspace", "Ungranted workspace")
+        .without_membership()
+        .build()
         .await;
+    let workspace_id = app.workspace_id("workspace");
     let request_id = Uuid::new_v4();
 
     app.server()
@@ -344,12 +398,34 @@ async fn ungranted_workspace_returns_not_found_for_evidence_request_routes() {
 }
 
 #[tokio::test]
-async fn ungranted_cross_workspace_replace_does_not_modify_owner_copy() {
-    let app = TestApp::start().await;
-    let workspace_id = app.insert_workspace("Granted owner workspace").await;
-    let ungranted_workspace_id = app
-        .insert_workspace_without_membership("Ungranted replace workspace")
+async fn unsupported_evidence_request_methods_return_method_not_allowed() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Unsupported method workspace")
+        .with_default_membership()
+        .build()
         .await;
+    let workspace_id = app.workspace_id("workspace");
+
+    let response = app.server().patch(&collection_path(workspace_id)).await;
+
+    assert_eq!(response.status_code(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        response.json::<Value>()["error"]["code"],
+        "method_not_allowed"
+    );
+}
+
+#[tokio::test]
+async fn ungranted_cross_workspace_replace_does_not_modify_owner_copy() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Granted owner workspace")
+        .with_default_membership()
+        .workspace("ungranted_workspace", "Ungranted replace workspace")
+        .without_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let ungranted_workspace_id = app.workspace_id("ungranted_workspace");
     let original = app
         .create_evidence_request(
             workspace_id,

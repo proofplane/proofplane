@@ -27,7 +27,8 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
 | 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
-| 022. [End-to-End Demo and Release Hardening](./022-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
+| 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Planned | Add integration coverage for readiness and fail-closed dependency behavior before release hardening. |
+| 023. [End-to-End Demo and Release Hardening](./023-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
 
 ## Parallelization Notes
 
@@ -37,7 +38,7 @@ Shared gates:
 
 - Stories 001-004 are complete and unblock the next layer of platform work.
 - Story 005 standardized the retry helper and concrete `thiserror` boundary errors before deeper runtime work.
-- Story 009 provides the Postgres/testcontainers API harness used by the Evidence Request integration tests. Later stories should add dependency-specific process, Pub/Sub, and object-storage coverage when they introduce those boundaries.
+- Story 009 provides the Postgres/testcontainers API harness used by the Evidence Request integration tests. Story 022 owns dependency-failure integration coverage as those boundaries become concrete.
 
 Near-term parallel lanes:
 
@@ -51,6 +52,14 @@ Infrastructure lanes after config:
 - Story 012 depends on 008 for schema and should use 005/011 where appropriate, but its repository and state-machine work can be developed before the worker exists.
 - Story 013 depends on 011 and 012, so it should wait for those interfaces to settle.
 
+Dependency-failure hardening lane:
+
+- Story 022 can be developed in parallel by dependency boundary. The Postgres readiness slice can start after stories 007-009 because health/readiness and the integration harness already exist.
+- The SpiceDB authorization-failure slice can start after story 010, once Evidence Request authz uses the real SpiceDB adapter.
+- Pub/Sub failure coverage should land alongside or after stories 011-013, once the client, outbox, and worker runtime define the observable retry and acknowledgement behavior.
+- Object-storage failure coverage should land alongside or after stories 014 and 017, once attachment endpoints exercise storage through public API paths.
+- Story 022 should not block product stories except where a product story introduces a new external boundary; in that case, add the corresponding failure coverage before story 023.
+
 Product lanes:
 
 - Story 010 depends on 007, 008, and the Evidence Request routes from 015. It adds actor-aware API auth, local SpiceDB runtime/bootstrap, and initial workspace-scoped authorization checks.
@@ -61,7 +70,8 @@ Product lanes:
 - Story 019 depends on the evidence/control/submission model from 015-018.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
 - Story 021 depends on the domain services created by 015-020 and should use the authentication and authorization model introduced in 010.
-- Story 022 should remain last because it validates the complete system.
+- Story 022 hardens dependency-failure behavior before the final release gate.
+- Story 023 should remain last because it validates the complete system.
 
 Definition of done for every story:
 

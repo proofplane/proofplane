@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     extract::{Path, Query, Request, State},
     http::Method,
@@ -65,9 +67,11 @@ pub fn router(state: EvidenceRequestState) -> Router {
 
 async fn authorize_evidence_request_route(
     State(state): State<EvidenceRequestRouteAuthState>,
+    Path(path): Path<HashMap<String, String>>,
     mut request: Request,
     next: Next,
 ) -> Response {
+    let method = request.method().clone();
     let api_key = match header_value(&request, API_KEY_HEADER) {
         Some(api_key) => api_key,
         None => return ApiError::Unauthorized.into_response(),
@@ -81,12 +85,16 @@ async fn authorize_evidence_request_route(
         Ok(actor) => actor,
         Err(error) => return error.into_response(),
     };
-    let workspace_id = match workspace_id_from_path(request.uri().path()) {
-        Some(workspace_id) => workspace_id,
+    let workspace_id = match path
+        .get("workspace_id")
+        .and_then(|workspace_id| Uuid::parse_str(workspace_id).ok())
+        .map(WorkspaceId::from)
+    {
+        Some(id) => id,
         None => return ApiError::NotFound.into_response(),
     };
 
-    let allowed = match *request.method() {
+    let allowed = match method {
         Method::GET => {
             state
                 .authorizer
@@ -99,7 +107,7 @@ async fn authorize_evidence_request_route(
                 .can_write_evidence_requests(&actor.id, workspace_id)
                 .await
         }
-        _ => Ok(true),
+        _ => return ApiError::MethodNotAllowed.into_response(),
     }
     .map_err(|error| {
         tracing::error!(%error, "Evidence Request authorization failed");
@@ -142,17 +150,6 @@ fn header_value(request: &Request, header: &'static str) -> Option<String> {
         .get(header)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
-}
-
-fn workspace_id_from_path(path: &str) -> Option<WorkspaceId> {
-    let mut segments = path.trim_start_matches('/').split('/');
-
-    match (segments.next(), segments.next()) {
-        (Some("workspaces"), Some(workspace_id)) => {
-            Uuid::parse_str(workspace_id).ok().map(WorkspaceId::from)
-        }
-        _ => None,
-    }
 }
 
 #[derive(Debug, Deserialize)]

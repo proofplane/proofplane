@@ -15,8 +15,13 @@ use super::support::{TestApp, INTEGRATION_ACTOR_ID};
 
 #[tokio::test]
 async fn evidence_request_routes_require_valid_api_keys() {
-    let app = TestApp::start_without_default_auth().await;
-    let workspace_id = app.insert_workspace("Protected workspace").await;
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Protected workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let path = format!("/workspaces/{workspace_id}/evidence-requests");
 
     let missing = app.server().get(&path).await;
@@ -63,10 +68,13 @@ async fn evidence_request_routes_require_valid_api_keys() {
 
 #[tokio::test]
 async fn authentication_runs_before_workspace_authorization() {
-    let app = TestApp::start_without_default_auth().await;
-    let workspace_id = app
-        .insert_workspace_without_membership("Unauthorized auth-order workspace")
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Unauthorized auth-order workspace")
+        .without_membership()
+        .build()
         .await;
+    let workspace_id = app.workspace_id("workspace");
     let path = format!("/workspaces/{workspace_id}/evidence-requests");
 
     let missing = app.server().get(&path).await;
@@ -83,8 +91,13 @@ async fn authentication_runs_before_workspace_authorization() {
 
 #[tokio::test]
 async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
-    let app = TestApp::start_without_default_auth().await;
-    let workspace_id = app.insert_workspace("Lifecycle workspace").await;
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Lifecycle workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let path = format!("/workspaces/{workspace_id}/evidence-requests");
     let credential = app
         .postgres()
@@ -190,8 +203,13 @@ async fn authenticated_request_logs_context_without_api_key() {
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("integration process has no tracing subscriber yet");
-    let app = TestApp::start_without_default_auth().await;
-    let workspace_id = app.insert_workspace("Logged workspace").await;
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Logged workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
     let request_id = Uuid::new_v4().to_string();
 
     app.server()

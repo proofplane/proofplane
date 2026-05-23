@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
 use axum_test::TestServer;
@@ -39,21 +39,25 @@ pub struct TestApp {
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
     postgres: Arc<Postgres>,
-    spicedb: SpiceDbClient,
     server: TestServer,
     api_key: String,
+    workspace_ids: HashMap<String, Uuid>,
 }
 
 impl TestApp {
+    pub fn builder() -> TestAppBuilder {
+        TestAppBuilder::default()
+    }
+
     pub async fn start() -> Self {
-        Self::start_with_default_auth(true).await
+        Self::builder().build().await
     }
 
     pub async fn start_without_default_auth() -> Self {
-        Self::start_with_default_auth(false).await
+        Self::builder().without_default_auth().build().await
     }
 
-    async fn start_with_default_auth(default_auth: bool) -> Self {
+    async fn start_with_builder(builder: TestAppBuilder) -> Self {
         // TODO(low priority): allow dependency containers to be toggled for health tests.
         let postgres_container = postgres::Postgres::default()
             .start()
@@ -109,42 +113,21 @@ impl TestApp {
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
-        if default_auth {
+        if builder.default_auth {
             server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
             server.add_header(API_KEY_HEADER, &api_key);
         }
+
+        let workspace_ids = insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
 
         Self {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
             postgres,
-            spicedb,
             server,
             api_key,
+            workspace_ids,
         }
-    }
-
-    pub async fn insert_workspace(&self, name: &str) -> Uuid {
-        let workspace_id: Uuid = self.insert_workspace_without_membership(name).await;
-        self.spicedb
-            .write_workspace_membership(WorkspaceId::from(workspace_id), INTEGRATION_ACTOR_ID)
-            .await
-            .expect("workspace fixture membership writes");
-
-        workspace_id
-    }
-
-    pub async fn insert_workspace_without_membership(&self, name: &str) -> Uuid {
-        self.postgres
-            .create_workspace(&CreateWorkspacePayload {
-                id: None,
-                slug: None,
-                name: name.to_owned(),
-            })
-            .await
-            .expect("workspace fixture inserts")
-            .id
-            .into()
     }
 
     pub async fn create_evidence_request(&self, workspace_id: Uuid, body: &Value) -> Value {
@@ -162,10 +145,6 @@ impl TestApp {
         &self.server
     }
 
-    pub fn spicedb(&self) -> &SpiceDbClient {
-        &self.spicedb
-    }
-
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
     }
@@ -173,6 +152,111 @@ impl TestApp {
     pub fn api_key(&self) -> &str {
         &self.api_key
     }
+
+    pub fn workspace_id(&self, key: &str) -> Uuid {
+        *self
+            .workspace_ids
+            .get(key)
+            .unwrap_or_else(|| panic!("workspace fixture {key:?} exists"))
+    }
+}
+
+pub struct TestAppBuilder {
+    default_auth: bool,
+    workspaces: Vec<WorkspaceSpec>,
+}
+
+impl TestAppBuilder {
+    pub fn without_default_auth(mut self) -> Self {
+        self.default_auth = false;
+        self
+    }
+
+    pub fn workspace(self, key: &'static str, name: &'static str) -> WorkspaceSpecBuilder {
+        WorkspaceSpecBuilder {
+            app: self,
+            spec: WorkspaceSpec {
+                key,
+                name,
+                default_membership: false,
+            },
+        }
+    }
+
+    pub async fn build(self) -> TestApp {
+        TestApp::start_with_builder(self).await
+    }
+}
+
+impl Default for TestAppBuilder {
+    fn default() -> Self {
+        Self {
+            default_auth: true,
+            workspaces: Vec::new(),
+        }
+    }
+}
+
+pub struct WorkspaceSpecBuilder {
+    app: TestAppBuilder,
+    spec: WorkspaceSpec,
+}
+
+impl WorkspaceSpecBuilder {
+    pub fn with_default_membership(mut self) -> TestAppBuilder {
+        self.spec.default_membership = true;
+        self.app.workspaces.push(self.spec);
+        self.app
+    }
+
+    pub fn without_membership(mut self) -> TestAppBuilder {
+        self.spec.default_membership = false;
+        self.app.workspaces.push(self.spec);
+        self.app
+    }
+}
+
+struct WorkspaceSpec {
+    key: &'static str,
+    name: &'static str,
+    default_membership: bool,
+}
+
+async fn insert_workspaces(
+    postgres: &Postgres,
+    spicedb: &SpiceDbClient,
+    workspaces: Vec<WorkspaceSpec>,
+) -> HashMap<String, Uuid> {
+    let mut ids = HashMap::new();
+
+    for workspace in workspaces {
+        let id: Uuid = postgres
+            .create_workspace(&CreateWorkspacePayload {
+                id: None,
+                slug: None,
+                name: workspace.name.to_owned(),
+            })
+            .await
+            .expect("workspace fixture inserts")
+            .id
+            .into();
+
+        if workspace.default_membership {
+            spicedb
+                .write_workspace_membership(WorkspaceId::from(id), INTEGRATION_ACTOR_ID)
+                .await
+                .expect("workspace fixture membership writes");
+        }
+
+        let existing = ids.insert(workspace.key.to_owned(), id);
+        assert!(
+            existing.is_none(),
+            "workspace fixture key {:?} is unique",
+            workspace.key
+        );
+    }
+
+    ids
 }
 
 async fn insert_api_credential(postgres: &Postgres) -> String {
