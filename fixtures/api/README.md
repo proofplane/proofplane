@@ -17,6 +17,8 @@ Use the key printed by the latest `seed` run:
 local system actor API key (rotated by this seed run): proof-dev-...
 ```
 
+Set the key shown in this output to `PROOFPLANE_API_KEY`.
+
 Create an evidence request:
 
 ```bash
@@ -24,7 +26,7 @@ curl --fail-with-body \
   --request POST \
   --header 'content-type: application/json' \
   --header 'x-proofplane-actor-id: system-actor' \
-  --header 'x-proofplane-api-key: PRINTED_LOCAL_API_KEY' \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   --data @fixtures/api/evidence-requests/create-quarterly-access-review.json \
   http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
 ```
@@ -34,7 +36,7 @@ List requests:
 ```bash
 curl --fail-with-body \
   --header 'x-proofplane-actor-id: system-actor' \
-  --header 'x-proofplane-api-key: PRINTED_LOCAL_API_KEY' \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
 ```
 
@@ -43,7 +45,7 @@ List requests that are due at a fixed time:
 ```bash
 curl --fail-with-body \
   --header 'x-proofplane-actor-id: system-actor' \
-  --header 'x-proofplane-api-key: PRINTED_LOCAL_API_KEY' \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   'http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests/due?now=2026-05-21T12%3A00%3A00Z'
 ```
 
@@ -55,7 +57,7 @@ curl --fail-with-body \
   --request PUT \
   --header 'content-type: application/json' \
   --header 'x-proofplane-actor-id: system-actor' \
-  --header 'x-proofplane-api-key: PRINTED_LOCAL_API_KEY' \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   --data @fixtures/api/evidence-requests/replace-paused-vulnerability-scan.json \
   http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests/EVIDENCE_REQUEST_ID
 ```
@@ -67,7 +69,7 @@ curl --fail-with-body \
   --request POST \
   --header 'content-type: application/json' \
   --header 'x-proofplane-actor-id: system-actor' \
-  --header 'x-proofplane-api-key: PRINTED_LOCAL_API_KEY' \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   --data @fixtures/api/evidence-requests/invalid-evidence-request.json \
   http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
 ```

@@ -6,6 +6,7 @@ use tracing_subscriber::filter::EnvFilter;
 use crate::config::{LogFormat, ObservabilityConfig};
 
 pub const RUST_LOG: &str = "RUST_LOG";
+pub const PROOFPLANE_CLI_LOG: &str = "PROOFPLANE_CLI_LOG";
 
 pub fn default_log_filter() -> &'static str {
     "info"
@@ -34,10 +35,20 @@ pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), Error> {
     }
 }
 
+pub fn init_cli_tracing(config: &ObservabilityConfig) -> Result<(), Error> {
+    if cli_tracing_enabled()? {
+        init_tracing(config)?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid log filter `{filter}`: {message}")]
     InvalidFilter { filter: String, message: String },
+    #[error("invalid environment variable `{name}`: {message}")]
+    InvalidEnvironment { name: String, message: String },
     #[error("failed to initialize tracing subscriber: {0}")]
     SubscriberInit(String),
 }
@@ -72,13 +83,30 @@ fn configured_log_filter(config: &ObservabilityConfig) -> Result<String, Error> 
     }
 }
 
+fn cli_tracing_enabled() -> Result<bool, Error> {
+    match env::var(PROOFPLANE_CLI_LOG) {
+        Ok(value) => Ok(matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        )),
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidEnvironment {
+            name: PROOFPLANE_CLI_LOG.to_owned(),
+            message: "must be valid unicode".to_owned(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{env, sync::Mutex};
 
     use crate::config::{LogFormat, ObservabilityConfig};
 
-    use super::{configured_log_filter, default_log_filter, log_filter, Error, RUST_LOG};
+    use super::{
+        cli_tracing_enabled, configured_log_filter, default_log_filter, log_filter, Error,
+        PROOFPLANE_CLI_LOG, RUST_LOG,
+    };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -145,6 +173,50 @@ mod tests {
         restore_rust_log(previous);
     }
 
+    #[test]
+    fn leaves_cli_tracing_disabled_by_default() {
+        let _lock = ENV_LOCK.lock().expect("env lock is available");
+        let previous = env::var(PROOFPLANE_CLI_LOG).ok();
+        env::remove_var(PROOFPLANE_CLI_LOG);
+
+        let enabled = cli_tracing_enabled().expect("cli tracing env is readable");
+
+        assert!(!enabled);
+        restore_cli_log(previous);
+    }
+
+    #[test]
+    fn enables_cli_tracing_for_truthy_values() {
+        let _lock = ENV_LOCK.lock().expect("env lock is available");
+        let previous = env::var(PROOFPLANE_CLI_LOG).ok();
+
+        for value in ["1", "true", "TRUE", "yes", " YES "] {
+            env::set_var(PROOFPLANE_CLI_LOG, value);
+
+            let enabled = cli_tracing_enabled().expect("cli tracing env is readable");
+
+            assert!(enabled, "{value} should enable cli tracing");
+        }
+
+        restore_cli_log(previous);
+    }
+
+    #[test]
+    fn ignores_non_truthy_cli_tracing_values() {
+        let _lock = ENV_LOCK.lock().expect("env lock is available");
+        let previous = env::var(PROOFPLANE_CLI_LOG).ok();
+
+        for value in ["0", "false", "no", "debug", ""] {
+            env::set_var(PROOFPLANE_CLI_LOG, value);
+
+            let enabled = cli_tracing_enabled().expect("cli tracing env is readable");
+
+            assert!(!enabled, "{value} should not enable cli tracing");
+        }
+
+        restore_cli_log(previous);
+    }
+
     fn observability_config(default_filter: impl Into<String>) -> ObservabilityConfig {
         ObservabilityConfig {
             log_format: LogFormat::Json,
@@ -156,6 +228,13 @@ mod tests {
         match previous {
             Some(previous) => env::set_var(RUST_LOG, previous),
             None => env::remove_var(RUST_LOG),
+        }
+    }
+
+    fn restore_cli_log(previous: Option<String>) {
+        match previous {
+            Some(previous) => env::set_var(PROOFPLANE_CLI_LOG, previous),
+            None => env::remove_var(PROOFPLANE_CLI_LOG),
         }
     }
 }

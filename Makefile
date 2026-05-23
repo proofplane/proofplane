@@ -62,10 +62,10 @@ authz-schema-validate:
 	zed validate authz/spicedb/proofplane.validation.yaml
 
 authz-schema:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin authz-schema
+	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin authz-schema
 
 seed:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
+	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin seed
 
 api:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api

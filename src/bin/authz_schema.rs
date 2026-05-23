@@ -2,15 +2,14 @@ use std::{fs, path::PathBuf};
 
 use proofplane::{
     authorization::spicedb::{ClientError, SpiceDbClient},
-    config, observability, VERSION,
+    config, observability,
 };
 use thiserror::Error;
-use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        error!("{error}");
+        eprintln!("{error}");
         std::process::exit(1);
     }
 }
@@ -37,7 +36,7 @@ async fn run() -> Result<(), Error> {
         }
     };
 
-    if let Err(error) = observability::init_tracing(&config.observability) {
+    if let Err(error) = observability::init_cli_tracing(&config.observability) {
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -51,11 +50,7 @@ async fn run() -> Result<(), Error> {
     let client = SpiceDbClient::from_config(&config.spicedb).await?;
     client.write_schema(schema).await?;
 
-    info!(
-        binary = "authz-schema",
-        version = VERSION,
-        "SpiceDB schema applied"
-    );
+    println!("SpiceDB schema applied");
 
     Ok(())
 }

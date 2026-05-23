@@ -10,18 +10,18 @@ use proofplane::{
         UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
         WorkspaceId,
     },
-    migrations, observability,
+    observability,
     repository::Postgres,
     store, VERSION,
 };
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::debug;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
 }
@@ -56,7 +56,7 @@ async fn run() -> Result<(), Error> {
         }
     };
 
-    if let Err(error) = observability::init_tracing(&config.observability) {
+    if let Err(error) = observability::init_cli_tracing(&config.observability) {
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -71,26 +71,27 @@ async fn run() -> Result<(), Error> {
     let postgres = Postgres::new(pool);
 
     debug!("seeding local data");
-    seed_local_data(&postgres).await?;
+    let api_key = seed_local_data(&postgres).await?;
     seed_local_membership(&config.spicedb).await?;
     debug!("done seeding local data");
 
-    info!(
-        binary = "seed",
-        version = VERSION,
-        "{}",
-        migrations::startup_message()
+    println!("Proofplane {VERSION} local seed complete");
+    println!(
+        "Seeded local workspace, actors, API credential, SpiceDB membership, and demo evidence requests"
     );
+    println!("local system actor API key (rotated by this seed run): {api_key}");
 
     Ok(())
 }
 
-async fn seed_local_data(repository: &Postgres) -> Result<(), Error> {
+async fn seed_local_data(repository: &Postgres) -> Result<String, Error> {
     seed_workspace(repository).await?;
     seed_actors(repository).await?;
-    seed_api_credential(repository).await?;
+    let api_key = seed_api_credential(repository).await?;
 
-    seed_evidence_requests(repository).await
+    seed_evidence_requests(repository).await?;
+
+    Ok(api_key)
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
@@ -164,7 +165,7 @@ async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
     Ok(())
 }
 
-async fn seed_api_credential(repository: &Postgres) -> Result<(), Error> {
+async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
     let id = "local-api-key";
     let actor_id = "system-actor".to_owned();
     let name = "Local API Key".to_owned();
@@ -198,12 +199,7 @@ async fn seed_api_credential(repository: &Postgres) -> Result<(), Error> {
             .await?;
     }
 
-    println!(
-        "local system actor API key (rotated by this seed run): {}",
-        issued.raw_key.expose_secret()
-    );
-
-    Ok(())
+    Ok(issued.raw_key.expose_secret().to_owned())
 }
 
 async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
