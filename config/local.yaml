@@ -16,6 +16,11 @@ pubsub:
   subscriptions:
     worker: "proofplane-worker"
 
+spicedb:
+  endpoint: "http://127.0.0.1:50051"
+  preshared_key: "proofplane-local-spicedb-key"
+  schema_path: "authz/spicedb/proofplane.zed"
+
 object_storage:
   backend: "filesystem"
   root: ".local/storage"
@@ -23,10 +28,6 @@ object_storage:
 observability:
   log_format: "pretty"
   default_filter: "debug"
-
-auth:
-  api_key_header: "x-proofplane-api-key"
-  credential_hash_pepper: "proofplane-local-pepper"
 
 worker:
   concurrency: 4

@@ -1,14 +1,13 @@
-# 010 - Authentication, Actors, Request Middleware, and Authorization Boundary
+# 010 - Authentication, Actors, Request Middleware, and SpiceDB Authorization
 
 ## Goal
 
-Add actor-aware authentication, request middleware, and the first authorization
-boundary for the Evidence Request API.
+Add actor-aware authentication, request middleware, and SpiceDB-backed
+authorization for the Evidence Request API.
 
 Evidence Request endpoints now provide concrete route behavior for the first auth
-slice. This story should authenticate actors and create an authorization shape
-that later stories can extend without committing the MVP to a full permission
-graph before more domain entities exist.
+slice. Integrate SpiceDB while the authorization graph is still small, then grow
+the schema and relationship writes with later domain stories.
 
 ## Design
 
@@ -19,40 +18,137 @@ Model actors as first-class domain objects:
 - service account
 - integration
 - policy automation
+- system
 
-Use locally managed, hashed API keys for the MVP. Auth0 is not part of the current plan. If Proofplane later needs Auth0 or another external identity provider, handle that as a future migration or additional auth provider rather than shaping the MVP around it now.
+Use locally managed, hashed API keys for the MVP. Auth0 is not part of the
+current plan. If Proofplane later needs Auth0 or another external identity
+provider, handle that as a future migration or additional auth provider rather
+than shaping the MVP around it now.
 
-API keys must be stored hashed at rest. For generated high-entropy API keys, prefer a simple deterministic keyed hash using the configured credential pepper unless later requirements call for a different scheme. Do not store raw API keys.
+API keys must be stored hashed at rest. Slice 3 uses crate-generated API keys,
+stores the stable key ID plus crate-managed Argon2 PHC hash material, and shows
+the raw key only at issuance. Do not store raw API keys. Each actor owns at most
+one API credential; issuing a new key for the same actor rotates that credential
+row, while an independently valid key requires a new actor identity.
 
 Protect the Evidence Request API in this story. The initial authorization policy
-should be deliberately narrow: authenticated actors may access Evidence Requests
-only through their own workspace, and handlers or services should call an
-authorization boundary that can later be backed by an external permissions
-system. Do not add a broad permission-scope model before controls, mappings,
-submissions, approvals, source material, and audit reads clarify the actions
-that need to be modeled.
+is deliberately narrow: authenticated actors may read and write Evidence
+Requests only through workspaces where SpiceDB grants the matching workspace
+permission. Keep Proofplane's authorization calls behind an adapter so route and
+service code does not depend on generated SpiceDB types directly.
 
-Run a small SpiceDB design spike as part of this story:
+### SpiceDB Integration
 
-- draft the first Proofplane authorization model for actors, workspaces, and
-  Evidence Requests
-- identify the relationship and permission questions expected from upcoming
-  controls, submissions, approvals, source material, audit, and MCP work
-- record how Proofplane domain writes would eventually keep authorization
-  relationships synchronized
-- update the follow-up SpiceDB authorization story with findings and open
-  questions
+SpiceDB schema and relationship data have different jobs:
 
-The spike is a design artifact, not a production SpiceDB integration. The first
-implementation should make the later integration straightforward by keeping
-authentication, actor context, and authorization decisions explicit.
+- the authored `.zed` schema defines subject and resource types, relations that
+  may be written, and permissions computed from those relations
+- relationships are live authorization data written through SpiceDB APIs or
+  tooling and stored in SpiceDB's datastore
+- permission checks combine the applied schema and stored relationships to
+  decide whether a subject may perform an action on a resource
+
+This is analogous to schema versus rows in the application database. The `.zed`
+file does not hold production relationship records. Later domain writes that
+create or change authorization-relevant relationships must write or synchronize
+those records explicitly.
+
+The first authored schema should live at `authz/spicedb/proofplane.zed`. It
+models:
+
+- `actor` as the initial subject type
+- `workspace` as the initial authorized resource type
+- an actor-to-workspace membership relation
+- workspace permissions for Evidence Request reads and writes
+
+Proofplane writes membership relationships to the relation declared by the
+schema, such as:
+
+```text
+workspace:00000000-0000-4000-8000-000000000001#member@actor:system-actor
+```
+
+Proofplane checks the computed workspace permissions when handling Evidence
+Request reads and writes. Do not add per-Evidence-Request relationships in this
+story; current Evidence Request queries are already workspace-scoped, and
+resource-specific relationships should arrive when later behavior needs them.
+
+Run SpiceDB locally from Docker Compose. Reuse the existing local Postgres
+service, but provision a separate SpiceDB database so SpiceDB owns its own
+datastore migrations and tables. Proofplane should use generated Tonic bindings
+from pinned Authzed protobuf definitions to call the SpiceDB gRPC API.
+
+The first schema deployment is an explicit maintenance flow. Validate the
+authored schema fixtures with `zed`, then run Proofplane's schema deployment
+command to apply the configured schema file. API startup does not apply schema.
+
+Postgres keeps actor identity rows for credentials, display metadata, and audit
+references. Workspace membership is authorization data owned only by SpiceDB.
+Local seed writes its initial membership relationship directly to SpiceDB after
+the schema is deployed. When a later story adds runtime membership writes, that
+write path must write the authorization relationship explicitly.
+
+### Implementation Slices
+
+#### Slice 1 - Local SpiceDB Foundation
+
+Add the local SpiceDB dependency:
+
+- Docker Compose service and separate Postgres-backed SpiceDB database
+- SpiceDB datastore migration/bootstrap flow
+- typed SpiceDB config, readiness checks, and local dependency docs
+- generated gRPC client build path from pinned Authzed protobuf definitions
+
+This slice is done when local SpiceDB starts and Proofplane can construct the
+generated client.
+
+#### Slice 2 - Schema and Relationship Bootstrap
+
+Make Proofplane own the initial authorization model:
+
+- add `authz/spicedb/proofplane.zed`
+- validate schema fixtures with `zed`
+- apply the configured schema through an explicit maintenance command
+- write seeded SpiceDB workspace membership relationships idempotently
+- test repeated schema deploy and seed relationship writes
+
+This slice is done when repeated schema deployment and local seeding leave
+workspace memberships usable for permission checks.
+
+#### Slice 3 - API-Key Authentication and Request Context
+
+Identify the caller:
+
+- add generated API-key issuance and verification
+- resolve credentials to actor context
+- seed one actor for each MVP actor type and print a generated local system key
+  that rotates on each seed run
+- require API keys only for Evidence Request routes
+- assign or propagate request IDs and include actor/request context in logs
+- map missing or invalid credentials to `401`
+
+This slice is limited to authentication and request context and is done when
+protected routes can distinguish authenticated and unauthenticated callers.
+SpiceDB authorization remains Slice 4.
+
+#### Slice 4 - Evidence Request Authorization
+
+Protect the first product surface:
+
+- call SpiceDB workspace read/write permissions through the authorization
+  adapter
+- conceal authenticated cross-workspace Evidence Request access with `404`
+- update fixtures and integration coverage
+
+This slice is done when the seeded actor can use same-workspace Evidence Request
+routes and cross-workspace requests are denied.
 
 Middleware responsibilities:
 
 - assign or propagate request ID
 - authenticate actor
 - attach actor context to request extensions
-- authorize Evidence Request reads and writes through the authorization boundary
+- authorize Evidence Request reads and writes through SpiceDB permissions
 - log every request
 - normalize error responses
 
@@ -60,13 +156,20 @@ Middleware responsibilities:
 
 - Protected routes reject missing or invalid credentials.
 - Authenticated requests include actor context available to handlers and services.
+- Local dependencies start a usable SpiceDB service backed by its own database on
+  the local Postgres service.
+- Proofplane owns, validates, and explicitly deploys the initial SpiceDB `.zed`
+  schema.
+- Seed writes the local actor-to-workspace membership relationship to SpiceDB
+  idempotently.
 - Evidence Request endpoints reject cross-workspace access for authenticated actors.
-- Evidence Request authorization flows through an explicit boundary that can be replaced by a SpiceDB-backed implementation later.
+- Evidence Request authorization uses SpiceDB workspace permission checks through
+  an explicit Proofplane authorization adapter.
 - Request logs include actor ID when authenticated.
 - API keys are hashed at rest.
 - Auth0 is not required for the MVP and is documented as deferred.
-- The SpiceDB spike produces a draft model and updates the later SpiceDB story with findings and open questions.
-- Authorization rules remain tied to concrete endpoints rather than a speculative full permission model.
+- Authorization rules remain tied to concrete endpoints rather than a
+  speculative full permission model.
 - Seed data includes at least one actor for each relevant MVP actor type.
 
 ## Tests
@@ -74,14 +177,20 @@ Middleware responsibilities:
 - Unit tests cover credential hashing and verification.
 - API tests cover missing auth, invalid auth, valid auth, and actor context propagation.
 - API tests cover same-workspace Evidence Request access and cross-workspace rejection.
-- Authorization boundary tests cover the initial Evidence Request read and write actions.
+- SpiceDB tests cover schema deployment idempotency and allowed/denied workspace
+  permission checks.
+- Authorization adapter tests cover the initial Evidence Request read and write
+  actions.
 - Middleware tests verify logging metadata without leaking secret headers.
 - Seed tests verify demo credentials produce usable actors.
 
 ## QA Guide
 
-1. Run migrations and seed.
-2. Call a protected endpoint without credentials and confirm `401`.
-3. Call with seeded credentials and confirm success.
-4. Call an Evidence Request path in a different workspace and confirm access is rejected.
-5. Inspect logs and confirm request ID and actor ID are present but the credential is absent.
+1. Start local dependencies and confirm SpiceDB is ready.
+2. Validate and deploy the SpiceDB schema.
+3. Run migrations and seed.
+4. Start API.
+5. Call a protected endpoint without credentials and confirm `401`.
+6. Call with seeded credentials and confirm success.
+7. Call an Evidence Request path in a different workspace and confirm access is rejected.
+8. Inspect logs and confirm request ID and actor ID are present but the credential is absent.

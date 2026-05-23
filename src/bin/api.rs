@@ -4,6 +4,11 @@ use tokio::net::TcpListener;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies},
+    authentication::{ApiKeyAuthenticator, ApiKeyManager},
+    authorization::{
+        evidence_requests::EvidenceRequestAuthorizer,
+        spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
+    },
     config, observability, repository, store,
 };
 use secrecy::ExposeSecret;
@@ -28,6 +33,12 @@ enum Error {
 
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
+
+    #[error("authentication initialization error")]
+    Authentication(#[from] proofplane::authentication::Error),
+
+    #[error("SpiceDB client initialization error")]
+    SpiceDb(#[from] SpiceDbClientError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -44,27 +55,34 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = store::conn(&config.postgres.expose_secret()).await?;
+    let mut client = store::conn(config.postgres.expose_secret()).await?;
 
     debug!("running migrations");
     store::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = store::conn_pool(&config.postgres.expose_secret(), 200).await?;
-    let postgres = repository::Postgres::new(pool);
+    // TODO: move the Postgres pool size into configuration.
+    let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let postgres = Arc::new(repository::Postgres::new(pool));
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
     let listener = TcpListener::bind(config.server.api_bind).await.unwrap();
     info!("listening on {}", config.server.api_bind);
 
+    let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
+    let evidence_request_authorizer =
+        EvidenceRequestAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
+
     let deps = AppDependencies {
-        config: config,
-        postgres: Arc::new(postgres),
-        metrics: metrics,
+        config,
+        postgres,
+        metrics,
+        authenticator,
+        evidence_request_authorizer,
     };
 
-    let app = create_app(deps);
+    let app = create_app(deps)?;
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {

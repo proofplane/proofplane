@@ -26,8 +26,10 @@ struct ErrorBody {
 pub enum ApiError {
     BadRequest(Vec<String>),
     Internal,
+    MethodNotAllowed,
     NotFound,
     ReadinessTimeout,
+    Unauthorized,
     Pool(PoolError),
     Postgres(tokio_postgres::Error),
 }
@@ -37,7 +39,9 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
@@ -48,7 +52,9 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => "bad_request",
             Self::Internal => "internal_error",
+            Self::MethodNotAllowed => "method_not_allowed",
             Self::NotFound => "not_found",
+            Self::Unauthorized => "unauthorized",
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => "not_ready",
         }
     }
@@ -57,7 +63,9 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => "request validation failed",
             Self::Internal => "internal server error",
+            Self::MethodNotAllowed => "method not allowed",
             Self::NotFound => "route not found",
+            Self::Unauthorized => "authentication required",
             Self::ReadinessTimeout => "readiness check timed out",
             Self::Pool(_) | Self::Postgres(_) => "Postgres readiness check failed",
         }
@@ -72,7 +80,10 @@ impl IntoResponse for ApiError {
             Self::BadRequest(_) => {}
             Self::Pool(error) => tracing::warn!(%error, "Postgres pool readiness check failed"),
             Self::Postgres(error) => tracing::warn!(%error, "Postgres readiness query failed"),
-            Self::NotFound | Self::ReadinessTimeout => {}
+            Self::MethodNotAllowed
+            | Self::NotFound
+            | Self::ReadinessTimeout
+            | Self::Unauthorized => {}
         }
         let details = match &self {
             Self::BadRequest(details) => details.clone(),

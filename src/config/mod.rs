@@ -20,9 +20,9 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub postgres: SecretString,
     pub pubsub: PubSubConfig,
+    pub spicedb: SpiceDbConfig,
     pub object_storage: ObjectStorageConfig,
     pub observability: ObservabilityConfig,
-    pub auth: AuthConfig,
     pub worker: WorkerConfig,
     pub health: HealthConfig,
 }
@@ -51,6 +51,13 @@ pub struct PubSubTopicsConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubSubSubscriptionsConfig {
     pub worker: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpiceDbConfig {
+    pub endpoint: Url,
+    pub preshared_key: SecretString,
+    pub schema_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,12 +90,6 @@ pub struct ObservabilityConfig {
 pub enum LogFormat {
     Json,
     Pretty,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthConfig {
-    pub api_key_header: String,
-    pub credential_hash_pepper: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,18 +187,18 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         server <- raw.server.validate(),
         postgres <- raw::validate_postgres_connection_string(raw.postgres),
         pubsub <- raw.pubsub.validate(),
+        spicedb <- raw.spicedb.validate(),
         object_storage <- raw.object_storage.validate(),
         observability <- raw.observability.validate(),
-        auth <- raw.auth.validate(),
         worker <- raw.worker.validate(),
         health <- raw.health.validate(),
         => AppConfig {
             server,
             postgres,
             pubsub,
+            spicedb,
             object_storage,
             observability,
-            auth,
             worker,
             health,
         },
@@ -230,6 +231,10 @@ mod tests {
         let config = load_from_path("config/local.yaml").expect("local config loads");
 
         assert_eq!(config.server.api_bind.to_string(), "127.0.0.1:3000");
+        assert_eq!(
+            config.spicedb.schema_path,
+            PathBuf::from("authz/spicedb/proofplane.zed")
+        );
         assert!(matches!(
             config.object_storage,
             ObjectStorageConfig::Filesystem { .. }
@@ -277,9 +282,9 @@ environment: ""
 server: {}
 postgres: {}
 pubsub: {}
+spicedb: {}
 object_storage: {}
 observability: {}
-auth: {}
 worker: {}
 health: {}
 "#,
@@ -310,6 +315,10 @@ pubsub:
     dead_letter: "proofplane-dead-letter"
   subscriptions:
     worker: "proofplane-worker"
+spicedb:
+  endpoint: ""
+  preshared_key: ""
+  schema_path: ""
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -319,9 +328,6 @@ object_storage:
 observability:
   log_format: "xml"
   default_filter: "info"
-auth:
-  api_key_header: "x-proofplane-api-key"
-  credential_hash_pepper: "pepper"
 worker:
   concurrency: 0
   retry_attempts: 0
@@ -345,6 +351,9 @@ health:
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.emulator_host"));
+                assert!(paths.contains(&"spicedb.endpoint"));
+                assert!(paths.contains(&"spicedb.preshared_key"));
+                assert!(paths.contains(&"spicedb.schema_path"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"observability.log_format"));
@@ -377,6 +386,15 @@ health:
         let debug = format!("{:?}", postgres);
 
         assert!(!debug.contains(postgres.expose_secret()));
+        assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn spicedb_preshared_key_is_redacted_in_debug_output() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.spicedb.preshared_key);
+
+        assert!(!debug.contains(config.spicedb.preshared_key.expose_secret()));
         assert!(debug.contains("Secret"));
     }
 

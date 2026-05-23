@@ -1,4 +1,4 @@
-# 022 - MCP Server
+# 021 - MCP Server
 
 ## Goal
 

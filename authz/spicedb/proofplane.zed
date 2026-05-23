@@ -1,0 +1,8 @@
+definition actor {}
+
+definition workspace {
+    relation member: actor
+
+    permission read_evidence_requests = member
+    permission write_evidence_requests = member
+}

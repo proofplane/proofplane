@@ -1,0 +1,163 @@
+use std::{fmt, str::FromStr};
+
+use chrono::{DateTime, Utc};
+
+use super::{api_credential::ApiCredential, DomainError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorKind {
+    HumanUser,
+    AiAgent,
+    ServiceAccount,
+    Integration,
+    PolicyAutomation,
+    System,
+}
+
+impl ActorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HumanUser => "human_user",
+            Self::AiAgent => "ai_agent",
+            Self::ServiceAccount => "service_account",
+            Self::Integration => "integration",
+            Self::PolicyAutomation => "policy_automation",
+            Self::System => "system",
+        }
+    }
+}
+
+impl fmt::Display for ActorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ActorKind {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "human_user" => Ok(Self::HumanUser),
+            "ai_agent" => Ok(Self::AiAgent),
+            "service_account" => Ok(Self::ServiceAccount),
+            "integration" => Ok(Self::Integration),
+            "policy_automation" => Ok(Self::PolicyAutomation),
+            "system" => Ok(Self::System),
+            _ => Err(DomainError::InvalidEnumValue {
+                field: "actor_type",
+                value: value.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorContext {
+    pub id: String,
+    pub kind: ActorKind,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    pub id: String,
+    pub kind: ActorKind,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorWithApiCredential {
+    pub actor: Actor,
+    pub api_credential: ApiCredential,
+}
+
+impl Actor {
+    pub fn context(&self) -> ActorContext {
+        ActorContext {
+            id: self.id.clone(),
+            kind: self.kind,
+            display_name: self.display_name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateActorPayload {
+    pub id: String,
+    pub kind: ActorKind,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateActorPayload {
+    pub kind: ActorKind,
+    pub display_name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use chrono::{TimeZone, Utc};
+
+    use super::{Actor, ActorContext, ActorKind};
+    use crate::domain::DomainError;
+
+    #[test]
+    fn actor_kinds_parse_all_authenticated_kinds() {
+        for (value, expected) in [
+            ("human_user", ActorKind::HumanUser),
+            ("ai_agent", ActorKind::AiAgent),
+            ("service_account", ActorKind::ServiceAccount),
+            ("integration", ActorKind::Integration),
+            ("policy_automation", ActorKind::PolicyAutomation),
+            ("system", ActorKind::System),
+        ] {
+            assert_eq!(ActorKind::from_str(value).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn actor_kind_rejects_invalid_persisted_values() {
+        assert_eq!(
+            ActorKind::from_str("admin").unwrap_err(),
+            DomainError::InvalidEnumValue {
+                field: "actor_type",
+                value: "admin".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn actor_context_carries_identity_for_downstream_work() {
+        let actor = ActorContext {
+            id: "system-actor".to_owned(),
+            kind: ActorKind::System,
+            display_name: "System".to_owned(),
+        };
+
+        assert_eq!(actor.id, "system-actor");
+        assert_eq!(actor.kind.as_str(), "system");
+    }
+
+    #[test]
+    fn actor_maps_to_authenticated_context() {
+        let actor = Actor {
+            id: "system-actor".to_owned(),
+            kind: ActorKind::System,
+            display_name: "System".to_owned(),
+            created_at: Utc.timestamp_opt(0, 0).unwrap(),
+        };
+
+        assert_eq!(
+            actor.context(),
+            ActorContext {
+                id: "system-actor".to_owned(),
+                kind: ActorKind::System,
+                display_name: "System".to_owned(),
+            }
+        );
+    }
+}

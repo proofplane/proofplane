@@ -1,24 +1,27 @@
+use api_keys_simplified::{Environment, ExposeSecret};
 use chrono::{DateTime, Utc};
 use proofplane::{
-    config,
+    authentication::ApiKeyManager,
+    authorization::spicedb::{ClientError, SpiceDbClient},
+    config::{load_from_env, SpiceDbConfig},
     domain::{
-        CreateEvidenceRequestPayload, EvidenceRequestCadence, EvidenceRequestStatus,
-        UpdateEvidenceRequestPayload, WorkspaceId,
+        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateEvidenceRequestPayload,
+        CreateWorkspacePayload, EvidenceRequestCadence, EvidenceRequestStatus, UpdateActorPayload,
+        UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
+        WorkspaceId,
     },
-    migrations, observability,
+    observability,
     repository::Postgres,
     store, VERSION,
 };
-use secrecy::ExposeSecret;
 use thiserror::Error;
-use tokio_postgres::Client;
-use tracing::{debug, error, info};
+use tracing::debug;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
 }
@@ -31,18 +34,21 @@ enum Error {
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
 
-    #[error("seed data error")]
-    SeedData(#[from] tokio_postgres::Error),
-
     #[error("repository error")]
     Repository(#[from] proofplane::repository::Error),
 
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
+
+    #[error("SpiceDB error")]
+    SpiceDb(#[from] ClientError),
+
+    #[error("API key generation error")]
+    ApiKey(#[from] proofplane::authentication::Error),
 }
 
 async fn run() -> Result<(), Error> {
-    let config = match config::load_from_env() {
+    let config = match load_from_env() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}");
@@ -50,7 +56,7 @@ async fn run() -> Result<(), Error> {
         }
     };
 
-    if let Err(error) = observability::init_tracing(&config.observability) {
+    if let Err(error) = observability::init_cli_tracing(&config.observability) {
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -65,39 +71,161 @@ async fn run() -> Result<(), Error> {
     let postgres = Postgres::new(pool);
 
     debug!("seeding local data");
-    seed_local_data(&client, &postgres).await?;
+    let api_key = seed_local_data(&postgres).await?;
+    seed_local_membership(&config.spicedb).await?;
     debug!("done seeding local data");
 
-    info!(
-        binary = "seed",
-        version = VERSION,
-        "{}",
-        migrations::startup_message()
+    println!("Proofplane {VERSION} local seed complete");
+    println!(
+        "Seeded local workspaces, actors, API credential, authorized SpiceDB membership, and demo evidence requests"
     );
+    println!(
+        "authorized workspace: {}",
+        Uuid::from(local_authorized_workspace_id())
+    );
+    println!(
+        "unauthorized workspace: {}",
+        Uuid::from(local_unauthorized_workspace_id())
+    );
+    println!("local system actor API key (rotated by this seed run): {api_key}");
 
     Ok(())
 }
 
-async fn seed_local_data(client: &Client, evidence_requests: &Postgres) -> Result<(), Error> {
+async fn seed_local_data(repository: &Postgres) -> Result<String, Error> {
+    seed_workspace(repository).await?;
+    seed_actors(repository).await?;
+    let api_key = seed_api_credential(repository).await?;
+
+    seed_evidence_requests(repository).await?;
+
+    Ok(api_key)
+}
+
+async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
+    for (id, slug, name) in [
+        (
+            local_authorized_workspace_id(),
+            Some("local-workspace".to_owned()),
+            "Local Workspace".to_owned(),
+        ),
+        (
+            local_unauthorized_workspace_id(),
+            Some("local-unauthorized-workspace".to_owned()),
+            "Local Unauthorized Workspace".to_owned(),
+        ),
+    ] {
+        if repository.get_workspace(id).await?.is_some() {
+            repository
+                .update_workspace(id, &UpdateWorkspacePayload { slug, name })
+                .await?;
+
+            continue;
+        }
+
+        repository
+            .create_workspace(&CreateWorkspacePayload {
+                id: Some(id),
+                slug,
+                name,
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
+    for (id, kind, display_name) in [
+        ("local-human-user", ActorKind::HumanUser, "Local Human User"),
+        ("local-ai-agent", ActorKind::AiAgent, "Local AI Agent"),
+        (
+            "local-service-account",
+            ActorKind::ServiceAccount,
+            "Local Service Account",
+        ),
+        (
+            "local-integration",
+            ActorKind::Integration,
+            "Local Integration",
+        ),
+        (
+            "local-policy-automation",
+            ActorKind::PolicyAutomation,
+            "Local Policy Automation",
+        ),
+        ("system-actor", ActorKind::System, "System"),
+    ] {
+        if repository.get_actor(id).await?.is_some() {
+            repository
+                .update_actor(
+                    id,
+                    &UpdateActorPayload {
+                        kind,
+                        display_name: display_name.to_owned(),
+                    },
+                )
+                .await?;
+
+            continue;
+        }
+
+        repository
+            .create_actor(&CreateActorPayload {
+                id: id.to_owned(),
+                kind,
+                display_name: display_name.to_owned(),
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
+    let id = "local-api-key";
+    let actor_id = "system-actor".to_owned();
+    let name = "Local API Key".to_owned();
+    let issued = ApiKeyManager::new()?.issue(Environment::dev())?;
+
+    if repository.get_api_credential(id).await?.is_some() {
+        repository
+            .update_api_credential(
+                id,
+                &UpdateApiCredentialPayload {
+                    actor_id,
+                    name,
+                    key_id: issued.key_id.clone(),
+                    credential_hash: issued.credential_hash.clone(),
+                    expires_at: None,
+                    revoked_at: None,
+                },
+            )
+            .await?;
+    } else {
+        repository
+            .create_api_credential(&CreateApiCredentialPayload {
+                id: id.to_owned(),
+                actor_id,
+                name,
+                key_id: issued.key_id.clone(),
+                credential_hash: issued.credential_hash.clone(),
+                expires_at: None,
+                revoked_at: None,
+            })
+            .await?;
+    }
+
+    Ok(issued.raw_key.expose_secret().to_owned())
+}
+
+async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
+    let client = SpiceDbClient::from_config(config).await?;
     client
-        .batch_execute(
-            r#"
-INSERT INTO workspaces (id, slug, name)
-VALUES ('00000000-0000-4000-8000-000000000001', 'local-workspace', 'Local Workspace')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO actors (id, workspace_id, actor_type, display_name)
-VALUES ('system-actor', '00000000-0000-4000-8000-000000000001', 'system', 'System')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO api_credentials (id, actor_id, name, credential_hash)
-VALUES ('local-api-key', 'system-actor', 'Local API Key', 'local-development-credential-hash')
-ON CONFLICT (id) DO NOTHING;
-"#,
-        )
+        .write_workspace_membership(local_authorized_workspace_id(), "system-actor")
         .await?;
 
-    seed_evidence_requests(evidence_requests).await
+    Ok(())
 }
 
 async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
@@ -216,7 +344,15 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
 }
 
 fn local_workspace_id() -> WorkspaceId {
+    local_authorized_workspace_id()
+}
+
+fn local_authorized_workspace_id() -> WorkspaceId {
     WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap())
+}
+
+fn local_unauthorized_workspace_id() -> WorkspaceId {
+    WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap())
 }
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
