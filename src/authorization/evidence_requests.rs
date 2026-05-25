@@ -47,6 +47,28 @@ impl EvidenceRequestAuthorizer {
             .await
     }
 
+    pub async fn can_read_controls(
+        &self,
+        actor_id: &str,
+        workspace_id: WorkspaceId,
+    ) -> Result<bool, ClientError> {
+        let spicedb = self.spicedb();
+        spicedb
+            .check_workspace_permission(workspace_id, WorkspacePermission::ReadControls, actor_id)
+            .await
+    }
+
+    pub async fn can_write_controls(
+        &self,
+        actor_id: &str,
+        workspace_id: WorkspaceId,
+    ) -> Result<bool, ClientError> {
+        let spicedb = self.spicedb();
+        spicedb
+            .check_workspace_permission(workspace_id, WorkspacePermission::WriteControls, actor_id)
+            .await
+    }
+
     fn spicedb(&self) -> SpiceDbClient {
         self.spicedb
             .lock()

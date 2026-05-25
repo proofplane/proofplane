@@ -5,4 +5,6 @@ definition workspace {
 
     permission read_evidence_requests = member
     permission write_evidence_requests = member
+    permission read_controls = member
+    permission write_controls = member
 }

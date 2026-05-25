@@ -22,7 +22,10 @@ Mappings live on Evidence Requests, not evidence submissions. Recurring submissi
 - Seed data includes an initial SOC 2 control set sufficient for demo flows.
 - API supports listing controls, getting a control, mapping an Evidence Request to a control, removing a mapping, and listing mappings.
 - Service prevents duplicate mappings and validates workspace ownership.
-- Mapping operations emit outbox events.
+- Mapping operations are implemented as synchronous database-backed product
+  behavior. Durable outbox event emission is deferred until a story has a real
+  asynchronous consumer and the Pub/Sub, transactional outbox, and worker
+  dequeuer infrastructure are all in place.
 
 ## Tests
 

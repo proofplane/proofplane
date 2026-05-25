@@ -37,6 +37,12 @@ enum Error {
     #[error("repository error")]
     Repository(#[from] proofplane::repository::Error),
 
+    #[error("connection pool error")]
+    Pool(#[from] deadpool_postgres::PoolError),
+
+    #[error("database error")]
+    Database(#[from] tokio_postgres::Error),
+
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
 
@@ -77,7 +83,7 @@ async fn run() -> Result<(), Error> {
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded local workspaces, actors, API credential, authorized SpiceDB membership, and demo evidence requests"
+        "Seeded local workspaces, actors, API credential, authorized SpiceDB membership, demo evidence requests, and SOC 2 controls"
     );
     println!(
         "authorized workspace: {}",
@@ -98,6 +104,7 @@ async fn seed_local_data(repository: &Postgres) -> Result<String, Error> {
     let api_key = seed_api_credential(repository).await?;
 
     seed_evidence_requests(repository).await?;
+    seed_frameworks_and_controls(repository).await?;
 
     Ok(api_key)
 }
@@ -257,6 +264,94 @@ async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
     Ok(())
 }
 
+async fn seed_frameworks_and_controls(repository: &Postgres) -> Result<(), Error> {
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
+
+    transaction
+        .execute(
+            r#"
+INSERT INTO frameworks (id, code, name, description)
+VALUES ($1, 'soc2', 'SOC 2', 'AICPA Trust Services Criteria for service organizations.')
+ON CONFLICT (code) DO UPDATE
+SET name = EXCLUDED.name,
+    description = EXCLUDED.description
+"#,
+            &[&soc2_framework_id()],
+        )
+        .await?;
+
+    for requirement in demo_soc2_requirements() {
+        transaction
+            .execute(
+                r#"
+INSERT INTO framework_requirements (id, framework_id, code, title, description)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (framework_id, code) DO UPDATE
+SET title = EXCLUDED.title,
+    description = EXCLUDED.description
+"#,
+                &[
+                    &requirement.id,
+                    &soc2_framework_id(),
+                    &requirement.code,
+                    &requirement.title,
+                    &requirement.description,
+                ],
+            )
+            .await?;
+    }
+
+    for workspace_id in [
+        local_authorized_workspace_id(),
+        local_unauthorized_workspace_id(),
+    ] {
+        for control in demo_controls(workspace_id) {
+            transaction
+                .execute(
+                    r#"
+INSERT INTO controls (id, workspace_id, code, title, description)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (workspace_id, code) DO UPDATE
+SET title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    updated_at = now()
+"#,
+                    &[
+                        &control.id,
+                        &Uuid::from(workspace_id),
+                        &control.code,
+                        &control.title,
+                        &control.description,
+                    ],
+                )
+                .await?;
+            transaction
+                .execute(
+                    "DELETE FROM control_framework_requirement_mappings WHERE control_id = $1",
+                    &[&control.id],
+                )
+                .await?;
+            for requirement_id in control.requirement_ids {
+                transaction
+                    .execute(
+                        r#"
+INSERT INTO control_framework_requirement_mappings (control_id, framework_requirement_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+"#,
+                        &[&control.id, &requirement_id],
+                    )
+                    .await?;
+            }
+        }
+    }
+
+    transaction.commit().await?;
+
+    Ok(())
+}
+
 #[derive(Clone)]
 struct SeedEvidenceRequest {
     title: String,
@@ -267,6 +362,21 @@ struct SeedEvidenceRequest {
     schedule_anchor_at: DateTime<Utc>,
     freshness_window_days: Option<i32>,
     status: EvidenceRequestStatus,
+}
+
+struct SeedFrameworkRequirement {
+    id: Uuid,
+    code: &'static str,
+    title: &'static str,
+    description: &'static str,
+}
+
+struct SeedControl {
+    id: Uuid,
+    code: &'static str,
+    title: &'static str,
+    description: &'static str,
+    requirement_ids: Vec<Uuid>,
 }
 
 impl SeedEvidenceRequest {
@@ -341,6 +451,86 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
             status: EvidenceRequestStatus::Paused,
         },
     ])
+}
+
+fn demo_soc2_requirements() -> Vec<SeedFrameworkRequirement> {
+    vec![
+        SeedFrameworkRequirement {
+            id: Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
+            code: "CC6.1",
+            title: "Logical access security",
+            description:
+                "Logical access security software, infrastructure, and architectures protect information assets.",
+        },
+        SeedFrameworkRequirement {
+            id: Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+            code: "CC6.2",
+            title: "Access credentials",
+            description:
+                "New internal and external users are registered and authorized before credentials are issued.",
+        },
+        SeedFrameworkRequirement {
+            id: Uuid::parse_str("10000000-0000-4000-8000-000000000003").unwrap(),
+            code: "CC7.1",
+            title: "System monitoring",
+            description:
+                "Detection and monitoring procedures identify changes that could impair system objectives.",
+        },
+        SeedFrameworkRequirement {
+            id: Uuid::parse_str("10000000-0000-4000-8000-000000000004").unwrap(),
+            code: "CC7.4",
+            title: "Incident response",
+            description:
+                "Security incidents are responded to, mitigated, and resolved according to response procedures.",
+        },
+    ]
+}
+
+fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
+    let workspace_suffix = match Uuid::from(workspace_id).to_string().as_str() {
+        "00000000-0000-4000-8000-000000000001" => "000000000001",
+        "00000000-0000-4000-8000-000000000002" => "000000000002",
+        _ => "000000000999",
+    };
+
+    vec![
+        SeedControl {
+            id: Uuid::parse_str(&format!("20000000-0000-4000-8000-{workspace_suffix}"))
+                .unwrap(),
+            code: "PP-AC-01",
+            title: "Quarterly access review",
+            description:
+                "Review production system access quarterly and retain reviewer sign-off.",
+            requirement_ids: vec![
+                Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
+                Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+            ],
+        },
+        SeedControl {
+            id: Uuid::parse_str(&format!("20000000-0000-4001-8000-{workspace_suffix}"))
+                .unwrap(),
+            code: "PP-VM-01",
+            title: "Monthly vulnerability scanning",
+            description:
+                "Run vulnerability scans for production assets and track remediation of critical findings.",
+            requirement_ids: vec![Uuid::parse_str("10000000-0000-4000-8000-000000000003")
+                .unwrap()],
+        },
+        SeedControl {
+            id: Uuid::parse_str(&format!("20000000-0000-4002-8000-{workspace_suffix}"))
+                .unwrap(),
+            code: "PP-IR-01",
+            title: "Incident response tabletop",
+            description:
+                "Exercise the incident response plan annually and track remediation actions.",
+            requirement_ids: vec![Uuid::parse_str("10000000-0000-4000-8000-000000000004")
+                .unwrap()],
+        },
+    ]
+}
+
+fn soc2_framework_id() -> Uuid {
+    Uuid::parse_str("10000000-0000-4000-8000-000000000000").unwrap()
 }
 
 fn local_workspace_id() -> WorkspaceId {

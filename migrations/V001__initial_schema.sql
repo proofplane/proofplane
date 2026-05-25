@@ -86,3 +86,57 @@ DROP INDEX IF EXISTS idx_evidence_requests_due_active;
 CREATE INDEX IF NOT EXISTS idx_evidence_requests_active_workspace_due_title
     ON evidence_requests (workspace_id, due_at, title)
     WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS frameworks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS framework_requirements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    framework_id UUID NOT NULL REFERENCES frameworks(id),
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    UNIQUE (framework_id, code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_framework_requirements_framework_code
+    ON framework_requirements (framework_id, code);
+
+CREATE TABLE IF NOT EXISTS controls (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_controls_workspace_code
+    ON controls (workspace_id, code);
+
+CREATE TABLE IF NOT EXISTS control_framework_requirement_mappings (
+    control_id UUID NOT NULL REFERENCES controls(id),
+    framework_requirement_id UUID NOT NULL REFERENCES framework_requirements(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (control_id, framework_requirement_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_control_requirement_mappings_requirement
+    ON control_framework_requirement_mappings (framework_requirement_id, control_id);
+
+CREATE TABLE IF NOT EXISTS evidence_request_control_mappings (
+    evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
+    control_id UUID NOT NULL REFERENCES controls(id),
+    rationale TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (evidence_request_id, control_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_request_control_mappings_control
+    ON evidence_request_control_mappings (control_id, evidence_request_id);

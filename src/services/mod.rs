@@ -1,6 +1,7 @@
 use crate::domain::WorkspaceId;
 use thiserror::Error;
 
+pub mod controls;
 pub mod evidence_requests;
 
 #[derive(Debug, Error)]

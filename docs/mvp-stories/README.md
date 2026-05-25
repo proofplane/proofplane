@@ -15,13 +15,13 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 007. [HTTP API Runtime Scaffold](./007-http-api-runtime-scaffold.md) | Done | Axum API runtime serves health, readiness, version, metrics, stable errors, and structured request logs. |
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Done | Refinery migrations, Postgres pool wiring, startup migrations, and idempotent local seed data are in place. |
 | 009. [Integration Test Harness](./009-integration-test-harness.md) | Done | Postgres/testcontainers API harness and Evidence Request integration coverage are in place; later stories add dependency-specific coverage as needed. |
-| 010. [Authentication, Actors, Request Middleware, and SpiceDB Authorization](./010-authentication-actors-and-request-middleware.md) | Next | Add API-key auth and local SpiceDB-backed workspace authorization for Evidence Request routes in slices. |
+| 010. [Authentication, Actors, Request Middleware, and SpiceDB Authorization](./010-authentication-actors-and-request-middleware.md) | Done | API-key auth, actor context, local SpiceDB schema/bootstrap, and workspace-scoped Evidence Request authorization are in place. |
 | 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Planned | Not started. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Planned | Not started. |
 | 013. [Worker Runtime and Outbox Dequeuer](./013-worker-runtime-and-outbox-dequeuer.md) | Planned | Not started. |
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Planned | Not started. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
-| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Planned | Add the control registry and durable Evidence Request-control mappings after the first auth boundary. |
+| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Next | Add the control registry and durable Evidence Request-control mappings after the first auth boundary. Event emission is deferred until outbox/PubSub/worker support exists. |
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Planned | Not started. |
 | 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
@@ -42,15 +42,20 @@ Shared gates:
 
 Near-term parallel lanes:
 
-- Story 010 is the next mainline task now that Evidence Request endpoints give authentication and the first SpiceDB authorization checks a concrete API surface.
+- Story 016 is the next mainline product task now that Evidence Request endpoints
+  are authenticated and workspace-authorized.
 - Later stories should extend the integration harness with reusable Pub/Sub, object-storage, config, and binary helpers when those boundaries exist.
 - Story 016 follows story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
 Infrastructure lanes after config:
 
 - Story 011 and story 014 can proceed independently after 004, because Pub/Sub and object storage touch different modules.
-- Story 012 depends on 008 for schema and should use 005/011 where appropriate, but its repository and state-machine work can be developed before the worker exists.
+- Story 012 depends on 008 for schema and should use 005/011 where appropriate.
 - Story 013 depends on 011 and 012, so it should wait for those interfaces to settle.
+- Do not require an outbox for synchronous product stories just because the
+  domain change might matter later. Add the Pub/Sub client, transactional
+  outbox, and worker/outbox dequeuer before the first story that truly needs to
+  emit durable asynchronous events or run background work.
 
 Dependency-failure hardening lane:
 
