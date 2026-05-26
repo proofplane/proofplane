@@ -103,7 +103,6 @@ pub struct EvidenceRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateEvidenceRequestPayload {
-    pub workspace_id: WorkspaceId,
     pub title: String,
     pub description: String,
     pub collection_instructions: String,

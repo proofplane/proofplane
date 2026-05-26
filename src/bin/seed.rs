@@ -252,7 +252,7 @@ async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
                         .replace_evidence_request(existing_request.id, &update)
                         .await?;
                 } else {
-                    let request = seed.into_new(workspace_id);
+                    let request = seed.into_new();
                     context.create_evidence_request(&request).await?;
                 }
             }
@@ -380,9 +380,8 @@ struct SeedControl {
 }
 
 impl SeedEvidenceRequest {
-    fn into_new(self, workspace_id: WorkspaceId) -> CreateEvidenceRequestPayload {
+    fn into_new(self) -> CreateEvidenceRequestPayload {
         CreateEvidenceRequestPayload {
-            workspace_id,
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,

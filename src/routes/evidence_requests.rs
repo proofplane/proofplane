@@ -165,10 +165,7 @@ struct EvidenceRequestDTO {
 }
 
 impl EvidenceRequestDTO {
-    fn into_new(
-        self,
-        workspace_id: WorkspaceId,
-    ) -> Validation<CreateEvidenceRequestPayload, DomainError> {
+    fn into_new(self) -> Validation<CreateEvidenceRequestPayload, DomainError> {
         validate! {
             title <- required_text("title", self.title),
             description <- required_text("description", self.description),
@@ -180,7 +177,6 @@ impl EvidenceRequestDTO {
             freshness_window_days <- validate_freshness_window_days(self.freshness_window_days),
             status <- parse_status(self.status),
             => CreateEvidenceRequestPayload {
-                workspace_id,
                 title,
                 description,
                 collection_instructions,
@@ -263,11 +259,9 @@ async fn create_evidence_request(
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
-    let request = body
-        .into_new(WorkspaceId::from(workspace_id))
-        .into_result()
-        .map_err(domain_errors)?;
-    let request = state.service.create(request).await?;
+    let workspace_id = WorkspaceId::from(workspace_id);
+    let request = body.into_new().into_result().map_err(domain_errors)?;
+    let request = state.service.create(workspace_id, request).await?;
 
     Ok(Json(request.into()))
 }
@@ -363,15 +357,13 @@ fn validate_freshness_window_days(value: Option<i32>) -> Validation<Option<i32>,
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Utc};
-    use uuid::Uuid;
-
     use super::EvidenceRequestDTO;
-    use crate::domain::{DomainError, EvidenceRequestCadence, EvidenceRequestStatus, WorkspaceId};
+    use crate::domain::{DomainError, EvidenceRequestCadence, EvidenceRequestStatus};
+    use chrono::{DateTime, Utc};
 
     #[test]
     fn request_dto_maps_to_create_payload() {
-        let payload = valid_dto().into_new(workspace_id()).into_result().unwrap();
+        let payload = valid_dto().into_new().into_result().unwrap();
 
         assert_eq!(payload.title, "Quarterly access review");
         assert_eq!(payload.cadence, EvidenceRequestCadence::Quarterly);
@@ -390,7 +382,7 @@ mod tests {
             freshness_window_days: Some(0),
             status: "draft".to_owned(),
         }
-        .into_new(workspace_id())
+        .into_new()
         .into_result()
         .unwrap_err();
 
@@ -428,10 +420,6 @@ mod tests {
             freshness_window_days: Some(90),
             status: "active".to_owned(),
         }
-    }
-
-    fn workspace_id() -> WorkspaceId {
-        WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap())
     }
 
     fn unix_epoch() -> DateTime<Utc> {

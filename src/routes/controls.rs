@@ -171,14 +171,13 @@ struct ControlDTO {
 }
 
 impl ControlDTO {
-    fn into_new(self, workspace_id: WorkspaceId) -> Validation<CreateControlPayload, DomainError> {
+    fn into_new(self) -> Validation<CreateControlPayload, DomainError> {
         validate! {
             code <- required_text("code", self.code),
             title <- required_text("title", self.title),
             description <- required_text("description", self.description),
             framework_requirement_ids <- parse_framework_requirement_ids(self.framework_requirement_ids),
             => CreateControlPayload {
-                workspace_id,
                 code,
                 title,
                 description,
@@ -363,13 +362,11 @@ async fn create_control(
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
-    let payload = body
-        .into_new(WorkspaceId::from(workspace_id))
-        .into_result()
-        .map_err(domain_errors)?;
+    let workspace_id = WorkspaceId::from(workspace_id);
+    let payload = body.into_new().into_result().map_err(domain_errors)?;
     let control = state
         .service
-        .create_control(payload)
+        .create_control(workspace_id, payload)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -493,7 +490,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{ControlDTO, MappingDTO};
-    use crate::domain::{DomainError, EvidenceRequestId, WorkspaceId};
+    use crate::domain::{DomainError, EvidenceRequestId};
 
     #[test]
     fn control_dto_maps_to_create_payload() {
@@ -504,7 +501,7 @@ mod tests {
             description: "Review production access quarterly.".to_owned(),
             framework_requirement_ids: vec![requirement_id],
         }
-        .into_new(WorkspaceId::from(Uuid::new_v4()))
+        .into_new()
         .into_result()
         .unwrap();
 
@@ -523,7 +520,7 @@ mod tests {
             description: "\t".to_owned(),
             framework_requirement_ids: Vec::new(),
         }
-        .into_new(WorkspaceId::from(Uuid::new_v4()))
+        .into_new()
         .into_result()
         .unwrap_err();
 

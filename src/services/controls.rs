@@ -54,11 +54,12 @@ impl ControlService {
 
     pub async fn create_control(
         &self,
+        workspace_id: WorkspaceId,
         payload: CreateControlPayload,
     ) -> Result<Option<Control>, Error> {
         Ok(self
             .repository
-            .in_workspace(payload.workspace_id, async move |context| {
+            .in_workspace(workspace_id, async move |context| {
                 context.create_control(&payload).await
             })
             .await?)

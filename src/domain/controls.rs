@@ -41,7 +41,6 @@ pub struct ControlSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateControlPayload {
-    pub workspace_id: WorkspaceId,
     pub code: String,
     pub title: String,
     pub description: String,
