@@ -2,7 +2,9 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 
-use super::{DomainError, EvidenceRequestId, WorkspaceId};
+use super::{ids::uuid_id, DomainError, WorkspaceId};
+
+uuid_id!(EvidenceRequestId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceRequestCadence {
@@ -129,8 +131,18 @@ pub struct UpdateEvidenceRequestPayload {
 mod tests {
     use std::str::FromStr;
 
-    use super::{EvidenceRequestCadence, EvidenceRequestStatus};
+    use uuid::Uuid;
+
+    use super::{EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus};
     use crate::domain::DomainError;
+
+    #[test]
+    fn evidence_request_id_wraps_uuid() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let id = EvidenceRequestId::from(uuid);
+
+        assert_eq!(Uuid::from(id), uuid);
+    }
 
     #[test]
     fn cadence_parses_allowed_values() {

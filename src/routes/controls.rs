@@ -5,25 +5,26 @@ use axum::{
     http::Method,
     middleware,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
     routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
     authorization::evidence_requests::EvidenceRequestAuthorizer,
     domain::{
-        ActorContext, Control, ControlId, CreateControlPayload,
+        required_text, Control, ControlId, CreateControlPayload,
         CreateEvidenceRequestControlMappingPayload, DomainError, EvidenceRequestControlMapping,
         EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
         UpdateControlPayload, WorkspaceId,
     },
     routes::{
-        authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
+        authentication::authorize_workspace_route,
         error::{domain_errors, ApiError},
     },
     services::controls::ControlService,
@@ -80,86 +81,47 @@ async fn authorize_control_route(
     Path(path): Path<HashMap<String, String>>,
     mut request: Request,
     next: Next,
-) -> Response {
+) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let api_key = match header_value(&request, API_KEY_HEADER) {
-        Some(api_key) => api_key,
-        None => return ApiError::Unauthorized.into_response(),
-    };
-    let actor_id = match header_value(&request, ACTOR_ID_HEADER) {
-        Some(actor_id) => actor_id,
-        None => return ApiError::Unauthorized.into_response(),
-    };
-
-    let actor = match authenticate_request(&state.authenticator, actor_id, api_key).await {
-        Ok(actor) => actor,
-        Err(error) => return error.into_response(),
-    };
-    let workspace_id = match path
-        .get("workspace_id")
-        .and_then(|workspace_id| Uuid::parse_str(workspace_id).ok())
-        .map(WorkspaceId::from)
-    {
-        Some(id) => id,
-        None => return ApiError::NotFound.into_response(),
-    };
+    let authorizer = state.authorizer.clone();
+    let (actor, workspace_id) =
+        authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
 
     let allowed = match method {
-        Method::GET => {
-            state
-                .authorizer
-                .can_read_controls(&actor.id, workspace_id)
-                .await
-        }
-        Method::POST | Method::PUT | Method::DELETE => {
-            state
-                .authorizer
-                .can_write_controls(&actor.id, workspace_id)
-                .await
-        }
-        _ => return ApiError::MethodNotAllowed.into_response(),
-    }
-    .map_err(|error| {
-        tracing::error!(%error, "Control authorization failed");
-        ApiError::Internal
-    });
-
-    let allowed = match allowed {
-        Ok(allowed) => allowed,
-        Err(error) => return error.into_response(),
-    };
+        Method::GET => authorizer
+            .can_read_controls(&actor.id, workspace_id)
+            .await
+            .map_err(|e| {
+                error!(
+                    method = %method,
+                    actor = %actor.id,
+                    workspace = %workspace_id,
+                    error = %e,
+                    "unable to check read permissions for controls"
+                );
+                ApiError::Internal
+            }),
+        Method::POST | Method::PUT | Method::DELETE => authorizer
+            .can_write_controls(&actor.id, workspace_id)
+            .await
+            .map_err(|e| {
+                error!(
+                    method = %method,
+                    actor = %actor.id,
+                    workspace = %workspace_id,
+                    error = %e,
+                    "unable to check write permissions for controls"
+                );
+                ApiError::Internal
+            }),
+        _ => Err(ApiError::MethodNotAllowed),
+    }?;
 
     if !allowed {
-        return ApiError::NotFound.into_response();
+        return Err(ApiError::NotFound);
     }
 
-    tracing::Span::current().record("actor_id", actor.id.as_str());
-    request.extensions_mut().insert(actor);
-
-    next.run(request).await
-}
-
-async fn authenticate_request(
-    authenticator: &ApiKeyAuthenticator,
-    actor_id: String,
-    api_key: String,
-) -> Result<ActorContext, ApiError> {
-    authenticator
-        .authenticate(&actor_id, &api_key)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "API key authentication failed");
-            ApiError::Internal
-        })?
-        .ok_or(ApiError::Unauthorized)
-}
-
-fn header_value(request: &Request, header: &'static str) -> Option<String> {
-    request
-        .headers()
-        .get(header)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
+    Ok(next.run(request).await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,26 +291,20 @@ impl From<EvidenceRequestControlMapping> for EvidenceRequestControlMappingRespon
 
 async fn list_frameworks(
     State(state): State<ControlState>,
-    Path(workspace_id): Path<Uuid>,
+    Path(_workspace_id): Path<Uuid>,
 ) -> Result<Json<Vec<FrameworkResponse>>, ApiError> {
-    let frameworks = state
-        .service
-        .list_frameworks(WorkspaceId::from(workspace_id))
-        .await?;
+    let frameworks = state.service.list_frameworks().await?;
 
     Ok(Json(frameworks.into_iter().map(Into::into).collect()))
 }
 
 async fn list_framework_requirements(
     State(state): State<ControlState>,
-    Path((workspace_id, framework_id)): Path<(Uuid, Uuid)>,
+    Path((_workspace_id, framework_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<FrameworkRequirementResponse>>, ApiError> {
     let requirements = state
         .service
-        .list_framework_requirements(
-            WorkspaceId::from(workspace_id),
-            FrameworkId::from(framework_id),
-        )
+        .list_framework_requirements(FrameworkId::from(framework_id))
         .await?;
     if requirements.is_empty() {
         return Err(ApiError::NotFound);
@@ -469,14 +425,6 @@ async fn delete_evidence_request_control_mapping(
     }
 
     Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
-fn required_text(field: &'static str, value: String) -> Validation<String, DomainError> {
-    if value.trim().is_empty() {
-        return Validation::invalid(DomainError::EmptyRequiredText { field });
-    }
-
-    Validation::valid(value)
 }
 
 fn parse_framework_requirement_ids(

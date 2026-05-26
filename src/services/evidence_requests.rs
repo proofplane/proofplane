@@ -60,7 +60,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_workspace(workspace_id, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)

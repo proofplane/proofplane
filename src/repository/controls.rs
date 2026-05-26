@@ -8,15 +8,16 @@ use crate::{
         EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
         UpdateControlPayload, WorkspaceId,
     },
+    repository::Postgres,
     services::ServiceContext,
 };
 
 use super::Error;
 
-impl ServiceContext<'_> {
+impl Postgres {
     pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
-        let rows = self
-            .transaction
+        let client = self.get().await?;
+        let rows = client
             .query(
                 r#"
 SELECT id, code, name, description
@@ -34,8 +35,8 @@ ORDER BY code
         &self,
         framework_id: FrameworkId,
     ) -> Result<Vec<FrameworkRequirement>, Error> {
-        let rows = self
-            .transaction
+        let client = self.get().await?;
+        let rows = client
             .query(
                 r#"
 SELECT id, framework_id, code, title, description
@@ -52,17 +53,37 @@ ORDER BY code
             .collect()
     }
 
+    pub async fn framework_requirements_exist(
+        &self,
+        ids: &[FrameworkRequirementId],
+    ) -> Result<bool, Error> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+
+        let client = self.get().await?;
+        for id in ids {
+            let exists = client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM framework_requirements WHERE id = $1) AS exists",
+                    &[&Uuid::from(*id)],
+                )
+                .await?
+                .try_get::<_, bool>("exists")?;
+            if !exists {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+}
+
+impl ServiceContext<'_> {
     pub async fn create_control(
         &self,
         payload: &CreateControlPayload,
     ) -> Result<Option<Control>, Error> {
-        if !self
-            .framework_requirements_exist(&payload.framework_requirement_ids)
-            .await?
-        {
-            return Ok(None);
-        }
-
         let row = self
             .transaction
             .query_one(
@@ -95,24 +116,30 @@ RETURNING id
             .transaction
             .query(
                 r#"
-SELECT id
-FROM controls
-WHERE workspace_id = $1
-ORDER BY code
+SELECT
+    c.id,
+    c.workspace_id,
+    c.code,
+    c.title,
+    c.description,
+    c.created_at,
+    c.updated_at,
+    fr.id AS framework_requirement_id,
+    fr.framework_id AS framework_requirement_framework_id,
+    fr.code AS framework_requirement_code,
+    fr.title AS framework_requirement_title,
+    fr.description AS framework_requirement_description
+FROM controls c
+LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
+LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+WHERE c.workspace_id = $1
+ORDER BY c.code, fr.code
 "#,
                 &[&Uuid::from(self.workspace_id)],
             )
             .await?;
 
-        let mut controls = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id = ControlId::from(row.try_get::<_, Uuid>("id")?);
-            if let Some(control) = self.get_control(id).await? {
-                controls.push(control);
-            }
-        }
-
-        Ok(controls)
+        controls_from_joined_rows(rows)
     }
 
     pub async fn get_control(&self, id: ControlId) -> Result<Option<Control>, Error> {
@@ -132,7 +159,7 @@ WHERE id = $1
         let Some(row) = rows.into_iter().next() else {
             return Ok(None);
         };
-        let mut control = control_from_row(row)?;
+        let mut control = control_from_row(&row)?;
         control.framework_requirements = self.control_framework_requirements(id).await?;
 
         Ok(Some(control))
@@ -143,13 +170,6 @@ WHERE id = $1
         id: ControlId,
         payload: &UpdateControlPayload,
     ) -> Result<Option<Control>, Error> {
-        if !self
-            .framework_requirements_exist(&payload.framework_requirement_ids)
-            .await?
-        {
-            return Ok(None);
-        }
-
         let rows = self
             .transaction
             .query(
@@ -285,27 +305,6 @@ WHERE m.evidence_request_id = er.id
         Ok(rows > 0)
     }
 
-    async fn framework_requirements_exist(
-        &self,
-        ids: &[FrameworkRequirementId],
-    ) -> Result<bool, Error> {
-        for id in ids {
-            let exists = self
-                .transaction
-                .query_one(
-                    "SELECT EXISTS (SELECT 1 FROM framework_requirements WHERE id = $1) AS exists",
-                    &[&Uuid::from(*id)],
-                )
-                .await?
-                .try_get::<_, bool>("exists")?;
-            if !exists {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
-    }
-
     async fn replace_control_framework_requirement_mappings(
         &self,
         control_id: ControlId,
@@ -313,8 +312,14 @@ WHERE m.evidence_request_id = er.id
     ) -> Result<(), Error> {
         self.transaction
             .execute(
-                "DELETE FROM control_framework_requirement_mappings WHERE control_id = $1",
-                &[&Uuid::from(control_id)],
+                r#"
+DELETE FROM control_framework_requirement_mappings m
+USING controls c
+WHERE m.control_id = c.id
+  AND c.id = $1
+  AND c.workspace_id = $2
+"#,
+                &[&Uuid::from(control_id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
@@ -323,10 +328,17 @@ WHERE m.evidence_request_id = er.id
                 .execute(
                     r#"
 INSERT INTO control_framework_requirement_mappings (control_id, framework_requirement_id)
-VALUES ($1, $2)
+SELECT c.id, $2
+FROM controls c
+WHERE c.id = $1
+  AND c.workspace_id = $3
 ON CONFLICT DO NOTHING
 "#,
-                    &[&Uuid::from(control_id), &Uuid::from(*requirement_id)],
+                    &[
+                        &Uuid::from(control_id),
+                        &Uuid::from(*requirement_id),
+                        &Uuid::from(self.workspace_id),
+                    ],
                 )
                 .await?;
         }
@@ -433,7 +445,7 @@ fn framework_requirement_from_row(row: Row) -> Result<FrameworkRequirement, Erro
     })
 }
 
-fn control_from_row(row: Row) -> Result<Control, Error> {
+fn control_from_row(row: &Row) -> Result<Control, Error> {
     Ok(Control {
         id: ControlId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
@@ -444,6 +456,45 @@ fn control_from_row(row: Row) -> Result<Control, Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+fn controls_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Control>, Error> {
+    let mut controls = Vec::new();
+    let mut current_control_id = None;
+    let mut current_control_index = None;
+
+    for row in rows {
+        let control_id = ControlId::from(row.try_get::<_, Uuid>("id")?);
+        if current_control_id != Some(control_id) {
+            controls.push(control_from_row(&row)?);
+            current_control_id = Some(control_id);
+            current_control_index = controls.len().checked_sub(1);
+        }
+
+        if let Some(control) = current_control_index.and_then(|index| controls.get_mut(index)) {
+            push_joined_framework_requirement(control, &row)?;
+        }
+    }
+
+    Ok(controls)
+}
+
+fn push_joined_framework_requirement(control: &mut Control, row: &Row) -> Result<(), Error> {
+    let Some(requirement_id) = row.try_get::<_, Option<Uuid>>("framework_requirement_id")? else {
+        return Ok(());
+    };
+
+    control.framework_requirements.push(FrameworkRequirement {
+        id: FrameworkRequirementId::from(requirement_id),
+        framework_id: FrameworkId::from(
+            row.try_get::<_, Uuid>("framework_requirement_framework_id")?,
+        ),
+        code: row.try_get("framework_requirement_code")?,
+        title: row.try_get("framework_requirement_title")?,
+        description: row.try_get("framework_requirement_description")?,
+    });
+
+    Ok(())
 }
 
 fn evidence_request_control_mapping_from_row(

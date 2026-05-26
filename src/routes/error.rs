@@ -114,6 +114,9 @@ impl From<ServiceError> for ApiError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Repository(error) => repository_error(error),
+            ServiceError::InvalidFrameworkRequirementReferences => ApiError::BadRequest(vec![
+                "framework_requirement_ids contains unknown ids".to_owned(),
+            ]),
         }
     }
 }

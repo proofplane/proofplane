@@ -8,6 +8,9 @@ pub mod evidence_requests;
 pub enum Error {
     #[error("repository error")]
     Repository(#[from] crate::repository::Error),
+
+    #[error("invalid framework requirement references")]
+    InvalidFrameworkRequirementReferences,
 }
 
 pub struct ServiceContext<'transaction> {

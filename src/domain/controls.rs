@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 
-use super::{ControlId, EvidenceRequestId, FrameworkId, FrameworkRequirementId, WorkspaceId};
+use super::{ids::uuid_id, EvidenceRequestId, WorkspaceId};
+
+uuid_id!(FrameworkId);
+uuid_id!(FrameworkRequirementId);
+uuid_id!(ControlId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Framework {
@@ -68,4 +72,27 @@ pub struct CreateEvidenceRequestControlMappingPayload {
     pub evidence_request_id: EvidenceRequestId,
     pub control_id: ControlId,
     pub rationale: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::{ControlId, FrameworkId, FrameworkRequirementId};
+
+    #[test]
+    fn framework_ids_wrap_uuid() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
+
+        assert_eq!(Uuid::from(FrameworkId::from(uuid)), uuid);
+        assert_eq!(Uuid::from(FrameworkRequirementId::from(uuid)), uuid);
+    }
+
+    #[test]
+    fn control_id_wraps_uuid() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap();
+        let id = ControlId::from(uuid);
+
+        assert_eq!(Uuid::from(id), uuid);
+    }
 }

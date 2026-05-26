@@ -4,22 +4,15 @@ use crate::{
     domain::{
         Control, ControlId, CreateControlPayload, CreateEvidenceRequestControlMappingPayload,
         EvidenceRequestControlMapping, EvidenceRequestId, Framework, FrameworkId,
-        FrameworkRequirement, UpdateControlPayload, WorkspaceId,
+        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspaceId,
     },
     repository::Postgres,
     services::Error,
 };
 
+#[derive(Clone)]
 pub struct ControlService {
     repository: Arc<Postgres>,
-}
-
-impl Clone for ControlService {
-    fn clone(&self) -> Self {
-        Self {
-            repository: self.repository.clone(),
-        }
-    }
 }
 
 impl ControlService {
@@ -27,28 +20,17 @@ impl ControlService {
         Self { repository }
     }
 
-    pub async fn list_frameworks(
-        &self,
-        workspace_id: WorkspaceId,
-    ) -> Result<Vec<Framework>, Error> {
-        Ok(self
-            .repository
-            .in_workspace(workspace_id, async move |context| {
-                context.list_frameworks().await
-            })
-            .await?)
+    pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
+        Ok(self.repository.list_frameworks().await?)
     }
 
     pub async fn list_framework_requirements(
         &self,
-        workspace_id: WorkspaceId,
         framework_id: FrameworkId,
     ) -> Result<Vec<FrameworkRequirement>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
-                context.list_framework_requirements(framework_id).await
-            })
+            .list_framework_requirements(framework_id)
             .await?)
     }
 
@@ -57,6 +39,9 @@ impl ControlService {
         workspace_id: WorkspaceId,
         payload: CreateControlPayload,
     ) -> Result<Option<Control>, Error> {
+        self.validate_framework_requirement_references(&payload.framework_requirement_ids)
+            .await?;
+
         Ok(self
             .repository
             .in_workspace(workspace_id, async move |context| {
@@ -68,9 +53,7 @@ impl ControlService {
     pub async fn list_controls(&self, workspace_id: WorkspaceId) -> Result<Vec<Control>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
-                context.list_controls().await
-            })
+            .in_workspace(workspace_id, async |context| context.list_controls().await)
             .await?)
     }
 
@@ -93,6 +76,9 @@ impl ControlService {
         control_id: ControlId,
         payload: UpdateControlPayload,
     ) -> Result<Option<Control>, Error> {
+        self.validate_framework_requirement_references(&payload.framework_requirement_ids)
+            .await?;
+
         Ok(self
             .repository
             .in_workspace(workspace_id, async move |context| {
@@ -145,5 +131,16 @@ impl ControlService {
                     .await
             })
             .await?)
+    }
+
+    async fn validate_framework_requirement_references(
+        &self,
+        ids: &[FrameworkRequirementId],
+    ) -> Result<(), Error> {
+        if self.repository.framework_requirements_exist(ids).await? {
+            return Ok(());
+        }
+
+        Err(Error::InvalidFrameworkRequirementReferences)
     }
 }

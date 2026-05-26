@@ -455,28 +455,28 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
 fn demo_soc2_requirements() -> Vec<SeedFrameworkRequirement> {
     vec![
         SeedFrameworkRequirement {
-            id: Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
+            id: soc2_requirement_id("CC6.1"),
             code: "CC6.1",
             title: "Logical access security",
             description:
                 "Logical access security software, infrastructure, and architectures protect information assets.",
         },
         SeedFrameworkRequirement {
-            id: Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+            id: soc2_requirement_id("CC6.2"),
             code: "CC6.2",
             title: "Access credentials",
             description:
                 "New internal and external users are registered and authorized before credentials are issued.",
         },
         SeedFrameworkRequirement {
-            id: Uuid::parse_str("10000000-0000-4000-8000-000000000003").unwrap(),
+            id: soc2_requirement_id("CC7.1"),
             code: "CC7.1",
             title: "System monitoring",
             description:
                 "Detection and monitoring procedures identify changes that could impair system objectives.",
         },
         SeedFrameworkRequirement {
-            id: Uuid::parse_str("10000000-0000-4000-8000-000000000004").unwrap(),
+            id: soc2_requirement_id("CC7.4"),
             code: "CC7.4",
             title: "Incident response",
             description:
@@ -486,50 +486,58 @@ fn demo_soc2_requirements() -> Vec<SeedFrameworkRequirement> {
 }
 
 fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
-    let workspace_suffix = match Uuid::from(workspace_id).to_string().as_str() {
-        "00000000-0000-4000-8000-000000000001" => "000000000001",
-        "00000000-0000-4000-8000-000000000002" => "000000000002",
-        _ => "000000000999",
-    };
-
     vec![
         SeedControl {
-            id: Uuid::parse_str(&format!("20000000-0000-4000-8000-{workspace_suffix}"))
-                .unwrap(),
+            id: control_id(workspace_id, "PP-AC-01"),
             code: "PP-AC-01",
             title: "Quarterly access review",
             description:
                 "Review production system access quarterly and retain reviewer sign-off.",
             requirement_ids: vec![
-                Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
-                Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+                soc2_requirement_id("CC6.1"),
+                soc2_requirement_id("CC6.2"),
             ],
         },
         SeedControl {
-            id: Uuid::parse_str(&format!("20000000-0000-4001-8000-{workspace_suffix}"))
-                .unwrap(),
+            id: control_id(workspace_id, "PP-VM-01"),
             code: "PP-VM-01",
             title: "Monthly vulnerability scanning",
             description:
                 "Run vulnerability scans for production assets and track remediation of critical findings.",
-            requirement_ids: vec![Uuid::parse_str("10000000-0000-4000-8000-000000000003")
-                .unwrap()],
+            requirement_ids: vec![soc2_requirement_id("CC7.1")],
         },
         SeedControl {
-            id: Uuid::parse_str(&format!("20000000-0000-4002-8000-{workspace_suffix}"))
-                .unwrap(),
+            id: control_id(workspace_id, "PP-IR-01"),
             code: "PP-IR-01",
             title: "Incident response tabletop",
             description:
                 "Exercise the incident response plan annually and track remediation actions.",
-            requirement_ids: vec![Uuid::parse_str("10000000-0000-4000-8000-000000000004")
-                .unwrap()],
+            requirement_ids: vec![soc2_requirement_id("CC7.4")],
         },
     ]
 }
 
 fn soc2_framework_id() -> Uuid {
-    Uuid::parse_str("10000000-0000-4000-8000-000000000000").unwrap()
+    seed_uuid("framework:soc2")
+}
+
+fn soc2_requirement_id(code: &str) -> Uuid {
+    seed_uuid(&format!("soc2:{code}"))
+}
+
+fn control_id(workspace_id: WorkspaceId, code: &str) -> Uuid {
+    seed_uuid(&format!(
+        "workspace:{}:control:{code}",
+        Uuid::from(workspace_id)
+    ))
+}
+
+fn seed_uuid(name: &str) -> Uuid {
+    Uuid::new_v5(&seed_namespace(), name.as_bytes())
+}
+
+fn seed_namespace() -> Uuid {
+    Uuid::parse_str("60dcb0ee-3c16-4767-bdda-25cb3bfaf300").unwrap()
 }
 
 fn local_workspace_id() -> WorkspaceId {
