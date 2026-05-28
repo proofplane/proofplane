@@ -19,16 +19,17 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Planned | Not started. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Planned | Not started. |
 | 013. [Worker Runtime and Outbox Dequeuer](./013-worker-runtime-and-outbox-dequeuer.md) | Planned | Not started. |
-| 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Planned | Not started. |
+| 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Next | Add filesystem-backed local/test object storage and GCS adapter boundaries before Evidence Submissions need attachments. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
-| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Next | Add the control registry and durable Evidence Request-control mappings after the first auth boundary. Event emission is deferred until outbox/PubSub/worker support exists. |
+| 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until outbox/Pub/Sub/worker support exists. |
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Planned | Not started. |
 | 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
 | 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
 | 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Planned | Add integration coverage for readiness and fail-closed dependency behavior before release hardening. |
-| 023. [End-to-End Demo and Release Hardening](./023-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
+| 023. [Prometheus Metrics Instrumentation](./023-prometheus-metrics-instrumentation.md) | Planned | Add application metrics on top of the existing `/metrics` scaffold before final demo hardening. |
+| 024. [End-to-End Demo and Release Hardening](./024-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
 
 ## Parallelization Notes
 
@@ -42,10 +43,10 @@ Shared gates:
 
 Near-term parallel lanes:
 
-- Story 016 is the next mainline product task now that Evidence Request endpoints
-  are authenticated and workspace-authorized.
+- Story 014 is the next mainline prerequisite because Evidence Submissions need
+  attachment storage.
 - Later stories should extend the integration harness with reusable Pub/Sub, object-storage, config, and binary helpers when those boundaries exist.
-- Story 016 follows story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
+- Story 016 followed story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
 Infrastructure lanes after config:
 
@@ -63,20 +64,30 @@ Dependency-failure hardening lane:
 - The SpiceDB authorization-failure slice can start after story 010, once Evidence Request authz uses the real SpiceDB adapter.
 - Pub/Sub failure coverage should land alongside or after stories 011-013, once the client, outbox, and worker runtime define the observable retry and acknowledgement behavior.
 - Object-storage failure coverage should land alongside or after stories 014 and 017, once attachment endpoints exercise storage through public API paths.
-- Story 022 should not block product stories except where a product story introduces a new external boundary; in that case, add the corresponding failure coverage before story 023.
+- Story 022 should not block product stories except where a product story introduces a new external boundary; in that case, add the corresponding failure coverage before final demo hardening.
+
+Metrics instrumentation lane:
+
+- Story 023 builds on the `/metrics` endpoint from story 007 and should land
+  after the main API, worker, storage, and dependency surfaces have enough real
+  behavior to measure.
+- Product and infrastructure stories should add narrowly scoped metrics when a
+  boundary naturally needs them, but story 023 is the release gate that makes
+  metric names, labels, and cardinality consistent across the MVP.
 
 Product lanes:
 
 - Story 010 depends on 007, 008, and the Evidence Request routes from 015. It adds actor-aware API auth, local SpiceDB runtime/bootstrap, and initial workspace-scoped authorization checks.
 - Story 015 is complete and provides the Evidence Request base for the main product model. Story 010 protects its endpoints.
-- Story 016 depends on 010 and 015.
+- Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015, and should introduce or coordinate with story 010 when submitter actor context becomes necessary.
 - Story 018 depends on 016 and 017.
 - Story 019 depends on the evidence/control/submission model from 015-018.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
 - Story 021 depends on the domain services created by 015-020 and should use the authentication and authorization model introduced in 010.
 - Story 022 hardens dependency-failure behavior before the final release gate.
-- Story 023 should remain last because it validates the complete system.
+- Story 023 adds metrics instrumentation before demo hardening.
+- Story 024 should remain last because it validates the complete system.
 
 Definition of done for every story:
 
