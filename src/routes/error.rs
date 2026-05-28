@@ -28,6 +28,7 @@ pub enum ApiError {
     Internal,
     MethodNotAllowed,
     NotFound,
+    Conflict,
     ReadinessTimeout,
     Unauthorized,
     Pool(PoolError),
@@ -41,6 +42,7 @@ impl ApiError {
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict => StatusCode::CONFLICT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => {
                 StatusCode::SERVICE_UNAVAILABLE
@@ -54,6 +56,7 @@ impl ApiError {
             Self::Internal => "internal_error",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
             Self::Unauthorized => "unauthorized",
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => "not_ready",
         }
@@ -65,6 +68,7 @@ impl ApiError {
             Self::Internal => "internal server error",
             Self::MethodNotAllowed => "method not allowed",
             Self::NotFound => "route not found",
+            Self::Conflict => "resource conflict",
             Self::Unauthorized => "authentication required",
             Self::ReadinessTimeout => "readiness check timed out",
             Self::Pool(_) | Self::Postgres(_) => "Postgres readiness check failed",
@@ -82,6 +86,7 @@ impl IntoResponse for ApiError {
             Self::Postgres(error) => tracing::warn!(%error, "Postgres readiness query failed"),
             Self::MethodNotAllowed
             | Self::NotFound
+            | Self::Conflict
             | Self::ReadinessTimeout
             | Self::Unauthorized => {}
         }
@@ -109,6 +114,9 @@ impl From<ServiceError> for ApiError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Repository(error) => repository_error(error),
+            ServiceError::InvalidFrameworkRequirementReferences => ApiError::BadRequest(vec![
+                "framework_requirement_ids contains unknown ids".to_owned(),
+            ]),
         }
     }
 }
@@ -118,6 +126,10 @@ pub fn domain_errors(errors: Vec<DomainError>) -> ApiError {
 }
 
 fn repository_error(error: RepositoryError) -> ApiError {
+    if let RepositoryError::Conflict(_) = error {
+        return ApiError::Conflict;
+    }
+
     tracing::error!(%error, "repository error");
     ApiError::Internal
 }

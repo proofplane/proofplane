@@ -30,11 +30,12 @@ impl EvidenceRequestService {
 
     pub async fn create(
         &self,
+        workspace_id: WorkspaceId,
         request: CreateEvidenceRequestPayload,
     ) -> Result<EvidenceRequest, Error> {
         Ok(self
             .repository
-            .in_workspace(request.workspace_id, async move |context| {
+            .in_workspace(workspace_id, async move |context| {
                 context.create_evidence_request(&request).await
             })
             .await?)
@@ -59,7 +60,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_workspace(workspace_id, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)

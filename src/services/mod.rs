@@ -1,12 +1,16 @@
 use crate::domain::WorkspaceId;
 use thiserror::Error;
 
+pub mod controls;
 pub mod evidence_requests;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("repository error")]
     Repository(#[from] crate::repository::Error),
+
+    #[error("invalid framework requirement references")]
+    InvalidFrameworkRequirementReferences,
 }
 
 pub struct ServiceContext<'transaction> {

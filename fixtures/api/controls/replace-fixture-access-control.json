@@ -1,0 +1,8 @@
+{
+  "code": "PP-FIX-01",
+  "title": "Updated fixture access control",
+  "description": "Updated fixture control for local API testing.",
+  "framework_requirement_ids": [
+    "2f77653a-1249-5704-aa54-1188612cf81a"
+  ]
+}

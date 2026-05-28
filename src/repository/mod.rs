@@ -6,6 +6,7 @@ use crate::{domain::WorkspaceId, services::ServiceContext};
 
 mod actors;
 mod api_credentials;
+mod controls;
 pub mod error;
 mod evidence_requests;
 mod workspaces;

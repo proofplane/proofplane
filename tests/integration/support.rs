@@ -42,6 +42,7 @@ pub struct TestApp {
     server: TestServer,
     api_key: String,
     workspace_ids: HashMap<String, Uuid>,
+    control_ids: HashMap<String, HashMap<String, Uuid>>,
 }
 
 impl TestApp {
@@ -118,7 +119,12 @@ impl TestApp {
             server.add_header(API_KEY_HEADER, &api_key);
         }
 
-        let workspace_ids = insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
+        if builder.soc2_reference_data {
+            insert_soc2_reference_data(&postgres).await;
+        }
+
+        let (workspace_ids, control_ids) =
+            insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
 
         Self {
             _postgres_container: postgres_container,
@@ -127,6 +133,7 @@ impl TestApp {
             server,
             api_key,
             workspace_ids,
+            control_ids,
         }
     }
 
@@ -159,16 +166,33 @@ impl TestApp {
             .get(key)
             .unwrap_or_else(|| panic!("workspace fixture {key:?} exists"))
     }
+
+    pub fn control_id(&self, workspace_key: &str, code: &str) -> Uuid {
+        *self
+            .control_ids
+            .get(workspace_key)
+            .unwrap_or_else(|| panic!("workspace fixture {workspace_key:?} exists"))
+            .get(code)
+            .unwrap_or_else(|| {
+                panic!("control fixture {code:?} exists in workspace {workspace_key:?}")
+            })
+    }
 }
 
 pub struct TestAppBuilder {
     default_auth: bool,
+    soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
 }
 
 impl TestAppBuilder {
     pub fn without_default_auth(mut self) -> Self {
         self.default_auth = false;
+        self
+    }
+
+    pub fn with_soc2_reference_data(mut self) -> Self {
+        self.soc2_reference_data = true;
         self
     }
 
@@ -179,6 +203,7 @@ impl TestAppBuilder {
                 key,
                 name,
                 default_membership: false,
+                controls: Vec::new(),
             },
         }
     }
@@ -192,6 +217,7 @@ impl Default for TestAppBuilder {
     fn default() -> Self {
         Self {
             default_auth: true,
+            soc2_reference_data: false,
             workspaces: Vec::new(),
         }
     }
@@ -203,6 +229,20 @@ pub struct WorkspaceSpecBuilder {
 }
 
 impl WorkspaceSpecBuilder {
+    pub fn with_control(
+        mut self,
+        code: &'static str,
+        title: &'static str,
+        requirement_ids: Vec<Uuid>,
+    ) -> Self {
+        self.spec.controls.push(ControlSpec {
+            code,
+            title,
+            requirement_ids,
+        });
+        self
+    }
+
     pub fn with_default_membership(mut self) -> TestAppBuilder {
         self.spec.default_membership = true;
         self.app.workspaces.push(self.spec);
@@ -220,14 +260,25 @@ struct WorkspaceSpec {
     key: &'static str,
     name: &'static str,
     default_membership: bool,
+    controls: Vec<ControlSpec>,
+}
+
+struct ControlSpec {
+    code: &'static str,
+    title: &'static str,
+    requirement_ids: Vec<Uuid>,
 }
 
 async fn insert_workspaces(
     postgres: &Postgres,
     spicedb: &SpiceDbClient,
     workspaces: Vec<WorkspaceSpec>,
-) -> HashMap<String, Uuid> {
+) -> (
+    HashMap<String, Uuid>,
+    HashMap<String, HashMap<String, Uuid>>,
+) {
     let mut ids = HashMap::new();
+    let mut control_ids = HashMap::new();
 
     for workspace in workspaces {
         let id: Uuid = postgres
@@ -248,15 +299,110 @@ async fn insert_workspaces(
                 .expect("workspace fixture membership writes");
         }
 
+        let mut workspace_control_ids = HashMap::new();
+        for control in workspace.controls {
+            let control_id = insert_control(postgres, id, &control).await;
+            let existing = workspace_control_ids.insert(control.code.to_owned(), control_id);
+            assert!(
+                existing.is_none(),
+                "control fixture code {:?} is unique in workspace {:?}",
+                control.code,
+                workspace.key
+            );
+        }
+
         let existing = ids.insert(workspace.key.to_owned(), id);
         assert!(
             existing.is_none(),
             "workspace fixture key {:?} is unique",
             workspace.key
         );
+        control_ids.insert(workspace.key.to_owned(), workspace_control_ids);
     }
 
-    ids
+    (ids, control_ids)
+}
+
+async fn insert_control(postgres: &Postgres, workspace_id: Uuid, control: &ControlSpec) -> Uuid {
+    let mut client = postgres
+        .get()
+        .await
+        .expect("control fixture connection opens");
+    let transaction = client
+        .transaction()
+        .await
+        .expect("control fixture transaction starts");
+    let control_id = Uuid::new_v4();
+
+    transaction
+        .execute(
+            r#"
+INSERT INTO controls (id, workspace_id, code, title, description)
+VALUES ($1, $2, $3, $4, $5)
+"#,
+            &[
+                &control_id,
+                &workspace_id,
+                &control.code,
+                &control.title,
+                &format!("Control description for {}.", control.title),
+            ],
+        )
+        .await
+        .expect("control fixture inserts");
+
+    for requirement_id in &control.requirement_ids {
+        transaction
+            .execute(
+                r#"
+INSERT INTO control_framework_requirement_mappings (control_id, framework_requirement_id)
+VALUES ($1, $2)
+"#,
+                &[&control_id, requirement_id],
+            )
+            .await
+            .expect("control requirement fixture inserts");
+    }
+
+    transaction
+        .commit()
+        .await
+        .expect("control fixture transaction commits");
+
+    control_id
+}
+
+async fn insert_soc2_reference_data(postgres: &Postgres) {
+    let client = postgres
+        .get()
+        .await
+        .expect("SOC 2 reference fixture connection opens");
+    client
+        .execute(
+            r#"
+INSERT INTO frameworks (id, code, name, description)
+VALUES ($1, 'soc2', 'SOC 2', 'SOC 2 Trust Services Criteria.')
+"#,
+            &[&soc2_framework_id()],
+        )
+        .await
+        .expect("SOC 2 framework fixture inserts");
+
+    for (id, code, title) in [
+        (cc61_id(), "CC6.1", "Logical access security"),
+        (cc71_id(), "CC7.1", "System monitoring"),
+    ] {
+        client
+            .execute(
+                r#"
+INSERT INTO framework_requirements (id, framework_id, code, title, description)
+VALUES ($1, $2, $3, $4, 'Seeded SOC 2 requirement.')
+"#,
+                &[&id, &soc2_framework_id(), &code, &title],
+            )
+            .await
+            .expect("SOC 2 requirement fixture inserts");
+    }
 }
 
 async fn insert_api_credential(postgres: &Postgres) -> String {
@@ -362,4 +508,16 @@ fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
 
 fn socket_addr(value: &str) -> std::net::SocketAddr {
     std::net::SocketAddr::from_str(value).expect("test socket address parses")
+}
+
+pub fn soc2_framework_id() -> Uuid {
+    Uuid::parse_str("30000000-0000-4000-8000-000000000000").unwrap()
+}
+
+pub fn cc61_id() -> Uuid {
+    Uuid::parse_str("30000000-0000-4000-8000-000000000001").unwrap()
+}
+
+pub fn cc71_id() -> Uuid {
+    Uuid::parse_str("30000000-0000-4000-8000-000000000002").unwrap()
 }
