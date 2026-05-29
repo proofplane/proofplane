@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
-use axum_test::TestServer;
+use axum_test::{TestRequest, TestServer};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
@@ -13,7 +13,7 @@ use proofplane::{
         WorkerConfig,
     },
     domain::{
-        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
+        ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
         WorkspaceId,
     },
     repository::Postgres,
@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
-pub const INTEGRATION_ACTOR_ID: &str = "integration-system";
+pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
 
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
@@ -98,7 +98,6 @@ impl TestApp {
             .await
             .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));
-        let api_key = insert_api_credential(&postgres).await;
         let recorder = PrometheusBuilder::new().build_recorder();
         // It's safe to unwrap the result of returning the new ApiKeyManager because
         // we're in a test and it really shouldn't panic anyways.
@@ -114,10 +113,6 @@ impl TestApp {
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
-        if builder.default_auth {
-            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
-            server.add_header(API_KEY_HEADER, &api_key);
-        }
 
         if builder.soc2_reference_data {
             insert_soc2_reference_data(&postgres).await;
@@ -125,6 +120,11 @@ impl TestApp {
 
         let (workspace_ids, control_ids) =
             insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
+        let api_key = insert_api_credential(&postgres).await;
+        if builder.default_auth {
+            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
+            server.add_header(API_KEY_HEADER, &api_key);
+        }
 
         Self {
             _postgres_container: postgres_container,
@@ -141,6 +141,8 @@ impl TestApp {
         let response = self
             .server
             .post(&format!("/workspaces/{workspace_id}/evidence-requests"))
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
             .json(body)
             .await;
 
@@ -158,6 +160,38 @@ impl TestApp {
 
     pub fn api_key(&self) -> &str {
         &self.api_key
+    }
+
+    pub fn actor_id(&self) -> &str {
+        INTEGRATION_ACTOR_ID
+    }
+
+    pub fn get(&self, path: &str) -> TestRequest {
+        self.server
+            .get(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn post(&self, path: &str) -> TestRequest {
+        self.server
+            .post(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn put(&self, path: &str) -> TestRequest {
+        self.server
+            .put(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn delete(&self, path: &str) -> TestRequest {
+        self.server
+            .delete(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
     }
 
     pub fn workspace_id(&self, key: &str) -> Uuid {
@@ -411,22 +445,24 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
         .issue(Environment::test())
         .expect("integration API key issues");
     let api_key = issued.raw_key.expose_secret().to_owned();
+    let actor_id = integration_actor_id();
 
     postgres
         .create_actor(&CreateActorPayload {
-            id: INTEGRATION_ACTOR_ID.to_owned(),
+            id: Some(actor_id),
             kind: ActorKind::System,
             display_name: "Integration System".to_owned(),
         })
         .await
         .expect("integration actor inserts");
+
     postgres
         .create_api_credential(&CreateApiCredentialPayload {
             id: "integration-api-key".to_owned(),
-            actor_id: INTEGRATION_ACTOR_ID.to_owned(),
+            actor_id,
             name: "Integration API Key".to_owned(),
-            key_id: issued.key_id,
-            credential_hash: issued.credential_hash,
+            key_id: issued.key_id.clone(),
+            credential_hash: issued.credential_hash.clone(),
             expires_at: None,
             revoked_at: None,
         })
@@ -434,6 +470,10 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
         .expect("integration API credential inserts");
 
     api_key
+}
+
+fn integration_actor_id() -> ActorId {
+    ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).expect("integration actor ID is a UUID"))
 }
 
 async fn start_spicedb() -> ContainerAsync<GenericImage> {

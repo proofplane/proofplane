@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     authorization::spicedb::{ClientError, SpiceDbClient, WorkspacePermission},
-    domain::WorkspaceId,
+    domain::ActorContext,
 };
 
 #[derive(Clone)]
@@ -19,53 +19,36 @@ impl EvidenceRequestAuthorizer {
 
     pub async fn can_read_evidence_requests(
         &self,
-        actor_id: &str,
-        workspace_id: WorkspaceId,
+        actor: &ActorContext,
     ) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb
-            .check_workspace_permission(
-                workspace_id,
-                WorkspacePermission::ReadEvidenceRequests,
-                actor_id,
-            )
+            .check_workspace_permission(actor, WorkspacePermission::ReadEvidenceRequests)
             .await
     }
 
     pub async fn can_write_evidence_requests(
         &self,
-        actor_id: &str,
-        workspace_id: WorkspaceId,
+        actor: &ActorContext,
     ) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb
-            .check_workspace_permission(
-                workspace_id,
-                WorkspacePermission::WriteEvidenceRequests,
-                actor_id,
-            )
+            .check_workspace_permission(actor, WorkspacePermission::WriteEvidenceRequests)
             .await
     }
 
-    pub async fn can_read_controls(
-        &self,
-        actor_id: &str,
-        workspace_id: WorkspaceId,
-    ) -> Result<bool, ClientError> {
+    // TODO: should reading and writing controls go in their own file?
+    pub async fn can_read_controls(&self, actor: &ActorContext) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb
-            .check_workspace_permission(workspace_id, WorkspacePermission::ReadControls, actor_id)
+            .check_workspace_permission(actor, WorkspacePermission::ReadControls)
             .await
     }
 
-    pub async fn can_write_controls(
-        &self,
-        actor_id: &str,
-        workspace_id: WorkspaceId,
-    ) -> Result<bool, ClientError> {
+    pub async fn can_write_controls(&self, actor: &ActorContext) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb
-            .check_workspace_permission(workspace_id, WorkspacePermission::WriteControls, actor_id)
+            .check_workspace_permission(actor, WorkspacePermission::WriteControls)
             .await
     }
 

@@ -49,10 +49,18 @@ async fn evidence_request_routes_require_valid_api_keys() {
         .await;
     assert_unauthorized(&invalid.json(), invalid.status_code());
 
-    let wrong_actor = app
+    let malformed_actor = app
         .server()
         .get(&path)
         .add_header(ACTOR_ID_HEADER, "wrong-actor")
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+    assert_unauthorized(&malformed_actor.json(), malformed_actor.status_code());
+
+    let wrong_actor = app
+        .server()
+        .get(&path)
+        .add_header(ACTOR_ID_HEADER, Uuid::new_v4().to_string())
         .add_header(API_KEY_HEADER, app.api_key())
         .await;
     assert_unauthorized(&wrong_actor.json(), wrong_actor.status_code());
@@ -64,6 +72,43 @@ async fn evidence_request_routes_require_valid_api_keys() {
         .add_header(API_KEY_HEADER, app.api_key())
         .await;
     valid.assert_status_ok();
+}
+
+#[tokio::test]
+async fn valid_global_actor_api_key_is_authorized_by_workspace_membership() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("first", "First workspace")
+        .with_default_membership()
+        .workspace("second", "Second workspace")
+        .with_default_membership()
+        .workspace("ungranted", "Ungranted workspace")
+        .without_membership()
+        .build()
+        .await;
+
+    for key in ["first", "second"] {
+        let workspace_id = app.workspace_id(key);
+        app.server()
+            .get(&format!("/workspaces/{workspace_id}/evidence-requests"))
+            .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+            .add_header(API_KEY_HEADER, app.api_key())
+            .await
+            .assert_status_ok();
+    }
+
+    let ungranted_workspace_id = app.workspace_id("ungranted");
+    let ungranted = app
+        .server()
+        .get(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-requests"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+
+    assert_eq!(ungranted.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(ungranted.json::<Value>()["error"]["code"], "not_found");
 }
 
 #[tokio::test]
@@ -110,7 +155,7 @@ async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: credential.actor_id.clone(),
+                actor_id: credential.actor_id,
                 name: credential.name.clone(),
                 key_id: credential.key_id.clone(),
                 credential_hash: credential.credential_hash.clone(),
@@ -229,7 +274,7 @@ async fn authenticated_request_logs_context_without_api_key() {
     let logs = String::from_utf8(log_bytes.lock().expect("log buffer locks").clone())
         .expect("logs are UTF-8");
     assert!(logs.contains(&request_id), "captured logs: {logs}");
-    assert!(logs.contains("integration-system"), "captured logs: {logs}");
+    assert!(logs.contains(INTEGRATION_ACTOR_ID), "captured logs: {logs}");
     assert!(logs.contains(invalid_request_path), "captured logs: {logs}");
     assert!(!logs.contains(app.api_key()), "captured logs: {logs}");
 }

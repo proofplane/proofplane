@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
 );
 
 CREATE TABLE IF NOT EXISTS actors (
-    id TEXT PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     actor_type TEXT NOT NULL,
     display_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS actors (
 
 CREATE TABLE IF NOT EXISTS api_credentials (
     id TEXT PRIMARY KEY,
-    actor_id TEXT NOT NULL UNIQUE REFERENCES actors(id),
+    actor_id UUID NOT NULL UNIQUE REFERENCES actors(id),
     name TEXT NOT NULL,
     key_id TEXT NOT NULL,
     credential_hash TEXT NOT NULL,
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS api_credentials (
 CREATE TABLE IF NOT EXISTS audit_events (
     id BIGSERIAL PRIMARY KEY,
     workspace_id UUID REFERENCES workspaces(id),
-    actor_id TEXT REFERENCES actors(id),
+    actor_id UUID REFERENCES actors(id),
     event_type TEXT NOT NULL,
     event_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

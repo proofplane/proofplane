@@ -89,6 +89,14 @@ As product behavior grows, query methods and transaction helpers should live
 here or in submodules below this boundary. Route handlers should avoid reaching
 through to `store` for normal application data access.
 
+Repository methods are persistence primitives, not authorization boundaries.
+This matters for global identity data: actors and API credentials are not owned
+by a single workspace, so repository methods may read or mutate them globally.
+Do not expose those methods directly through HTTP routes. Any future actor or
+API credential management API must authorize the requested management action
+explicitly, for example with actor-owned credential permissions or an
+organization/admin-level permission in SpiceDB.
+
 ### `src/app.rs`
 
 `app` is HTTP composition. It owns construction of the root Axum `Router`.

@@ -19,7 +19,6 @@ async fn create_list_get_and_update_controls_with_requirement_mappings() {
 
     let create = control("PP-LOG-01", "Log review", vec![cc71_id(), cc61_id()]);
     let created = app
-        .server()
         .post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&create)
         .await
@@ -35,14 +34,12 @@ async fn create_list_get_and_update_controls_with_requirement_mappings() {
         cc71_id().to_string()
     );
     let unmapped = app
-        .server()
         .post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&control("PP-AUD-01", "Audit trail", vec![]))
         .await
         .json::<Value>();
 
     let listed = app
-        .server()
         .get(&format!("/workspaces/{workspace_id}/controls"))
         .await
         .json::<Value>();
@@ -55,27 +52,23 @@ async fn create_list_get_and_update_controls_with_requirement_mappings() {
         ["CC6.1", "CC7.1"]
     );
 
-    app.server()
-        .get(&format!("/workspaces/{workspace_id}/controls/{control_id}"))
+    app.get(&format!("/workspaces/{workspace_id}/controls/{control_id}"))
         .await
         .assert_status_ok();
-    app.server()
-        .get(&format!(
-            "/workspaces/{other_workspace_id}/controls/{control_id}"
-        ))
-        .await
-        .assert_status_not_found();
-    app.server()
-        .put(&format!(
-            "/workspaces/{other_workspace_id}/controls/{control_id}"
-        ))
-        .json(&control("PP-LOG-03", "Wrong workspace", vec![cc61_id()]))
-        .await
-        .assert_status_not_found();
+    app.get(&format!(
+        "/workspaces/{other_workspace_id}/controls/{control_id}"
+    ))
+    .await
+    .assert_status_not_found();
+    app.put(&format!(
+        "/workspaces/{other_workspace_id}/controls/{control_id}"
+    ))
+    .json(&control("PP-LOG-03", "Wrong workspace", vec![cc61_id()]))
+    .await
+    .assert_status_not_found();
 
     let update = control("PP-LOG-02", "Updated log review", vec![cc71_id()]);
     let updated = app
-        .server()
         .put(&format!("/workspaces/{workspace_id}/controls/{control_id}"))
         .json(&update)
         .await
@@ -87,19 +80,16 @@ async fn create_list_get_and_update_controls_with_requirement_mappings() {
         cc71_id().to_string()
     );
 
-    app.server()
-        .post(&format!("/workspaces/{workspace_id}/controls"))
+    app.post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&control("PP-LOG-02", "Duplicate", vec![cc61_id()]))
         .await
         .assert_status(StatusCode::CONFLICT);
-    app.server()
-        .post(&format!("/workspaces/{workspace_id}/controls"))
+    app.post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&control("PP-MISSING", "Missing", vec![Uuid::new_v4()]))
         .await
         .assert_status_bad_request();
 
-    app.server()
-        .put(&format!("/workspaces/{workspace_id}/controls/{control_id}"))
+    app.put(&format!("/workspaces/{workspace_id}/controls/{control_id}"))
         .json(&control("PP-MISSING", "Missing", vec![Uuid::new_v4()]))
         .await
         .assert_status_bad_request();
@@ -140,7 +130,6 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
     let path = mapping_path(workspace_id, evidence_request_id);
 
     let created = app
-        .server()
         .post(&path)
         .json(&json!({
             "control_id": control_id,
@@ -154,8 +143,7 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
         "This request proves access approvals were reviewed."
     );
 
-    app.server()
-        .post(&path)
+    app.post(&path)
         .json(&json!({
             "control_id": control_id,
             "rationale": "Duplicate mapping"
@@ -163,23 +151,20 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
         .await
         .assert_status(StatusCode::CONFLICT);
 
-    let listed = app.server().get(&path).await.json::<Value>();
+    let listed = app.get(&path).await.json::<Value>();
     assert_eq!(listed.as_array().unwrap().len(), 1);
 
-    app.server()
-        .get(&mapping_path(other_workspace_id, evidence_request_id))
+    app.get(&mapping_path(other_workspace_id, evidence_request_id))
         .await
         .assert_status_not_found();
-    app.server()
-        .post(&mapping_path(workspace_id, Uuid::new_v4()))
+    app.post(&mapping_path(workspace_id, Uuid::new_v4()))
         .json(&json!({
             "control_id": control_id,
             "rationale": "Missing request"
         }))
         .await
         .assert_status_not_found();
-    app.server()
-        .post(&path)
+    app.post(&path)
         .json(&json!({
             "control_id": other_control_id,
             "rationale": "Cross-workspace control"
@@ -187,13 +172,11 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
         .await
         .assert_status_not_found();
 
-    app.server()
-        .delete(&format!("{path}/{control_id}"))
+    app.delete(&format!("{path}/{control_id}"))
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    assert_eq!(app.server().get(&path).await.json::<Value>(), json!([]));
-    app.server()
-        .delete(&format!("{path}/{control_id}"))
+    assert_eq!(app.get(&path).await.json::<Value>(), json!([]));
+    app.delete(&format!("{path}/{control_id}"))
         .await
         .assert_status_not_found();
 }

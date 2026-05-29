@@ -2,7 +2,9 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 
-use super::{api_credential::ApiCredential, DomainError};
+use super::{api_credential::ApiCredential, ids::uuid_id, DomainError, WorkspaceId};
+
+uuid_id!(ActorId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorKind {
@@ -54,14 +56,15 @@ impl FromStr for ActorKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActorContext {
-    pub id: String,
+    pub workspace_id: WorkspaceId,
+    pub id: ActorId,
     pub kind: ActorKind,
     pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor {
-    pub id: String,
+    pub id: ActorId,
     pub kind: ActorKind,
     pub display_name: String,
     pub created_at: DateTime<Utc>,
@@ -74,8 +77,9 @@ pub struct ActorWithApiCredential {
 }
 
 impl Actor {
-    pub fn context(&self) -> ActorContext {
+    pub fn context(&self, workspace_id: WorkspaceId) -> ActorContext {
         ActorContext {
+            workspace_id,
             id: self.id.clone(),
             kind: self.kind,
             display_name: self.display_name.clone(),
@@ -85,7 +89,7 @@ impl Actor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateActorPayload {
-    pub id: String,
+    pub id: Option<ActorId>, // optional for tests to be able to pass in deterministic IDs
     pub kind: ActorKind,
     pub display_name: String,
 }
@@ -101,8 +105,9 @@ mod tests {
     use std::str::FromStr;
 
     use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
 
-    use super::{Actor, ActorContext, ActorKind};
+    use super::{Actor, ActorContext, ActorId, ActorKind, WorkspaceId};
     use crate::domain::DomainError;
 
     #[test]
@@ -132,29 +137,49 @@ mod tests {
 
     #[test]
     fn actor_context_carries_identity_for_downstream_work() {
+        let workspace_id =
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
+        let actor_id =
+            ActorId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap());
         let actor = ActorContext {
-            id: "system-actor".to_owned(),
+            workspace_id,
+            id: actor_id,
             kind: ActorKind::System,
             display_name: "System".to_owned(),
         };
 
-        assert_eq!(actor.id, "system-actor");
+        assert_eq!(actor.workspace_id, workspace_id);
+        assert_eq!(actor.id, actor_id);
         assert_eq!(actor.kind.as_str(), "system");
     }
 
     #[test]
+    fn actor_id_wraps_uuid() {
+        let uuid = Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
+        let id = ActorId::from(uuid);
+
+        assert_eq!(Uuid::from(id), uuid);
+        assert_eq!(id.to_string(), "00000000-0000-4000-8000-000000000002");
+    }
+
+    #[test]
     fn actor_maps_to_authenticated_context() {
+        let workspace_id =
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
+        let actor_id =
+            ActorId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap());
         let actor = Actor {
-            id: "system-actor".to_owned(),
+            id: actor_id,
             kind: ActorKind::System,
             display_name: "System".to_owned(),
             created_at: Utc.timestamp_opt(0, 0).unwrap(),
         };
 
         assert_eq!(
-            actor.context(),
+            actor.context(workspace_id),
             ActorContext {
-                id: "system-actor".to_owned(),
+                workspace_id,
+                id: actor_id,
                 kind: ActorKind::System,
                 display_name: "System".to_owned(),
             }

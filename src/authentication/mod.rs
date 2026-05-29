@@ -4,7 +4,7 @@ use api_keys_simplified::{ApiKeyManagerV0, Environment, KeyStatus, SecureString}
 use chrono::Utc;
 
 use crate::{
-    domain::{ActorContext, ActorWithApiCredential},
+    domain::{ActorContext, ActorId, ActorWithApiCredential, WorkspaceId},
     repository,
 };
 
@@ -68,7 +68,8 @@ impl ApiKeyAuthenticator {
 
     pub async fn authenticate(
         &self,
-        actor_id: &str,
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
         api_key: &str,
     ) -> Result<Option<ActorContext>, Error> {
         let Some(ActorWithApiCredential {
@@ -98,7 +99,7 @@ impl ApiKeyAuthenticator {
             return Ok(None);
         }
 
-        Ok(Some(actor.context()))
+        Ok(Some(actor.context(workspace_id)))
     }
 }
 

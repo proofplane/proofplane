@@ -7,7 +7,10 @@ use tonic::{
 };
 use url::Url;
 
-use crate::{config::SpiceDbConfig, domain::WorkspaceId};
+use crate::{
+    config::SpiceDbConfig,
+    domain::{ActorContext, WorkspaceId},
+};
 
 // The generated rust code for the protos fails these lints. This is generated
 // code so we don't care.
@@ -107,9 +110,8 @@ impl SpiceDbClient {
 
     pub async fn check_workspace_permission(
         &self,
-        workspace_id: WorkspaceId,
+        actor: &ActorContext,
         permission: WorkspacePermission,
-        actor_id: &str,
     ) -> Result<bool, ClientError> {
         use protos::authzed::api::v1::{
             check_permission_response::Permissionship, consistency::Requirement,
@@ -123,9 +125,12 @@ impl SpiceDbClient {
                 consistency: Some(Consistency {
                     requirement: Some(Requirement::FullyConsistent(true)),
                 }),
-                resource: Some(object_reference("workspace", workspace_id.to_string())),
+                resource: Some(object_reference(
+                    "workspace",
+                    actor.workspace_id.to_string(),
+                )),
                 permission: permission.as_str().to_owned(),
-                subject: Some(actor_subject(actor_id)),
+                subject: Some(actor_subject(&actor.id.to_string())),
                 context: None,
                 with_tracing: false,
             })?)
@@ -135,6 +140,7 @@ impl SpiceDbClient {
         Ok(response.permissionship == Permissionship::HasPermission as i32)
     }
 
+    // TODO: should these implementation details go in the spicedb client instead of out here?
     fn authenticated<T>(&self, message: T) -> Result<Request<T>, ClientError> {
         let mut request = Request::new(message);
         let token = format!("Bearer {}", self.preshared_key.expose_secret());
@@ -218,7 +224,8 @@ mod tests {
 
         let workspace_id =
             WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
-        let update = workspace_membership_update(workspace_id, "system-actor");
+        let update =
+            workspace_membership_update(workspace_id, "00000000-0000-4000-8000-000000000106");
         let relationship = update.relationship.expect("relationship is present");
         let resource = relationship.resource.expect("resource is present");
         let subject = relationship.subject.expect("subject is present");
@@ -229,7 +236,7 @@ mod tests {
         assert_eq!(resource.object_id, "00000000-0000-4000-8000-000000000001");
         assert_eq!(relationship.relation, "member");
         assert_eq!(actor.object_type, "actor");
-        assert_eq!(actor.object_id, "system-actor");
+        assert_eq!(actor.object_id, "00000000-0000-4000-8000-000000000106");
         assert!(subject.optional_relation.is_empty());
     }
 }

@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
+    ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
     UpdateActorPayload, UpdateApiCredentialPayload, UpdateWorkspacePayload,
 };
 use uuid::Uuid;
@@ -13,7 +13,7 @@ async fn actor_repository_crud_uses_typed_rows() {
     let postgres = app.postgres();
     let actor = postgres
         .create_actor(&CreateActorPayload {
-            id: "repository-human".to_owned(),
+            id: Some(ActorId::from(Uuid::new_v4())),
             kind: ActorKind::HumanUser,
             display_name: "Repository Human".to_owned(),
         })
@@ -22,16 +22,21 @@ async fn actor_repository_crud_uses_typed_rows() {
 
     assert_eq!(
         postgres
-            .get_actor(&actor.id)
+            .get_actor(actor.id)
             .await
             .expect("actor reads")
             .expect("actor exists"),
         actor
     );
+    assert!(postgres
+        .list_actors()
+        .await
+        .expect("actors list")
+        .contains(&actor));
 
     let updated = postgres
         .update_actor(
-            &actor.id,
+            actor.id,
             &UpdateActorPayload {
                 kind: ActorKind::ServiceAccount,
                 display_name: "Repository Service".to_owned(),
@@ -50,7 +55,7 @@ async fn actor_repository_crud_uses_typed_rows() {
 
     assert!(postgres
         .update_actor(
-            "missing-actor",
+            ActorId::from(Uuid::new_v4()),
             &UpdateActorPayload {
                 kind: ActorKind::System,
                 display_name: "Missing".to_owned(),
@@ -60,16 +65,16 @@ async fn actor_repository_crud_uses_typed_rows() {
         .expect("missing actor update resolves")
         .is_none());
     assert!(postgres
-        .delete_actor(&actor.id)
+        .delete_actor(actor.id)
         .await
         .expect("actor deletes"));
     assert!(postgres
-        .get_actor(&actor.id)
+        .get_actor(actor.id)
         .await
         .expect("deleted actor reads")
         .is_none());
     assert!(!postgres
-        .delete_actor(&actor.id)
+        .delete_actor(actor.id)
         .await
         .expect("second actor delete resolves"));
 }
@@ -147,7 +152,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
     let postgres = app.postgres();
     let actor = postgres
         .create_actor(&CreateActorPayload {
-            id: "credential-actor".to_owned(),
+            id: None,
             kind: ActorKind::Integration,
             display_name: "Credential Actor".to_owned(),
         })
@@ -156,7 +161,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
     let credential = postgres
         .create_api_credential(&CreateApiCredentialPayload {
             id: "repository-api-key".to_owned(),
-            actor_id: actor.id.clone(),
+            actor_id: actor.id,
             name: "Repository API Key".to_owned(),
             key_id: "first-key-id".to_owned(),
             credential_hash: "first-credential-hash".to_owned(),
@@ -179,7 +184,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: actor.id.clone(),
+                actor_id: actor.id,
                 name: "Rotated Repository API Key".to_owned(),
                 key_id: "rotated-key-id".to_owned(),
                 credential_hash: "rotated-credential-hash".to_owned(),
@@ -195,7 +200,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
     assert!(updated.expires_at.is_none());
     assert!(updated.revoked_at.is_some());
     let actor_with_credential = postgres
-        .actor_with_api_credential(&actor.id)
+        .actor_with_api_credential(actor.id)
         .await
         .expect("actor credential reads")
         .expect("actor exists");
@@ -211,7 +216,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
         .update_api_credential(
             "missing-api-key",
             &UpdateApiCredentialPayload {
-                actor_id: actor.id.clone(),
+                actor_id: actor.id,
                 name: "Missing API Key".to_owned(),
                 key_id: "missing-key-id".to_owned(),
                 credential_hash: "missing-credential-hash".to_owned(),
@@ -236,7 +241,7 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
         .await
         .expect("second API credential delete resolves"));
     assert!(postgres
-        .delete_actor(&actor.id)
+        .delete_actor(actor.id)
         .await
         .expect("credential actor deletes"));
 }
@@ -247,7 +252,7 @@ async fn api_credential_repository_enforces_one_credential_per_actor() {
     let postgres = app.postgres();
     let actor = postgres
         .create_actor(&CreateActorPayload {
-            id: "single-credential-actor".to_owned(),
+            id: None,
             kind: ActorKind::Integration,
             display_name: "Single Credential Actor".to_owned(),
         })
@@ -261,7 +266,7 @@ async fn api_credential_repository_enforces_one_credential_per_actor() {
         let result = postgres
             .create_api_credential(&CreateApiCredentialPayload {
                 id: id.to_owned(),
-                actor_id: actor.id.clone(),
+                actor_id: actor.id,
                 name: id.to_owned(),
                 key_id: key_id.to_owned(),
                 credential_hash: format!("{id}-hash"),

@@ -65,7 +65,7 @@ Proofplane writes membership relationships to the relation declared by the
 schema, such as:
 
 ```text
-workspace:00000000-0000-4000-8000-000000000001#member@actor:system-actor
+workspace:00000000-0000-4000-8000-000000000001#member@actor:00000000-0000-4000-8000-000000000106
 ```
 
 Proofplane checks the computed workspace permissions when handling Evidence
@@ -87,6 +87,16 @@ references. Workspace membership is authorization data owned only by SpiceDB.
 Local seed writes its initial membership relationship directly to SpiceDB after
 the schema is deployed. When a later story adds runtime membership writes, that
 write path must write the authorization relationship explicitly.
+
+Actors and API credentials are global identity records, not workspace-owned
+records. The current product has no HTTP API for actor or API credential
+management; repository CRUD methods exist for seed, tests, and authentication
+support. If Proofplane later exposes actor or credential management routes, those
+routes must not rely on workspace membership alone and must not expose raw global
+lists. Add an explicit authorization model for identity administration first,
+such as credential ownership for self-service actions and an organization- or
+tenant-level admin permission for listing, creating, rotating, revoking, or
+deleting credentials and actors.
 
 ### Implementation Slices
 
