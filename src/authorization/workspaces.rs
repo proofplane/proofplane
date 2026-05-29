@@ -6,11 +6,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct EvidenceRequestAuthorizer {
+pub struct WorkspaceAuthorizer {
     spicedb: Arc<Mutex<SpiceDbClient>>,
 }
 
-impl EvidenceRequestAuthorizer {
+impl WorkspaceAuthorizer {
     pub fn new(spicedb: SpiceDbClient) -> Self {
         Self {
             spicedb: Arc::new(Mutex::new(spicedb)),
@@ -37,7 +37,6 @@ impl EvidenceRequestAuthorizer {
             .await
     }
 
-    // TODO: should reading and writing controls go in their own file?
     pub async fn can_read_controls(&self, actor: &ActorContext) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb

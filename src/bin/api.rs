@@ -6,8 +6,8 @@ use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
     authorization::{
-        evidence_requests::EvidenceRequestAuthorizer,
         spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
+        workspaces::WorkspaceAuthorizer,
     },
     config, observability, repository, store,
 };
@@ -71,15 +71,15 @@ async fn run() -> Result<(), Error> {
     info!("listening on {}", config.server.api_bind);
 
     let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
-    let evidence_request_authorizer =
-        EvidenceRequestAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
+    let workspace_authorizer =
+        WorkspaceAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
 
     let deps = AppDependencies {
         config,
         postgres,
         metrics,
         authenticator,
-        evidence_request_authorizer,
+        workspace_authorizer,
     };
 
     let app = create_app(deps)?;

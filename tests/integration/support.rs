@@ -6,7 +6,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
-    authorization::{evidence_requests::EvidenceRequestAuthorizer, spicedb::SpiceDbClient},
+    authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
         PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
@@ -109,7 +109,7 @@ impl TestApp {
             postgres: postgres.clone(),
             metrics: recorder.handle(),
             authenticator,
-            evidence_request_authorizer: EvidenceRequestAuthorizer::new(spicedb.clone()),
+            workspace_authorizer: WorkspaceAuthorizer::new(spicedb.clone()),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));

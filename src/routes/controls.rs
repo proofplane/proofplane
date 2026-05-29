@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
-    authorization::evidence_requests::EvidenceRequestAuthorizer,
+    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, Control, ControlId, CreateControlPayload,
         CreateEvidenceRequestControlMappingPayload, DomainError, EvidenceRequestControlMapping,
@@ -41,7 +41,7 @@ pub struct ControlState {
 #[derive(Clone)]
 pub struct ControlRouteAuthState {
     pub authenticator: ApiKeyAuthenticator,
-    pub authorizer: EvidenceRequestAuthorizer,
+    pub authorizer: WorkspaceAuthorizer,
 }
 
 pub fn router(state: ControlState) -> Router {

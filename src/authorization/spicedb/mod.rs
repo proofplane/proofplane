@@ -140,7 +140,6 @@ impl SpiceDbClient {
         Ok(response.permissionship == Permissionship::HasPermission as i32)
     }
 
-    // TODO: should these implementation details go in the spicedb client instead of out here?
     fn authenticated<T>(&self, message: T) -> Result<Request<T>, ClientError> {
         let mut request = Request::new(message);
         let token = format!("Bearer {}", self.preshared_key.expose_secret());

@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
-use axum::{
-    extract::{Request, State},
-    middleware::Next,
-    response::Response,
-};
+use axum::extract::Request;
 use tracing::Span;
 use uuid::Uuid;
 
@@ -16,34 +12,6 @@ use crate::{
 
 pub const ACTOR_ID_HEADER: &str = "x-proofplane-actor-id";
 pub const API_KEY_HEADER: &str = "x-proofplane-api-key";
-
-#[derive(Clone)]
-pub struct ApiKeyState {
-    pub authenticator: ApiKeyAuthenticator,
-}
-
-pub async fn require_api_key(
-    State(state): State<ApiKeyState>,
-    mut request: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
-    let (actor_id, api_key) = credentials_from_request(&request)?;
-    let workspace_id = workspace_id_from_uri(request.uri().path())?;
-
-    let actor = state
-        .authenticator
-        .authenticate(workspace_id, actor_id, &api_key)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "API key authentication failed");
-            ApiError::Internal
-        })?
-        .ok_or(ApiError::Unauthorized)?;
-
-    attach_actor_context(&mut request, actor);
-
-    Ok(next.run(request).await)
-}
 
 pub(in crate::routes) async fn authorize_workspace_route(
     authenticator: &ApiKeyAuthenticator,
@@ -83,20 +51,6 @@ fn credentials_from_request(request: &Request) -> Result<(ActorId, String), ApiE
 fn attach_actor_context(request: &mut Request, actor: ActorContext) {
     Span::current().record("actor_id", actor.id.to_string());
     request.extensions_mut().insert(actor);
-}
-
-// TODO: why is this here? We should have replaced this by passing in the Path from axum.
-fn workspace_id_from_uri(path: &str) -> Result<WorkspaceId, ApiError> {
-    path.split('/')
-        .collect::<Vec<_>>()
-        .windows(2)
-        .find_map(|parts| {
-            (parts[0] == "workspaces")
-                .then(|| Uuid::parse_str(parts[1]).ok())
-                .flatten()
-        })
-        .map(WorkspaceId::from)
-        .ok_or(ApiError::Unauthorized)
 }
 
 fn header_value(request: &Request, header: &'static str) -> Option<String> {
