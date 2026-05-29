@@ -63,6 +63,7 @@ Submissions must distinguish system receipt time from the evidence effective or 
 - API supports creating a submission, uploading or registering an attachment, getting submission status, and retrieving latest submission for a requirement.
 - Service validates Evidence Request existence and workspace ownership.
 - Submissions start in a pending approval status.
+- File attachment uploads require caller-provided CRC32C and reject the upload when the received bytes do not match it.
 - Attachment metadata records malware scan status, scanner name/version where available, scan timestamp, and failure reason where safe to expose.
 - File attachments enter a non-usable pending scan state until the configured malware scanner returns `clean`.
 - Malicious or failed scans block approval, normal download, and approved-source-material use.
