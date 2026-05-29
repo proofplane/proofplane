@@ -15,8 +15,8 @@ Evidence submissions support:
 - evidence effective or coverage date
 - source system
 - collection method
-- provenance metadata
-- checksum or hash
+- provenance metadata for source/integration receipt details
+- submission-level and attachment-level checksums or hashes
 - replacement or supplement relationship
 
 Attachments use GCS/object storage for bytes and Postgres for metadata. Submissions inherit Evidence Request-control mappings.
@@ -32,7 +32,17 @@ pub trait MalwareScanner {
 }
 ```
 
-Attachment metadata should persist scan state independently from upload state:
+Provenance is submission-level metadata that explains where the evidence came
+from and how Proofplane received it. Examples include an integration run ID, a
+source report URL, the upstream export timestamp, webhook delivery IDs, source
+account IDs, or the query/filter parameters used to produce the evidence. It is
+not the attachment byte-integrity record and should not duplicate object storage
+metadata.
+
+Attachment metadata should persist scan state independently from upload state.
+Store scan state in a separate scan record so the attachment object metadata can
+remain stable while scanner attempts, scanner versions, and failure details
+change over time:
 
 - `pending`
 - `clean`
@@ -65,7 +75,9 @@ Submissions must distinguish system receipt time from the evidence effective or 
 - API supports creating a submission, uploading or registering an attachment, getting submission details, and retrieving latest submission for a requirement.
 - Service validates Evidence Request existence and workspace ownership.
 - File attachment uploads require caller-provided CRC32C and reject the upload when the received bytes do not match it.
-- Attachment metadata records malware scan status, scanner name/version where available, scan timestamp, and failure reason where safe to expose.
+- Attachment metadata records object references and byte-integrity checksums.
+- Attachment scan records track malware scan status, scanner name/version where
+  available, scan timestamp, and failure reason where safe to expose.
 - File attachments enter a non-usable pending scan state until the configured malware scanner returns `clean`.
 - Malicious or failed scans block normal download and source-material use.
 - The scanner boundary supports ClamAV for local/self-hosted operation and does not make ClamAV part of the domain model.
@@ -97,7 +109,7 @@ Submissions must distinguish system receipt time from the evidence effective or 
 
 ## Implementation Slices
 
-1. Submission domain and database model: define submission and attachment IDs, replacement or supplement relationships, receipt time versus effective or coverage date, source system, collection method, provenance JSON, checksums, and attachment scan state columns.
+1. Submission domain and database model: define submission, attachment, and attachment scan IDs, replacement or supplement relationships, receipt time versus effective or coverage date, source system, collection method, provenance JSON, checksums, and separate attachment scan records.
 2. Repository layer: support creating submissions, attaching metadata, reading submission details, querying latest submissions, and verifying workspace ownership through the linked Evidence Request.
 3. Submission API without file uploads: add the basic REST surface for creating an accepted submission record and reading its details before introducing binary upload handling.
 4. Attachment registration API: allow callers to register attachment metadata or existing object references separately from raw upload, including initial scan states such as `pending` or `skipped`.

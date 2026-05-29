@@ -60,6 +60,8 @@ pub struct EvidenceSubmission {
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
+    // Integration-specific receipt metadata, such as external run IDs,
+    // source URLs, export timestamps, or webhook delivery IDs.
     pub provenance: Value,
 }
 
@@ -71,8 +73,13 @@ pub struct EvidenceAttachment {
     pub content_type: String,
     pub content_length: i64,
     pub object_key: String,
-    pub sha256: String,
-    pub caller_crc32c: String,
+    pub checksum_sha256: String,
+    pub checksum_crc32c: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceAttachmentScan {
+    pub evidence_attachment_id: EvidenceAttachmentId,
     pub scan_status: AttachmentScanStatus,
     pub scanner_name: Option<String>,
     pub scanner_version: Option<String>,
