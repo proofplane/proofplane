@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 
 use super::ActorId;
 
+/**
+ * ApiCredentials are the keys that actors pass in to authenticate.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiCredential {
     pub id: String,
@@ -27,7 +30,6 @@ pub struct CreateApiCredentialPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateApiCredentialPayload {
-    pub actor_id: ActorId,
     pub name: String,
     pub key_id: String,
     pub credential_hash: String,

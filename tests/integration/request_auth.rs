@@ -155,7 +155,6 @@ async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: credential.actor_id,
                 name: credential.name.clone(),
                 key_id: credential.key_id.clone(),
                 credential_hash: credential.credential_hash.clone(),
@@ -177,7 +176,6 @@ async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: credential.actor_id,
                 name: credential.name,
                 key_id: credential.key_id,
                 credential_hash: credential.credential_hash,

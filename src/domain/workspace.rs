@@ -4,6 +4,10 @@ use super::ids::uuid_id;
 
 uuid_id!(WorkspaceId);
 
+/**
+ * Workspace is the tenant boundary. Most things are basically scoped
+ * to workspaces, excepting global things like frameworks which are universal.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     pub id: WorkspaceId,

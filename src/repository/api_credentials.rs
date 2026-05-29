@@ -111,7 +111,6 @@ ORDER BY api_credentials.id
                 r#"
 UPDATE api_credentials
 SET
-    actor_id = $2,
     name = $3,
     key_id = $4,
     credential_hash = $5,
@@ -120,7 +119,6 @@ SET
 WHERE id = $1
 RETURNING
     id,
-    actor_id,
     name,
     key_id,
     credential_hash,
@@ -130,7 +128,6 @@ RETURNING
 "#,
                 &[
                     &id,
-                    &uuid::Uuid::from(update.actor_id),
                     &update.name,
                     &update.key_id,
                     &update.credential_hash,

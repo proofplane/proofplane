@@ -54,6 +54,9 @@ impl FromStr for ActorKind {
     }
 }
 
+/**
+ * ActorContext represents an actor acting in a specific workspace for a specific request.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActorContext {
     pub workspace_id: WorkspaceId,
@@ -62,6 +65,9 @@ pub struct ActorContext {
     pub display_name: String,
 }
 
+/**
+ * Actors are users of the system.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor {
     pub id: ActorId,

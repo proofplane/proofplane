@@ -87,6 +87,12 @@ impl FromStr for EvidenceRequestStatus {
     }
 }
 
+/**
+ * An EvidenceRequest represents the need to submit evidence that an
+ * organization is doing a particular thing it wants to do according
+ * to its controls. Evidence is requested periodically to make sure
+ * that the organization is sticking to what it wants to do.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceRequest {
     pub id: EvidenceRequestId,

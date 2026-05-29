@@ -50,6 +50,10 @@ impl FromStr for AttachmentScanStatus {
     }
 }
 
+/**
+ * An EvidenceSubmission represents a particular piece of evidence that
+ * is submitted to satisfy a request for evidence for a certain period.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceSubmission {
     pub id: EvidenceSubmissionId,
@@ -65,6 +69,11 @@ pub struct EvidenceSubmission {
     pub provenance: Value,
 }
 
+/**
+ * The EvidenceAttachment is the actual thing that's being presented as
+ * evidence. It can be a screenshot of config, a JSON response from a
+ * configuration management API, or anything else.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceAttachment {
     pub id: EvidenceAttachmentId,
@@ -77,6 +86,10 @@ pub struct EvidenceAttachment {
     pub checksum_crc32c: String,
 }
 
+/**
+ * EvidenceAttachmentScan is a record of a virus scan done to an uploaded
+ * evidence attachment.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceAttachmentScan {
     pub evidence_attachment_id: EvidenceAttachmentId,

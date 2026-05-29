@@ -184,7 +184,6 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: actor.id,
                 name: "Rotated Repository API Key".to_owned(),
                 key_id: "rotated-key-id".to_owned(),
                 credential_hash: "rotated-credential-hash".to_owned(),
@@ -216,7 +215,6 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
         .update_api_credential(
             "missing-api-key",
             &UpdateApiCredentialPayload {
-                actor_id: actor.id,
                 name: "Missing API Key".to_owned(),
                 key_id: "missing-key-id".to_owned(),
                 credential_hash: "missing-credential-hash".to_owned(),

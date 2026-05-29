@@ -215,7 +215,6 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
             .update_api_credential(
                 id,
                 &UpdateApiCredentialPayload {
-                    actor_id,
                     name: name.clone(),
                     key_id: issued.key_id.clone(),
                     credential_hash: issued.credential_hash.clone(),
