@@ -1,42 +1,53 @@
-# 018 - Submission Approval and Control Status
+# 018 - Deferred Submission Approval and Control Status
 
 ## Goal
 
-Support approval and rejection of evidence submissions and derive control status from mapped requirements and approved evidence.
+Defer Proofplane-owned submission approval and rejection until customer feedback
+shows that an in-product approval workflow is needed.
 
 ## Design
 
-Authorized actors can approve or reject pending submissions. Approval means the submission satisfies the requirement for the relevant period. Control status is derived from:
+For the MVP, Proofplane is approval-agnostic. A submission exists once the API
+accepts it. Customers that need human or agent review can perform that review in
+their own workflow before uploading evidence.
+
+Control and source-material reads should treat submitted evidence as candidate
+evidence, with file usability gated by attachment malware scan state. Uploaded
+file attachments are usable only when their scan status is `clean`; pending,
+malicious, or failed scans remain auditable but are blocked from normal download
+and source-material use.
+
+If customer feedback shows that Proofplane needs native approval, a future story
+can introduce approval and rejection. That future design would likely derive
+control status from:
 
 - linked Evidence Requests
-- latest approved submissions
+- latest usable submissions
 - freshness and expiry rules
 - missing evidence
 - exceptions or emergency overrides later
 
-Start with deterministic derived reads rather than denormalized status unless performance requires projection later.
+Start with deterministic derived reads rather than denormalized status unless
+performance requires projection later.
 
 ## Acceptance Criteria
 
-- API supports approve submission, reject submission, get control status, and get control evidence gaps.
-- Approval and rejection require authenticated actor context.
-- Invalid transitions are rejected with stable errors.
-- Control status reflects approved, pending, stale, expired, and missing evidence.
-- Approval and rejection emit outbox and audit events.
-- Seed data includes approved, pending, stale, and missing examples.
+- No approval or rejection API is required for the MVP.
+- Evidence submission records do not need a persisted approval status.
+- Control/source-material usability derives from Evidence Request mappings, submission freshness, and attachment scan state.
+- Pending, malicious, or failed file scans block normal download and source-material use.
+- Native approval/rejection can be added later without changing the story 017 attachment scan model.
 
 ## Tests
 
-- Domain tests cover status transition rules.
-- Service tests cover authorization hooks and derived control status.
-- Repository integration tests cover latest approved submission by requirement.
-- API integration tests cover approve, reject, invalid transition, control status, and evidence gaps.
+- No approval/rejection tests are required for the MVP.
+- Future approval work should add domain tests for status transition rules.
+- Future approval work should add service tests for authorization hooks and derived control status.
+- Future approval work should add repository/API integration tests for approval, rejection, invalid transitions, control status, and evidence gaps.
 - Time-dependent tests use fixed clocks.
 
 ## QA Guide
 
-1. Submit pending evidence.
-2. Approve it with an authorized seeded actor.
-3. Get the related control status and confirm the requirement is satisfied.
-4. Reject another pending submission and confirm it does not satisfy the control.
-5. Advance or simulate time to verify stale or expired status.
+No MVP QA flow is required for native approval. Revisit this story after
+customer feedback indicates that Proofplane should own approval state rather
+than leaving review in caller workflows.

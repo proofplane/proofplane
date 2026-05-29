@@ -9,16 +9,14 @@ Allow actors to submit evidence against existing Evidence Requests, including at
 Evidence submissions support:
 
 - Evidence Request ID
-- attachment reference, URL, text, or structured payload
+- file uploads
 - submitter actor
-- actor type
 - system receipt timestamp
 - evidence effective or coverage date
 - source system
 - collection method
 - provenance metadata
 - checksum or hash
-- approval status
 - replacement or supplement relationship
 
 Attachments use GCS/object storage for bytes and Postgres for metadata. Submissions inherit Evidence Request-control mappings.
@@ -50,36 +48,39 @@ The MVP implementation should include:
 - enough adapter shape to support cloud-provider native scanning or commercial
   scanning APIs later without changing attachment domain records
 
-Uploaded file attachments must not be approved, downloaded, or used as approved
-source material until their malware scan status is `clean`. Malicious uploads
-must remain auditable, but should not be served back to users through normal
-download paths.
+Uploaded file attachments must not be downloaded or used as source material
+until their malware scan status is `clean`. Malicious uploads must remain
+auditable, but should not be served back to users through normal download paths.
+
+Evidence submissions do not have an approval lifecycle in the MVP. A submission
+exists once the API accepts it; callers that need human or agent review should
+perform that review before upload. Submission usability is derived from
+attachment scan state rather than a persisted submission status.
 
 Submissions must distinguish system receipt time from the evidence effective or coverage date. Late submissions must not shift future Evidence Request due dates; cadence remains schedule-owned through the request's `schedule_anchor_at`.
 
 ## Acceptance Criteria
 
 - Submission and attachment tables are migrated.
-- API supports creating a submission, uploading or registering an attachment, getting submission status, and retrieving latest submission for a requirement.
+- API supports creating a submission, uploading or registering an attachment, getting submission details, and retrieving latest submission for a requirement.
 - Service validates Evidence Request existence and workspace ownership.
-- Submissions start in a pending approval status.
 - File attachment uploads require caller-provided CRC32C and reject the upload when the received bytes do not match it.
 - Attachment metadata records malware scan status, scanner name/version where available, scan timestamp, and failure reason where safe to expose.
 - File attachments enter a non-usable pending scan state until the configured malware scanner returns `clean`.
-- Malicious or failed scans block approval, normal download, and approved-source-material use.
+- Malicious or failed scans block normal download and source-material use.
 - The scanner boundary supports ClamAV for local/self-hosted operation and does not make ClamAV part of the domain model.
 - Submission creation emits outbox and audit events.
-- Seed data includes at least one pending submission and one attachment metadata record.
+- Seed data includes at least one sample submission and one attachment metadata record.
 
 ## Tests
 
-- Domain tests cover status transitions and replacement/supplement rules.
+- Domain tests cover replacement/supplement rules and scan-state usability rules.
 - Domain/service tests cover attachment scan state transitions and blocking rules.
 - Repository integration tests cover submission creation and latest-submission queries.
 - Storage integration tests cover attachment object upload and retrieval.
 - Scanner adapter tests cover clean, malicious, failed, timeout, and skipped outcomes.
 - API integration tests cover valid submission, invalid request accumulation, missing Evidence Request, and latest submission.
-- API integration tests verify unscanned, malicious, and failed-scan attachments cannot be approved or downloaded through normal paths.
+- API integration tests verify unscanned, malicious, and failed-scan attachments cannot be downloaded through normal paths.
 - Tests verify submission inherits Evidence Request mappings indirectly rather than copying mapping rows.
 
 ## QA Guide
@@ -89,7 +90,33 @@ Submissions must distinguish system receipt time from the evidence effective or 
 3. Start the configured malware scanner, such as local ClamAV.
 4. Upload or register an attachment.
 5. Confirm the attachment moves from `pending` to `clean`.
-6. Retrieve submission status.
+6. Retrieve submission details.
 7. Query latest submission for the requirement.
 8. Upload an EICAR test file in a local-only environment and confirm it is marked
    malicious and blocked from normal download.
+
+## Implementation Slices
+
+1. Submission domain and database model: define submission and attachment IDs, replacement or supplement relationships, receipt time versus effective or coverage date, source system, collection method, provenance JSON, checksums, and attachment scan state columns.
+2. Repository layer: support creating submissions, attaching metadata, reading submission details, querying latest submissions, and verifying workspace ownership through the linked Evidence Request.
+3. Submission API without file uploads: add the basic REST surface for creating an accepted submission record and reading its details before introducing binary upload handling.
+4. Attachment registration API: allow callers to register attachment metadata or existing object references separately from raw upload, including initial scan states such as `pending` or `skipped`.
+5. File upload API and CRC32C validation: accept uploaded bytes, require caller-provided CRC32C, reject mismatches, write to object storage, and persist object metadata references.
+6. Malware scanner boundary and noop implementation: add scanner request, result, and error types plus `NoopMalwareScanner` for tests and flows that do not exercise scanning behavior.
+7. Scan state enforcement: block normal download and source-material use unless file attachments have scan status `clean`.
+8. ClamAV adapter and scanner configuration: add the local/self-hosted scanner implementation, timeout settings, scanner selection, and adapter tests for clean, malicious, failed, timeout, and skipped outcomes.
+9. Download and retrieval API: expose normal attachment download paths that refuse pending, malicious, and failed attachments.
+10. Latest submission query/API, seed data, outbox, and audit polish: complete the latest-submission read path and add submission-created events, audit records, and seed sample submission plus attachment metadata.
+
+Recommended implementation order:
+
+1. Submission domain and database model.
+2. Repository layer.
+3. Submission API without file uploads.
+4. Attachment registration API.
+5. File upload API and CRC32C validation.
+6. Malware scanner boundary and noop implementation.
+7. Scan state enforcement.
+8. ClamAV adapter and scanner configuration.
+9. Download and retrieval API.
+10. Latest submission query/API, seed data, outbox, and audit polish.

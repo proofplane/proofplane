@@ -23,7 +23,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until outbox/Pub/Sub/worker support exists. |
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Planned | Not started. |
-| 018. [Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Planned | Not started. |
+| 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
 | 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
@@ -81,8 +81,8 @@ Product lanes:
 - Story 015 is complete and provides the Evidence Request base for the main product model. Story 010 protects its endpoints.
 - Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015, and should introduce or coordinate with story 010 when submitter actor context becomes necessary.
-- Story 018 depends on 016 and 017.
-- Story 019 depends on the evidence/control/submission model from 015-018.
+- Story 018 is deferred until customer feedback shows that Proofplane should own approval state.
+- Story 019 depends on the evidence/control/submission model from 015-017, with usability gated by attachment scan state rather than submission approval.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
 - Story 021 depends on the domain services created by 015-020 and should use the authentication and authorization model introduced in 010.
 - Story 022 hardens dependency-failure behavior before the final release gate.
