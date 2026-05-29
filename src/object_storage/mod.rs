@@ -175,6 +175,7 @@ impl FilesystemObjectStore {
             });
         let file_name = path
             .file_name()
+            // expect is ok here because this should only ever run locally anyways
             .expect("validated object keys always have a file name")
             .to_string_lossy()
             .into_owned();
