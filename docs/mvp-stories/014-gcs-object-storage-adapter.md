@@ -16,7 +16,7 @@ pub trait ObjectStore {
 }
 ```
 
-Support production GCS and local filesystem configuration. Object keys should include workspace ID and stable prefixes. Metadata should include content type, content length, checksum, and provenance where applicable.
+Support production GCS and local filesystem configuration. Object keys should include workspace ID and stable prefixes. Metadata should include content type, content length, and checksum.
 
 The filesystem adapter is the default for local development and automated tests. It should store object bytes under a configured root directory and keep metadata in either sidecar files or a deterministic local metadata representation. The GCS adapter is selected for live environments by configuration and should use native GCS APIs.
 

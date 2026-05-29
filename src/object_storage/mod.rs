@@ -84,8 +84,6 @@ pub struct PutObjectRequest {
     pub key: ObjectKey,
     pub content_type: String,
     pub bytes: Vec<u8>,
-    pub expected_sha256: Option<String>,
-    pub provenance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,7 +92,6 @@ pub struct ObjectMetadata {
     pub content_type: String,
     pub content_length: u64,
     pub sha256: String,
-    pub provenance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,9 +107,6 @@ pub enum StorageError {
 
     #[error("object not found")]
     NotFound,
-
-    #[error("object checksum mismatch")]
-    ChecksumMismatch,
 
     #[error("filesystem storage error")]
     Filesystem {
@@ -175,7 +169,6 @@ impl FilesystemObjectStore {
             });
         let file_name = path
             .file_name()
-            // expect is ok here because this should only ever run locally anyways
             .expect("validated object keys always have a file name")
             .to_string_lossy()
             .into_owned();
@@ -188,20 +181,12 @@ impl FilesystemObjectStore {
 impl ObjectStore for FilesystemObjectStore {
     async fn put_object(&self, request: PutObjectRequest) -> Result<ObjectMetadata, StorageError> {
         let sha256 = sha256_hex(&request.bytes);
-        if request
-            .expected_sha256
-            .as_deref()
-            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&sha256))
-        {
-            return Err(StorageError::ChecksumMismatch);
-        }
 
         let metadata = ObjectMetadata {
             key: request.key,
             content_type: request.content_type,
             content_length: request.bytes.len() as u64,
             sha256,
-            provenance: request.provenance,
         };
 
         let object_path = self.object_path(&metadata.key);
@@ -330,7 +315,6 @@ async fn remove_file_if_exists(path: PathBuf) -> Result<(), StorageError> {
 mod tests {
     use super::*;
     use crate::config::{GcsCredentialsMode, GcsObjectStorageConfig};
-    use serde_json::json;
     use std::{
         fs as std_fs,
         sync::atomic::{AtomicU64, Ordering},
@@ -394,8 +378,6 @@ mod tests {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
                 bytes: b"hello object storage".to_vec(),
-                expected_sha256: None,
-                provenance: None,
             })
             .await
             .unwrap();
@@ -421,47 +403,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expected_checksum_mismatch_fails_without_writing_readable_object() {
-        let store = FilesystemObjectStore::new(temp_dir("checksum"))
-            .await
-            .unwrap();
-        let key = test_key("artifact.txt");
-
-        let result = store
-            .put_object(PutObjectRequest {
-                key: key.clone(),
-                content_type: "text/plain".to_owned(),
-                bytes: b"hello".to_vec(),
-                expected_sha256: Some("not-a-match".to_owned()),
-                provenance: None,
-            })
-            .await;
-
-        assert!(matches!(result, Err(StorageError::ChecksumMismatch)));
-        assert!(matches!(
-            store.get_object(key).await,
-            Err(StorageError::NotFound)
-        ));
-    }
-
-    #[tokio::test]
     async fn metadata_sidecar_round_trips_all_metadata_fields() {
         let store = FilesystemObjectStore::new(temp_dir("metadata"))
             .await
             .unwrap();
         let key = test_key("artifact.txt");
-        let provenance = json!({
-            "source": "unit-test",
-            "submitted_by": "actor-1"
-        });
 
         let written = store
             .put_object(PutObjectRequest {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
                 bytes: b"hello".to_vec(),
-                expected_sha256: None,
-                provenance: Some(provenance.clone()),
             })
             .await
             .unwrap();
@@ -474,7 +426,6 @@ mod tests {
             read.sha256,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
-        assert_eq!(read.provenance, Some(provenance));
     }
 
     #[tokio::test]
@@ -488,8 +439,6 @@ mod tests {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
                 bytes: b"hello".to_vec(),
-                expected_sha256: None,
-                provenance: None,
             })
             .await
             .unwrap();
@@ -521,8 +470,6 @@ mod tests {
                 key: key.clone(),
                 content_type: "application/octet-stream".to_owned(),
                 bytes: vec![1, 2, 3, 4],
-                expected_sha256: None,
-                provenance: Some(json!({ "source": "integration-style" })),
             },
         )
         .await
