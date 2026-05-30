@@ -111,14 +111,15 @@ ORDER BY api_credentials.id
                 r#"
 UPDATE api_credentials
 SET
-    name = $3,
-    key_id = $4,
-    credential_hash = $5,
-    expires_at = $6,
-    revoked_at = $7
+    name = $2,
+    key_id = $3,
+    credential_hash = $4,
+    expires_at = $5,
+    revoked_at = $6
 WHERE id = $1
 RETURNING
     id,
+    actor_id,
     name,
     key_id,
     credential_hash,

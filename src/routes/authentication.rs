@@ -6,9 +6,24 @@ use uuid::Uuid;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
-    domain::{ActorContext, ActorId, WorkspaceId},
+    domain::{ActorId, WorkspaceId},
     routes::error::ApiError,
 };
+
+/**
+ * ActorContext represents an actor acting in a specific workspace for a specific request.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorContext {
+    pub workspace_id: WorkspaceId,
+    pub id: ActorId,
+}
+
+impl ActorContext {
+    pub fn new(workspace_id: WorkspaceId, id: ActorId) -> Self {
+        Self { workspace_id, id }
+    }
+}
 
 pub const ACTOR_ID_HEADER: &str = "x-proofplane-actor-id";
 pub const API_KEY_HEADER: &str = "x-proofplane-api-key";

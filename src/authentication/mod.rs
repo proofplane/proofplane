@@ -4,8 +4,9 @@ use api_keys_simplified::{ApiKeyManagerV0, Environment, KeyStatus, SecureString}
 use chrono::Utc;
 
 use crate::{
-    domain::{ActorContext, ActorId, ActorWithApiCredential, WorkspaceId},
+    domain::{ActorId, ActorWithApiCredential, WorkspaceId},
     repository,
+    routes::authentication::ActorContext,
 };
 
 const API_KEY_PREFIX: &str = "proof";
@@ -99,7 +100,7 @@ impl ApiKeyAuthenticator {
             return Ok(None);
         }
 
-        Ok(Some(actor.context(workspace_id)))
+        Ok(Some(ActorContext::new(workspace_id, actor.id)))
     }
 }
 

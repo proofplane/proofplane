@@ -9,8 +9,7 @@ mod validation;
 mod workspace;
 
 pub use actor::{
-    Actor, ActorContext, ActorId, ActorKind, ActorWithApiCredential, CreateActorPayload,
-    UpdateActorPayload,
+    Actor, ActorId, ActorKind, ActorWithApiCredential, CreateActorPayload, UpdateActorPayload,
 };
 pub use api_credential::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
 pub use controls::{
