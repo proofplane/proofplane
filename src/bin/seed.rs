@@ -253,11 +253,14 @@ async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
 async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
     let actor = ActorContext::new(local_workspace_id(), actor_id(SYSTEM_ACTOR_ID));
     let seeds = demo_evidence_requests()?;
+    let existing = repository
+        .in_actor_context_read(actor.clone(), async |context| {
+            context.list_evidence_requests().await
+        })
+        .await?;
 
     repository
         .in_actor_context(actor, async move |context| {
-            let existing = context.list_evidence_requests().await?;
-
             for seed in seeds {
                 if let Some(existing_request) =
                     existing.iter().find(|request| request.title == seed.title)

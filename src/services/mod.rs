@@ -36,3 +36,23 @@ impl<'transaction> ServiceContext<'transaction> {
         self.transaction.commit().await
     }
 }
+
+pub struct ReadServiceContext {
+    pub workspace_id: WorkspaceId,
+    pub actor_id: ActorId,
+    pub(crate) client: deadpool_postgres::Object,
+}
+
+impl ReadServiceContext {
+    pub(crate) fn new(
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
+        client: deadpool_postgres::Object,
+    ) -> Self {
+        Self {
+            workspace_id,
+            actor_id,
+            client,
+        }
+    }
+}

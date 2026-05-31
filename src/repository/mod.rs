@@ -2,7 +2,10 @@ use std::ops::AsyncFnOnce;
 
 use deadpool_postgres::{Object, Pool};
 
-use crate::{routes::authentication::ActorContext, services::ServiceContext};
+use crate::{
+    routes::authentication::ActorContext,
+    services::{ReadServiceContext, ServiceContext},
+};
 
 mod actors;
 mod api_credentials;
@@ -47,5 +50,20 @@ impl Postgres {
         context.commit().await?;
 
         Ok(result)
+    }
+
+    pub async fn in_actor_context_read<T, F>(
+        &self,
+        actor: ActorContext,
+        operation: F,
+    ) -> Result<T, Error>
+    where
+        T: Send,
+        F: for<'context> AsyncFnOnce(&'context ReadServiceContext) -> Result<T, Error> + Send,
+    {
+        let client = self.get().await?;
+        let context = ReadServiceContext::new(actor.workspace_id, actor.id, client);
+
+        operation(&context).await
     }
 }

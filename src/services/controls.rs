@@ -54,7 +54,7 @@ impl ControlService {
     pub async fn list_controls(&self, actor: ActorContext) -> Result<Vec<Control>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async |context| context.list_controls().await)
+            .in_actor_context_read(actor, async |context| context.list_controls().await)
             .await?)
     }
 
@@ -65,7 +65,7 @@ impl ControlService {
     ) -> Result<Option<Control>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context_read(actor, async move |context| {
                 context.get_control(control_id).await
             })
             .await?)
@@ -110,7 +110,7 @@ impl ControlService {
     ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context_read(actor, async move |context| {
                 context
                     .list_evidence_request_control_mappings(evidence_request_id)
                     .await

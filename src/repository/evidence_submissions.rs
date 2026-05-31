@@ -8,7 +8,7 @@ use crate::{
         EvidenceAttachmentScan, EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
         EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
-    services::ServiceContext,
+    services::{ReadServiceContext, ServiceContext},
 };
 
 use super::Error;
@@ -64,13 +64,15 @@ RETURNING
             .map(|row| evidence_submission_from_row(&row))
             .transpose()
     }
+}
 
+impl ReadServiceContext {
     pub async fn get_evidence_submission(
         &self,
         id: EvidenceSubmissionId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         let rows = self
-            .transaction
+            .client
             .query(
                 r#"
 SELECT
@@ -118,7 +120,7 @@ ORDER BY a.filename, a.id
         evidence_request_id: EvidenceRequestId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         let rows = self
-            .transaction
+            .client
             .query(
                 r#"
 WITH latest_submission AS (
@@ -170,7 +172,9 @@ ORDER BY a.filename, a.id
 
         evidence_submission_detail_from_rows(rows)
     }
+}
 
+impl ServiceContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,

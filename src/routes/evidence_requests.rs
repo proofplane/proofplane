@@ -182,6 +182,11 @@ struct DueQuery {
     now: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EvidenceRequestPath {
+    evidence_request_id: Uuid,
+}
+
 #[derive(Debug, Serialize)]
 struct EvidenceRequestResponse {
     id: Uuid,
@@ -219,7 +224,6 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 
 async fn create_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path(_workspace_id): Path<Uuid>,
     Extension(actor): Extension<ActorContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
@@ -231,7 +235,6 @@ async fn create_evidence_request(
 
 async fn list_evidence_requests(
     State(state): State<EvidenceRequestState>,
-    Path(_workspace_id): Path<Uuid>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
     let requests = state.service.list_by_workspace(actor).await?;
@@ -242,7 +245,6 @@ async fn list_evidence_requests(
 async fn list_due_evidence_requests(
     State(state): State<EvidenceRequestState>,
     Query(query): Query<DueQuery>,
-    Path(_workspace_id): Path<Uuid>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
     let requests = state
@@ -258,12 +260,12 @@ async fn list_due_evidence_requests(
 
 async fn get_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path((_workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestPath>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let request = state
         .service
-        .get(actor, EvidenceRequestId::from(evidence_request_id))
+        .get(actor, EvidenceRequestId::from(path.evidence_request_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -272,11 +274,11 @@ async fn get_evidence_request(
 
 async fn replace_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path((_workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestPath>,
     Extension(actor): Extension<ActorContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
-    let evidence_request_id = EvidenceRequestId::from(evidence_request_id);
+    let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let update = body.into_update().into_result().map_err(domain_errors)?;
     let request = state
         .service

@@ -338,7 +338,7 @@ async fn evidence_submission_detail_starts_with_empty_attachment_list() {
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
 
     let detail = postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context_read(actor, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -407,7 +407,7 @@ async fn evidence_submission_detail_includes_attachments_with_scan_rows() {
     let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
 
     let detail = postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context_read(actor, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -432,7 +432,7 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     set_submission_received_at(postgres, latest.id, Utc::now()).await;
 
     let detail = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context_read(actor.clone(), async move |context| {
             context
                 .latest_evidence_submission_for_request(request.id)
                 .await
@@ -443,7 +443,7 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     assert_eq!(detail.submission.id, latest.id);
 
     let missing = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context_read(actor.clone(), async move |context| {
             context
                 .latest_evidence_submission_for_request(Uuid::new_v4().into())
                 .await
@@ -453,7 +453,7 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     assert!(missing.is_none());
 
     let cross_workspace = postgres
-        .in_actor_context(other_actor, async move |context| {
+        .in_actor_context_read(other_actor, async move |context| {
             context
                 .latest_evidence_submission_for_request(request.id)
                 .await

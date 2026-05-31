@@ -7,7 +7,7 @@ use crate::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
         EvidenceRequestStatus, UpdateEvidenceRequestPayload, WorkspaceId,
     },
-    services::ServiceContext,
+    services::{ReadServiceContext, ServiceContext},
 };
 
 use super::Error;
@@ -62,70 +62,6 @@ RETURNING
             .await?;
 
         evidence_request_from_row(row)
-    }
-
-    pub async fn get_evidence_request(
-        &self,
-        id: EvidenceRequestId,
-    ) -> Result<Option<EvidenceRequest>, Error> {
-        let rows = self
-            .transaction
-            .query(
-                r#"
-SELECT
-    id,
-    workspace_id,
-    title,
-    description,
-    collection_instructions,
-    cadence,
-    due_at,
-    schedule_anchor_at,
-    freshness_window_days,
-    status,
-    created_at,
-    updated_at
-FROM evidence_requests
-WHERE id = $1
-  AND workspace_id = $2
-"#,
-                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
-            )
-            .await?;
-
-        rows.into_iter()
-            .next()
-            .map(evidence_request_from_row)
-            .transpose()
-    }
-
-    pub async fn list_evidence_requests(&self) -> Result<Vec<EvidenceRequest>, Error> {
-        let rows = self
-            .transaction
-            .query(
-                r#"
-SELECT
-    id,
-    workspace_id,
-    title,
-    description,
-    collection_instructions,
-    cadence,
-    due_at,
-    schedule_anchor_at,
-    freshness_window_days,
-    status,
-    created_at,
-    updated_at
-FROM evidence_requests
-WHERE workspace_id = $1
-ORDER BY due_at, title
-"#,
-                &[&Uuid::from(self.workspace_id)],
-            )
-            .await?;
-
-        rows.into_iter().map(evidence_request_from_row).collect()
     }
 
     pub async fn replace_evidence_request(
@@ -184,13 +120,79 @@ RETURNING
             .map(evidence_request_from_row)
             .transpose()
     }
+}
+
+impl ReadServiceContext {
+    pub async fn get_evidence_request(
+        &self,
+        id: EvidenceRequestId,
+    ) -> Result<Option<EvidenceRequest>, Error> {
+        let rows = self
+            .client
+            .query(
+                r#"
+SELECT
+    id,
+    workspace_id,
+    title,
+    description,
+    collection_instructions,
+    cadence,
+    due_at,
+    schedule_anchor_at,
+    freshness_window_days,
+    status,
+    created_at,
+    updated_at
+FROM evidence_requests
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+
+        rows.into_iter()
+            .next()
+            .map(evidence_request_from_row)
+            .transpose()
+    }
+
+    pub async fn list_evidence_requests(&self) -> Result<Vec<EvidenceRequest>, Error> {
+        let rows = self
+            .client
+            .query(
+                r#"
+SELECT
+    id,
+    workspace_id,
+    title,
+    description,
+    collection_instructions,
+    cadence,
+    due_at,
+    schedule_anchor_at,
+    freshness_window_days,
+    status,
+    created_at,
+    updated_at
+FROM evidence_requests
+WHERE workspace_id = $1
+ORDER BY due_at, title
+"#,
+                &[&Uuid::from(self.workspace_id)],
+            )
+            .await?;
+
+        rows.into_iter().map(evidence_request_from_row).collect()
+    }
 
     pub async fn list_due_evidence_requests(
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         let rows = self
-            .transaction
+            .client
             .query(
                 r#"
 SELECT

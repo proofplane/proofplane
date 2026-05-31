@@ -285,9 +285,29 @@ impl From<EvidenceRequestControlMapping> for EvidenceRequestControlMappingRespon
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct FrameworkRequirementsPath {
+    framework_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct ControlPath {
+    control_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceRequestControlMappingsPath {
+    evidence_request_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceRequestControlMappingPath {
+    evidence_request_id: Uuid,
+    control_id: Uuid,
+}
+
 async fn list_frameworks(
     State(state): State<ControlState>,
-    Path(_workspace_id): Path<Uuid>,
 ) -> Result<Json<Vec<FrameworkResponse>>, ApiError> {
     let frameworks = state.service.list_frameworks().await?;
 
@@ -296,11 +316,11 @@ async fn list_frameworks(
 
 async fn list_framework_requirements(
     State(state): State<ControlState>,
-    Path((_workspace_id, framework_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<FrameworkRequirementsPath>,
 ) -> Result<Json<Vec<FrameworkRequirementResponse>>, ApiError> {
     let requirements = state
         .service
-        .list_framework_requirements(FrameworkId::from(framework_id))
+        .list_framework_requirements(FrameworkId::from(path.framework_id))
         .await?;
     if requirements.is_empty() {
         return Err(ApiError::NotFound);
@@ -311,7 +331,6 @@ async fn list_framework_requirements(
 
 async fn create_control(
     State(state): State<ControlState>,
-    Path(_workspace_id): Path<Uuid>,
     Extension(actor): Extension<ActorContext>,
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
@@ -327,7 +346,6 @@ async fn create_control(
 
 async fn list_controls(
     State(state): State<ControlState>,
-    Path(_workspace_id): Path<Uuid>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<ControlResponse>>, ApiError> {
     let controls = state.service.list_controls(actor).await?;
@@ -337,12 +355,12 @@ async fn list_controls(
 
 async fn get_control(
     State(state): State<ControlState>,
-    Path((_workspace_id, control_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<ControlPath>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let control = state
         .service
-        .get_control(actor, ControlId::from(control_id))
+        .get_control(actor, ControlId::from(path.control_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -351,14 +369,14 @@ async fn get_control(
 
 async fn replace_control(
     State(state): State<ControlState>,
-    Path((_workspace_id, control_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<ControlPath>,
     Extension(actor): Extension<ActorContext>,
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_update().into_result().map_err(domain_errors)?;
     let control = state
         .service
-        .replace_control(actor, ControlId::from(control_id), payload)
+        .replace_control(actor, ControlId::from(path.control_id), payload)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -367,12 +385,12 @@ async fn replace_control(
 
 async fn create_evidence_request_control_mapping(
     State(state): State<ControlState>,
-    Path((_workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestControlMappingsPath>,
     Extension(actor): Extension<ActorContext>,
     Json(body): Json<MappingDTO>,
 ) -> Result<Json<EvidenceRequestControlMappingResponse>, ApiError> {
     let payload = body
-        .into_new(EvidenceRequestId::from(evidence_request_id))
+        .into_new(EvidenceRequestId::from(path.evidence_request_id))
         .into_result()
         .map_err(domain_errors)?;
     let mapping = state
@@ -386,12 +404,15 @@ async fn create_evidence_request_control_mapping(
 
 async fn list_evidence_request_control_mappings(
     State(state): State<ControlState>,
-    Path((_workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestControlMappingsPath>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<EvidenceRequestControlMappingResponse>>, ApiError> {
     let mappings = state
         .service
-        .list_evidence_request_control_mappings(actor, EvidenceRequestId::from(evidence_request_id))
+        .list_evidence_request_control_mappings(
+            actor,
+            EvidenceRequestId::from(path.evidence_request_id),
+        )
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -400,15 +421,15 @@ async fn list_evidence_request_control_mappings(
 
 async fn delete_evidence_request_control_mapping(
     State(state): State<ControlState>,
-    Path((_workspace_id, evidence_request_id, control_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestControlMappingPath>,
     Extension(actor): Extension<ActorContext>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let deleted = state
         .service
         .delete_evidence_request_control_mapping(
             actor,
-            EvidenceRequestId::from(evidence_request_id),
-            ControlId::from(control_id),
+            EvidenceRequestId::from(path.evidence_request_id),
+            ControlId::from(path.control_id),
         )
         .await?;
 

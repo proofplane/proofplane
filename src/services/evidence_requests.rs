@@ -49,7 +49,7 @@ impl EvidenceRequestService {
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context_read(actor, async move |context| {
                 context.get_evidence_request(id).await
             })
             .await?)
@@ -61,7 +61,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async |context| {
+            .in_actor_context_read(actor, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)
@@ -88,7 +88,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context_read(actor, async move |context| {
                 context.list_due_evidence_requests(now).await
             })
             .await?)
