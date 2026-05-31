@@ -2,13 +2,14 @@ use std::ops::AsyncFnOnce;
 
 use deadpool_postgres::{Object, Pool};
 
-use crate::{domain::WorkspaceId, services::ServiceContext};
+use crate::{routes::authentication::ActorContext, services::ServiceContext};
 
 mod actors;
 mod api_credentials;
 mod controls;
 pub mod error;
 mod evidence_requests;
+mod evidence_submissions;
 mod workspaces;
 
 pub use error::Error;
@@ -26,9 +27,9 @@ impl Postgres {
         self.pool.get().await
     }
 
-    pub async fn in_workspace<T, F>(
+    pub async fn in_actor_context<T, F>(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         operation: F,
     ) -> Result<T, Error>
     where
@@ -40,7 +41,7 @@ impl Postgres {
     {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
-        let mut context = ServiceContext::new(workspace_id, transaction);
+        let mut context = ServiceContext::new(actor.workspace_id, actor.id, transaction);
         let result = operation(&mut context).await?;
 
         context.commit().await?;

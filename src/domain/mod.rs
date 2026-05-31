@@ -23,8 +23,9 @@ pub use evidence_request::{
     EvidenceRequestStatus, UpdateEvidenceRequestPayload,
 };
 pub use evidence_submission::{
-    AttachmentScanStatus, EvidenceAttachment, EvidenceAttachmentId, EvidenceAttachmentScan,
-    EvidenceSubmission, EvidenceSubmissionId,
+    AttachmentScanStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
+    EvidenceAttachment, EvidenceAttachmentId, EvidenceAttachmentScan, EvidenceAttachmentWithScan,
+    EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
 };
 pub use validation::{required_text, validate_freshness_window_days};
 pub use workspace::{CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId};

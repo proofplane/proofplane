@@ -69,6 +69,16 @@ pub struct EvidenceSubmission {
     pub provenance: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateEvidenceSubmissionPayload {
+    pub evidence_request_id: EvidenceRequestId,
+    pub coverage_start_at: DateTime<Utc>,
+    pub coverage_end_at: DateTime<Utc>,
+    pub source_system: String,
+    pub collection_method: String,
+    pub provenance: Value,
+}
+
 /**
  * The EvidenceAttachment is the actual thing that's being presented as
  * evidence. It can be a screenshot of config, a JSON response from a
@@ -77,6 +87,17 @@ pub struct EvidenceSubmission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceAttachment {
     pub id: EvidenceAttachmentId,
+    pub evidence_submission_id: EvidenceSubmissionId,
+    pub filename: String,
+    pub content_type: String,
+    pub content_length: i64,
+    pub object_key: String,
+    pub checksum_sha256: String,
+    pub checksum_crc32c: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateEvidenceAttachmentPayload {
     pub evidence_submission_id: EvidenceSubmissionId,
     pub filename: String,
     pub content_type: String,
@@ -98,6 +119,19 @@ pub struct EvidenceAttachmentScan {
     pub scanner_version: Option<String>,
     pub scanned_at: Option<DateTime<Utc>>,
     pub scan_failure_reason: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceAttachmentWithScan {
+    pub attachment: EvidenceAttachment,
+    pub scan: EvidenceAttachmentScan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceSubmissionDetail {
+    pub submission: EvidenceSubmission,
+    pub attachments: Vec<EvidenceAttachmentWithScan>,
 }
 
 #[cfg(test)]

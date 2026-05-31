@@ -1,4 +1,4 @@
-use crate::domain::WorkspaceId;
+use crate::domain::{ActorId, WorkspaceId};
 use thiserror::Error;
 
 pub mod controls;
@@ -15,16 +15,19 @@ pub enum Error {
 
 pub struct ServiceContext<'transaction> {
     pub workspace_id: WorkspaceId,
+    pub actor_id: ActorId,
     pub(crate) transaction: deadpool_postgres::Transaction<'transaction>,
 }
 
 impl<'transaction> ServiceContext<'transaction> {
     pub(crate) fn new(
         workspace_id: WorkspaceId,
+        actor_id: ActorId,
         transaction: deadpool_postgres::Transaction<'transaction>,
     ) -> Self {
         Self {
             workspace_id,
+            actor_id,
             transaction,
         }
     }

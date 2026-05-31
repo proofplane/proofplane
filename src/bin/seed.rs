@@ -12,6 +12,7 @@ use proofplane::{
     },
     observability,
     repository::Postgres,
+    routes::authentication::ActorContext,
     store, VERSION,
 };
 use thiserror::Error;
@@ -250,11 +251,11 @@ async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
 }
 
 async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
-    let workspace_id = local_workspace_id();
+    let actor = ActorContext::new(local_workspace_id(), actor_id(SYSTEM_ACTOR_ID));
     let seeds = demo_evidence_requests()?;
 
     repository
-        .in_workspace(workspace_id, async move |context| {
+        .in_actor_context(actor, async move |context| {
             let existing = context.list_evidence_requests().await?;
 
             for seed in seeds {

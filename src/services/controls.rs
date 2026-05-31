@@ -4,9 +4,10 @@ use crate::{
     domain::{
         Control, ControlId, CreateControlPayload, CreateEvidenceRequestControlMappingPayload,
         EvidenceRequestControlMapping, EvidenceRequestId, Framework, FrameworkId,
-        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspaceId,
+        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
     },
     repository::Postgres,
+    routes::authentication::ActorContext,
     services::Error,
 };
 
@@ -36,7 +37,7 @@ impl ControlService {
 
     pub async fn create_control(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         payload: CreateControlPayload,
     ) -> Result<Option<Control>, Error> {
         self.validate_framework_requirement_references(&payload.framework_requirement_ids)
@@ -44,27 +45,27 @@ impl ControlService {
 
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.create_control(&payload).await
             })
             .await?)
     }
 
-    pub async fn list_controls(&self, workspace_id: WorkspaceId) -> Result<Vec<Control>, Error> {
+    pub async fn list_controls(&self, actor: ActorContext) -> Result<Vec<Control>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async |context| context.list_controls().await)
+            .in_actor_context(actor, async |context| context.list_controls().await)
             .await?)
     }
 
     pub async fn get_control(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         control_id: ControlId,
     ) -> Result<Option<Control>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.get_control(control_id).await
             })
             .await?)
@@ -72,7 +73,7 @@ impl ControlService {
 
     pub async fn replace_control(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         control_id: ControlId,
         payload: UpdateControlPayload,
     ) -> Result<Option<Control>, Error> {
@@ -81,7 +82,7 @@ impl ControlService {
 
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.replace_control(control_id, &payload).await
             })
             .await?)
@@ -89,12 +90,12 @@ impl ControlService {
 
     pub async fn create_evidence_request_control_mapping(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         payload: CreateEvidenceRequestControlMappingPayload,
     ) -> Result<Option<EvidenceRequestControlMapping>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context
                     .create_evidence_request_control_mapping(&payload)
                     .await
@@ -104,12 +105,12 @@ impl ControlService {
 
     pub async fn list_evidence_request_control_mappings(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         evidence_request_id: EvidenceRequestId,
     ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context
                     .list_evidence_request_control_mappings(evidence_request_id)
                     .await
@@ -119,13 +120,13 @@ impl ControlService {
 
     pub async fn delete_evidence_request_control_mapping(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         evidence_request_id: EvidenceRequestId,
         control_id: ControlId,
     ) -> Result<bool, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context
                     .delete_evidence_request_control_mapping(evidence_request_id, control_id)
                     .await

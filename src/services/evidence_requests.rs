@@ -5,9 +5,10 @@ use chrono::{DateTime, Utc};
 use crate::{
     domain::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestId,
-        UpdateEvidenceRequestPayload, WorkspaceId,
+        UpdateEvidenceRequestPayload,
     },
     repository::Postgres,
+    routes::authentication::ActorContext,
     services::Error,
 };
 
@@ -30,12 +31,12 @@ impl EvidenceRequestService {
 
     pub async fn create(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         request: CreateEvidenceRequestPayload,
     ) -> Result<EvidenceRequest, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.create_evidence_request(&request).await
             })
             .await?)
@@ -43,12 +44,12 @@ impl EvidenceRequestService {
 
     pub async fn get(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         id: EvidenceRequestId,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.get_evidence_request(id).await
             })
             .await?)
@@ -56,11 +57,11 @@ impl EvidenceRequestService {
 
     pub async fn list_by_workspace(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async |context| {
+            .in_actor_context(actor, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)
@@ -68,13 +69,13 @@ impl EvidenceRequestService {
 
     pub async fn replace(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         id: EvidenceRequestId,
         update: UpdateEvidenceRequestPayload,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.replace_evidence_request(id, &update).await
             })
             .await?)
@@ -82,12 +83,12 @@ impl EvidenceRequestService {
 
     pub async fn list_due(
         &self,
-        workspace_id: WorkspaceId,
+        actor: ActorContext,
         now: DateTime<Utc>,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace(workspace_id, async move |context| {
+            .in_actor_context(actor, async move |context| {
                 context.list_due_evidence_requests(now).await
             })
             .await?)
