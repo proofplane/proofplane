@@ -15,4 +15,7 @@ pub enum Error {
 
     #[error("invalid persisted data")]
     InvalidData(#[from] DomainError),
+
+    #[error("repository invariant violation: {0}")]
+    InvariantViolation(&'static str),
 }

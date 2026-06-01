@@ -80,10 +80,7 @@ ORDER BY code
 }
 
 impl ServiceContext<'_> {
-    pub async fn create_control(
-        &self,
-        payload: &CreateControlPayload,
-    ) -> Result<Option<Control>, Error> {
+    pub async fn create_control(&self, payload: &CreateControlPayload) -> Result<Control, Error> {
         let row = self
             .transaction
             .query_one(
@@ -108,7 +105,11 @@ RETURNING id
             &payload.framework_requirement_ids,
         )
         .await?;
-        self.get_control_in_transaction(control_id).await
+        self.get_control_in_transaction(control_id)
+            .await?
+            .ok_or(Error::InvariantViolation(
+                "created control must be readable in transaction",
+            ))
     }
 
     pub async fn replace_control(
@@ -146,7 +147,12 @@ RETURNING id
 
         self.replace_control_framework_requirement_mappings(id, &payload.framework_requirement_ids)
             .await?;
-        self.get_control_in_transaction(id).await
+        self.get_control_in_transaction(id)
+            .await?
+            .ok_or(Error::InvariantViolation(
+                "updated control must be readable in transaction",
+            ))
+            .map(Some)
     }
 
     pub async fn create_evidence_request_control_mapping(
@@ -183,7 +189,11 @@ RETURNING evidence_request_id, control_id
             payload.evidence_request_id,
             payload.control_id,
         )
-        .await
+        .await?
+        .ok_or(Error::InvariantViolation(
+            "created evidence request control mapping must be readable in transaction",
+        ))
+        .map(Some)
     }
 
     pub async fn delete_evidence_request_control_mapping(
@@ -220,24 +230,31 @@ WHERE m.evidence_request_id = er.id
             .transaction
             .query(
                 r#"
-SELECT id, workspace_id, code, title, description, created_at, updated_at
-FROM controls
-WHERE id = $1
-  AND workspace_id = $2
+SELECT
+    c.id,
+    c.workspace_id,
+    c.code,
+    c.title,
+    c.description,
+    c.created_at,
+    c.updated_at,
+    fr.id AS framework_requirement_id,
+    fr.framework_id AS framework_requirement_framework_id,
+    fr.code AS framework_requirement_code,
+    fr.title AS framework_requirement_title,
+    fr.description AS framework_requirement_description
+FROM controls c
+LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
+LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+WHERE c.id = $1
+  AND c.workspace_id = $2
+ORDER BY fr.code
 "#,
                 &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let mut control = control_from_row(&row)?;
-        control.framework_requirements = self
-            .control_framework_requirements_in_transaction(id)
-            .await?;
-
-        Ok(Some(control))
+        Ok(controls_from_joined_rows(rows)?.into_iter().next())
     }
 
     async fn get_evidence_request_control_mapping_in_transaction(
@@ -317,29 +334,6 @@ ON CONFLICT DO NOTHING
 
         Ok(())
     }
-
-    async fn control_framework_requirements_in_transaction(
-        &self,
-        control_id: ControlId,
-    ) -> Result<Vec<FrameworkRequirement>, Error> {
-        let rows = self
-            .transaction
-            .query(
-                r#"
-SELECT fr.id, fr.framework_id, fr.code, fr.title, fr.description
-FROM control_framework_requirement_mappings m
-JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
-WHERE m.control_id = $1
-ORDER BY fr.code
-"#,
-                &[&Uuid::from(control_id)],
-            )
-            .await?;
-
-        rows.into_iter()
-            .map(framework_requirement_from_row)
-            .collect()
-    }
 }
 
 impl ReadServiceContext {
@@ -379,48 +373,54 @@ ORDER BY c.code, fr.code
             .client
             .query(
                 r#"
-SELECT id, workspace_id, code, title, description, created_at, updated_at
-FROM controls
-WHERE id = $1
-  AND workspace_id = $2
+SELECT
+    c.id,
+    c.workspace_id,
+    c.code,
+    c.title,
+    c.description,
+    c.created_at,
+    c.updated_at,
+    fr.id AS framework_requirement_id,
+    fr.framework_id AS framework_requirement_framework_id,
+    fr.code AS framework_requirement_code,
+    fr.title AS framework_requirement_title,
+    fr.description AS framework_requirement_description
+FROM controls c
+LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
+LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+WHERE c.id = $1
+  AND c.workspace_id = $2
+ORDER BY fr.code
 "#,
                 &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let mut control = control_from_row(&row)?;
-        control.framework_requirements = self.control_framework_requirements(id).await?;
-
-        Ok(Some(control))
+        Ok(controls_from_joined_rows(rows)?.into_iter().next())
     }
 
     pub async fn list_evidence_request_control_mappings(
         &self,
         evidence_request_id: EvidenceRequestId,
     ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
-        if !self.evidence_request_exists(evidence_request_id).await? {
-            return Ok(None);
-        }
-
         let rows = self
             .client
             .query(
                 r#"
 SELECT
-    m.evidence_request_id,
+    er.id AS evidence_request_id,
     c.id AS control_id,
     c.code AS control_code,
     c.title AS control_title,
     c.description AS control_description,
     m.rationale,
     m.created_at
-FROM evidence_request_control_mappings m
-JOIN controls c ON c.id = m.control_id
-WHERE m.evidence_request_id = $1
-  AND c.workspace_id = $2
+FROM evidence_requests er
+LEFT JOIN evidence_request_control_mappings m ON m.evidence_request_id = er.id
+LEFT JOIN controls c ON c.id = m.control_id AND c.workspace_id = er.workspace_id
+WHERE er.id = $1
+  AND er.workspace_id = $2
 ORDER BY c.code
 "#,
                 &[
@@ -430,52 +430,14 @@ ORDER BY c.code
             )
             .await?;
 
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
         rows.into_iter()
-            .map(evidence_request_control_mapping_from_row)
+            .filter_map(evidence_request_control_mapping_from_joined_row)
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
-    }
-
-    async fn control_framework_requirements(
-        &self,
-        control_id: ControlId,
-    ) -> Result<Vec<FrameworkRequirement>, Error> {
-        let rows = self
-            .client
-            .query(
-                r#"
-SELECT fr.id, fr.framework_id, fr.code, fr.title, fr.description
-FROM control_framework_requirement_mappings m
-JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
-WHERE m.control_id = $1
-ORDER BY fr.code
-"#,
-                &[&Uuid::from(control_id)],
-            )
-            .await?;
-
-        rows.into_iter()
-            .map(framework_requirement_from_row)
-            .collect()
-    }
-
-    async fn evidence_request_exists(&self, id: EvidenceRequestId) -> Result<bool, Error> {
-        let row = self
-            .client
-            .query_one(
-                r#"
-SELECT EXISTS (
-    SELECT 1
-    FROM evidence_requests
-    WHERE id = $1
-      AND workspace_id = $2
-) AS exists
-"#,
-                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
-            )
-            .await?;
-
-        Ok(row.try_get("exists")?)
     }
 }
 
@@ -566,6 +528,16 @@ fn evidence_request_control_mapping_from_row(
         rationale: row.try_get("rationale")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn evidence_request_control_mapping_from_joined_row(
+    row: Row,
+) -> Option<Result<EvidenceRequestControlMapping, Error>> {
+    match row.try_get::<_, Option<Uuid>>("control_id") {
+        Ok(Some(_)) => Some(evidence_request_control_mapping_from_row(row)),
+        Ok(None) => None,
+        Err(error) => Some(Err(Error::Database(error))),
+    }
 }
 
 fn control_insert_error(error: tokio_postgres::Error) -> Error {

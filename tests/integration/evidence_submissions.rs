@@ -1,11 +1,14 @@
 use axum::http::StatusCode;
 use axum_test::multipart::{MultipartForm, Part};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{
+    attachment_form, attachment_form_with_digest, content_digest_header, crc32c_base64, file_part,
+    TestApp,
+};
 
 #[tokio::test]
 async fn create_returns_the_submission() {
@@ -16,10 +19,7 @@ async fn create_returns_the_submission() {
         .await;
     let workspace_id = app.workspace_id("workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Submission target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Submission target"))
         .await;
     let evidence_request_id = created_id(&request);
     let body = evidence_submission();
@@ -50,10 +50,7 @@ async fn get_returns_submission_detail_with_empty_attachments() {
         .await;
     let workspace_id = app.workspace_id("workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Detail target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Detail target"))
         .await;
     let evidence_request_id = created_id(&request);
     let created = app
@@ -172,6 +169,8 @@ async fn upload_attachment_returns_not_found_for_missing_cross_workspace_or_ungr
         .multipart(attachment_form(bytes, "artifact.txt", "text/plain", None))
         .await
         .assert_status_not_found();
+
+    assert!(object_files(app.object_storage_root().join("objects")).is_empty());
 }
 
 #[tokio::test]
@@ -194,27 +193,71 @@ async fn upload_attachment_maps_invalid_multipart_to_bad_request() {
                 .file_name("artifact.txt")
                 .mime_type("text/plain"),
         ),
-        MultipartForm::new()
-            .add_part(
-                "file",
-                Part::bytes(bytes.as_slice())
-                    .file_name("artifact.txt")
-                    .mime_type("text/plain"),
-            )
-            .add_part("checksum_crc32c", Part::text("not base64")),
-        MultipartForm::new()
-            .add_part(
-                "file",
-                Part::bytes(bytes.as_slice())
-                    .file_name("artifact.txt")
-                    .mime_type("text/plain"),
-            )
-            .add_part("checksum_crc32c", Part::text(crc32c_base64(b"different"))),
+        attachment_form_with_digest(bytes, "artifact.txt", "text/plain", "crc32c=:not base64:"),
+        attachment_form_with_digest(bytes, "artifact.txt", "text/plain", "sha-256=:abcd:"),
+        attachment_form_with_digest(
+            bytes,
+            "artifact.txt",
+            "text/plain",
+            &content_digest_header(b"different"),
+        ),
     ] {
         let response = app.post(&path).multipart(form).await;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         assert_eq!(response.json::<Value>()["error"]["code"], "bad_request");
     }
+
+    assert!(object_files(app.object_storage_root().join("objects")).is_empty());
+}
+
+#[tokio::test]
+async fn upload_attachment_rejects_duplicate_file_and_cleans_staged_object() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Attachment duplicate workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let uploaded_bytes = b"this was an uploaded attachment";
+    let skipped_bytes = b"this should be skipped";
+    let form = MultipartForm::new()
+        .add_part(
+            "file",
+            file_part(
+                uploaded_bytes,
+                "artifact.txt",
+                "text/plain",
+                &content_digest_header(uploaded_bytes),
+            ),
+        )
+        .add_part(
+            "file",
+            file_part(
+                skipped_bytes,
+                "artifact-copy.txt",
+                "text/plain",
+                &content_digest_header(skipped_bytes),
+            ),
+        );
+
+    let response = app
+        .post(&attachment_collection_path(workspace_id, submission_id))
+        .multipart(form)
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::ACCEPTED);
+
+    let files = object_files(app.object_storage_root().join("objects"));
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        files[0].file_name().and_then(|name| name.to_str()),
+        Some("artifact.txt")
+    );
+    assert_eq!(
+        std::fs::read(&files[0]).expect("stored object is readable"),
+        uploaded_bytes
+    );
 }
 
 #[tokio::test]
@@ -232,12 +275,12 @@ async fn upload_attachment_rejects_missing_or_blank_filename() {
     let missing = app
         .post(&path)
         .multipart(
-            MultipartForm::new()
-                .add_part(
-                    "file",
-                    Part::bytes(bytes.as_slice()).mime_type("text/plain"),
-                )
-                .add_part("checksum_crc32c", Part::text(crc32c_base64(bytes))),
+            MultipartForm::new().add_part(
+                "file",
+                Part::bytes(bytes.as_slice())
+                    .mime_type("text/plain")
+                    .add_header("content-digest", content_digest_header(bytes)),
+            ),
         )
         .await;
     assert_eq!(missing.status_code(), StatusCode::BAD_REQUEST);
@@ -278,10 +321,7 @@ async fn create_maps_validation_errors_to_bad_request() {
         .await;
     let workspace_id = app.workspace_id("workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Invalid target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Invalid target"))
         .await;
     let evidence_request_id = created_id(&request);
 
@@ -325,10 +365,7 @@ async fn create_defaults_omitted_provenance_to_empty_object() {
         .await;
     let workspace_id = app.workspace_id("workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Default provenance target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Default provenance target"))
         .await;
     let evidence_request_id = created_id(&request);
 
@@ -358,10 +395,7 @@ async fn create_returns_not_found_for_missing_or_cross_workspace_requests() {
     let workspace_id = app.workspace_id("workspace");
     let other_workspace_id = app.workspace_id("other_workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Owner target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Owner target"))
         .await;
     let evidence_request_id = created_id(&request);
 
@@ -388,10 +422,7 @@ async fn get_returns_not_found_for_missing_or_cross_workspace_submissions() {
     let workspace_id = app.workspace_id("workspace");
     let other_workspace_id = app.workspace_id("other_workspace");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Get owner target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Get owner target"))
         .await;
     let evidence_request_id = created_id(&request);
     let created = app
@@ -421,10 +452,7 @@ async fn ungranted_workspace_returns_not_found_for_submission_routes() {
     let granted_workspace_id = app.workspace_id("granted_workspace");
     let ungranted_workspace_id = app.workspace_id("ungranted_workspace");
     let request = app
-        .create_evidence_request(
-            granted_workspace_id,
-            &evidence_request("Protected target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(granted_workspace_id, &evidence_request("Protected target"))
         .await;
     let evidence_request_id = created_id(&request);
     let created = app
@@ -483,10 +511,7 @@ async fn unsupported_submission_methods_return_method_not_allowed() {
 
 async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Attachment target", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence_request(workspace_id, &evidence_request("Attachment target"))
         .await;
     let evidence_request_id = created_id(&request);
     let created = app
@@ -498,17 +523,21 @@ async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
     created_id(&created)
 }
 
-fn evidence_request(title: &str, due_at: &str) -> Value {
+fn evidence_request(title: &str) -> Value {
     json!({
         "title": title,
         "description": format!("Collect evidence for {title}."),
         "collection_instructions": format!("Upload the artifact for {title}."),
         "cadence": "quarterly",
-        "due_at": due_at,
+        "due_at": dynamic_due_at(),
         "schedule_anchor_at": "2026-01-01T00:00:00Z",
         "freshness_window_days": 90,
         "status": "active"
     })
+}
+
+fn dynamic_due_at() -> String {
+    (Utc::now() + Duration::days(7)).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 fn evidence_submission() -> Value {
@@ -568,25 +597,19 @@ fn attachment_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String
     format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments")
 }
 
-fn attachment_form(
-    bytes: &[u8],
-    filename: &str,
-    content_type: &str,
-    checksum: Option<String>,
-) -> MultipartForm {
-    MultipartForm::new()
-        .add_part(
-            "file",
-            Part::bytes(bytes.to_vec())
-                .file_name(filename)
-                .mime_type(content_type),
-        )
-        .add_part(
-            "checksum_crc32c",
-            Part::text(checksum.unwrap_or_else(|| crc32c_base64(bytes))),
-        )
-}
+fn object_files(path: std::path::PathBuf) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return Vec::new();
+    };
 
-fn crc32c_base64(bytes: &[u8]) -> String {
-    BASE64_STANDARD.encode(crc32c::crc32c(bytes).to_be_bytes())
+    entries
+        .flat_map(|entry| {
+            let path = entry.expect("object storage entry is readable").path();
+            if path.is_dir() {
+                object_files(path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
 }

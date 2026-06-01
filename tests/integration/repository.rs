@@ -1,15 +1,17 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
     ActorId, ActorKind, AttachmentScanStatus, CreateActorPayload, CreateApiCredentialPayload,
-    CreateEvidenceAttachmentPayload, CreateEvidenceRequestPayload, CreateEvidenceSubmissionPayload,
-    CreateWorkspacePayload, EvidenceRequestCadence, EvidenceRequestStatus, EvidenceSubmissionId,
-    UpdateActorPayload, UpdateApiCredentialPayload, UpdateWorkspacePayload,
+    CreateControlPayload, CreateEvidenceAttachmentPayload,
+    CreateEvidenceRequestControlMappingPayload, CreateEvidenceRequestPayload,
+    CreateEvidenceSubmissionPayload, CreateWorkspacePayload, EvidenceRequestCadence,
+    EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, UpdateActorPayload,
+    UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
 use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::support::{TestApp, INTEGRATION_ACTOR_ID};
+use super::support::{cc61_id, cc71_id, TestApp, INTEGRATION_ACTOR_ID};
 
 #[tokio::test]
 async fn actor_repository_crud_uses_typed_rows() {
@@ -286,6 +288,144 @@ async fn api_credential_repository_enforces_one_credential_per_actor() {
 }
 
 #[tokio::test]
+async fn control_repository_create_returns_created_control_and_replace_masks_missing_rows() {
+    let app = TestApp::builder().with_soc2_reference_data().build().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let other_actor = repository_actor_context(&app).await;
+
+    let created = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_control(&control_payload_with_requirements(
+                    "PP-CTRL-01",
+                    vec![cc71_id().into(), cc61_id().into()],
+                ))
+                .await
+        })
+        .await
+        .expect("control creates");
+
+    assert_eq!(created.workspace_id, actor.workspace_id);
+    assert_eq!(created.code, "PP-CTRL-01");
+    assert_eq!(
+        requirement_ids(&created.framework_requirements),
+        vec![cc61_id(), cc71_id()]
+    );
+
+    let updated = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .replace_control(
+                    created.id,
+                    &update_control_payload_with_requirements("PP-CTRL-02", vec![cc71_id().into()]),
+                )
+                .await
+        })
+        .await
+        .expect("control replace resolves")
+        .expect("control replaces");
+
+    assert_eq!(updated.id, created.id);
+    assert_eq!(updated.code, "PP-CTRL-02");
+    assert_eq!(
+        requirement_ids(&updated.framework_requirements),
+        vec![cc71_id()]
+    );
+
+    let missing = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .replace_control(Uuid::new_v4().into(), &update_control_payload("PP-MISSING"))
+                .await
+        })
+        .await
+        .expect("missing control replace resolves");
+    assert!(missing.is_none());
+
+    // Ensure that replacing a control with an ID that the actor doesn't have access to
+    // doesn't leak information about the workspace.
+    let cross_workspace = postgres
+        .in_actor_context(other_actor, async move |context| {
+            context
+                .replace_control(created.id, &update_control_payload("PP-CROSS"))
+                .await
+        })
+        .await
+        .expect("cross-workspace control replace resolves");
+    assert!(cross_workspace.is_none());
+}
+
+#[tokio::test]
+async fn mapping_repository_create_returns_mapping_and_masks_guarded_absence() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let other_actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let control = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context.create_control(&control_payload("PP-MAP-01")).await
+        })
+        .await
+        .expect("control creates");
+    let other_control = postgres
+        .in_actor_context(other_actor.clone(), async move |context| {
+            context.create_control(&control_payload("PP-MAP-02")).await
+        })
+        .await
+        .expect("other control creates");
+
+    let created = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_evidence_request_control_mapping(&mapping_payload(
+                    request.id,
+                    control.id,
+                    "Repository mapping rationale.",
+                ))
+                .await
+        })
+        .await
+        .expect("mapping create resolves")
+        .expect("mapping creates");
+
+    assert_eq!(created.evidence_request_id, request.id);
+    assert_eq!(created.control.id, control.id);
+    assert_eq!(created.rationale, "Repository mapping rationale.");
+
+    let missing_request = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_evidence_request_control_mapping(&mapping_payload(
+                    Uuid::new_v4().into(),
+                    control.id,
+                    "Missing request.",
+                ))
+                .await
+        })
+        .await
+        .expect("missing request mapping create resolves");
+    assert!(missing_request.is_none());
+
+    // Ensure that creating mappings in a workspace the actor doesn't have access to
+    // doesn't leak information.
+    let cross_workspace_control = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_evidence_request_control_mapping(&mapping_payload(
+                    request.id,
+                    other_control.id,
+                    "Cross-workspace control.",
+                ))
+                .await
+        })
+        .await
+        .expect("cross-workspace control mapping create resolves");
+    assert!(cross_workspace_control.is_none());
+}
+
+#[tokio::test]
 async fn evidence_submission_create_scopes_to_workspace_and_records_context_actor() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
@@ -365,7 +505,6 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan
                 .await
         })
         .await
-        .expect("attachment create resolves")
         .expect("attachment creates");
 
     assert_eq!(attachment.attachment.evidence_submission_id, submission.id);
@@ -382,9 +521,13 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan
                 .create_evidence_attachment(&attachment_payload(Uuid::new_v4().into(), "missing"))
                 .await
         })
-        .await
-        .expect("missing submission attachment create resolves");
-    assert!(missing.is_none());
+        .await;
+    assert!(matches!(
+        missing,
+        Err(proofplane::repository::Error::InvariantViolation(
+            "attachment insert requires an existing workspace-scoped submission"
+        ))
+    ));
 
     let cross_workspace = postgres
         .in_actor_context(other_actor, async move |context| {
@@ -392,9 +535,13 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan
                 .create_evidence_attachment(&attachment_payload(submission.id, "cross-workspace"))
                 .await
         })
-        .await
-        .expect("cross-workspace submission attachment create resolves");
-    assert!(cross_workspace.is_none());
+        .await;
+    assert!(matches!(
+        cross_workspace,
+        Err(proofplane::repository::Error::InvariantViolation(
+            "attachment insert requires an existing workspace-scoped submission"
+        ))
+    ));
 }
 
 #[tokio::test]
@@ -529,7 +676,6 @@ async fn create_repository_attachment(
                 .await
         })
         .await
-        .expect("attachment create resolves")
         .expect("attachment creates")
 }
 
@@ -558,6 +704,57 @@ fn submission_payload(
         source_system: "github".to_owned(),
         collection_method: "api_export".to_owned(),
         provenance: json!({ "run_id": "123" }),
+    }
+}
+
+fn control_payload(code: &str) -> CreateControlPayload {
+    control_payload_with_requirements(code, Vec::new())
+}
+
+fn control_payload_with_requirements(
+    code: &str,
+    framework_requirement_ids: Vec<FrameworkRequirementId>,
+) -> CreateControlPayload {
+    CreateControlPayload {
+        code: code.to_owned(),
+        title: format!("Repository control {code}"),
+        description: format!("Repository control description for {code}."),
+        framework_requirement_ids,
+    }
+}
+
+fn update_control_payload(code: &str) -> UpdateControlPayload {
+    update_control_payload_with_requirements(code, Vec::new())
+}
+
+fn update_control_payload_with_requirements(
+    code: &str,
+    framework_requirement_ids: Vec<FrameworkRequirementId>,
+) -> UpdateControlPayload {
+    UpdateControlPayload {
+        code: code.to_owned(),
+        title: format!("Updated repository control {code}"),
+        description: format!("Updated repository control description for {code}."),
+        framework_requirement_ids,
+    }
+}
+
+fn requirement_ids(requirements: &[proofplane::domain::FrameworkRequirement]) -> Vec<Uuid> {
+    requirements
+        .iter()
+        .map(|requirement| Uuid::from(requirement.id))
+        .collect()
+}
+
+fn mapping_payload(
+    evidence_request_id: proofplane::domain::EvidenceRequestId,
+    control_id: proofplane::domain::ControlId,
+    rationale: &str,
+) -> CreateEvidenceRequestControlMappingPayload {
+    CreateEvidenceRequestControlMappingPayload {
+        evidence_request_id,
+        control_id,
+        rationale: rationale.to_owned(),
     }
 }
 

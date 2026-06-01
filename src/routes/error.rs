@@ -7,7 +7,8 @@ use deadpool_postgres::PoolError;
 use serde::Serialize;
 
 use crate::{
-    domain::DomainError, repository::Error as RepositoryError, services::Error as ServiceError,
+    domain::DomainError, object_storage::StorageError, repository::Error as RepositoryError,
+    services::Error as ServiceError,
 };
 
 #[derive(Debug, Serialize)]
@@ -119,10 +120,7 @@ impl From<ServiceError> for ApiError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Repository(error) => repository_error(error),
-            ServiceError::Storage(error) => {
-                tracing::error!(%error, "object storage error");
-                ApiError::Internal
-            }
+            ServiceError::Storage(error) => storage_error(error),
             ServiceError::InvalidFrameworkRequirementReferences => ApiError::BadRequest(vec![
                 "framework_requirement_ids contains unknown ids".to_owned(),
             ]),
@@ -132,6 +130,20 @@ impl From<ServiceError> for ApiError {
 
 pub fn domain_errors(errors: Vec<DomainError>) -> ApiError {
     ApiError::BadRequest(errors.into_iter().map(|error| error.to_string()).collect())
+}
+
+fn storage_error(error: StorageError) -> ApiError {
+    match error {
+        StorageError::StreamRead {
+            payload_too_large: true,
+            ..
+        } => ApiError::PayloadTooLarge,
+        StorageError::StreamRead { message, .. } => ApiError::BadRequest(vec![message]),
+        other => {
+            tracing::error!(%other, "object storage error");
+            ApiError::Internal
+        }
+    }
 }
 
 fn repository_error(error: RepositoryError) -> ApiError {

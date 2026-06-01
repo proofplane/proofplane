@@ -4,8 +4,6 @@ use std::{
 };
 
 use axum::http::StatusCode;
-use axum_test::multipart::{MultipartForm, Part};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use proofplane::routes::authentication::ACTOR_ID_HEADER;
 use serde_json::Value;
 use uuid::Uuid;
@@ -13,7 +11,7 @@ use uuid::Uuid;
 use chrono::{Duration, Utc};
 use proofplane::{domain::UpdateApiCredentialPayload, routes::authentication::API_KEY_HEADER};
 
-use super::support::{TestApp, INTEGRATION_ACTOR_ID};
+use super::support::{attachment_form, TestApp, INTEGRATION_ACTOR_ID};
 
 #[tokio::test]
 async fn evidence_request_routes_require_valid_api_keys() {
@@ -123,7 +121,7 @@ async fn evidence_submission_routes_require_valid_api_keys() {
     let missing_upload = app
         .server()
         .post(&upload_path)
-        .multipart(attachment_form())
+        .multipart(valid_attachment_form())
         .await;
     assert_unauthorized(&missing_upload.json(), missing_upload.status_code());
     let invalid_upload = app
@@ -131,7 +129,7 @@ async fn evidence_submission_routes_require_valid_api_keys() {
         .post(&upload_path)
         .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
         .add_header(API_KEY_HEADER, "not-a-known-key")
-        .multipart(attachment_form())
+        .multipart(valid_attachment_form())
         .await;
     assert_unauthorized(&invalid_upload.json(), invalid_upload.status_code());
 }
@@ -211,7 +209,7 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         ))
         .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
         .add_header(API_KEY_HEADER, app.api_key())
-        .multipart(attachment_form())
+        .multipart(valid_attachment_form())
         .await
         .assert_status_not_found();
 
@@ -248,7 +246,7 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         ))
         .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
         .add_header(API_KEY_HEADER, app.api_key())
-        .multipart(attachment_form())
+        .multipart(valid_attachment_form())
         .await;
     assert_eq!(ungranted_upload.status_code(), StatusCode::NOT_FOUND);
     assert_eq!(
@@ -439,19 +437,8 @@ fn submission_body() -> Value {
     })
 }
 
-fn attachment_form() -> MultipartForm {
-    let bytes = b"attachment";
-    MultipartForm::new()
-        .add_part(
-            "file",
-            Part::bytes(bytes.as_slice())
-                .file_name("artifact.txt")
-                .mime_type("text/plain"),
-        )
-        .add_part(
-            "checksum_crc32c",
-            Part::text(BASE64_STANDARD.encode(crc32c::crc32c(bytes).to_be_bytes())),
-        )
+fn valid_attachment_form() -> axum_test::multipart::MultipartForm {
+    attachment_form(b"attachment", "artifact.txt", "text/plain", None)
 }
 
 #[derive(Clone)]

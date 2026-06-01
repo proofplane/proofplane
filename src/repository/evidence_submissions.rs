@@ -67,6 +67,28 @@ RETURNING
 }
 
 impl ReadServiceContext {
+    pub async fn evidence_submission_exists(
+        &self,
+        id: EvidenceSubmissionId,
+    ) -> Result<bool, Error> {
+        let rows = self
+            .client
+            .query(
+                r#"
+SELECT 1
+FROM evidence_submissions s
+JOIN evidence_requests er ON er.id = s.evidence_request_id
+WHERE s.id = $1
+  AND er.workspace_id = $2
+LIMIT 1
+"#,
+                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+
+        Ok(!rows.is_empty())
+    }
+
     pub async fn get_evidence_submission(
         &self,
         id: EvidenceSubmissionId,
@@ -178,7 +200,7 @@ impl ServiceContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,
-    ) -> Result<Option<EvidenceAttachmentWithScan>, Error> {
+    ) -> Result<EvidenceAttachmentWithScan, Error> {
         let rows = self
             .transaction
             .query(
@@ -221,21 +243,20 @@ RETURNING
             .await?;
 
         let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
+            return Err(Error::InvariantViolation(
+                "attachment insert requires an existing workspace-scoped submission",
+            ));
         };
         let attachment = evidence_attachment_from_row(&row)?;
-        let scan = self
-            .create_pending_attachment_scan(attachment.id)
-            .await?
-            .expect("pending scan insert returns a row");
+        let scan = self.create_pending_attachment_scan(attachment.id).await?;
 
-        Ok(Some(EvidenceAttachmentWithScan { attachment, scan }))
+        Ok(EvidenceAttachmentWithScan { attachment, scan })
     }
 
     async fn create_pending_attachment_scan(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
-    ) -> Result<Option<EvidenceAttachmentScan>, Error> {
+    ) -> Result<EvidenceAttachmentScan, Error> {
         let rows = self
             .transaction
             .query(
@@ -255,10 +276,13 @@ RETURNING
             )
             .await?;
 
-        rows.into_iter()
-            .next()
-            .map(|row| evidence_attachment_scan_from_row(&row))
-            .transpose()
+        let Some(row) = rows.into_iter().next() else {
+            return Err(Error::InvariantViolation(
+                "pending attachment scan insert returned no row",
+            ));
+        };
+
+        evidence_attachment_scan_from_row(&row)
     }
 }
 

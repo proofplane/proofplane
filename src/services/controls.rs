@@ -39,7 +39,7 @@ impl ControlService {
         &self,
         actor: ActorContext,
         payload: CreateControlPayload,
-    ) -> Result<Option<Control>, Error> {
+    ) -> Result<Control, Error> {
         self.validate_framework_requirement_references(&payload.framework_requirement_ids)
             .await?;
 

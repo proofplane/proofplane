@@ -77,7 +77,7 @@ pub struct GcsObjectStorageConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadsConfig {
-    pub max_attachment_bytes: u64,
+    pub max_attachment_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

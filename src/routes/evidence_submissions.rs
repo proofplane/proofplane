@@ -1,7 +1,16 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
 use axum::{
-    extract::{multipart::MultipartError, DefaultBodyLimit, Multipart, Path, Request, State},
+    extract::{
+        multipart::{Field, MultipartError},
+        DefaultBodyLimit, Multipart, Path, Request, State,
+    },
     http::{Method, StatusCode},
     middleware,
     middleware::Next,
@@ -11,9 +20,11 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
+use futures_core::Stream;
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
+use sfv::{BareItem, Dictionary, ListEntry, Parser};
 use tracing::error;
 use uuid::Uuid;
 
@@ -25,6 +36,7 @@ use crate::{
         EvidenceAttachmentScan, EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
         EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
+    object_storage::StorageError,
     routes::{
         authentication::{authorize_workspace_route, ActorContext},
         error::{domain_errors, ApiError},
@@ -334,126 +346,170 @@ async fn upload_evidence_attachment(
     Extension(actor): Extension<ActorContext>,
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<EvidenceAttachmentUploadResponse>), ApiError> {
+    let submission_id = EvidenceSubmissionId::from(path.submission_id);
+    if !state
+        .service
+        .evidence_submission_exists(actor.clone(), submission_id)
+        .await?
+    {
+        return Err(ApiError::NotFound);
+    }
+
     let payload =
-        attachment_upload_from_multipart(EvidenceSubmissionId::from(path.submission_id), multipart)
+        attachment_upload_from_multipart(&state.service, actor.clone(), submission_id, multipart)
             .await?;
     let attachment = state
         .service
-        .upload_attachment(
-            actor,
-            EvidenceSubmissionId::from(path.submission_id),
-            payload,
-        )
-        .await?
-        .ok_or(ApiError::NotFound)?;
+        .create_attachment(actor, submission_id, payload)
+        .await?;
 
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))
 }
 
 async fn attachment_upload_from_multipart(
+    service: &EvidenceSubmissionService,
+    actor: ActorContext,
     evidence_submission_id: EvidenceSubmissionId,
     mut multipart: Multipart,
 ) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
-    let mut file: Option<ReceivedFilePart> = None;
-    let mut checksum_crc32c: Option<String> = None;
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(multipart_error)?
+        .ok_or(ApiError::BadRequest(vec![
+            "multipart upload requires at least one field".to_owned(),
+        ]))?;
 
-    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
-        match field.name() {
-            Some("file") => {
-                if file.is_some() {
-                    return Err(ApiError::BadRequest(vec![
-                        "file must be provided exactly once".to_owned(),
-                    ]));
-                }
-                let filename = field.file_name().map(str::to_owned).ok_or_else(|| {
-                    ApiError::BadRequest(vec!["file filename is required".to_owned()])
-                })?;
-                let content_type = field
-                    .content_type()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| "application/octet-stream".to_owned());
-                let bytes = field.bytes().await.map_err(multipart_error)?;
+    let field_name = field.name().ok_or(ApiError::BadRequest(vec![
+        "multipart upload field must be named".to_owned(),
+    ]))?;
 
-                file = Some(ReceivedFilePart {
-                    filename,
-                    content_type,
-                    bytes: bytes.to_vec(),
-                });
-            }
-            Some("checksum_crc32c") => {
-                if checksum_crc32c.is_some() {
-                    return Err(ApiError::BadRequest(vec![
-                        "checksum_crc32c must be provided exactly once".to_owned(),
-                    ]));
-                }
-                checksum_crc32c = Some(field.text().await.map_err(multipart_error)?);
-            }
-            _ => {}
-        }
+    if field_name != "file" {
+        return Err(ApiError::BadRequest(vec![
+            "multipart upload field for file must have correct name".to_owned(),
+        ]));
     }
 
-    let file = file.ok_or_else(|| ApiError::BadRequest(vec!["file is required".to_owned()]))?;
-    let checksum_crc32c = checksum_crc32c
-        .ok_or_else(|| ApiError::BadRequest(vec!["checksum_crc32c is required".to_owned()]))?;
+    let filename = field
+        .file_name()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::BadRequest(vec!["file filename is required".to_owned()]))?;
+    let content_type = field
+        .content_type()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    if filename.trim().is_empty() {
+        return Err(ApiError::BadRequest(vec![
+            "file filename is required".to_owned()
+        ]));
+    }
+    let expected_crc32c = field_content_digest_crc32c(&field)
+        .map_err(|message| ApiError::BadRequest(vec![message]))?;
 
-    validate_attachment_upload(evidence_submission_id, file, checksum_crc32c)
-        .map_err(|message| ApiError::BadRequest(vec![message]))
+    let crc32c = Arc::new(AtomicU32::new(0));
+    let chunks = file_chunks(field, Arc::clone(&crc32c));
+    let mut uploaded_file = service
+        .upload_attachment(
+            actor.clone(),
+            evidence_submission_id,
+            filename,
+            content_type,
+            chunks,
+        )
+        .await?;
+
+    let actual_crc32c = crc32c.load(Ordering::Relaxed);
+
+    if let Err(message) = validate_attachment_upload(expected_crc32c, actual_crc32c) {
+        maybe_delete_uploaded_file(service, uploaded_file.object_key).await;
+        return Err(ApiError::BadRequest(vec![message]));
+    }
+
+    uploaded_file.checksum_crc32c = encode_crc32c_base64(actual_crc32c);
+    Ok(uploaded_file)
 }
 
 fn multipart_error(error: MultipartError) -> ApiError {
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        ApiError::PayloadTooLarge
-    } else {
-        ApiError::BadRequest(vec![format!(
-            "invalid multipart body: {}",
-            error.body_text()
-        )])
+        return ApiError::PayloadTooLarge;
+    }
+
+    ApiError::BadRequest(vec![format!(
+        "invalid multipart body: {}",
+        error.body_text()
+    )])
+}
+
+fn file_chunks(
+    field: Field<'_>,
+    crc32c: Arc<AtomicU32>,
+) -> impl Stream<Item = Result<bytes::Bytes, StorageError>> + Send + '_ {
+    stream::try_unfold(field, move |mut field| {
+        let crc32c = Arc::clone(&crc32c);
+        async move {
+            match field.chunk().await.map_err(multipart_stream_error)? {
+                Some(chunk) => {
+                    let current = crc32c.load(Ordering::Relaxed);
+                    crc32c.store(crc32c::crc32c_append(current, &chunk), Ordering::Relaxed);
+                    Ok(Some((chunk, field)))
+                }
+                None => Ok(None),
+            }
+        }
+    })
+}
+
+fn multipart_stream_error(error: MultipartError) -> StorageError {
+    StorageError::StreamRead {
+        payload_too_large: error.status() == StatusCode::PAYLOAD_TOO_LARGE,
+        message: if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            "request payload is too large".to_owned()
+        } else {
+            format!("invalid multipart body: {}", error.body_text())
+        },
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ReceivedFilePart {
-    filename: String,
-    content_type: String,
-    bytes: Vec<u8>,
-}
-
-fn validate_attachment_upload(
-    evidence_submission_id: EvidenceSubmissionId,
-    file: ReceivedFilePart,
-    checksum_crc32c: String,
-) -> Result<UploadEvidenceAttachmentPayload, String> {
-    if file.filename.trim().is_empty() {
-        return Err("file filename is required".to_owned());
-    }
-
-    let expected_crc32c = decode_crc32c_base64(&checksum_crc32c)?;
-    let actual_crc32c = crc32c::crc32c(&file.bytes);
+fn validate_attachment_upload(expected_crc32c: u32, actual_crc32c: u32) -> Result<(), String> {
     if expected_crc32c != actual_crc32c {
         return Err("checksum_crc32c does not match file content".to_owned());
     }
 
-    let content_length =
-        i64::try_from(file.bytes.len()).map_err(|_| "file is too large".to_owned())?;
-
-    Ok(UploadEvidenceAttachmentPayload {
-        evidence_submission_id,
-        filename: file.filename,
-        content_type: file.content_type,
-        content_length,
-        checksum_sha256: hex::encode(Sha256::digest(&file.bytes)),
-        checksum_crc32c: encode_crc32c_base64(actual_crc32c),
-        bytes: file.bytes,
-    })
+    Ok(())
 }
 
-fn decode_crc32c_base64(value: &str) -> Result<u32, String> {
-    let bytes = BASE64_STANDARD
-        .decode(value.trim())
-        .map_err(|_| "checksum_crc32c must be base64-encoded CRC32C bytes".to_owned())?;
+async fn maybe_delete_uploaded_file(service: &EvidenceSubmissionService, key: String) {
+    let _ = service.delete_uploaded_attachment_object(&key).await;
+}
+
+fn field_content_digest_crc32c(field: &Field<'_>) -> Result<u32, String> {
+    let value = field
+        .headers()
+        .get("content-digest")
+        .ok_or_else(|| "Content-Digest is required".to_owned())?
+        .to_str()
+        .map_err(|_| "Content-Digest must be valid ASCII".to_owned())?;
+
+    parse_content_digest_crc32c(value)
+}
+
+fn parse_content_digest_crc32c(value: &str) -> Result<u32, String> {
+    let dictionary: Dictionary = Parser::new(value)
+        .parse()
+        .map_err(|_| "Content-Digest must be a valid structured field dictionary".to_owned())?;
+    let entry = dictionary
+        .get("crc32c")
+        .ok_or_else(|| "Content-Digest crc32c is required".to_owned())?;
+    let ListEntry::Item(item) = entry else {
+        return Err("Content-Digest crc32c must be a byte sequence".to_owned());
+    };
+    let BareItem::ByteSequence(bytes) = &item.bare_item else {
+        return Err("Content-Digest crc32c must be a byte sequence".to_owned());
+    };
     let bytes: [u8; 4] = bytes
+        .as_slice()
         .try_into()
-        .map_err(|_| "checksum_crc32c must encode exactly 4 bytes".to_owned())?;
+        .map_err(|_| "Content-Digest crc32c must encode exactly 4 bytes".to_owned())?;
 
     Ok(u32::from_be_bytes(bytes))
 }
@@ -488,7 +544,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        encode_crc32c_base64, validate_attachment_upload, EvidenceSubmissionDTO, ReceivedFilePart,
+        encode_crc32c_base64, parse_content_digest_crc32c, validate_attachment_upload,
+        EvidenceSubmissionDTO,
     };
     use crate::domain::{DomainError, EvidenceRequestId};
 
@@ -535,64 +592,68 @@ mod tests {
 
     #[test]
     fn attachment_upload_validation_accepts_matching_crc32c() {
-        let bytes = b"evidence bytes".to_vec();
-        let checksum = encode_crc32c_base64(crc32c::crc32c(&bytes));
-        let payload = validate_attachment_upload(
-            submission_id(),
-            ReceivedFilePart {
-                filename: "artifact.json".to_owned(),
-                content_type: "application/json".to_owned(),
-                bytes,
-            },
-            checksum.clone(),
+        validate_attachment_upload(
+            crc32c::crc32c(b"evidence bytes"),
+            crc32c::crc32c(b"evidence bytes"),
         )
         .expect("attachment upload validates");
-
-        assert_eq!(payload.evidence_submission_id, submission_id());
-        assert_eq!(payload.filename, "artifact.json");
-        assert_eq!(payload.content_type, "application/json");
-        assert_eq!(payload.content_length, 14);
-        assert_eq!(payload.checksum_crc32c, checksum);
     }
 
     #[test]
-    fn attachment_upload_validation_rejects_invalid_base64_crc32c() {
-        let error =
-            validate_attachment_upload(submission_id(), valid_file_part(), "not base64".to_owned())
-                .expect_err("invalid CRC32C is rejected");
+    fn content_digest_parser_accepts_crc32c_byte_sequence() {
+        let digest = format!("sha-256=:abcd:, crc32c=:{}:", encode_crc32c_base64(123));
 
-        assert_eq!(error, "checksum_crc32c must be base64-encoded CRC32C bytes");
+        assert_eq!(
+            parse_content_digest_crc32c(&digest).expect("Content-Digest parses"),
+            123
+        );
+    }
+
+    #[test]
+    fn content_digest_parser_rejects_malformed_dictionary() {
+        let error = parse_content_digest_crc32c("crc32c=:not base64:")
+            .expect_err("malformed Content-Digest is rejected");
+
+        assert_eq!(
+            error,
+            "Content-Digest must be a valid structured field dictionary"
+        );
+    }
+
+    #[test]
+    fn content_digest_parser_rejects_missing_crc32c() {
+        let error =
+            parse_content_digest_crc32c("sha-256=:abcd:").expect_err("missing crc32c is rejected");
+
+        assert_eq!(error, "Content-Digest crc32c is required");
+    }
+
+    #[test]
+    fn content_digest_parser_rejects_non_byte_sequence_crc32c() {
+        let error =
+            parse_content_digest_crc32c("crc32c=123").expect_err("non-byte-sequence is rejected");
+
+        assert_eq!(error, "Content-Digest crc32c must be a byte sequence");
+    }
+
+    #[test]
+    fn content_digest_parser_rejects_wrong_crc32c_length() {
+        let error =
+            parse_content_digest_crc32c("crc32c=:abc:").expect_err("short CRC32C is rejected");
+
+        assert_eq!(error, "Content-Digest crc32c must encode exactly 4 bytes");
     }
 
     #[test]
     fn attachment_upload_validation_rejects_checksum_mismatch() {
         let error = validate_attachment_upload(
-            submission_id(),
-            valid_file_part(),
-            encode_crc32c_base64(crc32c::crc32c(b"different bytes")),
+            crc32c::crc32c(b"different bytes"),
+            crc32c::crc32c(b"evidence bytes"),
         )
         .expect_err("mismatched CRC32C is rejected");
 
         assert_eq!(error, "checksum_crc32c does not match file content");
     }
-
-    #[test]
-    fn attachment_upload_validation_rejects_blank_filename() {
-        let bytes = b"evidence bytes".to_vec();
-        let error = validate_attachment_upload(
-            submission_id(),
-            ReceivedFilePart {
-                filename: " \t".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                bytes: bytes.clone(),
-            },
-            encode_crc32c_base64(crc32c::crc32c(&bytes)),
-        )
-        .expect_err("blank filename is rejected");
-
-        assert_eq!(error, "file filename is required");
-    }
-
     fn valid_dto(provenance: Option<serde_json::Value>) -> EvidenceSubmissionDTO {
         EvidenceSubmissionDTO {
             coverage_start_at: instant("2026-01-01T00:00:00Z"),
@@ -609,19 +670,5 @@ mod tests {
 
     fn request_id() -> EvidenceRequestId {
         EvidenceRequestId::from(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap())
-    }
-
-    fn submission_id() -> crate::domain::EvidenceSubmissionId {
-        crate::domain::EvidenceSubmissionId::from(
-            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap(),
-        )
-    }
-
-    fn valid_file_part() -> ReceivedFilePart {
-        ReceivedFilePart {
-            filename: "artifact.txt".to_owned(),
-            content_type: "text/plain".to_owned(),
-            bytes: b"evidence bytes".to_vec(),
-        }
     }
 }

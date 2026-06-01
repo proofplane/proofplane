@@ -20,6 +20,8 @@ Support production GCS and local filesystem configuration. Object keys should in
 
 The filesystem adapter is the default for local development and automated tests. It should store object bytes under a configured root directory and keep metadata in either sidecar files or a deterministic local metadata representation. The GCS adapter is selected for live environments by configuration and should use native GCS APIs.
 
+When multiple object storage backends are supported at runtime, app and service dependencies should use a concrete backend enum rather than `dyn ObjectStore`. Keep the trait for backend implementation reuse and focused trait-method tests, but avoid using it as the runtime dependency boundary.
+
 ## Acceptance Criteria
 
 - Storage abstraction supports upload, download, delete, metadata, and signed or internal retrieval strategy.

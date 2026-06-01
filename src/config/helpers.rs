@@ -47,6 +47,14 @@ pub(super) fn nonzero_u64(value: u64) -> Result<u64, String> {
     }
 }
 
+pub(super) fn nonzero_usize(value: usize) -> Result<usize, String> {
+    if value == 0 {
+        Err("must be greater than zero".into())
+    } else {
+        Ok(value)
+    }
+}
+
 pub(super) fn socket_addr(value: String) -> Result<SocketAddr, String> {
     if value.trim().is_empty() {
         return Err("must not be empty".into());

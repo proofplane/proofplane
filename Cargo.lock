@@ -2191,10 +2191,13 @@ dependencies = [
  "axum",
  "axum-test",
  "base64",
+ "bytes",
  "chrono",
  "config",
  "crc32c",
  "deadpool-postgres",
+ "futures-core",
+ "futures-util",
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
@@ -2205,6 +2208,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sfv",
  "sha2 0.10.9",
  "testcontainers",
  "testcontainers-modules",
@@ -2914,6 +2918,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "sfv"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d471eaefb14f4b30032525bdb124b36e55ba9cb1292080e06f1a236cd10fe87"
+dependencies = [
+ "base64",
+ "indexmap 2.14.0",
+ "ref-cast",
 ]
 
 [[package]]

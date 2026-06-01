@@ -335,11 +335,7 @@ async fn create_control(
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_new().into_result().map_err(domain_errors)?;
-    let control = state
-        .service
-        .create_control(actor, payload)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let control = state.service.create_control(actor, payload).await?;
 
     Ok(Json(control.into()))
 }

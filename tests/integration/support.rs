@@ -1,7 +1,9 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
+use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
@@ -234,7 +236,7 @@ pub struct TestAppBuilder {
     default_auth: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
-    max_attachment_bytes: u64,
+    max_attachment_bytes: usize,
 }
 
 impl TestAppBuilder {
@@ -248,7 +250,7 @@ impl TestAppBuilder {
         self
     }
 
-    pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: u64) -> Self {
+    pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: usize) -> Self {
         self.max_attachment_bytes = max_attachment_bytes;
         self
     }
@@ -526,7 +528,7 @@ async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
 fn config(
     database_url: String,
     spicedb_endpoint: url::Url,
-    max_attachment_bytes: u64,
+    max_attachment_bytes: usize,
 ) -> AppConfig {
     let storage_root =
         std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
@@ -592,4 +594,51 @@ pub fn cc61_id() -> Uuid {
 
 pub fn cc71_id() -> Uuid {
     Uuid::parse_str("30000000-0000-4000-8000-000000000002").unwrap()
+}
+
+pub fn attachment_form(
+    bytes: &[u8],
+    filename: &str,
+    content_type: &str,
+    checksum: Option<String>,
+) -> MultipartForm {
+    MultipartForm::new().add_part(
+        "file",
+        file_part(
+            bytes,
+            filename,
+            content_type,
+            &format!(
+                "crc32c=:{}:",
+                checksum.unwrap_or_else(|| crc32c_base64(bytes))
+            ),
+        ),
+    )
+}
+
+pub fn attachment_form_with_digest(
+    bytes: &[u8],
+    filename: &str,
+    content_type: &str,
+    content_digest: &str,
+) -> MultipartForm {
+    MultipartForm::new().add_part(
+        "file",
+        file_part(bytes, filename, content_type, content_digest),
+    )
+}
+
+pub fn file_part(bytes: &[u8], filename: &str, content_type: &str, content_digest: &str) -> Part {
+    Part::bytes(bytes.to_vec())
+        .file_name(filename)
+        .mime_type(content_type)
+        .add_header("content-digest", content_digest)
+}
+
+pub fn content_digest_header(bytes: &[u8]) -> String {
+    format!("crc32c=:{}:", crc32c_base64(bytes))
+}
+
+pub fn crc32c_base64(bytes: &[u8]) -> String {
+    BASE64_STANDARD.encode(crc32c::crc32c(bytes).to_be_bytes())
 }

@@ -8,9 +8,9 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        gcs_credentials_mode, host_port, nonzero_u16, nonzero_u64, optional_url, parse_log_format,
-        path_string, postgres_connection_string, secret_value, string_url, string_value,
-        ConfigValidationExt,
+        gcs_credentials_mode, host_port, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
+        parse_log_format, path_string, postgres_connection_string, secret_value, string_url,
+        string_value, ConfigValidationExt,
     },
     GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
     PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
@@ -188,12 +188,12 @@ impl RawObjectStorageConfig {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawUploadsConfig {
-    max_attachment_bytes: u64,
+    max_attachment_bytes: usize,
 }
 
 impl RawUploadsConfig {
     pub(super) fn validate(self) -> Validation<UploadsConfig, ConfigFieldError> {
-        nonzero_u64(self.max_attachment_bytes)
+        nonzero_usize(self.max_attachment_bytes)
             .at("uploads.max_attachment_bytes")
             .map(|max_attachment_bytes| UploadsConfig {
                 max_attachment_bytes,
