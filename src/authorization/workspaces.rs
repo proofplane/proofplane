@@ -37,6 +37,26 @@ impl WorkspaceAuthorizer {
             .await
     }
 
+    pub async fn can_read_evidence_submissions(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<bool, ClientError> {
+        let spicedb = self.spicedb();
+        spicedb
+            .check_workspace_permission(actor, WorkspacePermission::ReadEvidenceSubmissions)
+            .await
+    }
+
+    pub async fn can_write_evidence_submissions(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<bool, ClientError> {
+        let spicedb = self.spicedb();
+        spicedb
+            .check_workspace_permission(actor, WorkspacePermission::WriteEvidenceSubmissions)
+            .await
+    }
+
     pub async fn can_read_controls(&self, actor: &ActorContext) -> Result<bool, ClientError> {
         let spicedb = self.spicedb();
         spicedb

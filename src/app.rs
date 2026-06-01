@@ -14,12 +14,16 @@ use crate::{
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
+        evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
         version,
     },
-    services::{controls::ControlService, evidence_requests::EvidenceRequestService},
+    services::{
+        controls::ControlService, evidence_requests::EvidenceRequestService,
+        evidence_submissions::EvidenceSubmissionService,
+    },
 };
 
 pub struct AppDependencies {
@@ -52,6 +56,13 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
         .merge(evidence_requests::router(EvidenceRequestState {
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
             route_auth: EvidenceRequestRouteAuthState {
+                authenticator: dependencies.authenticator.clone(),
+                authorizer: dependencies.workspace_authorizer.clone(),
+            },
+        }))
+        .merge(evidence_submissions::router(EvidenceSubmissionState {
+            service: EvidenceSubmissionService::new(dependencies.postgres.clone()),
+            route_auth: EvidenceSubmissionRouteAuthState {
                 authenticator: dependencies.authenticator.clone(),
                 authorizer: dependencies.workspace_authorizer.clone(),
             },

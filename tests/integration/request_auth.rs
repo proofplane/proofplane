@@ -75,6 +75,49 @@ async fn evidence_request_routes_require_valid_api_keys() {
 }
 
 #[tokio::test]
+async fn evidence_submission_routes_require_valid_api_keys() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Protected submission workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_request_id = Uuid::new_v4();
+    let submission_id = Uuid::new_v4();
+    let create_path =
+        format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions");
+    let get_path = format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}");
+
+    let missing_create = app.server().post(&create_path).await;
+    assert_unauthorized(&missing_create.json(), missing_create.status_code());
+    let invalid_create = app
+        .server()
+        .post(&create_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid_create.json(), invalid_create.status_code());
+
+    let missing_get = app.server().get(&get_path).await;
+    assert_unauthorized(&missing_get.json(), missing_get.status_code());
+    let invalid_get = app
+        .server()
+        .get(&get_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid_get.json(), invalid_get.status_code());
+
+    app.server()
+        .get(&get_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
+}
+
+#[tokio::test]
 async fn valid_global_actor_api_key_is_authorized_by_workspace_membership() {
     let app = TestApp::builder()
         .without_default_auth()
@@ -109,6 +152,66 @@ async fn valid_global_actor_api_key_is_authorized_by_workspace_membership() {
 
     assert_eq!(ungranted.status_code(), StatusCode::NOT_FOUND);
     assert_eq!(ungranted.json::<Value>()["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn submission_routes_are_authorized_by_workspace_membership() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("granted", "Granted submission auth workspace")
+        .with_default_membership()
+        .workspace("ungranted", "Ungranted submission auth workspace")
+        .without_membership()
+        .build()
+        .await;
+    let granted_workspace_id = app.workspace_id("granted");
+    let ungranted_workspace_id = app.workspace_id("ungranted");
+    let evidence_request_id = Uuid::new_v4();
+    let submission_id = Uuid::new_v4();
+
+    app.server()
+        .post(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-requests/{evidence_request_id}/submissions"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .json(&submission_body())
+        .await
+        .assert_status_not_found();
+    app.server()
+        .get(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-submissions/{submission_id}"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
+
+    let ungranted_create = app
+        .server()
+        .post(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-requests/{evidence_request_id}/submissions"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .json(&submission_body())
+        .await;
+    assert_eq!(ungranted_create.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        ungranted_create.json::<Value>()["error"]["code"],
+        "not_found"
+    );
+
+    let ungranted_get = app
+        .server()
+        .get(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-submissions/{submission_id}"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+    assert_eq!(ungranted_get.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(ungranted_get.json::<Value>()["error"]["code"], "not_found");
 }
 
 #[tokio::test]
@@ -281,6 +384,16 @@ fn assert_unauthorized(body: &Value, status: StatusCode) {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
     assert_eq!(body["error"]["details"], serde_json::json!([]));
+}
+
+fn submission_body() -> Value {
+    serde_json::json!({
+        "coverage_start_at": "2026-01-01T00:00:00Z",
+        "coverage_end_at": "2026-03-31T23:59:59Z",
+        "source_system": "okta",
+        "collection_method": "api_export",
+        "provenance": {}
+    })
 }
 
 #[derive(Clone)]

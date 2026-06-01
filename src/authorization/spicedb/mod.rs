@@ -150,6 +150,8 @@ impl SpiceDbClient {
 pub enum WorkspacePermission {
     ReadEvidenceRequests,
     WriteEvidenceRequests,
+    ReadEvidenceSubmissions,
+    WriteEvidenceSubmissions,
     ReadControls,
     WriteControls,
 }
@@ -159,6 +161,8 @@ impl WorkspacePermission {
         match self {
             Self::ReadEvidenceRequests => "read_evidence_requests",
             Self::WriteEvidenceRequests => "write_evidence_requests",
+            Self::ReadEvidenceSubmissions => "read_evidence_submissions",
+            Self::WriteEvidenceSubmissions => "write_evidence_submissions",
             Self::ReadControls => "read_controls",
             Self::WriteControls => "write_controls",
         }

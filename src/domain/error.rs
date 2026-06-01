@@ -10,4 +10,10 @@ pub enum DomainError {
 
     #[error("freshness_window_days must be positive")]
     InvalidFreshnessWindowDays,
+
+    #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
+    InvalidCoverageWindow,
+
+    #[error("provenance must be a JSON object")]
+    InvalidProvenanceObject,
 }
