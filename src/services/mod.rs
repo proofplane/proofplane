@@ -13,6 +13,9 @@ pub enum Error {
     InvalidFrameworkRequirementReferences,
 }
 
+// TODO: see if it's a bad idea for the repository layer to be importing from the
+// service layer like this instead of having the service layer just import and
+// call repository APIs.
 pub struct ServiceContext<'transaction> {
     pub workspace_id: WorkspaceId,
     pub actor_id: ActorId,
