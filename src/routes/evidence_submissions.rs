@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::{Path, Request, State},
-    http::Method,
+    extract::{multipart::MultipartError, DefaultBodyLimit, Multipart, Path, Request, State},
+    http::{Method, StatusCode},
     middleware,
     middleware::Next,
     response::Response,
     routing::{get, post},
     Extension, Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tracing::error;
 use uuid::Uuid;
 
@@ -27,7 +29,7 @@ use crate::{
         authentication::{authorize_workspace_route, ActorContext},
         error::{domain_errors, ApiError},
     },
-    services::evidence_submissions::EvidenceSubmissionService,
+    services::evidence_submissions::{EvidenceSubmissionService, UploadEvidenceAttachmentPayload},
     validate,
     validation::Validation,
 };
@@ -36,6 +38,7 @@ use crate::{
 pub struct EvidenceSubmissionState {
     pub service: EvidenceSubmissionService,
     pub route_auth: EvidenceSubmissionRouteAuthState,
+    pub max_attachment_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -46,6 +49,7 @@ pub struct EvidenceSubmissionRouteAuthState {
 
 pub fn router(state: EvidenceSubmissionState) -> Router {
     let route_auth = state.route_auth.clone();
+    let max_attachment_bytes = state.max_attachment_bytes;
 
     Router::new()
         .route(
@@ -55,6 +59,10 @@ pub fn router(state: EvidenceSubmissionState) -> Router {
         .route(
             "/workspaces/{workspace_id}/evidence-submissions/{submission_id}",
             get(get_evidence_submission),
+        )
+        .route(
+            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments",
+            post(upload_evidence_attachment).layer(DefaultBodyLimit::max(max_attachment_bytes)),
         )
         .route_layer(middleware::from_fn_with_state(
             route_auth,
@@ -152,6 +160,11 @@ struct EvidenceRequestSubmissionsPath {
 
 #[derive(Debug, Deserialize)]
 struct EvidenceSubmissionPath {
+    submission_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceSubmissionAttachmentPath {
     submission_id: Uuid,
 }
 
@@ -300,6 +313,155 @@ async fn get_evidence_submission(
     Ok(Json(detail.into()))
 }
 
+#[derive(Debug, Serialize)]
+struct EvidenceAttachmentUploadResponse {
+    attachment: EvidenceAttachmentResponse,
+    scan: EvidenceAttachmentScanResponse,
+}
+
+impl From<EvidenceAttachmentWithScan> for EvidenceAttachmentUploadResponse {
+    fn from(value: EvidenceAttachmentWithScan) -> Self {
+        Self {
+            attachment: value.attachment.into(),
+            scan: value.scan.into(),
+        }
+    }
+}
+
+async fn upload_evidence_attachment(
+    State(state): State<EvidenceSubmissionState>,
+    Path(path): Path<EvidenceSubmissionAttachmentPath>,
+    Extension(actor): Extension<ActorContext>,
+    multipart: Multipart,
+) -> Result<(StatusCode, Json<EvidenceAttachmentUploadResponse>), ApiError> {
+    let payload =
+        attachment_upload_from_multipart(EvidenceSubmissionId::from(path.submission_id), multipart)
+            .await?;
+    let attachment = state
+        .service
+        .upload_attachment(
+            actor,
+            EvidenceSubmissionId::from(path.submission_id),
+            payload,
+        )
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok((StatusCode::ACCEPTED, Json(attachment.into())))
+}
+
+async fn attachment_upload_from_multipart(
+    evidence_submission_id: EvidenceSubmissionId,
+    mut multipart: Multipart,
+) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
+    let mut file: Option<ReceivedFilePart> = None;
+    let mut checksum_crc32c: Option<String> = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
+        match field.name() {
+            Some("file") => {
+                if file.is_some() {
+                    return Err(ApiError::BadRequest(vec![
+                        "file must be provided exactly once".to_owned(),
+                    ]));
+                }
+                let filename = field.file_name().map(str::to_owned).ok_or_else(|| {
+                    ApiError::BadRequest(vec!["file filename is required".to_owned()])
+                })?;
+                let content_type = field
+                    .content_type()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "application/octet-stream".to_owned());
+                let bytes = field.bytes().await.map_err(multipart_error)?;
+
+                file = Some(ReceivedFilePart {
+                    filename,
+                    content_type,
+                    bytes: bytes.to_vec(),
+                });
+            }
+            Some("checksum_crc32c") => {
+                if checksum_crc32c.is_some() {
+                    return Err(ApiError::BadRequest(vec![
+                        "checksum_crc32c must be provided exactly once".to_owned(),
+                    ]));
+                }
+                checksum_crc32c = Some(field.text().await.map_err(multipart_error)?);
+            }
+            _ => {}
+        }
+    }
+
+    let file = file.ok_or_else(|| ApiError::BadRequest(vec!["file is required".to_owned()]))?;
+    let checksum_crc32c = checksum_crc32c
+        .ok_or_else(|| ApiError::BadRequest(vec!["checksum_crc32c is required".to_owned()]))?;
+
+    validate_attachment_upload(evidence_submission_id, file, checksum_crc32c)
+        .map_err(|message| ApiError::BadRequest(vec![message]))
+}
+
+fn multipart_error(error: MultipartError) -> ApiError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::PayloadTooLarge
+    } else {
+        ApiError::BadRequest(vec![format!(
+            "invalid multipart body: {}",
+            error.body_text()
+        )])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivedFilePart {
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+fn validate_attachment_upload(
+    evidence_submission_id: EvidenceSubmissionId,
+    file: ReceivedFilePart,
+    checksum_crc32c: String,
+) -> Result<UploadEvidenceAttachmentPayload, String> {
+    if file.filename.trim().is_empty() {
+        return Err("file filename is required".to_owned());
+    }
+
+    let expected_crc32c = decode_crc32c_base64(&checksum_crc32c)?;
+    let actual_crc32c = crc32c::crc32c(&file.bytes);
+    if expected_crc32c != actual_crc32c {
+        return Err("checksum_crc32c does not match file content".to_owned());
+    }
+
+    let content_length =
+        i64::try_from(file.bytes.len()).map_err(|_| "file is too large".to_owned())?;
+
+    Ok(UploadEvidenceAttachmentPayload {
+        evidence_submission_id,
+        filename: file.filename,
+        content_type: file.content_type,
+        content_length,
+        checksum_sha256: hex::encode(Sha256::digest(&file.bytes)),
+        checksum_crc32c: encode_crc32c_base64(actual_crc32c),
+        bytes: file.bytes,
+    })
+}
+
+fn decode_crc32c_base64(value: &str) -> Result<u32, String> {
+    let bytes = BASE64_STANDARD
+        .decode(value.trim())
+        .map_err(|_| "checksum_crc32c must be base64-encoded CRC32C bytes".to_owned())?;
+    let bytes: [u8; 4] = bytes
+        .try_into()
+        .map_err(|_| "checksum_crc32c must encode exactly 4 bytes".to_owned())?;
+
+    Ok(u32::from_be_bytes(bytes))
+}
+
+fn encode_crc32c_base64(value: u32) -> String {
+    BASE64_STANDARD.encode(value.to_be_bytes())
+}
+
 fn validate_provenance(value: Option<Value>) -> Validation<Value, DomainError> {
     match value {
         None => Validation::valid(Value::Object(Map::new())),
@@ -325,7 +487,9 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::EvidenceSubmissionDTO;
+    use super::{
+        encode_crc32c_base64, validate_attachment_upload, EvidenceSubmissionDTO, ReceivedFilePart,
+    };
     use crate::domain::{DomainError, EvidenceRequestId};
 
     #[test]
@@ -369,6 +533,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn attachment_upload_validation_accepts_matching_crc32c() {
+        let bytes = b"evidence bytes".to_vec();
+        let checksum = encode_crc32c_base64(crc32c::crc32c(&bytes));
+        let payload = validate_attachment_upload(
+            submission_id(),
+            ReceivedFilePart {
+                filename: "artifact.json".to_owned(),
+                content_type: "application/json".to_owned(),
+                bytes,
+            },
+            checksum.clone(),
+        )
+        .expect("attachment upload validates");
+
+        assert_eq!(payload.evidence_submission_id, submission_id());
+        assert_eq!(payload.filename, "artifact.json");
+        assert_eq!(payload.content_type, "application/json");
+        assert_eq!(payload.content_length, 14);
+        assert_eq!(payload.checksum_crc32c, checksum);
+    }
+
+    #[test]
+    fn attachment_upload_validation_rejects_invalid_base64_crc32c() {
+        let error =
+            validate_attachment_upload(submission_id(), valid_file_part(), "not base64".to_owned())
+                .expect_err("invalid CRC32C is rejected");
+
+        assert_eq!(error, "checksum_crc32c must be base64-encoded CRC32C bytes");
+    }
+
+    #[test]
+    fn attachment_upload_validation_rejects_checksum_mismatch() {
+        let error = validate_attachment_upload(
+            submission_id(),
+            valid_file_part(),
+            encode_crc32c_base64(crc32c::crc32c(b"different bytes")),
+        )
+        .expect_err("mismatched CRC32C is rejected");
+
+        assert_eq!(error, "checksum_crc32c does not match file content");
+    }
+
+    #[test]
+    fn attachment_upload_validation_rejects_blank_filename() {
+        let bytes = b"evidence bytes".to_vec();
+        let error = validate_attachment_upload(
+            submission_id(),
+            ReceivedFilePart {
+                filename: " \t".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                bytes: bytes.clone(),
+            },
+            encode_crc32c_base64(crc32c::crc32c(&bytes)),
+        )
+        .expect_err("blank filename is rejected");
+
+        assert_eq!(error, "file filename is required");
+    }
+
     fn valid_dto(provenance: Option<serde_json::Value>) -> EvidenceSubmissionDTO {
         EvidenceSubmissionDTO {
             coverage_start_at: instant("2026-01-01T00:00:00Z"),
@@ -385,5 +609,19 @@ mod tests {
 
     fn request_id() -> EvidenceRequestId {
         EvidenceRequestId::from(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap())
+    }
+
+    fn submission_id() -> crate::domain::EvidenceSubmissionId {
+        crate::domain::EvidenceSubmissionId::from(
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap(),
+        )
+    }
+
+    fn valid_file_part() -> ReceivedFilePart {
+        ReceivedFilePart {
+            filename: "artifact.txt".to_owned(),
+            content_type: "text/plain".to_owned(),
+            bytes: b"evidence bytes".to_vec(),
+        }
     }
 }

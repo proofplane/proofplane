@@ -31,9 +31,11 @@ path = "src/bin/authz_schema.rs"
 [dependencies]
 async-trait = "0.1"
 api-keys-simplified = "0.5.1"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.22"
 config = { version = "0.15", default-features = false, features = ["yaml"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+crc32c = "0.6"
 deadpool-postgres = "0.14.1"
 hex = "0.4"
 metrics = "0.24.6"

@@ -4,6 +4,8 @@ use std::{
 };
 
 use axum::http::StatusCode;
+use axum_test::multipart::{MultipartForm, Part};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use proofplane::routes::authentication::ACTOR_ID_HEADER;
 use serde_json::Value;
 use uuid::Uuid;
@@ -88,6 +90,8 @@ async fn evidence_submission_routes_require_valid_api_keys() {
     let create_path =
         format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions");
     let get_path = format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}");
+    let upload_path =
+        format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments");
 
     let missing_create = app.server().post(&create_path).await;
     assert_unauthorized(&missing_create.json(), missing_create.status_code());
@@ -115,6 +119,21 @@ async fn evidence_submission_routes_require_valid_api_keys() {
         .add_header(API_KEY_HEADER, app.api_key())
         .await
         .assert_status_not_found();
+
+    let missing_upload = app
+        .server()
+        .post(&upload_path)
+        .multipart(attachment_form())
+        .await;
+    assert_unauthorized(&missing_upload.json(), missing_upload.status_code());
+    let invalid_upload = app
+        .server()
+        .post(&upload_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .multipart(attachment_form())
+        .await;
+    assert_unauthorized(&invalid_upload.json(), invalid_upload.status_code());
 }
 
 #[tokio::test]
@@ -186,6 +205,15 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         .add_header(API_KEY_HEADER, app.api_key())
         .await
         .assert_status_not_found();
+    app.server()
+        .post(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-submissions/{submission_id}/attachments"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .multipart(attachment_form())
+        .await
+        .assert_status_not_found();
 
     let ungranted_create = app
         .server()
@@ -212,6 +240,21 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         .await;
     assert_eq!(ungranted_get.status_code(), StatusCode::NOT_FOUND);
     assert_eq!(ungranted_get.json::<Value>()["error"]["code"], "not_found");
+
+    let ungranted_upload = app
+        .server()
+        .post(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-submissions/{submission_id}/attachments"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .multipart(attachment_form())
+        .await;
+    assert_eq!(ungranted_upload.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        ungranted_upload.json::<Value>()["error"]["code"],
+        "not_found"
+    );
 }
 
 #[tokio::test]
@@ -394,6 +437,21 @@ fn submission_body() -> Value {
         "collection_method": "api_export",
         "provenance": {}
     })
+}
+
+fn attachment_form() -> MultipartForm {
+    let bytes = b"attachment";
+    MultipartForm::new()
+        .add_part(
+            "file",
+            Part::bytes(bytes.as_slice())
+                .file_name("artifact.txt")
+                .mime_type("text/plain"),
+        )
+        .add_part(
+            "checksum_crc32c",
+            Part::text(BASE64_STANDARD.encode(crc32c::crc32c(bytes).to_be_bytes())),
+        )
 }
 
 #[derive(Clone)]

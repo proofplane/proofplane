@@ -28,6 +28,7 @@ pub enum ApiError {
     Internal,
     MethodNotAllowed,
     NotFound,
+    PayloadTooLarge,
     Conflict,
     ReadinessTimeout,
     Unauthorized,
@@ -42,6 +43,7 @@ impl ApiError {
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Conflict => StatusCode::CONFLICT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => {
@@ -56,6 +58,7 @@ impl ApiError {
             Self::Internal => "internal_error",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::NotFound => "not_found",
+            Self::PayloadTooLarge => "payload_too_large",
             Self::Conflict => "conflict",
             Self::Unauthorized => "unauthorized",
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => "not_ready",
@@ -68,6 +71,7 @@ impl ApiError {
             Self::Internal => "internal server error",
             Self::MethodNotAllowed => "method not allowed",
             Self::NotFound => "route not found",
+            Self::PayloadTooLarge => "request payload is too large",
             Self::Conflict => "resource conflict",
             Self::Unauthorized => "authentication required",
             Self::ReadinessTimeout => "readiness check timed out",
@@ -86,6 +90,7 @@ impl IntoResponse for ApiError {
             Self::Postgres(error) => tracing::warn!(%error, "Postgres readiness query failed"),
             Self::MethodNotAllowed
             | Self::NotFound
+            | Self::PayloadTooLarge
             | Self::Conflict
             | Self::ReadinessTimeout
             | Self::Unauthorized => {}
@@ -114,6 +119,10 @@ impl From<ServiceError> for ApiError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Repository(error) => repository_error(error),
+            ServiceError::Storage(error) => {
+                tracing::error!(%error, "object storage error");
+                ApiError::Internal
+            }
             ServiceError::InvalidFrameworkRequirementReferences => ApiError::BadRequest(vec![
                 "framework_requirement_ids contains unknown ids".to_owned(),
             ]),

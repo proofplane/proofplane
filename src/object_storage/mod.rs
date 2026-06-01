@@ -12,7 +12,7 @@ use tokio::fs;
 use crate::{config::ObjectStorageConfig, domain::WorkspaceId};
 
 #[async_trait]
-pub trait ObjectStore {
+pub trait ObjectStore: Send + Sync {
     async fn put_object(&self, request: PutObjectRequest) -> Result<ObjectMetadata, StorageError>;
 
     async fn get_object(&self, key: ObjectKey) -> Result<ObjectStream, StorageError>;

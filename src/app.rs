@@ -9,6 +9,7 @@ use crate::{
     authentication::ApiKeyAuthenticator,
     authorization::workspaces::WorkspaceAuthorizer,
     config::AppConfig,
+    object_storage::ObjectStore,
     repository::Postgres,
     routes::{
         controls::{self, ControlRouteAuthState, ControlState},
@@ -29,6 +30,7 @@ use crate::{
 pub struct AppDependencies {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
+    pub object_store: Arc<dyn ObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
     pub workspace_authorizer: WorkspaceAuthorizer,
@@ -61,7 +63,11 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
             },
         }))
         .merge(evidence_submissions::router(EvidenceSubmissionState {
-            service: EvidenceSubmissionService::new(dependencies.postgres.clone()),
+            service: EvidenceSubmissionService::new(
+                dependencies.postgres.clone(),
+                dependencies.object_store.clone(),
+            ),
+            max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes as usize,
             route_auth: EvidenceSubmissionRouteAuthState {
                 authenticator: dependencies.authenticator.clone(),
                 authorizer: dependencies.workspace_authorizer.clone(),

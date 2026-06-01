@@ -13,7 +13,7 @@ use super::{
         ConfigValidationExt,
     },
     GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
-    PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, WorkerConfig,
+    PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +23,7 @@ pub(super) struct RawAppConfig {
     pub(super) pubsub: RawPubSubConfig,
     pub(super) spicedb: RawSpiceDbConfig,
     pub(super) object_storage: RawObjectStorageConfig,
+    pub(super) uploads: RawUploadsConfig,
     pub(super) observability: RawObservabilityConfig,
     pub(super) worker: RawWorkerConfig,
     pub(super) health: RawHealthConfig,
@@ -182,6 +183,21 @@ impl RawObjectStorageConfig {
                 }),
             },
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawUploadsConfig {
+    max_attachment_bytes: u64,
+}
+
+impl RawUploadsConfig {
+    pub(super) fn validate(self) -> Validation<UploadsConfig, ConfigFieldError> {
+        nonzero_u64(self.max_attachment_bytes)
+            .at("uploads.max_attachment_bytes")
+            .map(|max_attachment_bytes| UploadsConfig {
+                max_attachment_bytes,
+            })
     }
 }
 

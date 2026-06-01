@@ -25,6 +25,9 @@ object_storage:
   backend: "filesystem"
   root: ".local/storage"
 
+uploads:
+  max_attachment_bytes: 26214400
+
 observability:
   log_format: "pretty"
   default_filter: "debug"

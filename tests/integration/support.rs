@@ -10,7 +10,7 @@ use proofplane::{
     config::{
         AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
         PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
-        WorkerConfig,
+        UploadsConfig, WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -39,6 +39,7 @@ pub struct TestApp {
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
     postgres: Arc<Postgres>,
+    object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
     workspace_ids: HashMap<String, Uuid>,
@@ -78,6 +79,7 @@ impl TestApp {
         let app_config = config(
             database_url.clone(),
             spicedb_endpoint(&spicedb_container).await,
+            builder.max_attachment_bytes,
         );
         let spicedb = SpiceDbClient::from_config(&app_config.spicedb)
             .await
@@ -98,6 +100,15 @@ impl TestApp {
             .await
             .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));
+        let object_storage_root = match &app_config.object_storage {
+            ObjectStorageConfig::Filesystem { root } => root.clone(),
+            ObjectStorageConfig::Gcs(_) => unreachable!("integration tests use filesystem storage"),
+        };
+        let object_store = Arc::new(
+            proofplane::object_storage::from_config(&app_config.object_storage)
+                .await
+                .expect("filesystem object store initializes"),
+        );
         let recorder = PrometheusBuilder::new().build_recorder();
         // It's safe to unwrap the result of returning the new ApiKeyManager because
         // we're in a test and it really shouldn't panic anyways.
@@ -107,6 +118,7 @@ impl TestApp {
         let dependencies = AppDependencies {
             config: app_config,
             postgres: postgres.clone(),
+            object_store,
             metrics: recorder.handle(),
             authenticator,
             workspace_authorizer: WorkspaceAuthorizer::new(spicedb.clone()),
@@ -130,6 +142,7 @@ impl TestApp {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
             postgres,
+            object_storage_root,
             server,
             api_key,
             workspace_ids,
@@ -156,6 +169,10 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
+    }
+
+    pub fn object_storage_root(&self) -> &std::path::Path {
+        &self.object_storage_root
     }
 
     pub fn api_key(&self) -> &str {
@@ -217,6 +234,7 @@ pub struct TestAppBuilder {
     default_auth: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
+    max_attachment_bytes: u64,
 }
 
 impl TestAppBuilder {
@@ -227,6 +245,11 @@ impl TestAppBuilder {
 
     pub fn with_soc2_reference_data(mut self) -> Self {
         self.soc2_reference_data = true;
+        self
+    }
+
+    pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: u64) -> Self {
+        self.max_attachment_bytes = max_attachment_bytes;
         self
     }
 
@@ -253,6 +276,7 @@ impl Default for TestAppBuilder {
             default_auth: true,
             soc2_reference_data: false,
             workspaces: Vec::new(),
+            max_attachment_bytes: 25 * 1024 * 1024,
         }
     }
 }
@@ -499,7 +523,14 @@ async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
     url::Url::parse(&format!("http://{host}:{port}")).expect("SpiceDB endpoint parses")
 }
 
-fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
+fn config(
+    database_url: String,
+    spicedb_endpoint: url::Url,
+    max_attachment_bytes: u64,
+) -> AppConfig {
+    let storage_root =
+        std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
+
     AppConfig {
         server: ServerConfig {
             api_bind: socket_addr("127.0.0.1:0"),
@@ -526,8 +557,9 @@ fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
             preshared_key: SecretString::from(SPICEDB_PRESHARED_KEY),
             schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
         },
-        object_storage: ObjectStorageConfig::Filesystem {
-            root: PathBuf::from(".integration-storage"),
+        object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        uploads: UploadsConfig {
+            max_attachment_bytes,
         },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,

@@ -9,7 +9,7 @@ use proofplane::{
         spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
         workspaces::WorkspaceAuthorizer,
     },
-    config, observability, repository, store,
+    config, object_storage, observability, repository, store,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -39,6 +39,9 @@ enum Error {
 
     #[error("SpiceDB client initialization error")]
     SpiceDb(#[from] SpiceDbClientError),
+
+    #[error("object storage initialization error")]
+    ObjectStorage(#[from] object_storage::StorageError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -64,6 +67,7 @@ async fn run() -> Result<(), Error> {
     // TODO: move the Postgres pool size into configuration.
     let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
     let postgres = Arc::new(repository::Postgres::new(pool));
+    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
@@ -77,6 +81,7 @@ async fn run() -> Result<(), Error> {
     let deps = AppDependencies {
         config,
         postgres,
+        object_store,
         metrics,
         authenticator,
         workspace_authorizer,
