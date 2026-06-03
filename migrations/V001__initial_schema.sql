@@ -37,12 +37,18 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE TABLE IF NOT EXISTS outbox_messages (
     id BIGSERIAL PRIMARY KEY,
     topic TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
     payload JSONB NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_outbox_messages_due
+    ON outbox_messages (next_available_at, id);
 
 CREATE TABLE IF NOT EXISTS evidence_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

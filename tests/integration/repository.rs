@@ -7,6 +7,8 @@ use proofplane::domain::{
     EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, UpdateActorPayload,
     UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
+use proofplane::pubsub::TopicName;
+use proofplane::repository::NewOutboxMessage;
 use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
 use uuid::Uuid;
@@ -610,6 +612,160 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     assert!(cross_workspace.is_none());
 }
 
+#[tokio::test]
+async fn outbox_append_commits_atomically_with_domain_write() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+
+    let request = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            let request = context
+                .create_evidence_request(&CreateEvidenceRequestPayload {
+                    title: "Outbox Atomic Request".to_owned(),
+                    description: "Collect atomic evidence.".to_owned(),
+                    collection_instructions: "Upload atomic evidence.".to_owned(),
+                    cadence: EvidenceRequestCadence::Quarterly,
+                    due_at: Utc::now() + Duration::days(7),
+                    schedule_anchor_at: Utc::now(),
+                    freshness_window_days: Some(90),
+                    status: EvidenceRequestStatus::Active,
+                })
+                .await?;
+            context
+                .append_outbox_message(&outbox_payload(
+                    "evidence_request.created",
+                    "evidence_request",
+                    Uuid::from(request.id).to_string(),
+                ))
+                .await?;
+
+            Ok(request)
+        })
+        .await
+        .expect("request and outbox commit");
+
+    let rows = postgres
+        .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 10)
+        .await
+        .expect("outbox rows list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].event_type, "evidence_request.created");
+    assert_eq!(rows[0].aggregate_id, Uuid::from(request.id).to_string());
+}
+
+#[tokio::test]
+async fn outbox_append_rolls_back_with_domain_write() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+
+    let result = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_evidence_request(&CreateEvidenceRequestPayload {
+                    title: "Rolled Back Outbox Request".to_owned(),
+                    description: "Collect rollback evidence.".to_owned(),
+                    collection_instructions: "Upload rollback evidence.".to_owned(),
+                    cadence: EvidenceRequestCadence::Quarterly,
+                    due_at: Utc::now() + Duration::days(7),
+                    schedule_anchor_at: Utc::now(),
+                    freshness_window_days: Some(90),
+                    status: EvidenceRequestStatus::Active,
+                })
+                .await?;
+            context
+                .append_outbox_message(&outbox_payload(
+                    "evidence_request.created",
+                    "evidence_request",
+                    "rolled-back",
+                ))
+                .await?;
+
+            Err::<(), proofplane::repository::Error>(proofplane::repository::Error::Conflict(
+                "force rollback",
+            ))
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(proofplane::repository::Error::Conflict("force rollback"))
+    ));
+    let rows = postgres
+        .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 10)
+        .await
+        .expect("outbox rows list");
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failures() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+
+    let first = append_outbox(postgres, actor.clone(), "first").await;
+    let second = append_outbox(postgres, actor.clone(), "second").await;
+    let future = append_outbox(postgres, actor, "future").await;
+
+    set_outbox_next_available_at(postgres, first.id, Utc::now() - Duration::minutes(5)).await;
+    set_outbox_next_available_at(postgres, second.id, Utc::now() - Duration::minutes(1)).await;
+    set_outbox_next_available_at(postgres, future.id, Utc::now() + Duration::hours(1)).await;
+
+    let due = postgres
+        .list_due_outbox_messages(Utc::now(), 10)
+        .await
+        .expect("due rows list");
+    assert_eq!(
+        due.iter()
+            .map(|row| row.aggregate_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+
+    assert!(postgres
+        .delete_outbox_message(first.id)
+        .await
+        .expect("published row deletes"));
+    assert!(!postgres
+        .delete_outbox_message(first.id)
+        .await
+        .expect("second delete is false"));
+
+    let retry_at = Utc::now() + Duration::minutes(2);
+    assert!(postgres
+        .record_outbox_publish_failure(second.id, retry_at)
+        .await
+        .expect("failure records"));
+
+    let client = postgres.get().await.expect("connection opens");
+    let row = client
+        .query_one(
+            "SELECT attempt_count, next_available_at FROM outbox_messages WHERE id = $1",
+            &[&second.id],
+        )
+        .await
+        .expect("failed row reads");
+    assert_eq!(row.get::<_, i32>("attempt_count"), 1);
+    assert_eq!(
+        row.get::<_, chrono::DateTime<Utc>>("next_available_at"),
+        retry_at
+    );
+
+    let exhausted = postgres
+        .list_exhausted_outbox_messages(1, 10)
+        .await
+        .expect("exhausted rows list");
+    assert_eq!(
+        exhausted
+            .iter()
+            .map(|row| row.aggregate_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["second"]
+    );
+}
+
 async fn repository_actor_context(app: &TestApp) -> ActorContext {
     let workspace = app
         .postgres()
@@ -692,6 +848,56 @@ async fn set_submission_received_at(
         )
         .await
         .expect("submission received_at updates");
+}
+
+async fn append_outbox(
+    postgres: &proofplane::repository::Postgres,
+    actor: ActorContext,
+    aggregate_id: &str,
+) -> proofplane::repository::OutboxMessage {
+    let aggregate_id = aggregate_id.to_owned();
+    postgres
+        .in_actor_context(actor, async move |context| {
+            context
+                .append_outbox_message(&outbox_payload(
+                    "attachment.scan_requested",
+                    "evidence_attachment",
+                    aggregate_id,
+                ))
+                .await
+        })
+        .await
+        .expect("outbox appends")
+}
+
+async fn set_outbox_next_available_at(
+    postgres: &proofplane::repository::Postgres,
+    id: i64,
+    next_available_at: chrono::DateTime<Utc>,
+) {
+    let client = postgres.get().await.expect("connection opens");
+    client
+        .execute(
+            "UPDATE outbox_messages SET next_available_at = $2 WHERE id = $1",
+            &[&id, &next_available_at],
+        )
+        .await
+        .expect("outbox next_available_at updates");
+}
+
+fn outbox_payload(
+    event_type: &str,
+    aggregate_type: &str,
+    aggregate_id: impl Into<String>,
+) -> NewOutboxMessage {
+    NewOutboxMessage {
+        topic: TopicName::new("integration-outbox"),
+        event_type: event_type.to_owned(),
+        aggregate_type: aggregate_type.to_owned(),
+        aggregate_id: aggregate_id.into(),
+        payload: json!({ "id": "payload-id" }),
+        attributes: json!({ "source": "integration-test" }),
+    }
 }
 
 fn submission_payload(

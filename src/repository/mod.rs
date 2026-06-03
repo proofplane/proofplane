@@ -13,9 +13,11 @@ mod controls;
 pub mod error;
 mod evidence_requests;
 mod evidence_submissions;
+mod outbox;
 mod workspaces;
 
 pub use error::Error;
+pub use outbox::{NewOutboxMessage, OutboxMessage};
 
 pub struct Postgres {
     pool: Pool,
