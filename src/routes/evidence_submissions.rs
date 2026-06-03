@@ -355,6 +355,10 @@ async fn upload_evidence_attachment(
         return Err(ApiError::NotFound);
     }
 
+    // Uploading the attachment happens before the database record for the attachment is stored
+    // because if the database record fails to be created, the orphaned attachment can be
+    // automatically cleaned up with object storage retention settings since it's in a quarantine
+    // bucket and that will probably have a cleanup policy.
     let payload =
         attachment_upload_from_multipart(&state.service, actor.clone(), submission_id, multipart)
             .await?;
