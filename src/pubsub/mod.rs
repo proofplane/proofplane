@@ -57,6 +57,21 @@ pub trait Publisher {
     ) -> impl Future<Output = Result<MessageId, PubSubError>> + Send;
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct UnavailablePublisher;
+
+impl Publisher for UnavailablePublisher {
+    async fn publish(
+        &self,
+        _topic: &TopicName,
+        _message: OutboundMessage,
+    ) -> Result<MessageId, PubSubError> {
+        Err(PubSubError::Publish(
+            "Pub/Sub publisher implementation is not configured".to_owned(),
+        ))
+    }
+}
+
 #[cfg(test)]
 pub mod fake {
     use std::sync::{Arc, Mutex};
@@ -136,7 +151,7 @@ pub mod fake {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{MessageId, OutboundMessage, TopicName};
+    use super::{MessageId, OutboundMessage, Publisher, TopicName, UnavailablePublisher};
 
     #[test]
     fn stores_topic_name() {
@@ -158,5 +173,23 @@ mod tests {
 
         assert_eq!(message.data, b"{}".to_vec());
         assert!(message.attributes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unavailable_publisher_fails_closed() {
+        let publisher = UnavailablePublisher;
+
+        let error = publisher
+            .publish(
+                &TopicName::new("outbox"),
+                OutboundMessage::new(b"{}", BTreeMap::new()),
+            )
+            .await
+            .expect_err("unavailable publisher fails");
+
+        assert_eq!(
+            error.to_string(),
+            "publish failed: Pub/Sub publisher implementation is not configured"
+        );
     }
 }

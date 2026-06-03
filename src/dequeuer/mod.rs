@@ -11,7 +11,7 @@ use crate::{
 use tracing::warn;
 
 pub fn startup_message() -> &'static str {
-    "proofplane worker scaffold ready"
+    "proofplane outbox dequeuer ready"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn has_startup_message() {
-        assert_eq!(startup_message(), "proofplane worker scaffold ready");
+        assert_eq!(startup_message(), "proofplane outbox dequeuer ready");
     }
 
     #[test]

@@ -2,6 +2,7 @@ pub mod app;
 pub mod authentication;
 pub mod authorization;
 pub mod config;
+pub mod dequeuer;
 pub mod domain;
 pub mod errors;
 pub mod mcp;
@@ -14,7 +15,6 @@ pub mod routes;
 pub mod services;
 pub mod store;
 pub mod validation;
-pub mod worker;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

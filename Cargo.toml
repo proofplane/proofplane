@@ -13,8 +13,8 @@ name = "api"
 path = "src/bin/api.rs"
 
 [[bin]]
-name = "worker"
-path = "src/bin/worker.rs"
+name = "dequeuer"
+path = "src/bin/dequeuer.rs"
 
 [[bin]]
 name = "mcp"
