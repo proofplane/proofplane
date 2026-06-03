@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub pubsub: PubSubConfig,
     pub spicedb: SpiceDbConfig,
     pub object_storage: ObjectStorageConfig,
+    pub uploads: UploadsConfig,
     pub observability: ObservabilityConfig,
     pub worker: WorkerConfig,
     pub health: HealthConfig,
@@ -72,6 +73,11 @@ pub struct GcsObjectStorageConfig {
     pub endpoint_override: Option<Url>,
     pub credentials_mode: GcsCredentialsMode,
     pub object_key_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadsConfig {
+    pub max_attachment_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +195,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         pubsub <- raw.pubsub.validate(),
         spicedb <- raw.spicedb.validate(),
         object_storage <- raw.object_storage.validate(),
+        uploads <- raw.uploads.validate(),
         observability <- raw.observability.validate(),
         worker <- raw.worker.validate(),
         health <- raw.health.validate(),
@@ -198,6 +205,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             pubsub,
             spicedb,
             object_storage,
+            uploads,
             observability,
             worker,
             health,
@@ -239,6 +247,7 @@ mod tests {
             config.object_storage,
             ObjectStorageConfig::Filesystem { .. }
         ));
+        assert_eq!(config.uploads.max_attachment_bytes, 25 * 1024 * 1024);
     }
 
     #[test]
@@ -325,6 +334,8 @@ object_storage:
   endpoint_override: "not-a-url"
   credentials_mode: "unknown"
   object_key_prefix: "evidence"
+uploads:
+  max_attachment_bytes: 0
 observability:
   log_format: "xml"
   default_filter: "info"
@@ -356,6 +367,7 @@ health:
                 assert!(paths.contains(&"spicedb.schema_path"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
+                assert!(paths.contains(&"uploads.max_attachment_bytes"));
                 assert!(paths.contains(&"observability.log_format"));
                 assert!(paths.contains(&"worker.concurrency"));
                 assert!(paths.contains(&"worker.shutdown_grace_seconds"));

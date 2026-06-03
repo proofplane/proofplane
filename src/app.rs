@@ -7,27 +7,33 @@ use tracing::Span;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
-    authorization::evidence_requests::EvidenceRequestAuthorizer,
+    authorization::workspaces::WorkspaceAuthorizer,
     config::AppConfig,
+    object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
+        evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
         version,
     },
-    services::{controls::ControlService, evidence_requests::EvidenceRequestService},
+    services::{
+        controls::ControlService, evidence_requests::EvidenceRequestService,
+        evidence_submissions::EvidenceSubmissionService,
+    },
 };
 
 pub struct AppDependencies {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
+    pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
-    pub evidence_request_authorizer: EvidenceRequestAuthorizer,
+    pub workspace_authorizer: WorkspaceAuthorizer,
 }
 
 pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authentication::Error> {
@@ -53,14 +59,25 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
             route_auth: EvidenceRequestRouteAuthState {
                 authenticator: dependencies.authenticator.clone(),
-                authorizer: dependencies.evidence_request_authorizer.clone(),
+                authorizer: dependencies.workspace_authorizer.clone(),
+            },
+        }))
+        .merge(evidence_submissions::router(EvidenceSubmissionState {
+            service: EvidenceSubmissionService::new(
+                dependencies.postgres.clone(),
+                dependencies.object_store.clone(),
+            ),
+            max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
+            route_auth: EvidenceSubmissionRouteAuthState {
+                authenticator: dependencies.authenticator.clone(),
+                authorizer: dependencies.workspace_authorizer.clone(),
             },
         }))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
                 authenticator: dependencies.authenticator,
-                authorizer: dependencies.evidence_request_authorizer,
+                authorizer: dependencies.workspace_authorizer,
             },
         }))
         .nest("/version", version::router())

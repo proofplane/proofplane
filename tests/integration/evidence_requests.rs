@@ -80,7 +80,7 @@ async fn list_returns_requests_for_a_workspace_in_due_date_then_title_order() {
     )
     .await;
 
-    let response = app.server().get(&collection_path(workspace_id)).await;
+    let response = app.get(&collection_path(workspace_id)).await;
 
     response.assert_status_ok();
     let listed: Value = response.json();
@@ -148,13 +148,11 @@ async fn list_due_returns_only_active_due_requests_for_the_workspace() {
     )
     .await;
 
-    let response = app
-        .server()
-        .get(&format!(
-            "{}/due?now=2026-05-21T12%3A00%3A00Z",
-            collection_path(workspace_id)
-        ))
-        .await;
+    let due_path = format!(
+        "{}/due?now=2026-05-21T12%3A00%3A00Z",
+        collection_path(workspace_id)
+    );
+    let response = app.get(&due_path).await;
 
     response.assert_status_ok();
     let due: Value = response.json();
@@ -176,17 +174,15 @@ async fn get_returns_a_request_and_not_found_for_missing_or_cross_workspace_ids(
     let created = app.create_evidence_request(workspace_id, &body).await;
     let id = created_id(&created);
 
-    let response = app.server().get(&item_path(workspace_id, id)).await;
+    let response = app.get(&item_path(workspace_id, id)).await;
 
     response.assert_status_ok();
     assert_eq!(response.json::<Value>(), created);
 
-    app.server()
-        .get(&item_path(workspace_id, Uuid::new_v4()))
+    app.get(&item_path(workspace_id, Uuid::new_v4()))
         .await
         .assert_status_not_found();
-    app.server()
-        .get(&item_path(other_workspace_id, id))
+    app.get(&item_path(other_workspace_id, id))
         .await
         .assert_status_not_found();
 }
@@ -295,8 +291,7 @@ async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() 
         .await;
     let id = created_id(&original);
 
-    app.server()
-        .put(&item_path(other_workspace_id, id))
+    app.put(&item_path(other_workspace_id, id))
         .json(&evidence_request(
             "Cross workspace update",
             "2027-02-01T00:00:00Z",
@@ -305,11 +300,7 @@ async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() 
         .await
         .assert_status_not_found();
 
-    let owned = app
-        .server()
-        .get(&item_path(workspace_id, id))
-        .await
-        .json::<Value>();
+    let owned = app.get(&item_path(workspace_id, id)).await.json::<Value>();
     assert_eq!(owned, original);
 }
 
@@ -434,8 +425,7 @@ async fn ungranted_cross_workspace_replace_does_not_modify_owner_copy() {
         .await;
     let id = created_id(&original);
 
-    app.server()
-        .put(&item_path(ungranted_workspace_id, id))
+    app.put(&item_path(ungranted_workspace_id, id))
         .json(&evidence_request(
             "Unauthorized cross workspace update",
             "2027-02-01T00:00:00Z",
@@ -444,11 +434,7 @@ async fn ungranted_cross_workspace_replace_does_not_modify_owner_copy() {
         .await
         .assert_status_not_found();
 
-    let owned = app
-        .server()
-        .get(&item_path(workspace_id, id))
-        .await
-        .json::<Value>();
+    let owned = app.get(&item_path(workspace_id, id)).await.json::<Value>();
     assert_eq!(owned, original);
 }
 

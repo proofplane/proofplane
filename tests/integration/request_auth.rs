@@ -11,7 +11,7 @@ use uuid::Uuid;
 use chrono::{Duration, Utc};
 use proofplane::{domain::UpdateApiCredentialPayload, routes::authentication::API_KEY_HEADER};
 
-use super::support::{TestApp, INTEGRATION_ACTOR_ID};
+use super::support::{attachment_form, TestApp, INTEGRATION_ACTOR_ID};
 
 #[tokio::test]
 async fn evidence_request_routes_require_valid_api_keys() {
@@ -49,10 +49,18 @@ async fn evidence_request_routes_require_valid_api_keys() {
         .await;
     assert_unauthorized(&invalid.json(), invalid.status_code());
 
-    let wrong_actor = app
+    let malformed_actor = app
         .server()
         .get(&path)
         .add_header(ACTOR_ID_HEADER, "wrong-actor")
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+    assert_unauthorized(&malformed_actor.json(), malformed_actor.status_code());
+
+    let wrong_actor = app
+        .server()
+        .get(&path)
+        .add_header(ACTOR_ID_HEADER, Uuid::new_v4().to_string())
         .add_header(API_KEY_HEADER, app.api_key())
         .await;
     assert_unauthorized(&wrong_actor.json(), wrong_actor.status_code());
@@ -64,6 +72,187 @@ async fn evidence_request_routes_require_valid_api_keys() {
         .add_header(API_KEY_HEADER, app.api_key())
         .await;
     valid.assert_status_ok();
+}
+
+#[tokio::test]
+async fn evidence_submission_routes_require_valid_api_keys() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("workspace", "Protected submission workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_request_id = Uuid::new_v4();
+    let submission_id = Uuid::new_v4();
+    let create_path =
+        format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions");
+    let get_path = format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}");
+    let upload_path =
+        format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments");
+
+    let missing_create = app.server().post(&create_path).await;
+    assert_unauthorized(&missing_create.json(), missing_create.status_code());
+    let invalid_create = app
+        .server()
+        .post(&create_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid_create.json(), invalid_create.status_code());
+
+    let missing_get = app.server().get(&get_path).await;
+    assert_unauthorized(&missing_get.json(), missing_get.status_code());
+    let invalid_get = app
+        .server()
+        .get(&get_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid_get.json(), invalid_get.status_code());
+
+    app.server()
+        .get(&get_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
+
+    let missing_upload = app
+        .server()
+        .post(&upload_path)
+        .multipart(valid_attachment_form())
+        .await;
+    assert_unauthorized(&missing_upload.json(), missing_upload.status_code());
+    let invalid_upload = app
+        .server()
+        .post(&upload_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .multipart(valid_attachment_form())
+        .await;
+    assert_unauthorized(&invalid_upload.json(), invalid_upload.status_code());
+}
+
+#[tokio::test]
+async fn valid_global_actor_api_key_is_authorized_by_workspace_membership() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("first", "First workspace")
+        .with_default_membership()
+        .workspace("second", "Second workspace")
+        .with_default_membership()
+        .workspace("ungranted", "Ungranted workspace")
+        .without_membership()
+        .build()
+        .await;
+
+    for key in ["first", "second"] {
+        let workspace_id = app.workspace_id(key);
+        app.server()
+            .get(&format!("/workspaces/{workspace_id}/evidence-requests"))
+            .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+            .add_header(API_KEY_HEADER, app.api_key())
+            .await
+            .assert_status_ok();
+    }
+
+    let ungranted_workspace_id = app.workspace_id("ungranted");
+    let ungranted = app
+        .server()
+        .get(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-requests"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+
+    assert_eq!(ungranted.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(ungranted.json::<Value>()["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn submission_routes_are_authorized_by_workspace_membership() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .workspace("granted", "Granted submission auth workspace")
+        .with_default_membership()
+        .workspace("ungranted", "Ungranted submission auth workspace")
+        .without_membership()
+        .build()
+        .await;
+    let granted_workspace_id = app.workspace_id("granted");
+    let ungranted_workspace_id = app.workspace_id("ungranted");
+    let evidence_request_id = Uuid::new_v4();
+    let submission_id = Uuid::new_v4();
+
+    app.server()
+        .post(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-requests/{evidence_request_id}/submissions"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .json(&submission_body())
+        .await
+        .assert_status_not_found();
+    app.server()
+        .get(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-submissions/{submission_id}"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
+    app.server()
+        .post(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-submissions/{submission_id}/attachments"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .multipart(valid_attachment_form())
+        .await
+        .assert_status_not_found();
+
+    let ungranted_create = app
+        .server()
+        .post(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-requests/{evidence_request_id}/submissions"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .json(&submission_body())
+        .await;
+    assert_eq!(ungranted_create.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        ungranted_create.json::<Value>()["error"]["code"],
+        "not_found"
+    );
+
+    let ungranted_get = app
+        .server()
+        .get(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-submissions/{submission_id}"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+    assert_eq!(ungranted_get.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(ungranted_get.json::<Value>()["error"]["code"], "not_found");
+
+    let ungranted_upload = app
+        .server()
+        .post(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-submissions/{submission_id}/attachments"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .multipart(valid_attachment_form())
+        .await;
+    assert_eq!(ungranted_upload.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        ungranted_upload.json::<Value>()["error"]["code"],
+        "not_found"
+    );
 }
 
 #[tokio::test]
@@ -110,7 +299,6 @@ async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: credential.actor_id.clone(),
                 name: credential.name.clone(),
                 key_id: credential.key_id.clone(),
                 credential_hash: credential.credential_hash.clone(),
@@ -132,7 +320,6 @@ async fn evidence_request_routes_reject_revoked_and_expired_credentials() {
         .update_api_credential(
             &credential.id,
             &UpdateApiCredentialPayload {
-                actor_id: credential.actor_id,
                 name: credential.name,
                 key_id: credential.key_id,
                 credential_hash: credential.credential_hash,
@@ -229,7 +416,7 @@ async fn authenticated_request_logs_context_without_api_key() {
     let logs = String::from_utf8(log_bytes.lock().expect("log buffer locks").clone())
         .expect("logs are UTF-8");
     assert!(logs.contains(&request_id), "captured logs: {logs}");
-    assert!(logs.contains("integration-system"), "captured logs: {logs}");
+    assert!(logs.contains(INTEGRATION_ACTOR_ID), "captured logs: {logs}");
     assert!(logs.contains(invalid_request_path), "captured logs: {logs}");
     assert!(!logs.contains(app.api_key()), "captured logs: {logs}");
 }
@@ -238,6 +425,20 @@ fn assert_unauthorized(body: &Value, status: StatusCode) {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
     assert_eq!(body["error"]["details"], serde_json::json!([]));
+}
+
+fn submission_body() -> Value {
+    serde_json::json!({
+        "coverage_start_at": "2026-01-01T00:00:00Z",
+        "coverage_end_at": "2026-03-31T23:59:59Z",
+        "source_system": "okta",
+        "collection_method": "api_export",
+        "provenance": {}
+    })
+}
+
+fn valid_attachment_form() -> axum_test::multipart::MultipartForm {
+    attachment_form(b"attachment", "artifact.txt", "text/plain", None)
 }
 
 #[derive(Clone)]

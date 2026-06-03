@@ -3,12 +3,13 @@ mod api_credential;
 mod controls;
 mod error;
 mod evidence_request;
+mod evidence_submission;
 mod ids;
 mod validation;
 mod workspace;
 
 pub use actor::{
-    Actor, ActorContext, ActorKind, ActorWithApiCredential, CreateActorPayload, UpdateActorPayload,
+    Actor, ActorId, ActorKind, ActorWithApiCredential, CreateActorPayload, UpdateActorPayload,
 };
 pub use api_credential::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
 pub use controls::{
@@ -20,6 +21,11 @@ pub use error::DomainError;
 pub use evidence_request::{
     CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
     EvidenceRequestStatus, UpdateEvidenceRequestPayload,
+};
+pub use evidence_submission::{
+    AttachmentScanStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
+    EvidenceAttachment, EvidenceAttachmentId, EvidenceAttachmentScan, EvidenceAttachmentWithScan,
+    EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
 };
 pub use validation::{required_text, validate_freshness_window_days};
 pub use workspace::{CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId};

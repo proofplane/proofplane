@@ -6,6 +6,9 @@ uuid_id!(FrameworkId);
 uuid_id!(FrameworkRequirementId);
 uuid_id!(ControlId);
 
+/**
+ * A Framework is a specific set of rules an organization wants to adhere to.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Framework {
     pub id: FrameworkId,
@@ -14,6 +17,9 @@ pub struct Framework {
     pub description: String,
 }
 
+/**
+ * A FrameworkRequirement is a specific rule inside a framework.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameworkRequirement {
     pub id: FrameworkRequirementId,
@@ -23,6 +29,11 @@ pub struct FrameworkRequirement {
     pub description: String,
 }
 
+/**
+ * A Control is an organization's way of ensuring they are adhering to
+ * a requirement. Sometimes, different frameworks have similar requirements
+ * so it can be useful to use the same control for multiple requirements.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Control {
     pub id: ControlId,
@@ -59,6 +70,10 @@ pub struct UpdateControlPayload {
     pub framework_requirement_ids: Vec<FrameworkRequirementId>,
 }
 
+/**
+ * Controls are satisfied by fulfilling requests for evidence. Sometimes,
+ * the same thing can be evidence of compliance with different controls.
+ */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceRequestControlMapping {
     pub evidence_request_id: EvidenceRequestId,

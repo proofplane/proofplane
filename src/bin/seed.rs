@@ -5,13 +5,14 @@ use proofplane::{
     authorization::spicedb::{ClientError, SpiceDbClient},
     config::{load_from_env, SpiceDbConfig},
     domain::{
-        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateEvidenceRequestPayload,
-        CreateWorkspacePayload, EvidenceRequestCadence, EvidenceRequestStatus, UpdateActorPayload,
-        UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
-        WorkspaceId,
+        ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload,
+        CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
+        EvidenceRequestStatus, UpdateActorPayload, UpdateApiCredentialPayload,
+        UpdateEvidenceRequestPayload, UpdateWorkspacePayload, WorkspaceId,
     },
     observability,
     repository::Postgres,
+    routes::authentication::ActorContext,
     store, VERSION,
 };
 use thiserror::Error;
@@ -52,6 +53,13 @@ enum Error {
     #[error("API key generation error")]
     ApiKey(#[from] proofplane::authentication::Error),
 }
+
+const LOCAL_HUMAN_USER_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000101";
+const LOCAL_AI_AGENT_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000102";
+const LOCAL_SERVICE_ACCOUNT_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000103";
+const LOCAL_INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000104";
+const LOCAL_POLICY_AUTOMATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000105";
+const SYSTEM_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000106";
 
 async fn run() -> Result<(), Error> {
     let config = match load_from_env() {
@@ -144,24 +152,32 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
 
 async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
     for (id, kind, display_name) in [
-        ("local-human-user", ActorKind::HumanUser, "Local Human User"),
-        ("local-ai-agent", ActorKind::AiAgent, "Local AI Agent"),
         (
-            "local-service-account",
+            actor_id(LOCAL_HUMAN_USER_ACTOR_ID),
+            ActorKind::HumanUser,
+            "Local Human User",
+        ),
+        (
+            actor_id(LOCAL_AI_AGENT_ACTOR_ID),
+            ActorKind::AiAgent,
+            "Local AI Agent",
+        ),
+        (
+            actor_id(LOCAL_SERVICE_ACCOUNT_ACTOR_ID),
             ActorKind::ServiceAccount,
             "Local Service Account",
         ),
         (
-            "local-integration",
+            actor_id(LOCAL_INTEGRATION_ACTOR_ID),
             ActorKind::Integration,
             "Local Integration",
         ),
         (
-            "local-policy-automation",
+            actor_id(LOCAL_POLICY_AUTOMATION_ACTOR_ID),
             ActorKind::PolicyAutomation,
             "Local Policy Automation",
         ),
-        ("system-actor", ActorKind::System, "System"),
+        (actor_id(SYSTEM_ACTOR_ID), ActorKind::System, "System"),
     ] {
         if repository.get_actor(id).await?.is_some() {
             repository
@@ -179,7 +195,7 @@ async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
 
         repository
             .create_actor(&CreateActorPayload {
-                id: id.to_owned(),
+                id: Some(id),
                 kind,
                 display_name: display_name.to_owned(),
             })
@@ -191,7 +207,7 @@ async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
 
 async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
     let id = "local-api-key";
-    let actor_id = "system-actor".to_owned();
+    let actor_id = actor_id(SYSTEM_ACTOR_ID);
     let name = "Local API Key".to_owned();
     let issued = ApiKeyManager::new()?.issue(Environment::dev())?;
 
@@ -200,8 +216,7 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
             .update_api_credential(
                 id,
                 &UpdateApiCredentialPayload {
-                    actor_id,
-                    name,
+                    name: name.clone(),
                     key_id: issued.key_id.clone(),
                     credential_hash: issued.credential_hash.clone(),
                     expires_at: None,
@@ -229,20 +244,23 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
 async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
     let client = SpiceDbClient::from_config(config).await?;
     client
-        .write_workspace_membership(local_authorized_workspace_id(), "system-actor")
+        .write_workspace_membership(local_authorized_workspace_id(), SYSTEM_ACTOR_ID)
         .await?;
 
     Ok(())
 }
 
 async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
-    let workspace_id = local_workspace_id();
+    let actor = ActorContext::new(local_workspace_id(), actor_id(SYSTEM_ACTOR_ID));
     let seeds = demo_evidence_requests()?;
+    let existing = repository
+        .in_actor_context_read(actor.clone(), async |context| {
+            context.list_evidence_requests().await
+        })
+        .await?;
 
     repository
-        .in_workspace(workspace_id, async move |context| {
-            let existing = context.list_evidence_requests().await?;
-
+        .in_actor_context(actor, async move |context| {
             for seed in seeds {
                 if let Some(existing_request) =
                     existing.iter().find(|request| request.title == seed.title)
@@ -550,6 +568,10 @@ fn local_authorized_workspace_id() -> WorkspaceId {
 
 fn local_unauthorized_workspace_id() -> WorkspaceId {
     WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap())
+}
+
+fn actor_id(value: &str) -> ActorId {
+    ActorId::from(Uuid::parse_str(value).expect("seed actor ID is a UUID"))
 }
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {

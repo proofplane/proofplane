@@ -7,7 +7,7 @@ use axum::{
     middleware::Next,
     response::Response,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,14 +16,14 @@ use uuid::Uuid;
 
 use crate::{
     authentication::ApiKeyAuthenticator,
-    authorization::evidence_requests::EvidenceRequestAuthorizer,
+    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, validate_freshness_window_days, CreateEvidenceRequestPayload, DomainError,
         EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
-        UpdateEvidenceRequestPayload, WorkspaceId,
+        UpdateEvidenceRequestPayload,
     },
     routes::{
-        authentication::authorize_workspace_route,
+        authentication::{authorize_workspace_route, ActorContext},
         error::{domain_errors, ApiError},
     },
     services::evidence_requests::EvidenceRequestService,
@@ -40,7 +40,7 @@ pub struct EvidenceRequestState {
 #[derive(Clone)]
 pub struct EvidenceRequestRouteAuthState {
     pub authenticator: ApiKeyAuthenticator,
-    pub authorizer: EvidenceRequestAuthorizer,
+    pub authorizer: WorkspaceAuthorizer,
 }
 
 pub fn router(state: EvidenceRequestState) -> Router {
@@ -75,12 +75,12 @@ async fn authorize_evidence_request_route(
     let method = request.method().clone();
     let authorizer = state.authorizer.clone();
 
-    let (actor, workspace_id) =
-        authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    let workspace_id = actor.workspace_id;
 
     let allowed = match method {
         Method::GET => authorizer
-            .can_read_evidence_requests(&actor.id, workspace_id)
+            .can_read_evidence_requests(&actor)
             .await
             .map_err(|e| {
                 error!(
@@ -93,7 +93,7 @@ async fn authorize_evidence_request_route(
                 ApiError::Internal
             }),
         Method::POST | Method::PUT => authorizer
-            .can_write_evidence_requests(&actor.id, workspace_id)
+            .can_write_evidence_requests(&actor)
             .await
             .map_err(|e| {
                 error!(
@@ -182,6 +182,11 @@ struct DueQuery {
     now: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EvidenceRequestPath {
+    evidence_request_id: Uuid,
+}
+
 #[derive(Debug, Serialize)]
 struct EvidenceRequestResponse {
     id: Uuid,
@@ -219,24 +224,20 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 
 async fn create_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path(workspace_id): Path<Uuid>,
+    Extension(actor): Extension<ActorContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
-    let workspace_id = WorkspaceId::from(workspace_id);
     let request = body.into_new().into_result().map_err(domain_errors)?;
-    let request = state.service.create(workspace_id, request).await?;
+    let request = state.service.create(actor, request).await?;
 
     Ok(Json(request.into()))
 }
 
 async fn list_evidence_requests(
     State(state): State<EvidenceRequestState>,
-    Path(workspace_id): Path<Uuid>,
+    Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
-    let requests = state
-        .service
-        .list_by_workspace(WorkspaceId::from(workspace_id))
-        .await?;
+    let requests = state.service.list_by_workspace(actor).await?;
 
     Ok(Json(requests.into_iter().map(Into::into).collect()))
 }
@@ -244,12 +245,11 @@ async fn list_evidence_requests(
 async fn list_due_evidence_requests(
     State(state): State<EvidenceRequestState>,
     Query(query): Query<DueQuery>,
-    Path(workspace_id): Path<Uuid>,
+    Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
-    let workspace_id = WorkspaceId::from(workspace_id);
     let requests = state
         .service
-        .list_due(workspace_id, query.now.unwrap_or_else(Utc::now))
+        .list_due(actor, query.now.unwrap_or_else(Utc::now))
         .await?
         .into_iter()
         .map(Into::into)
@@ -260,12 +260,12 @@ async fn list_due_evidence_requests(
 
 async fn get_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path((workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestPath>,
+    Extension(actor): Extension<ActorContext>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
-    let workspace_id = WorkspaceId::from(workspace_id);
     let request = state
         .service
-        .get(workspace_id, EvidenceRequestId::from(evidence_request_id))
+        .get(actor, EvidenceRequestId::from(path.evidence_request_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -274,15 +274,15 @@ async fn get_evidence_request(
 
 async fn replace_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Path((workspace_id, evidence_request_id)): Path<(Uuid, Uuid)>,
+    Path(path): Path<EvidenceRequestPath>,
+    Extension(actor): Extension<ActorContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
-    let workspace_id = WorkspaceId::from(workspace_id);
-    let evidence_request_id = EvidenceRequestId::from(evidence_request_id);
+    let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let update = body.into_update().into_result().map_err(domain_errors)?;
     let request = state
         .service
-        .replace(workspace_id, evidence_request_id, update)
+        .replace(actor, evidence_request_id, update)
         .await?
         .ok_or(ApiError::NotFound)?;
 

@@ -1,19 +1,28 @@
 use std::{
     fmt, io,
     path::{Path, PathBuf},
+    pin::pin,
 };
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures_core::Stream;
+use futures_util::StreamExt;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::fs;
+use tokio::{fs, io::AsyncWriteExt};
 
 use crate::{config::ObjectStorageConfig, domain::WorkspaceId};
 
 #[async_trait]
 pub trait ObjectStore {
-    async fn put_object(&self, request: PutObjectRequest) -> Result<ObjectMetadata, StorageError>;
+    async fn put_object<S>(
+        &self,
+        request: PutObjectRequest<S>,
+    ) -> Result<ObjectMetadata, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, StorageError>> + Send;
 
     async fn get_object(&self, key: ObjectKey) -> Result<ObjectStream, StorageError>;
 
@@ -79,11 +88,10 @@ impl<'de> Deserialize<'de> for ObjectKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PutObjectRequest {
+pub struct PutObjectRequest<S> {
     pub key: ObjectKey,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    pub chunks: S,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +127,12 @@ pub enum StorageError {
     MetadataPersistence {
         #[source]
         source: serde_json::Error,
+    },
+
+    #[error("object stream read error: {message}")]
+    StreamRead {
+        message: String,
+        payload_too_large: bool,
     },
 
     #[error("object storage backend is not supported")]
@@ -179,35 +193,46 @@ impl FilesystemObjectStore {
 
 #[async_trait]
 impl ObjectStore for FilesystemObjectStore {
-    async fn put_object(&self, request: PutObjectRequest) -> Result<ObjectMetadata, StorageError> {
-        let sha256 = sha256_hex(&request.bytes);
+    async fn put_object<S>(
+        &self,
+        request: PutObjectRequest<S>,
+    ) -> Result<ObjectMetadata, StorageError>
+    where
+        S: Stream<Item = Result<Bytes, StorageError>> + Send,
+    {
+        let object_path = self.object_path(&request.key);
+        create_parent_dir(&object_path).await?;
+
+        let write_result = write_object_stream(&object_path, request.chunks).await;
+        let (content_length, sha256) = match write_result {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = remove_file_if_exists(object_path.clone()).await;
+                return Err(error);
+            }
+        };
 
         let metadata = ObjectMetadata {
             key: request.key,
             content_type: request.content_type,
-            content_length: request.bytes.len() as u64,
+            content_length,
             sha256,
         };
-
-        let object_path = self.object_path(&metadata.key);
-        create_parent_dir(&object_path).await?;
-        fs::write(&object_path, request.bytes)
-            .await
-            .map_err(|source| StorageError::Filesystem {
-                path: object_path.clone(),
-                source,
-            })?;
 
         let metadata_path = self.metadata_path(&metadata.key);
         create_parent_dir(&metadata_path).await?;
         let metadata_bytes = serde_json::to_vec_pretty(&metadata)
             .map_err(|source| StorageError::MetadataPersistence { source })?;
-        fs::write(&metadata_path, metadata_bytes)
+        if let Err(error) = fs::write(&metadata_path, metadata_bytes)
             .await
             .map_err(|source| StorageError::Filesystem {
-                path: metadata_path,
+                path: metadata_path.clone(),
                 source,
-            })?;
+            })
+        {
+            let _ = remove_file_if_exists(object_path).await;
+            return Err(error);
+        }
 
         Ok(metadata)
     }
@@ -279,10 +304,6 @@ fn validated_segment(segment: &str) -> Result<String, StorageError> {
     Ok(segment.to_owned())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
 async fn create_parent_dir(path: &Path) -> Result<(), StorageError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -293,6 +314,47 @@ async fn create_parent_dir(path: &Path) -> Result<(), StorageError> {
             })?;
     }
     Ok(())
+}
+
+async fn write_object_stream(
+    path: &Path,
+    chunks: impl Stream<Item = Result<Bytes, StorageError>>,
+) -> Result<(u64, String), StorageError> {
+    let mut file = fs::File::create(path)
+        .await
+        .map_err(|source| StorageError::Filesystem {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut sha256 = Sha256::new();
+    let mut content_length = 0_u64;
+    let mut chunks = pin!(chunks);
+
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|source| StorageError::Filesystem {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        sha256.update(&chunk);
+        content_length = content_length
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| StorageError::StreamRead {
+                message: "object stream is too large".to_owned(),
+                payload_too_large: true,
+            })?;
+    }
+
+    file.flush()
+        .await
+        .map_err(|source| StorageError::Filesystem {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    Ok((content_length, hex::encode(sha256.finalize())))
 }
 
 async fn remove_file_if_exists(path: PathBuf) -> Result<(), StorageError> {
@@ -315,6 +377,8 @@ async fn remove_file_if_exists(path: PathBuf) -> Result<(), StorageError> {
 mod tests {
     use super::*;
     use crate::config::{GcsCredentialsMode, GcsObjectStorageConfig};
+    use bytes::Bytes;
+    use futures_util::stream;
     use std::{
         fs as std_fs,
         sync::atomic::{AtomicU64, Ordering},
@@ -377,7 +441,7 @@ mod tests {
             .put_object(PutObjectRequest {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
-                bytes: b"hello object storage".to_vec(),
+                chunks: chunks(["hello object storage"]),
             })
             .await
             .unwrap();
@@ -413,7 +477,7 @@ mod tests {
             .put_object(PutObjectRequest {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
-                bytes: b"hello".to_vec(),
+                chunks: chunks(["hello"]),
             })
             .await
             .unwrap();
@@ -438,7 +502,7 @@ mod tests {
             .put_object(PutObjectRequest {
                 key: key.clone(),
                 content_type: "text/plain".to_owned(),
-                bytes: b"hello".to_vec(),
+                chunks: chunks(["hello"]),
             })
             .await
             .unwrap();
@@ -469,7 +533,7 @@ mod tests {
             PutObjectRequest {
                 key: key.clone(),
                 content_type: "application/octet-stream".to_owned(),
-                bytes: vec![1, 2, 3, 4],
+                chunks: byte_chunks([vec![1, 2], vec![3, 4]]),
             },
         )
         .await
@@ -528,6 +592,69 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn upload_accepts_multiple_chunks_and_persists_combined_metadata() {
+        let store = FilesystemObjectStore::new(temp_dir("multi-chunk"))
+            .await
+            .unwrap();
+        let key = test_key("artifact.txt");
+
+        let metadata = store
+            .put_object(PutObjectRequest {
+                key: key.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: chunks(["hello ", "object ", "storage"]),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(metadata.content_length, 20);
+        assert_eq!(
+            metadata.sha256,
+            "f5cc4171a2e81eaba9b21e188e0d087d2dd3a190512fcc37b356c6da77adad93"
+        );
+        assert_eq!(
+            store.get_object(key).await.unwrap().bytes,
+            b"hello object storage"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_removes_partial_object_when_stream_fails() {
+        let root = temp_dir("stream-failure");
+        let store = FilesystemObjectStore::new(&root).await.unwrap();
+        let key = test_key("artifact.txt");
+
+        let result = store
+            .put_object(PutObjectRequest {
+                key: key.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: Box::pin(stream::iter([
+                    Ok(Bytes::from_static(b"partial")),
+                    Err(StorageError::StreamRead {
+                        message: "multipart stopped".to_owned(),
+                        payload_too_large: false,
+                    }),
+                ])),
+            })
+            .await;
+
+        assert!(matches!(result, Err(StorageError::StreamRead { .. })));
+        assert!(!root
+            .join("objects")
+            .join(key.as_str())
+            .try_exists()
+            .unwrap());
+        assert!(!root
+            .join("metadata")
+            .join("workspaces")
+            .join("00000000-0000-4000-8000-000000000001")
+            .join("evidence")
+            .join("artifact.txt.json")
+            .try_exists()
+            .unwrap());
+    }
+
     fn test_key(object_name: &str) -> ObjectKey {
         let workspace_id =
             WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
@@ -542,5 +669,17 @@ mod tests {
         ));
         let _ = std_fs::remove_dir_all(&path);
         path
+    }
+
+    fn chunks<const N: usize>(
+        chunks: [&'static str; N],
+    ) -> impl Stream<Item = Result<Bytes, StorageError>> {
+        byte_chunks(chunks.map(|chunk| chunk.as_bytes().to_vec()))
+    }
+
+    fn byte_chunks<const N: usize>(
+        chunks: [Vec<u8>; N],
+    ) -> impl Stream<Item = Result<Bytes, StorageError>> {
+        stream::iter(chunks.into_iter().map(|chunk| Ok(Bytes::from(chunk))))
     }
 }

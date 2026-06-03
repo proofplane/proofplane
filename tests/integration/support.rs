@@ -1,19 +1,21 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
-use axum_test::TestServer;
+use axum_test::multipart::{MultipartForm, Part};
+use axum_test::{TestRequest, TestServer};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
-    authorization::{evidence_requests::EvidenceRequestAuthorizer, spicedb::SpiceDbClient},
+    authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
         PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
-        WorkerConfig,
+        UploadsConfig, WorkerConfig,
     },
     domain::{
-        ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
+        ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
         WorkspaceId,
     },
     repository::Postgres,
@@ -32,13 +34,14 @@ use uuid::Uuid;
 
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
-pub const INTEGRATION_ACTOR_ID: &str = "integration-system";
+pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
 
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
     postgres: Arc<Postgres>,
+    object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
     workspace_ids: HashMap<String, Uuid>,
@@ -78,6 +81,7 @@ impl TestApp {
         let app_config = config(
             database_url.clone(),
             spicedb_endpoint(&spicedb_container).await,
+            builder.max_attachment_bytes,
         );
         let spicedb = SpiceDbClient::from_config(&app_config.spicedb)
             .await
@@ -98,7 +102,15 @@ impl TestApp {
             .await
             .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));
-        let api_key = insert_api_credential(&postgres).await;
+        let object_storage_root = match &app_config.object_storage {
+            ObjectStorageConfig::Filesystem { root } => root.clone(),
+            ObjectStorageConfig::Gcs(_) => unreachable!("integration tests use filesystem storage"),
+        };
+        let object_store = Arc::new(
+            proofplane::object_storage::from_config(&app_config.object_storage)
+                .await
+                .expect("filesystem object store initializes"),
+        );
         let recorder = PrometheusBuilder::new().build_recorder();
         // It's safe to unwrap the result of returning the new ApiKeyManager because
         // we're in a test and it really shouldn't panic anyways.
@@ -108,16 +120,13 @@ impl TestApp {
         let dependencies = AppDependencies {
             config: app_config,
             postgres: postgres.clone(),
+            object_store,
             metrics: recorder.handle(),
             authenticator,
-            evidence_request_authorizer: EvidenceRequestAuthorizer::new(spicedb.clone()),
+            workspace_authorizer: WorkspaceAuthorizer::new(spicedb.clone()),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
-        if builder.default_auth {
-            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
-            server.add_header(API_KEY_HEADER, &api_key);
-        }
 
         if builder.soc2_reference_data {
             insert_soc2_reference_data(&postgres).await;
@@ -125,11 +134,17 @@ impl TestApp {
 
         let (workspace_ids, control_ids) =
             insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
+        let api_key = insert_api_credential(&postgres).await;
+        if builder.default_auth {
+            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
+            server.add_header(API_KEY_HEADER, &api_key);
+        }
 
         Self {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
             postgres,
+            object_storage_root,
             server,
             api_key,
             workspace_ids,
@@ -141,6 +156,8 @@ impl TestApp {
         let response = self
             .server
             .post(&format!("/workspaces/{workspace_id}/evidence-requests"))
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
             .json(body)
             .await;
 
@@ -156,8 +173,44 @@ impl TestApp {
         &self.postgres
     }
 
+    pub fn object_storage_root(&self) -> &std::path::Path {
+        &self.object_storage_root
+    }
+
     pub fn api_key(&self) -> &str {
         &self.api_key
+    }
+
+    pub fn actor_id(&self) -> &str {
+        INTEGRATION_ACTOR_ID
+    }
+
+    pub fn get(&self, path: &str) -> TestRequest {
+        self.server
+            .get(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn post(&self, path: &str) -> TestRequest {
+        self.server
+            .post(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn put(&self, path: &str) -> TestRequest {
+        self.server
+            .put(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
+    }
+
+    pub fn delete(&self, path: &str) -> TestRequest {
+        self.server
+            .delete(path)
+            .add_header(ACTOR_ID_HEADER, self.actor_id())
+            .add_header(API_KEY_HEADER, self.api_key())
     }
 
     pub fn workspace_id(&self, key: &str) -> Uuid {
@@ -183,6 +236,7 @@ pub struct TestAppBuilder {
     default_auth: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
+    max_attachment_bytes: usize,
 }
 
 impl TestAppBuilder {
@@ -193,6 +247,11 @@ impl TestAppBuilder {
 
     pub fn with_soc2_reference_data(mut self) -> Self {
         self.soc2_reference_data = true;
+        self
+    }
+
+    pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: usize) -> Self {
+        self.max_attachment_bytes = max_attachment_bytes;
         self
     }
 
@@ -219,6 +278,7 @@ impl Default for TestAppBuilder {
             default_auth: true,
             soc2_reference_data: false,
             workspaces: Vec::new(),
+            max_attachment_bytes: 25 * 1024 * 1024,
         }
     }
 }
@@ -411,22 +471,24 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
         .issue(Environment::test())
         .expect("integration API key issues");
     let api_key = issued.raw_key.expose_secret().to_owned();
+    let actor_id = integration_actor_id();
 
     postgres
         .create_actor(&CreateActorPayload {
-            id: INTEGRATION_ACTOR_ID.to_owned(),
+            id: Some(actor_id),
             kind: ActorKind::System,
             display_name: "Integration System".to_owned(),
         })
         .await
         .expect("integration actor inserts");
+
     postgres
         .create_api_credential(&CreateApiCredentialPayload {
             id: "integration-api-key".to_owned(),
-            actor_id: INTEGRATION_ACTOR_ID.to_owned(),
+            actor_id,
             name: "Integration API Key".to_owned(),
-            key_id: issued.key_id,
-            credential_hash: issued.credential_hash,
+            key_id: issued.key_id.clone(),
+            credential_hash: issued.credential_hash.clone(),
             expires_at: None,
             revoked_at: None,
         })
@@ -434,6 +496,10 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
         .expect("integration API credential inserts");
 
     api_key
+}
+
+fn integration_actor_id() -> ActorId {
+    ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).expect("integration actor ID is a UUID"))
 }
 
 async fn start_spicedb() -> ContainerAsync<GenericImage> {
@@ -459,7 +525,14 @@ async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
     url::Url::parse(&format!("http://{host}:{port}")).expect("SpiceDB endpoint parses")
 }
 
-fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
+fn config(
+    database_url: String,
+    spicedb_endpoint: url::Url,
+    max_attachment_bytes: usize,
+) -> AppConfig {
+    let storage_root =
+        std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
+
     AppConfig {
         server: ServerConfig {
             api_bind: socket_addr("127.0.0.1:0"),
@@ -486,8 +559,9 @@ fn config(database_url: String, spicedb_endpoint: url::Url) -> AppConfig {
             preshared_key: SecretString::from(SPICEDB_PRESHARED_KEY),
             schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
         },
-        object_storage: ObjectStorageConfig::Filesystem {
-            root: PathBuf::from(".integration-storage"),
+        object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        uploads: UploadsConfig {
+            max_attachment_bytes,
         },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,
@@ -520,4 +594,51 @@ pub fn cc61_id() -> Uuid {
 
 pub fn cc71_id() -> Uuid {
     Uuid::parse_str("30000000-0000-4000-8000-000000000002").unwrap()
+}
+
+pub fn attachment_form(
+    bytes: &[u8],
+    filename: &str,
+    content_type: &str,
+    checksum: Option<String>,
+) -> MultipartForm {
+    MultipartForm::new().add_part(
+        "file",
+        file_part(
+            bytes,
+            filename,
+            content_type,
+            &format!(
+                "crc32c=:{}:",
+                checksum.unwrap_or_else(|| crc32c_base64(bytes))
+            ),
+        ),
+    )
+}
+
+pub fn attachment_form_with_digest(
+    bytes: &[u8],
+    filename: &str,
+    content_type: &str,
+    content_digest: &str,
+) -> MultipartForm {
+    MultipartForm::new().add_part(
+        "file",
+        file_part(bytes, filename, content_type, content_digest),
+    )
+}
+
+pub fn file_part(bytes: &[u8], filename: &str, content_type: &str, content_digest: &str) -> Part {
+    Part::bytes(bytes.to_vec())
+        .file_name(filename)
+        .mime_type(content_type)
+        .add_header("content-digest", content_digest)
+}
+
+pub fn content_digest_header(bytes: &[u8]) -> String {
+    format!("crc32c=:{}:", crc32c_base64(bytes))
+}
+
+pub fn crc32c_base64(bytes: &[u8]) -> String {
+    BASE64_STANDARD.encode(crc32c::crc32c(bytes).to_be_bytes())
 }

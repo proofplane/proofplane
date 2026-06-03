@@ -1,7 +1,9 @@
 use tokio_postgres::Row;
+use uuid::Uuid;
 
 use crate::domain::{
-    Actor, ActorKind, ActorWithApiCredential, ApiCredential, CreateActorPayload, UpdateActorPayload,
+    Actor, ActorId, ActorKind, ActorWithApiCredential, ApiCredential, CreateActorPayload,
+    UpdateActorPayload,
 };
 
 use super::{Error, Postgres};
@@ -9,7 +11,7 @@ use super::{Error, Postgres};
 impl Postgres {
     pub async fn actor_with_api_credential(
         &self,
-        actor_id: &str,
+        actor_id: ActorId,
     ) -> Result<Option<ActorWithApiCredential>, Error> {
         let client = self.get().await?;
         let rows = client
@@ -28,11 +30,12 @@ SELECT
     api_credentials.revoked_at AS credential_revoked_at,
     api_credentials.created_at AS credential_created_at
 FROM actors
-JOIN api_credentials ON api_credentials.actor_id = actors.id
+JOIN api_credentials
+    ON api_credentials.actor_id = actors.id
 WHERE actors.id = $1
 LIMIT 1
 "#,
-                &[&actor_id],
+                &[&Uuid::from(actor_id)],
             )
             .await?;
 
@@ -48,21 +51,25 @@ LIMIT 1
             .query_one(
                 r#"
 INSERT INTO actors (id, actor_type, display_name)
-VALUES ($1, $2, $3)
+VALUES (COALESCE($1, gen_random_uuid()), $2, $3)
 RETURNING
     id,
     actor_type,
     display_name,
     created_at
 "#,
-                &[&actor.id, &actor.kind.as_str(), &actor.display_name],
+                &[
+                    &actor.id.map(Uuid::from),
+                    &actor.kind.as_str(),
+                    &actor.display_name,
+                ],
             )
             .await?;
 
         actor_from_row(row)
     }
 
-    pub async fn get_actor(&self, id: &str) -> Result<Option<Actor>, Error> {
+    pub async fn get_actor(&self, id: ActorId) -> Result<Option<Actor>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
@@ -75,7 +82,7 @@ SELECT
 FROM actors
 WHERE id = $1
 "#,
-                &[&id],
+                &[&Uuid::from(id)],
             )
             .await?;
 
@@ -104,7 +111,7 @@ ORDER BY id
 
     pub async fn update_actor(
         &self,
-        id: &str,
+        id: ActorId,
         update: &UpdateActorPayload,
     ) -> Result<Option<Actor>, Error> {
         let client = self.get().await?;
@@ -122,17 +129,17 @@ RETURNING
     display_name,
     created_at
 "#,
-                &[&id, &update.kind.as_str(), &update.display_name],
+                &[&Uuid::from(id), &update.kind.as_str(), &update.display_name],
             )
             .await?;
 
         rows.into_iter().next().map(actor_from_row).transpose()
     }
 
-    pub async fn delete_actor(&self, id: &str) -> Result<bool, Error> {
+    pub async fn delete_actor(&self, id: ActorId) -> Result<bool, Error> {
         let client = self.get().await?;
         let deleted = client
-            .execute("DELETE FROM actors WHERE id = $1", &[&id])
+            .execute("DELETE FROM actors WHERE id = $1", &[&Uuid::from(id)])
             .await?;
 
         Ok(deleted > 0)
@@ -141,7 +148,7 @@ RETURNING
 
 fn actor_with_credential_from_row(row: Row) -> Result<ActorWithApiCredential, Error> {
     let actor = Actor {
-        id: row.try_get("actor_id")?,
+        id: ActorId::from(row.try_get::<_, uuid::Uuid>("actor_id")?),
         kind: row
             .try_get::<_, String>("actor_type")?
             .parse::<ActorKind>()?,
@@ -150,7 +157,7 @@ fn actor_with_credential_from_row(row: Row) -> Result<ActorWithApiCredential, Er
     };
     let credential = ApiCredential {
         id: row.try_get("credential_id")?,
-        actor_id: actor.id.clone(),
+        actor_id: actor.id,
         name: row.try_get("credential_name")?,
         key_id: row.try_get("credential_key_id")?,
         credential_hash: row.try_get("credential_hash")?,
@@ -167,7 +174,7 @@ fn actor_with_credential_from_row(row: Row) -> Result<ActorWithApiCredential, Er
 
 fn actor_from_row(row: Row) -> Result<Actor, Error> {
     Ok(Actor {
-        id: row.try_get("id")?,
+        id: ActorId::from(row.try_get::<_, uuid::Uuid>("id")?),
         kind: row
             .try_get::<_, String>("actor_type")?
             .parse::<ActorKind>()?,

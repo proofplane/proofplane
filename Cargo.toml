@@ -31,10 +31,15 @@ path = "src/bin/authz_schema.rs"
 [dependencies]
 async-trait = "0.1"
 api-keys-simplified = "0.5.1"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.22"
+bytes = "1"
 config = { version = "0.15", default-features = false, features = ["yaml"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+crc32c = "0.6"
 deadpool-postgres = "0.14.1"
+futures-core = "0.3"
+futures-util = "0.3"
 hex = "0.4"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -46,8 +51,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1.52.3", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "time"] }
-tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-uuid-1"] }
+tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tonic = { version = "0.14", features = ["transport"] }
 tonic-prost = "0.14"
 tower = "0.5.3"
@@ -56,6 +61,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
+sfv = "0.14.0"
 
 [build-dependencies]
 protoc-bin-vendored = "3"

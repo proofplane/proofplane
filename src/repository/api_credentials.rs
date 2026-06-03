@@ -1,6 +1,8 @@
 use tokio_postgres::Row;
 
-use crate::domain::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
+use crate::domain::{
+    ActorId, ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload,
+};
 
 use super::{Error, Postgres};
 
@@ -35,7 +37,7 @@ RETURNING
 "#,
                 &[
                     &credential.id,
-                    &credential.actor_id,
+                    &uuid::Uuid::from(credential.actor_id),
                     &credential.name,
                     &credential.key_id,
                     &credential.credential_hash,
@@ -47,23 +49,22 @@ RETURNING
 
         api_credential_from_row(row)
     }
-
     pub async fn get_api_credential(&self, id: &str) -> Result<Option<ApiCredential>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
                 r#"
 SELECT
-    id,
-    actor_id,
-    name,
-    key_id,
-    credential_hash,
-    expires_at,
-    revoked_at,
-    created_at
+    api_credentials.id,
+    api_credentials.actor_id,
+    api_credentials.name,
+    api_credentials.key_id,
+    api_credentials.credential_hash,
+    api_credentials.expires_at,
+    api_credentials.revoked_at,
+    api_credentials.created_at
 FROM api_credentials
-WHERE id = $1
+WHERE api_credentials.id = $1
 "#,
                 &[&id],
             )
@@ -81,16 +82,16 @@ WHERE id = $1
             .query(
                 r#"
 SELECT
-    id,
-    actor_id,
-    name,
-    key_id,
-    credential_hash,
-    expires_at,
-    revoked_at,
-    created_at
+    api_credentials.id,
+    api_credentials.actor_id,
+    api_credentials.name,
+    api_credentials.key_id,
+    api_credentials.credential_hash,
+    api_credentials.expires_at,
+    api_credentials.revoked_at,
+    api_credentials.created_at
 FROM api_credentials
-ORDER BY id
+ORDER BY api_credentials.id
 "#,
                 &[],
             )
@@ -110,12 +111,11 @@ ORDER BY id
                 r#"
 UPDATE api_credentials
 SET
-    actor_id = $2,
-    name = $3,
-    key_id = $4,
-    credential_hash = $5,
-    expires_at = $6,
-    revoked_at = $7
+    name = $2,
+    key_id = $3,
+    credential_hash = $4,
+    expires_at = $5,
+    revoked_at = $6
 WHERE id = $1
 RETURNING
     id,
@@ -129,7 +129,6 @@ RETURNING
 "#,
                 &[
                     &id,
-                    &update.actor_id,
                     &update.name,
                     &update.key_id,
                     &update.credential_hash,
@@ -148,7 +147,13 @@ RETURNING
     pub async fn delete_api_credential(&self, id: &str) -> Result<bool, Error> {
         let client = self.get().await?;
         let deleted = client
-            .execute("DELETE FROM api_credentials WHERE id = $1", &[&id])
+            .execute(
+                r#"
+DELETE FROM api_credentials
+WHERE id = $1
+"#,
+                &[&id],
+            )
             .await?;
 
         Ok(deleted > 0)
@@ -158,7 +163,7 @@ RETURNING
 fn api_credential_from_row(row: Row) -> Result<ApiCredential, Error> {
     Ok(ApiCredential {
         id: row.try_get("id")?,
-        actor_id: row.try_get("actor_id")?,
+        actor_id: ActorId::from(row.try_get::<_, uuid::Uuid>("actor_id")?),
         name: row.try_get("name")?,
         key_id: row.try_get("key_id")?,
         credential_hash: row.try_get("credential_hash")?,
