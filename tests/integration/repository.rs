@@ -7,7 +7,7 @@ use proofplane::domain::{
     EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, UpdateActorPayload,
     UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
-use proofplane::pubsub::TopicName;
+use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
 use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
@@ -891,7 +891,7 @@ fn outbox_payload(
     aggregate_id: impl Into<String>,
 ) -> NewOutboxMessage {
     NewOutboxMessage {
-        topic: TopicName::new("integration-outbox"),
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
         event_type: event_type.to_owned(),
         aggregate_type: aggregate_type.to_owned(),
         aggregate_id: aggregate_id.into(),

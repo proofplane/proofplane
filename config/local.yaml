@@ -10,9 +10,6 @@ postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
 pubsub:
   project_id: "proofplane-local"
   emulator_host: "127.0.0.1:8085"
-  topics:
-    outbox: "proofplane-outbox"
-    dead_letter: "proofplane-dead-letter"
   subscriptions:
     worker: "proofplane-worker"
 

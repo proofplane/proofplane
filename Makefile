@@ -71,7 +71,7 @@ api:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api
 
 dequeuer:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
+	PUBSUB_EMULATOR_HOST=127.0.0.1:8085 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
 
 mcp:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp

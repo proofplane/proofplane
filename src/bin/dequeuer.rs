@@ -1,10 +1,10 @@
-use std::time::Duration as StdDuration;
+use std::{env, time::Duration as StdDuration};
 
 use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
-    pubsub::UnavailablePublisher,
+    pubsub::{self, GoogleCloudPublisher},
     repository::Postgres,
     store, VERSION,
 };
@@ -32,6 +32,14 @@ enum Error {
 
     #[error("outbox dequeuer error")]
     Dequeuer(#[from] dequeuer::OutboxDequeuerError),
+
+    #[error("pubsub error")]
+    PubSub(#[from] pubsub::PubSubError),
+
+    #[error(
+        "environment variable PUBSUB_EMULATOR_HOST is required for dequeuer Pub/Sub publishing"
+    )]
+    MissingPubSubEmulatorHost,
 }
 
 async fn run() -> Result<(), Error> {
@@ -57,7 +65,12 @@ async fn run() -> Result<(), Error> {
 
     let pool = store::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
     let postgres = Postgres::new(pool);
-    let publisher = UnavailablePublisher;
+    if env::var_os(pubsub::PUBSUB_EMULATOR_HOST).is_none() {
+        // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set
+        return Err(Error::MissingPubSubEmulatorHost);
+    }
+
+    let publisher = GoogleCloudPublisher::new(config.pubsub.project_id.clone()).await?;
     let dequeuer_config = OutboxDequeuerConfig {
         max_attempts: config.worker.retry_attempts.into(),
         poll_interval: StdDuration::from_secs(1),

@@ -13,7 +13,7 @@ use super::{
         string_value, ConfigValidationExt,
     },
     GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
-    PubSubSubscriptionsConfig, PubSubTopicsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
+    PubSubSubscriptionsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +85,6 @@ impl RawServerConfig {
 pub(super) struct RawPubSubConfig {
     project_id: String,
     emulator_host: String,
-    topics: RawPubSubTopicsConfig,
     subscriptions: RawPubSubSubscriptionsConfig,
 }
 
@@ -94,32 +93,11 @@ impl RawPubSubConfig {
         validate! {
             project_id <- string_value(self.project_id).at("pubsub.project_id"),
             emulator_host <- host_port(self.emulator_host).at("pubsub.emulator_host"),
-            topics <- self.topics.validate(),
             subscriptions <- self.subscriptions.validate(),
             => PubSubConfig {
                 project_id,
                 emulator_host,
-                topics,
                 subscriptions,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawPubSubTopicsConfig {
-    outbox: String,
-    dead_letter: String,
-}
-
-impl RawPubSubTopicsConfig {
-    pub(super) fn validate(self) -> Validation<PubSubTopicsConfig, ConfigFieldError> {
-        validate! {
-            outbox <- string_value(self.outbox).at("pubsub.topics.outbox"),
-            dead_letter <- string_value(self.dead_letter).at("pubsub.topics.dead_letter"),
-            => PubSubTopicsConfig {
-                outbox,
-                dead_letter,
             },
         }
     }
