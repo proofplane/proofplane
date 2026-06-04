@@ -3,7 +3,7 @@ use std::sync::Arc;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     config, observability, repository, store,
-    worker::{create_worker_app, LogOnlyWorkerHandler, WorkerAppDependencies},
+    worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
 };
 use secrecy::ExposeSecret;
@@ -74,7 +74,6 @@ async fn run() -> Result<(), Error> {
         live_path: config.health.live_path.clone(),
         ready_path: config.health.ready_path.clone(),
         dependency_timeout_ms: config.health.dependency_timeout_ms,
-        handler: LogOnlyWorkerHandler,
     });
 
     axum::serve(listener, app.into_make_service())
