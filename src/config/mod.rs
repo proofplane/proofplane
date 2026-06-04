@@ -45,6 +45,8 @@ pub struct PubSubConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubSubSubscriptionsConfig {
     pub worker: String,
+    pub worker_push_endpoint: Url,
+    pub worker_max_delivery_attempts: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +235,11 @@ mod tests {
 
         assert_eq!(config.server.api_bind.to_string(), "127.0.0.1:3000");
         assert_eq!(
+            config.pubsub.subscriptions.worker_push_endpoint.as_str(),
+            "http://host.docker.internal:3001/pubsub/messages"
+        );
+        assert_eq!(config.pubsub.subscriptions.worker_max_delivery_attempts, 5);
+        assert_eq!(
             config.spicedb.schema_path,
             PathBuf::from("authz/spicedb/proofplane.zed")
         );
@@ -314,6 +321,8 @@ pubsub:
   emulator_host: "127.0.0.1:0"
   subscriptions:
     worker: "proofplane-worker"
+    worker_push_endpoint: "not-a-url"
+    worker_max_delivery_attempts: 4
 spicedb:
   endpoint: ""
   preshared_key: ""
@@ -352,6 +361,8 @@ health:
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.emulator_host"));
+                assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
+                assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
                 assert!(paths.contains(&"spicedb.endpoint"));
                 assert!(paths.contains(&"spicedb.preshared_key"));
                 assert!(paths.contains(&"spicedb.schema_path"));

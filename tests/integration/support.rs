@@ -548,6 +548,9 @@ fn config(
             },
             subscriptions: PubSubSubscriptionsConfig {
                 worker: "integration-worker".to_owned(),
+                worker_push_endpoint: url::Url::parse("http://127.0.0.1:0/pubsub/messages")
+                    .expect("worker push endpoint parses"),
+                worker_max_delivery_attempts: 5,
             },
         },
         spicedb: SpiceDbConfig {

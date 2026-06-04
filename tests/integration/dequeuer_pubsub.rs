@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use chrono::Utc;
 use google_cloud_pubsub::{
     client::{Client, ClientConfig},
@@ -5,9 +7,13 @@ use google_cloud_pubsub::{
     subscription::SubscriptionConfig,
 };
 use proofplane::{
+    config::PubSubSubscriptionsConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     domain::{ActorId, WorkspaceId},
-    pubsub::{GoogleCloudPublisher, TopicName, MESSAGE_BUS_TOPIC, PUBSUB_EMULATOR_HOST},
+    pubsub::{
+        ensure_worker_subscription, GoogleCloudPublisher, TopicName, MESSAGE_BUS_TOPIC,
+        PUBSUB_EMULATOR_HOST, WORKER_DEAD_LETTER_TOPIC,
+    },
     repository::{NewOutboxMessage, OutboxMessage, Postgres},
     routes::authentication::ActorContext,
     store,
@@ -23,9 +29,12 @@ use uuid::Uuid;
 
 const PROJECT_ID: &str = "proofplane-integration";
 const SUBSCRIPTION: &str = "proofplane-worker-integration";
+static PUBSUB_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 #[tokio::test]
 async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
+    let _pubsub_env_lock = PUBSUB_ENV_LOCK.lock().await;
     let pubsub_container = start_deltio().await;
     let emulator_host = emulator_host(&pubsub_container).await;
     std::env::set_var(PUBSUB_EMULATOR_HOST, &emulator_host);
@@ -89,6 +98,74 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
     );
     assert_eq!(message.attributes["aggregate_type"], "evidence_attachment");
     assert_eq!(message.attributes["aggregate_id"], "attachment-1");
+}
+
+#[tokio::test]
+async fn worker_subscription_is_provisioned_and_reconciled_in_deltio() {
+    let _pubsub_env_lock = PUBSUB_ENV_LOCK.lock().await;
+    let pubsub_container = start_deltio().await;
+    let emulator_host = emulator_host(&pubsub_container).await;
+    std::env::set_var(PUBSUB_EMULATOR_HOST, &emulator_host);
+
+    let subscription_id = format!("proofplane-worker-{}", Uuid::new_v4());
+    let first_config = PubSubSubscriptionsConfig {
+        worker: subscription_id.clone(),
+        worker_push_endpoint: url::Url::parse("http://127.0.0.1:3001/pubsub/messages")
+            .expect("push endpoint parses"),
+        worker_max_delivery_attempts: 5,
+    };
+
+    ensure_worker_subscription(PROJECT_ID, &first_config)
+        .await
+        .expect("worker subscription is created");
+
+    let pubsub_client = pubsub_client(PROJECT_ID).await;
+    let subscription = pubsub_client.subscription(&subscription_id);
+    let (topic, config) = subscription
+        .config(None)
+        .await
+        .expect("created subscription config loads");
+
+    assert_eq!(
+        topic,
+        format!("projects/{PROJECT_ID}/topics/{MESSAGE_BUS_TOPIC}")
+    );
+    assert_eq!(
+        config.push_config.expect("push config").push_endpoint,
+        "http://127.0.0.1:3001/pubsub/messages"
+    );
+    let dead_letter_policy = config.dead_letter_policy.expect("dead-letter policy");
+    assert_eq!(
+        dead_letter_policy.dead_letter_topic,
+        format!("projects/{PROJECT_ID}/topics/{WORKER_DEAD_LETTER_TOPIC}")
+    );
+    assert_eq!(dead_letter_policy.max_delivery_attempts, 5);
+
+    let reconciled_config = PubSubSubscriptionsConfig {
+        worker: subscription_id.clone(),
+        worker_push_endpoint: url::Url::parse("http://127.0.0.1:3002/pubsub/messages")
+            .expect("push endpoint parses"),
+        worker_max_delivery_attempts: 6,
+    };
+    ensure_worker_subscription(PROJECT_ID, &reconciled_config)
+        .await
+        .expect("worker subscription is reconciled");
+
+    let (_, config) = subscription
+        .config(None)
+        .await
+        .expect("updated subscription config loads");
+    assert_eq!(
+        config.push_config.expect("push config").push_endpoint,
+        "http://127.0.0.1:3002/pubsub/messages"
+    );
+    assert_eq!(
+        config
+            .dead_letter_policy
+            .expect("dead-letter policy")
+            .max_delivery_attempts,
+        6
+    );
 }
 
 async fn start_deltio() -> ContainerAsync<GenericImage> {

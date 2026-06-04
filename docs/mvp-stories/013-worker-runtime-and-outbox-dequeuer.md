@@ -2,8 +2,8 @@
 
 ## Status
 
-Planned. Story 011 owns outbound Pub/Sub publishing and story 012 owns the
-transactional outbox dequeuer. This story owns the HTTP worker service that
+Implemented. Story 011 owns outbound Pub/Sub publishing and story 012 owns the
+transactional outbox dequeuer. This story added the HTTP worker service that
 receives Pub/Sub push deliveries in both local and live environments.
 
 ## Goal
@@ -81,6 +81,12 @@ The worker should not implement a pull loop, bounded-channel worker pool, or
 local relay. Cloud Run concurrency provides the live request-level worker pool,
 and Deltio push subscriptions provide local push parity.
 
+The worker should also not be responsible for provisioning the push subscription
+that invokes it. In scale-to-zero environments such as Cloud Run, the push
+subscription must already exist before Pub/Sub can send a request that starts
+the worker. The dequeuer process owns worker delivery resource provisioning
+because it is the process publishing to the message bus.
+
 ## Pub/Sub Resources
 
 Application topics remain hard-coded in the Pub/Sub registry from story 011.
@@ -103,14 +109,19 @@ For local development, the network shape determines the endpoint:
 - Deltio in Docker and worker on the host: use `host.docker.internal`
 - Deltio and worker on the host: use `127.0.0.1`
 
-The production push subscription should use authenticated push with a service
-account that can invoke the Cloud Run worker service. Local Deltio push can use
-unauthenticated HTTP unless Deltio authentication support is explicitly added to
-the local setup.
+This implementation uses unauthenticated push. Authenticated Cloud Run push with
+a service account is deferred.
+
+Deltio supports creating push subscriptions, but does not implement
+`UpdateSubscription`. Dequeuer startup updates subscriptions in place when the
+Pub/Sub backend supports it and falls back to delete/recreate for emulators that
+return unimplemented, so local subscriptions are not left stale.
 
 ## Acceptance Criteria
 
 - Worker binary starts from YAML config and serves an HTTP Pub/Sub push endpoint.
+- Dequeuer startup provisions the worker push subscription before publishing
+  outbox messages.
 - Worker endpoint accepts Pub/Sub push envelopes and normalizes them into
   `WorkerMessage`.
 - Worker dispatches messages by `event_type` through statically wired handlers.
@@ -132,21 +143,20 @@ the local setup.
 - Unit tests cover base64 payload decoding, JSON payload parsing, attribute
   extraction, and optional `deliveryAttempt`.
 - Unit tests cover dispatch success, unknown event handling, malformed envelope
-  handling, retryable handler failure, and permanent handler failure policy.
-- Integration test publishes to Deltio and verifies the push subscription invokes
-  the local worker endpoint.
-- Integration test verifies worker `2xx` responses acknowledge messages.
-- Integration test verifies worker non-2xx responses are retried and eventually
-  dead-lettered by Deltio when the configured delivery attempts are exhausted.
+  handling, retryable handler failure, and route-level `204`/`500` behavior.
+- Integration test provisions the message bus topic, worker dead-letter topic,
+  and worker push subscription against Deltio through the dequeuer-owned
+  provisioning helper, including the create and reconciliation path.
+- End-to-end Deltio push delivery, retry, and dead-letter behavior remains a QA
+  step because Deltio's push/update feature coverage is emulator behavior rather
+  than application code.
 
 ## QA Guide
 
 1. Start local dependencies, including Deltio.
 2. Run the worker HTTP service with local config.
-3. Configure the Deltio push subscription for `proof.message_bus` to call the
-   local worker endpoint. Deltio should perform the HTTP push directly.
-4. Run the dequeuer.
-5. Insert or trigger an outbox row for a supported `event_type`.
-6. Confirm the worker handles the pushed message and returns success.
-7. Force a retryable handler failure and confirm Deltio retries, then
+3. Run the dequeuer.
+4. Insert or trigger an outbox row for a supported `event_type`.
+5. Confirm the worker handles the pushed message and returns success.
+6. Force a retryable handler failure and confirm Deltio retries, then
    dead-letters after the configured maximum delivery attempts.
