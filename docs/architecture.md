@@ -38,7 +38,7 @@ connections, connection pools, and migrations. Seed data is different: it is
 owned by the `seed` binary because seeding is a maintenance command, not shared
 infrastructure for application code.
 
-The `mcp` and `worker` binaries should stay minimal until real runtimes exist.
+The `mcp` and `dequeuer` binaries should stay minimal until real runtimes exist.
 They may run startup database work, but should not build pools, repositories, or
 placeholder abstractions before those process boundaries need them.
 

@@ -1,16 +1,27 @@
 # 011 - Pub/Sub Client and Subscription Runtime
 
+## Status
+
+Partially complete. The outbound publisher slice is implemented for Google
+Pub/Sub/emulator, including an application topic registry and startup topic
+provisioning. The subscription runtime, ack/nack abstraction, reconnect loop,
+and dead-letter handling remain future work.
+
 ## Goal
 
-Implement Google Cloud Pub/Sub integration with local emulator support, automatic reconnection, and dead-letter handling.
+Implement Google Cloud Pub/Sub integration with local emulator support. The MVP
+currently needs outbound publishing for the transactional outbox; inbound
+subscription handling, automatic reconnection, and dead-letter handling belong
+to the later worker-runtime slice.
 
 ## Design
 
-Create static-dispatch traits for publishing and subscribing:
+Create static-dispatch traits for publishing and, when the worker runtime
+lands, subscribing:
 
 ```rust
-pub trait MessagePublisher {
-    async fn publish(&self, topic: TopicName, message: OutboundMessage) -> Result<MessageId, PubSubError>;
+pub trait Publisher {
+    async fn publish(&self, topic: &TopicName, message: OutboundMessage) -> Result<MessageId, PubSubError>;
 }
 
 pub trait MessageSubscriber {
@@ -18,32 +29,51 @@ pub trait MessageSubscriber {
 }
 ```
 
-Use concrete implementations for Google Pub/Sub/emulator. Support:
+The implemented publisher side uses a concrete Google Pub/Sub SDK client. Topic
+names for application-owned resources are not configured in YAML; they live in
+the central Pub/Sub registry:
 
-- topic provisioning for local/dev/test
-- subscription provisioning
+- `MESSAGE_BUS_TOPIC = "proof.message_bus"`
+- `application_topics()` returns every topic the application must ensure
+
+`GoogleCloudPublisher::new(project_id)` creates the SDK client once and ensures
+every registered application topic exists before returning. The outbox row still
+stores the destination `TopicName`, but current callers use the registry topic
+instead of ad hoc string literals.
+
+Remaining subscription-runtime work should support:
+
+- subscription provisioning, when subscriptions are introduced
 - automatic reconnection after emulator or network interruption
 - ack and nack
 - dead-letter topic publishing when a message fully exhausts delivery attempts
 
 ## Acceptance Criteria
 
-- Pub/Sub client can run against local emulator through config.
-- Subscribers recover from transient connection failures.
-- Message attributes preserve event type, aggregate ID, causation ID, correlation ID, and attempt metadata.
-- Dead-letter messages include original payload and failure metadata.
-- Publish and subscription reconnection retry loops use the shared retry API where appropriate.
+- Pub/Sub publisher can run against the local emulator using `PUBSUB_EMULATOR_HOST`
+  and configured `pubsub.project_id`.
+- Application topic names are hard-coded in the Pub/Sub registry, not YAML
+  config.
+- Publisher construction provisions every registered application topic and fails
+  if topic existence/create calls fail.
+- Published messages preserve payload bytes and stringified attributes.
+- Subscriber recovery, ack/nack, retry loops, and dead-letter behavior remain
+  deferred until the subscription worker runtime is implemented.
 
 ## Tests
 
-- Unit tests with fake publisher/subscriber cover ack, nack, retry, and dead-letter decisions.
-- Integration tests publish and receive a message through the emulator.
-- Integration tests simulate subscriber restart and verify messages continue flowing.
-- Integration tests verify a permanently failing message is dead-lettered.
+- Unit tests cover topic names, message IDs, outbound-message conversion, topic
+  path formatting, SDK error mapping, and the application topic registry.
+- Dequeuer unit tests use the fake publisher for success and failure behavior.
+- Integration tests verify the concrete publisher can publish an outbox row
+  through the Pub/Sub emulator and that the payload/attributes are received.
+- Subscriber restart and dead-letter tests remain deferred.
 
 ## QA Guide
 
 1. Start Pub/Sub emulator.
-2. Provision a topic, subscription, and dead-letter topic.
-3. Publish a test message and confirm subscriber receives and acks it.
-4. Force a handler failure until attempts are exhausted and inspect the dead-letter topic.
+2. Set `PUBSUB_EMULATOR_HOST` and run the dequeuer with local config.
+3. Confirm publisher startup creates `proof.message_bus`.
+4. Insert an outbox row for `proof.message_bus`.
+5. Run the dequeuer and confirm a test subscription receives the published
+   payload and attributes.

@@ -11,7 +11,7 @@ Use a single Cargo package named `proofplane` with multiple binary entrypoints. 
 Dedicated binaries:
 
 - `src/bin/api.rs`, invoked with `cargo run --bin api`
-- `src/bin/worker.rs`, invoked with `cargo run --bin worker`
+- `src/bin/dequeuer.rs`, invoked with `cargo run --bin dequeuer`
 - `src/bin/mcp.rs`, invoked with `cargo run --bin mcp`
 - `src/bin/seed.rs`, invoked with `cargo run --bin seed`
 
@@ -40,7 +40,7 @@ proofplane/
     app.rs
     bin/
       api.rs
-      worker.rs
+      dequeuer.rs
       mcp.rs
       seed.rs
     routes/
@@ -63,7 +63,7 @@ The dedicated integration suite is deferred to story 009. The initial scaffold s
 ## Acceptance Criteria
 
 - Package builds with `cargo build`.
-- API, worker, MCP server, and seed script exist as separate binaries addressable through `cargo run --bin api`, `cargo run --bin worker`, `cargo run --bin mcp`, and `cargo run --bin seed`.
+- API, dequeuer, MCP server, and seed script exist as separate binaries addressable through `cargo run --bin api`, `cargo run --bin dequeuer`, `cargo run --bin mcp`, and `cargo run --bin seed`.
 - Internal modules compile even if they initially contain only skeletal types.
 - Module boundaries make it possible to inject dependencies with traits and generic parameters.
 - No runtime feature requires dynamic dispatch.
@@ -80,4 +80,4 @@ The dedicated integration suite is deferred to story 009. The initial scaffold s
 
 1. Run `make build`.
 2. Run `make check`.
-3. Run `cargo run --bin api`, `cargo run --bin worker`, `cargo run --bin mcp`, and `cargo run --bin seed` with local config and dependencies as needed.
+3. Run `cargo run --bin api`, `cargo run --bin dequeuer`, `cargo run --bin mcp`, and `cargo run --bin seed` with local config and dependencies as needed.

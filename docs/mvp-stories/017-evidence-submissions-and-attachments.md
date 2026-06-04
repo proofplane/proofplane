@@ -1,5 +1,14 @@
 # 017 - Evidence Submissions and Attachments
 
+## Status
+
+Partially complete. Submission creation, submission detail retrieval, multipart
+attachment upload, CRC32C validation, filesystem object writes, attachment
+metadata, and pending scan records are implemented. Scanner dispatch through the
+transactional outbox, scan workers, finalization of clean files, download
+enforcement, malware scanner adapters, latest-submission API, audit/outbox event
+polish, and seed data remain open.
+
 ## Goal
 
 Allow actors to submit evidence against existing Evidence Requests and upload file attachments through the API.

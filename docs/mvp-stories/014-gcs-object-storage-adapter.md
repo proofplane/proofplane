@@ -1,5 +1,13 @@
 # 014 - Object Storage Adapters
 
+## Status
+
+Partially complete. The object storage trait, filesystem-backed local/test
+adapter, object-key validation, metadata sidecars, checksum calculation, and
+integration with evidence attachment upload are implemented. GCS remains
+configured but unsupported at runtime, so the production GCS adapter slice is
+still open.
+
 ## Goal
 
 Add object storage abstraction, a filesystem implementation for local/test use, and a GCS implementation for production evidence attachments.
