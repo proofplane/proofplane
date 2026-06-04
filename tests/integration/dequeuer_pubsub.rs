@@ -6,8 +6,10 @@ use google_cloud_pubsub::{
 };
 use proofplane::{
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
-    pubsub::{GoogleCloudPublisher, MESSAGE_BUS_TOPIC, PUBSUB_EMULATOR_HOST},
-    repository::Postgres,
+    domain::{ActorId, WorkspaceId},
+    pubsub::{GoogleCloudPublisher, TopicName, MESSAGE_BUS_TOPIC, PUBSUB_EMULATOR_HOST},
+    repository::{NewOutboxMessage, OutboxMessage, Postgres},
+    routes::authentication::ActorContext,
     store,
 };
 use serde_json::json;
@@ -17,6 +19,7 @@ use testcontainers::{
     ContainerAsync, GenericImage,
 };
 use testcontainers_modules::postgres;
+use uuid::Uuid;
 
 const PROJECT_ID: &str = "proofplane-integration";
 const SUBSCRIPTION: &str = "proofplane-worker-integration";
@@ -52,7 +55,7 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
         .await
         .expect("application Postgres pool opens");
     let postgres = Postgres::new(pool);
-    let outbox_id = insert_outbox_row(&postgres).await;
+    let outbox_id = append_outbox_message(&postgres).await.id;
 
     let dequeuer = OutboxDequeuer::new(&postgres, &publisher, OutboxDequeuerConfig::default());
 
@@ -144,35 +147,29 @@ async fn ensure_subscription(
         .map(|_| ())
 }
 
-async fn insert_outbox_row(postgres: &Postgres) -> i64 {
-    let client = postgres.get().await.expect("database connection opens");
-    let row = client
-        .query_one(
-            r#"
-INSERT INTO outbox_messages (
-    topic,
-    event_type,
-    aggregate_type,
-    aggregate_id,
-    payload,
-    attributes
-)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id
-"#,
-            &[
-                &MESSAGE_BUS_TOPIC,
-                &"attachment.scan_requested",
-                &"evidence_attachment",
-                &"attachment-1",
-                &json!({ "scan_id": "scan-1" }),
-                &json!({ "source": "integration-test", "priority": 5 }),
-            ],
-        )
-        .await
-        .expect("outbox row inserts");
+async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
+    let message = NewOutboxMessage {
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
+        event_type: "attachment.scan_requested".to_owned(),
+        aggregate_type: "evidence_attachment".to_owned(),
+        aggregate_id: "attachment-1".to_owned(),
+        payload: json!({ "scan_id": "scan-1" }),
+        attributes: json!({ "source": "integration-test", "priority": 5 }),
+    };
 
-    row.get("id")
+    postgres
+        .in_actor_context(actor_context(), async move |context| {
+            context.append_outbox_message(&message).await
+        })
+        .await
+        .expect("outbox message appends")
+}
+
+fn actor_context() -> ActorContext {
+    ActorContext::new(
+        WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000101").unwrap()),
+        ActorId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000102").unwrap()),
+    )
 }
 
 async fn pull_one(client: &Client, subscription_id: &str) -> ReceivedMessage {
