@@ -11,8 +11,8 @@ use proofplane::{
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, PubSubTopicsConfig, ServerConfig, SpiceDbConfig,
-        UploadsConfig, WorkerConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -545,10 +545,6 @@ fn config(
             emulator_host: HostPort {
                 host: "127.0.0.1".to_owned(),
                 port: 1,
-            },
-            topics: PubSubTopicsConfig {
-                outbox: "integration-outbox".to_owned(),
-                dead_letter: "integration-dead-letter".to_owned(),
             },
             subscriptions: PubSubSubscriptionsConfig {
                 worker: "integration-worker".to_owned(),

@@ -11,7 +11,7 @@ use crate::{
 use tracing::warn;
 
 pub fn startup_message() -> &'static str {
-    "proofplane worker scaffold ready"
+    "proofplane outbox dequeuer ready"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,7 +207,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        pubsub::{fake::FakePublisher, Publisher},
+        pubsub::{fake::FakePublisher, Publisher, TopicName, MESSAGE_BUS_TOPIC},
         repository::OutboxMessage,
     };
 
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn has_startup_message() {
-        assert_eq!(startup_message(), "proofplane worker scaffold ready");
+        assert_eq!(startup_message(), "proofplane outbox dequeuer ready");
     }
 
     #[test]
@@ -262,7 +262,7 @@ mod tests {
 
         let err = publisher
             .publish(
-                &crate::pubsub::TopicName::new("outbox"),
+                &TopicName::new(MESSAGE_BUS_TOPIC),
                 outbound_message(&outbox_row(1, 0)),
             )
             .await
@@ -271,7 +271,7 @@ mod tests {
 
         publisher
             .publish(
-                &crate::pubsub::TopicName::new("outbox"),
+                &TopicName::new(MESSAGE_BUS_TOPIC),
                 outbound_message(&outbox_row(2, 0)),
             )
             .await
@@ -356,7 +356,7 @@ mod tests {
     fn outbox_row(id: i64, attempt_count: i32) -> OutboxMessage {
         OutboxMessage {
             id,
-            topic: crate::pubsub::TopicName::new("outbox"),
+            topic: TopicName::new(MESSAGE_BUS_TOPIC),
             event_type: "attachment.scan_requested".to_owned(),
             aggregate_type: "evidence_attachment".to_owned(),
             aggregate_id: "attachment-1".to_owned(),

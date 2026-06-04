@@ -39,14 +39,7 @@ pub struct ServerConfig {
 pub struct PubSubConfig {
     pub project_id: String,
     pub emulator_host: HostPort,
-    pub topics: PubSubTopicsConfig,
     pub subscriptions: PubSubSubscriptionsConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PubSubTopicsConfig {
-    pub outbox: String,
-    pub dead_letter: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,9 +312,6 @@ postgres: ""
 pubsub:
   project_id: "proofplane-local"
   emulator_host: "127.0.0.1:0"
-  topics:
-    outbox: "proofplane-outbox"
-    dead_letter: "proofplane-dead-letter"
   subscriptions:
     worker: "proofplane-worker"
 spicedb:
