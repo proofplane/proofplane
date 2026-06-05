@@ -38,5 +38,6 @@ This feature does not generate questionnaire responses. It provides approved mat
 1. Run seed.
 2. Search approved material by a demo control.
 3. Create new approved material linked to approved evidence.
-4. Retrieve it and confirm provenance links are present.
+4. Retrieve it and confirm linked controls, Evidence Requests, submissions, and
+   freshness metadata are present.
 5. Expire linked evidence and confirm freshness metadata changes.

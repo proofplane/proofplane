@@ -5,9 +5,10 @@
 Partially complete. Submission creation, submission detail retrieval, multipart
 attachment upload, CRC32C validation, filesystem object writes, attachment
 metadata, and pending scan records are implemented. Scanner dispatch through the
-transactional outbox, scan workers, finalization of clean files, download
-enforcement, malware scanner adapters, latest-submission API, audit/outbox event
-polish, and seed data remain open.
+transactional outbox and Pub/Sub push worker path is implemented with a log-only
+`attachment.scan_requested` handler. Scanner execution, finalization of clean
+files, download enforcement, malware scanner adapters, latest-submission API,
+audit polish, and seed data remain open.
 
 ## Goal
 
@@ -24,7 +25,6 @@ Evidence submissions support:
 - evidence effective or coverage date
 - source system
 - collection method
-- source system and collection method metadata
 - submission-level and attachment-level checksums or hashes
 - replacement or supplement relationship
 
@@ -34,6 +34,13 @@ multipart upload endpoint receives bytes, validates caller-provided integrity
 metadata, writes the object to quarantine storage, records upload and scan state
 in Postgres, and queues malware scanning through the transactional outbox.
 Submissions inherit Evidence Request-control mappings.
+
+The implemented scan dispatch slice emits an `attachment.scan_requested` event
+when a quarantined upload is accepted. The event is appended in the same
+database transaction as the attachment metadata and pending scan record, then
+published by the standalone dequeuer to Pub/Sub and delivered to the worker's
+push endpoint. The current handler only accepts/logs the message; scanner
+execution and finalization are later slices.
 
 Quarantined files are not usable evidence. When scanning returns `clean`, the
 worker moves or copies the file to the final workspace-scoped object path in the
@@ -103,7 +110,9 @@ Submissions must distinguish system receipt time from the evidence effective or 
 - File attachments enter a non-usable pending scan state until the configured malware scanner returns `clean`.
 - Malicious or failed scans block normal download and source-material use.
 - The scanner boundary supports ClamAV for local/self-hosted operation and does not make ClamAV part of the domain model.
-- Submission creation and accepted uploads emit outbox and audit events.
+- Accepted uploads emit scan-request outbox events.
+- Submission creation and upload acceptance audit events remain deferred to the
+  audit story.
 - Seed data includes at least one sample submission and one uploaded attachment
   metadata record.
 
@@ -111,11 +120,15 @@ Submissions must distinguish system receipt time from the evidence effective or 
 
 - Domain tests cover replacement/supplement rules and scan-state usability rules.
 - Domain/service tests cover attachment scan state transitions and blocking rules.
-- Repository integration tests cover submission creation and latest-submission queries.
+- Repository integration tests cover submission creation, submission details,
+  latest-submission queries, attachment creation, pending scan rows, and outbox
+  enqueue behavior.
 - Storage integration tests cover quarantined attachment upload, clean-file
   finalization, and retrieval from the finalized object path.
 - Scanner adapter tests cover clean, malicious, failed, and timeout outcomes.
-- API integration tests cover valid submission, invalid request accumulation, missing Evidence Request, and latest submission.
+- API integration tests cover valid submission, invalid request accumulation,
+  missing Evidence Request, attachment upload, CRC32C validation, object writes,
+  pending scan state, and outbox scan-request payloads.
 - API integration tests verify unscanned, malicious, and failed-scan attachments cannot be downloaded through normal paths.
 - Tests verify submission inherits Evidence Request mappings indirectly rather than copying mapping rows.
 
@@ -137,13 +150,15 @@ Submissions must distinguish system receipt time from the evidence effective or 
 2. Repository layer: support creating submissions, attaching metadata, reading submission details, querying latest submissions, and verifying workspace ownership through the linked Evidence Request.
 3. Submission API without file uploads: add the basic REST surface for creating an accepted submission record and reading its details before introducing binary upload handling.
 4. Multipart attachment upload API and CRC32C validation: accept uploaded bytes for an existing submission, require caller-provided CRC32C, reject mismatches, write the file to quarantine object storage, create attachment metadata plus a `pending` scan record, and return `202 Accepted`.
-5. Scan dispatch through transactional outbox: enqueue attachment-scan work when a quarantined upload is accepted, publish it through the existing outbox to Pub/Sub flow, and keep scanner message payloads based on attachment IDs and quarantine object keys.
+5. Scan dispatch through transactional outbox: enqueue attachment-scan work when a quarantined upload is accepted, publish it through the existing outbox to Pub/Sub flow, and keep scanner message payloads based on attachment IDs and quarantine object keys. Implemented.
 6. Malware scanner boundary and noop implementation: add scanner request, result, and error types plus `NoopMalwareScanner` for tests and flows that do not exercise scanning behavior.
 7. Scan worker finalization: consume scan messages, scan quarantined objects, persist scan results, move or copy `clean` files to final workspace-scoped object paths, and leave malicious or failed files quarantined and unusable.
 8. Scan state enforcement: block normal download and source-material use unless file attachments have scan status `clean` and a finalized object reference.
 9. ClamAV adapter and scanner configuration: add the local/self-hosted scanner implementation, timeout settings, scanner selection, and adapter tests for clean, malicious, failed, and timeout outcomes.
 10. Download and retrieval API: expose normal attachment download paths that  refuse pending, malicious, failed, and unfinalized attachments.
-11. Latest submission query/API, seed data, outbox, and audit polish: complete  the latest-submission read path and add submission-created/upload-accepted  events, audit records, and seed sample submission plus uploaded attachment  metadata.
+11. Latest submission query/API, seed data, and audit polish: complete the
+latest-submission API surface, add audit records, and seed sample submission
+plus uploaded attachment metadata.
 
 Recommended implementation order:
 
@@ -151,10 +166,10 @@ Recommended implementation order:
 2. Repository layer.
 3. Submission API without file uploads.
 4. Multipart attachment upload API and CRC32C validation.
-5. Scan dispatch through transactional outbox.
+5. Scan dispatch through transactional outbox. Implemented.
 6. Malware scanner boundary and noop implementation.
 7. Scan worker finalization.
 8. Scan state enforcement.
 9. ClamAV adapter and scanner configuration.
 10. Download and retrieval API.
-11. Latest submission query/API, seed data, outbox, and audit polish.
+11. Latest submission query/API, seed data, and audit polish.

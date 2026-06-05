@@ -16,13 +16,13 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 008. [Database Migrations and Seed Data](./008-database-migrations-and-seed-data.md) | Done | Refinery migrations, Postgres pool wiring, startup migrations, and idempotent local seed data are in place. |
 | 009. [Integration Test Harness](./009-integration-test-harness.md) | Done | Postgres/testcontainers API harness and Evidence Request integration coverage are in place; later stories add dependency-specific coverage as needed. |
 | 010. [Authentication, Actors, Request Middleware, and SpiceDB Authorization](./010-authentication-actors-and-request-middleware.md) | Done | API-key auth, actor context, local SpiceDB schema/bootstrap, and workspace-scoped Evidence Request authorization are in place. |
-| 011. [Pub/Sub Client and Subscription Runtime](./011-pubsub-client-and-subscription-runtime.md) | Partial | Publisher, emulator support, application topic registry, and topic provisioning are in place; worker delivery is handled by story 013's Pub/Sub push runtime. |
+| 011. [Pub/Sub Client and Push Subscription Provisioning](./011-pubsub-client-and-subscription-runtime.md) | Done | Publisher, emulator support, application topic registry, topic provisioning, worker push subscription provisioning, and dead-letter topic configuration are in place; there is intentionally no pull subscriber runtime in the MVP. |
 | 012. [Transactional Outbox](./012-transactional-outbox.md) | Done | Outbox schema/repository, generic dequeuer, dequeuer binary, Pub/Sub publisher integration, retry scheduling, and emulator integration coverage are in place. |
 | 013. [Pub/Sub Push Worker Handler Runtime](./013-worker-runtime-and-outbox-dequeuer.md) | Done | Worker binary, Pub/Sub push endpoint, log-only `attachment.scan_requested` dispatch, dequeuer-owned worker subscription/dead-letter provisioning, and Deltio provisioning coverage are in place; scanner/domain work remains deferred. |
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Partial | Filesystem-backed local/test object storage is implemented and used by attachment uploads; the production GCS adapter remains open. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until specific product event contracts are added. |
-| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment metadata, and pending scan records are in place; scan dispatch/workers, download enforcement, latest-submission API, audit/outbox polish, and seed data remain open. |
+| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment metadata, pending scan records, and scan-request outbox dispatch are in place; scanner execution, finalization, download enforcement, latest-submission API, audit polish, and seed data remain open. |
 | 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
@@ -45,23 +45,25 @@ Shared gates:
 Near-term parallel lanes:
 
 - Story 017 is the current mainline product surface. Its submission and upload
-  slices are partially complete; the next work is scan dispatch, scanner
-  boundaries, scan-state enforcement, and latest-submission polish.
+  slices are partially complete and scan-request dispatch is wired through the
+  outbox/Pub/Sub push worker path; the next work is scanner boundaries,
+  scan-state enforcement, finalization, download enforcement, and
+  latest-submission polish.
 - Later stories should extend the integration harness with reusable Pub/Sub,
   object-storage, config, and binary helpers as those boundaries become shared.
 - Story 016 followed story 010 with the first control and mapping entities. The auth direction is local hashed API keys; Auth0 is out of scope for the MVP unless revisited later.
 
 Infrastructure lanes after config:
 
-- Story 011's outbound publisher slice is in place. Worker delivery now belongs
-  to story 013's Pub/Sub push HTTP runtime rather than an app-owned pull
-  subscriber loop.
+- Story 011 is complete for the MVP Pub/Sub client boundary. It owns publishing,
+  application topic provisioning, and worker push subscription provisioning;
+  story 013 owns the worker HTTP runtime that receives push deliveries.
 - Story 012 is complete for the single-process transactional outbox dequeuer.
 - Story 014's filesystem object-storage slice is in place. The GCS adapter
   remains open before production object storage is complete.
-- Story 013 depends on 011 and 012 and should use Pub/Sub push subscriptions in
-  both live and local environments. Live push targets Cloud Run; local push
-  targets the same worker endpoint through Deltio push subscriptions, with no
+- Story 013 is complete for the MVP worker runtime. Pub/Sub push subscriptions
+  are used in both live and local environments: live push targets Cloud Run,
+  local push targets the same worker endpoint through Deltio, and there is no
   separate local relay process.
 - Do not require an outbox for synchronous product stories just because the
   domain change might matter later. Use the transactional outbox when a product
@@ -90,8 +92,10 @@ Product lanes:
 - Story 015 is complete and provides the Evidence Request base for the main product model. Story 010 protects its endpoints.
 - Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015. Its submission/upload slices already use the
-  actor context from story 010; remaining work should focus on scan dispatch,
-  scan-state enforcement, latest-submission reads, and event/audit polish.
+  actor context from story 010 and its upload-accepted scan dispatch uses the
+  outbox/Pub/Sub push path from stories 011-013; remaining work should focus on
+  scanner execution, scan-state enforcement, latest-submission reads, and
+  audit polish.
 - Story 018 is deferred until customer feedback shows that Proofplane should own approval state.
 - Story 019 depends on the evidence/control/submission model from 015-017, with usability gated by attachment scan state rather than submission approval.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.

@@ -91,7 +91,7 @@ because it is the process publishing to the message bus.
 ## Pub/Sub Resources
 
 Application topics remain hard-coded in the Pub/Sub registry from story 011.
-This story should add the worker-side application resources that are needed for
+This story adds the worker-side application resources that are needed for
 delivery:
 
 - message bus topic: `proof.message_bus`
@@ -141,8 +141,9 @@ return unimplemented, so local subscriptions are not left stale.
 ## Tests
 
 - Unit tests decode Pub/Sub push envelopes into `WorkerMessage`.
-- Unit tests cover base64 payload decoding, JSON payload parsing, attribute
-  extraction, and optional `deliveryAttempt`.
+- Unit tests cover base64 payload decoding, JSON payload parsing,
+  self-describing message validation, ignoring Pub/Sub attributes, and optional
+  `deliveryAttempt`.
 - Unit tests cover dispatch success, unknown event handling, malformed envelope
   handling, retryable handler failure, and route-level `204`/`500` behavior.
 - Integration test provisions the message bus topic, worker dead-letter topic,

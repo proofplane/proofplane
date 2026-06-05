@@ -38,9 +38,9 @@ only after publish success, and retries failures with backoff while the row
 remains in the table.
 
 Application Pub/Sub topic names are not YAML configuration. Current app topics
-come from the Pub/Sub registry, starting with `proof.message_bus`. Future
-callers should enqueue outbox rows with registry-derived `TopicName` values
-rather than string literals.
+come from the Pub/Sub registry, including `proof.message_bus` and
+`proof.message_bus.dead_letter`. Future callers should enqueue outbox rows with
+registry-derived `TopicName` values rather than string literals.
 
 Duplicate publishes are acceptable if the process crashes after publish but before delete; downstream handlers must be idempotent. MVP assumes one dequeuer process, so there are intentionally no claim or lock columns.
 
