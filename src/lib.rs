@@ -13,6 +13,7 @@ pub mod observability;
 pub mod pubsub;
 pub mod repository;
 pub mod routes;
+pub mod scanner;
 pub mod services;
 pub mod store;
 pub mod validation;
