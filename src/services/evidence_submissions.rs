@@ -2,16 +2,18 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
+        CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
         EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
         EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
-    repository::Postgres,
+    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
+    repository::{NewOutboxMessage, Postgres},
     routes::authentication::ActorContext,
     services::Error,
+    worker::ATTACHMENT_SCAN_REQUESTED,
 };
 use bytes::Bytes;
 use futures_core::Stream;
@@ -145,6 +147,7 @@ impl EvidenceSubmissionService {
     pub async fn create_attachment(
         &self,
         actor: ActorContext,
+        request_id: Uuid,
         submission_id: EvidenceSubmissionId,
         mut payload: UploadEvidenceAttachmentPayload,
     ) -> Result<EvidenceAttachmentWithScan, Error> {
@@ -163,7 +166,15 @@ impl EvidenceSubmissionService {
         let result = self
             .repository
             .in_actor_context(actor, async move |context| {
-                context.create_evidence_attachment(&create_payload).await
+                let attachment = context.create_evidence_attachment(&create_payload).await?;
+                context
+                    .append_outbox_message(&attachment_scan_requested_message(
+                        &attachment.attachment,
+                        request_id,
+                    ))
+                    .await?;
+
+                Ok(attachment)
             })
             .await;
 
@@ -176,5 +187,23 @@ impl EvidenceSubmissionService {
                 Err(error.into())
             }
         }
+    }
+}
+
+fn attachment_scan_requested_message(
+    attachment: &EvidenceAttachment,
+    request_id: Uuid,
+) -> NewOutboxMessage {
+    NewOutboxMessage {
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
+        event_type: ATTACHMENT_SCAN_REQUESTED.to_owned(),
+        aggregate_type: "evidence_attachment".to_owned(),
+        aggregate_id: Uuid::from(attachment.id).to_string(),
+        payload: serde_json::json!({
+            "evidence_attachment_id": Uuid::from(attachment.id).to_string(),
+            "evidence_submission_id": Uuid::from(attachment.evidence_submission_id).to_string(),
+            "object_key": attachment.object_key,
+        }),
+        request_id: Some(request_id),
     }
 }

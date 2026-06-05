@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, future::Future, time::Duration as StdDuration};
+use std::{future::Future, time::Duration as StdDuration};
 
 use chrono::{DateTime, Duration, Utc};
-use serde_json::Value;
+use serde_json::json;
 use thiserror::Error;
 
 use crate::{
@@ -169,30 +169,16 @@ where
 }
 
 fn outbound_message(row: &OutboxMessage) -> OutboundMessage {
-    let mut attributes = json_attributes_to_strings(&row.attributes);
+    let data = json!({
+        "outbox_message_id": row.id.to_string(),
+        "event_type": row.event_type,
+        "aggregate_type": row.aggregate_type,
+        "aggregate_id": row.aggregate_id,
+        "request_id": row.request_id.map(|request_id| request_id.to_string()),
+        "payload": row.payload,
+    });
 
-    attributes.insert("outbox_message_id".to_owned(), row.id.to_string());
-    attributes.insert("event_type".to_owned(), row.event_type.clone());
-    attributes.insert("aggregate_type".to_owned(), row.aggregate_type.clone());
-    attributes.insert("aggregate_id".to_owned(), row.aggregate_id.clone());
-
-    OutboundMessage::new(row.payload.to_string().into_bytes(), attributes)
-}
-
-fn json_attributes_to_strings(attributes: &Value) -> BTreeMap<String, String> {
-    match attributes {
-        Value::Object(object) => object
-            .iter()
-            .map(|(key, value)| {
-                let value = match value {
-                    Value::String(value) => value.clone(),
-                    other => other.to_string(),
-                };
-                (key.clone(), value)
-            })
-            .collect(),
-        _ => BTreeMap::new(),
-    }
+    OutboundMessage::new(data.to_string().into_bytes())
 }
 
 fn retry_delay(attempt_count: i32, initial: Duration, max: Duration) -> Duration {
@@ -222,21 +208,23 @@ mod tests {
     }
 
     #[test]
-    fn outbox_publish_message_includes_metadata_attributes() {
+    fn outbox_publish_message_is_self_describing() {
         let row = outbox_row(42, 0);
 
         let message = outbound_message(&row);
 
-        assert_eq!(message.data, br#"{"scan_id":"scan-1"}"#.to_vec());
-        assert_eq!(message.attributes["source"], "repository");
-        assert_eq!(message.attributes["priority"], "7");
-        assert_eq!(message.attributes["outbox_message_id"], "42");
         assert_eq!(
-            message.attributes["event_type"],
-            "attachment.scan_requested"
+            serde_json::from_slice::<serde_json::Value>(&message.data)
+                .expect("message data is JSON"),
+            json!({
+                "outbox_message_id": "42",
+                "event_type": "attachment.scan_requested",
+                "aggregate_type": "evidence_attachment",
+                "aggregate_id": "attachment-1",
+                "request_id": "00000000-0000-4000-8000-000000000042",
+                "payload": { "scan_id": "scan-1" },
+            })
         );
-        assert_eq!(message.attributes["aggregate_type"], "evidence_attachment");
-        assert_eq!(message.attributes["aggregate_id"], "attachment-1");
     }
 
     #[test]
@@ -361,10 +349,11 @@ mod tests {
             aggregate_type: "evidence_attachment".to_owned(),
             aggregate_id: "attachment-1".to_owned(),
             payload: json!({ "scan_id": "scan-1" }),
-            attributes: json!({
-                "source": "repository",
-                "priority": 7
-            }),
+            request_id: Some(
+                "00000000-0000-4000-8000-000000000042"
+                    .parse()
+                    .expect("request id parses"),
+            ),
             attempt_count,
             next_available_at: Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap(),
             created_at: Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap(),

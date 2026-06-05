@@ -12,6 +12,8 @@ pubsub:
   emulator_host: "127.0.0.1:8085"
   subscriptions:
     worker: "proofplane-worker"
+    worker_push_endpoint: "http://host.docker.internal:3001/pubsub/messages"
+    worker_max_delivery_attempts: 5
 
 spicedb:
   endpoint: "http://127.0.0.1:50051"

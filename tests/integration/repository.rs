@@ -448,7 +448,6 @@ async fn evidence_submission_create_scopes_to_workspace_and_records_context_acto
     assert_eq!(submission.evidence_request_id, request.id);
     assert_eq!(submission.submitted_by, actor.id);
     assert_eq!(submission.source_system, "github");
-    assert_eq!(submission.provenance, json!({ "run_id": "123" }));
 
     let missing = postgres
         .in_actor_context(actor.clone(), async move |context| {
@@ -896,7 +895,7 @@ fn outbox_payload(
         aggregate_type: aggregate_type.to_owned(),
         aggregate_id: aggregate_id.into(),
         payload: json!({ "id": "payload-id" }),
-        attributes: json!({ "source": "integration-test" }),
+        request_id: None,
     }
 }
 
@@ -909,7 +908,6 @@ fn submission_payload(
         coverage_end_at: Utc::now(),
         source_system: "github".to_owned(),
         collection_method: "api_export".to_owned(),
-        provenance: json!({ "run_id": "123" }),
     }
 }
 

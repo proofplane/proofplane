@@ -106,16 +106,34 @@ impl RawPubSubConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct RawPubSubSubscriptionsConfig {
     worker: String,
+    worker_push_endpoint: String,
+    worker_max_delivery_attempts: u16,
 }
 
 impl RawPubSubSubscriptionsConfig {
     pub(super) fn validate(self) -> Validation<PubSubSubscriptionsConfig, ConfigFieldError> {
         validate! {
             worker <- string_value(self.worker).at("pubsub.subscriptions.worker"),
+            worker_push_endpoint <- string_url(self.worker_push_endpoint)
+                .at("pubsub.subscriptions.worker_push_endpoint"),
+            worker_max_delivery_attempts <- validate_worker_max_delivery_attempts(
+                self.worker_max_delivery_attempts
+            )
+                .at("pubsub.subscriptions.worker_max_delivery_attempts"),
             => PubSubSubscriptionsConfig {
                 worker,
+                worker_push_endpoint,
+                worker_max_delivery_attempts,
             },
         }
+    }
+}
+
+fn validate_worker_max_delivery_attempts(value: u16) -> Result<u16, String> {
+    if (5..=100).contains(&value) {
+        Ok(value)
+    } else {
+        Err("must be between 5 and 100".into())
     }
 }
 

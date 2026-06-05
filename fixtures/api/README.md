@@ -35,6 +35,7 @@ export WORKSPACE_ID=00000000-0000-4000-8000-000000000001
 export UNAUTHORIZED_WORKSPACE_ID=00000000-0000-4000-8000-000000000002
 export SOC2_FRAMEWORK_ID=136bfa09-f431-589c-ba4f-0176ad981a39
 export SEEDED_ACCESS_CONTROL_ID=25559395-28b2-5e5f-9fae-4a68d4386d5e
+export ACTOR_ID=00000000-0000-4000-8000-000000000106
 export PROOFPLANE_API_KEY=proof-dev-replace-with-latest-seed-output
 ```
 
@@ -213,6 +214,43 @@ curl --include \
   --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
   --data @fixtures/api/control-mappings/invalid-mapping.json \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests/$EVIDENCE_REQUEST_ID/control-mappings"
+```
+
+## Submissions
+
+```
+REQ_JSON=$(curl --fail-with-body \
+  --request POST \
+  --header 'content-type: application/json' \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  --data @fixtures/api/evidence-requests/create-quarterly-access-review.json \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests")
+
+export EVIDENCE_REQUEST_ID=$(jq -r .id <<< "$REQ_JSON")
+
+SUB_JSON=$(curl --fail-with-body \
+  --request POST \
+  --header 'content-type: application/json' \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  --data @fixtures/api/evidence-submissions/create-manual-qa-submission.json \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests/$EVIDENCE_REQUEST_ID/submissions")
+
+export SUBMISSION_ID=$(jq -r .id <<< "$SUB_JSON")
+
+DIGEST=$(scripts/content-digest-crc32c.py fixtures/api/evidence-submissions/manual-qa-attachment.txt)
+printf 'Content-Digest: %s\n' "$DIGEST" > /tmp/proofplane-part-headers.txt
+
+ATTACH_JSON=$(curl --fail-with-body \
+  --request POST \
+  --header "x-request-id: $(uuidgen)" \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  --form "file=@fixtures/api/evidence-submissions/manual-qa-attachment.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments")
+
+echo "$ATTACH_JSON" | jq .
 ```
 
 ## Authorization Checks

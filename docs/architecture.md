@@ -27,9 +27,26 @@ The binary should compose dependencies explicitly, then hand them to the app
 layer. HTTP route modules should not load config, initialize tracing, run
 migrations, or construct database pools.
 
-## Other Binaries
+## Worker Runtime
 
-Non-API binaries should also own their startup orchestration: load config,
+The dequeuer is a standalone outbox publisher. It loads config, initializes tracing,
+runs migrations, builds a small Postgres pool, provisions Pub/Sub topics and the
+worker push subscription, builds a `GoogleCloudPublisher`, and polls due
+`outbox_messages`. When a row publishes successfully, the dequeuer deletes it.
+When publishing fails, it records the failure, increments the attempt count, and
+schedules the next retry using bounded backoff.
+
+The worker is a separate HTTP runtime for Pub/Sub push delivery. It loads config,
+initializes tracing, runs migrations, builds its own Postgres pool, installs
+metrics, binds `server.worker_bind`, and serves `/pubsub/messages` plus health
+and metrics routes. Pub/Sub push messages are acknowledged with `204 No Content`
+for malformed or unknown events so they do not retry forever. Known retryable
+handler failures return `500` so Pub/Sub can redeliver according to the
+subscription policy.
+
+## General Notes on Binaries
+
+All binaries should also own their startup orchestration: load config,
 initialize tracing, run required startup database work, then enter their runtime
 or command behavior.
 
@@ -37,10 +54,6 @@ Shared database startup utilities belong in `store`, including direct
 connections, connection pools, and migrations. Seed data is different: it is
 owned by the `seed` binary because seeding is a maintenance command, not shared
 infrastructure for application code.
-
-The `mcp` and `dequeuer` binaries should stay minimal until real runtimes exist.
-They may run startup database work, but should not build pools, repositories, or
-placeholder abstractions before those process boundaries need them.
 
 ## Module Boundaries
 
@@ -124,6 +137,43 @@ run migrations, construct pools, or initialize global process state.
 
 Route errors should map to stable HTTP responses in `routes::error`.
 
+### `src/dequeuer`
+
+`dequeuer` owns the transactional outbox polling loop. It should stay independent
+from HTTP concerns. Its inputs are a `repository::Postgres`, a Pub/Sub
+`Publisher`, and an `OutboxDequeuerConfig`.
+
+The dequeuer is responsible for:
+
+- listing due outbox rows;
+- converting rows into Pub/Sub messages;
+- deleting rows after successful publish;
+- recording publish failures and retry timestamps;
+- applying bounded retry backoff.
+
+It should not know about individual domain handlers. Domain-specific work starts
+after Pub/Sub delivers the message to the worker.
+
+### `src/worker.rs` and `src/handlers`
+
+`worker.rs` owns the Pub/Sub push HTTP surface and event dispatch. It builds the
+worker router, decodes Pub/Sub push envelopes, validates message
+data, maps malformed or unknown events to acknowledgements, and maps retryable
+handler failures to `500`.
+
+Domain-specific worker behavior belongs under `src/handlers`. The worker
+dispatch layer should multiplex by event type and call the appropriate handler,
+not use dynamically injected handler traits for the current single-process
+runtime.
+
+### `src/pubsub`
+
+`pubsub` owns Pub/Sub integration. It defines application topic names, outbound
+message publishing, Google Pub/Sub publisher construction, and worker
+subscription provisioning. The dequeuer depends on this module for publishing and
+startup provisioning; handlers should not publish directly unless a later domain
+flow explicitly needs a new event.
+
 ## Dependency Direction
 
 The API dependency direction should remain:
@@ -132,6 +182,23 @@ The API dependency direction should remain:
 src/bin/api.rs
   -> app::create_app(AppDependencies)
   -> routes::{health, metrics, version, error}
+  -> repository
+  -> store
+```
+
+The asynchronous worker dependency direction should remain:
+
+```text
+src/bin/dequeuer.rs
+  -> dequeuer::OutboxDequeuer
+  -> pubsub::Publisher
+  -> repository
+  -> store
+
+src/bin/worker.rs
+  -> worker::create_worker_app(WorkerAppDependencies)
+  -> worker::router
+  -> handlers
   -> repository
   -> store
 ```
@@ -165,6 +232,8 @@ consistent request logs.
 - Keep app-facing database access in `repository`.
 - Keep HTTP composition in `app`.
 - Keep endpoint behavior in `routes`.
+- Keep outbox publishing in the standalone `dequeuer`.
+- Keep Pub/Sub push decoding and event dispatch in `worker`.
 - Pass dependencies explicitly through structs instead of reaching for globals.
 - Prefer a single dependency struct at app construction boundaries.
 - Do not add placeholder abstractions before a real boundary needs them.

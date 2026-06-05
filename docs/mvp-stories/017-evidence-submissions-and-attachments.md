@@ -24,7 +24,7 @@ Evidence submissions support:
 - evidence effective or coverage date
 - source system
 - collection method
-- provenance metadata for source/integration receipt details
+- source system and collection method metadata
 - submission-level and attachment-level checksums or hashes
 - replacement or supplement relationship
 
@@ -50,13 +50,6 @@ pub trait MalwareScanner {
     async fn scan_object(&self, request: ScanObjectRequest) -> Result<MalwareScanResult, MalwareScanError>;
 }
 ```
-
-Provenance is submission-level metadata that explains where the evidence came
-from and how Proofplane received it. Examples include an integration run ID, a
-source report URL, the upstream export timestamp, webhook delivery IDs, source
-account IDs, or the query/filter parameters used to produce the evidence. It is
-not the attachment byte-integrity record and should not duplicate object storage
-metadata.
 
 Attachment metadata should persist scan state independently from stable object
 metadata.
@@ -140,7 +133,7 @@ Submissions must distinguish system receipt time from the evidence effective or 
 
 ## Implementation Slices
 
-1. Submission domain and database model: define submission, attachment, and attachment scan IDs, replacement or supplement relationships, receipt time versus effective or coverage date, source system, collection method, provenance JSON, checksums, and separate attachment scan records.
+1. Submission domain and database model: define submission, attachment, and attachment scan IDs, replacement or supplement relationships, receipt time versus effective or coverage date, source system, collection method, checksums, and separate attachment scan records.
 2. Repository layer: support creating submissions, attaching metadata, reading submission details, querying latest submissions, and verifying workspace ownership through the linked Evidence Request.
 3. Submission API without file uploads: add the basic REST surface for creating an accepted submission record and reading its details before introducing binary upload handling.
 4. Multipart attachment upload API and CRC32C validation: accept uploaded bytes for an existing submission, require caller-provided CRC32C, reject mismatches, write the file to quarantine object storage, create attachment metadata plus a `pending` scan record, and return `202 Accepted`.

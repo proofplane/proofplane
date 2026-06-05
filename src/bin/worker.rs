@@ -1,0 +1,93 @@
+use std::sync::Arc;
+
+use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
+use proofplane::{
+    config, observability, repository, store,
+    worker::{create_worker_app, WorkerAppDependencies},
+    VERSION,
+};
+use secrecy::ExposeSecret;
+use thiserror::Error;
+use tokio::net::TcpListener;
+use tracing::{debug, error, info};
+
+const POSTGRES_POOL_SIZE: usize = 20;
+
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
+        error!("{}", e);
+        std::process::exit(1);
+    }
+}
+
+#[derive(Debug, Error)]
+enum Error {
+    #[error("postgres connection error")]
+    StoreConnection(#[from] store::conn::Error),
+
+    #[error("database migration error")]
+    Migrations(#[from] refinery::Error),
+
+    #[error("prometheus initialization error")]
+    PrometheusInit(#[from] BuildError),
+}
+
+async fn run() -> Result<(), Error> {
+    let config = match config::load_from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(error) = observability::init_tracing(&config.observability) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
+    let mut client = store::conn(config.postgres.expose_secret()).await?;
+
+    debug!("running migrations");
+    store::migrate(&mut client).await?;
+    debug!("done running migrations");
+    drop(client);
+
+    let pool = store::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
+    let postgres = Arc::new(repository::Postgres::new(pool));
+    let metrics = PrometheusBuilder::new().install_recorder()?;
+
+    let listener = TcpListener::bind(config.server.worker_bind)
+        .await
+        .expect("worker bind address is available");
+    info!(
+        binary = "worker",
+        version = VERSION,
+        "listening on {}",
+        config.server.worker_bind
+    );
+
+    let app = create_worker_app(WorkerAppDependencies {
+        postgres,
+        metrics,
+        live_path: config.health.live_path.clone(),
+        ready_path: config.health.ready_path.clone(),
+        dependency_timeout_ms: config.health.dependency_timeout_ms,
+    });
+
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to listen for ctrl-c");
+
+            info!("received shutdown signal")
+        })
+        .await
+        .expect("worker server exits cleanly");
+
+    info!(binary = "worker", "server shutdown complete");
+
+    Ok(())
+}

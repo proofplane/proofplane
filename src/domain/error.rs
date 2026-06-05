@@ -13,7 +13,4 @@ pub enum DomainError {
 
     #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
     InvalidCoverageWindow,
-
-    #[error("provenance must be a JSON object")]
-    InvalidProvenanceObject,
 }

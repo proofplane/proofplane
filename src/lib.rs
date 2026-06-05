@@ -5,6 +5,7 @@ pub mod config;
 pub mod dequeuer;
 pub mod domain;
 pub mod errors;
+pub mod handlers;
 pub mod mcp;
 pub mod migrations;
 pub mod object_storage;
@@ -15,6 +16,7 @@ pub mod routes;
 pub mod services;
 pub mod store;
 pub mod validation;
+pub mod worker;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

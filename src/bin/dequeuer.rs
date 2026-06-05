@@ -4,7 +4,7 @@ use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
-    pubsub::{self, GoogleCloudPublisher},
+    pubsub::{self, ensure_worker_subscription, GoogleCloudPublisher},
     repository::Postgres,
     store, VERSION,
 };
@@ -69,6 +69,8 @@ async fn run() -> Result<(), Error> {
         // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set
         return Err(Error::MissingPubSubEmulatorHost);
     }
+
+    ensure_worker_subscription(&config.pubsub.project_id, &config.pubsub.subscriptions).await?;
 
     let publisher = GoogleCloudPublisher::new(config.pubsub.project_id.clone()).await?;
     let dequeuer_config = OutboxDequeuerConfig {

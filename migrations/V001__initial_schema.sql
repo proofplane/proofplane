@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
     aggregate_type TEXT NOT NULL,
     aggregate_id TEXT NOT NULL,
     payload JSONB NOT NULL,
-    attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    request_id UUID,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     next_available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -156,7 +156,6 @@ CREATE TABLE IF NOT EXISTS evidence_submissions (
     coverage_end_at TIMESTAMPTZ NOT NULL,
     source_system TEXT NOT NULL,
     collection_method TEXT NOT NULL,
-    provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
     CHECK (coverage_end_at >= coverage_start_at)
 );
 

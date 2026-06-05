@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate authz-schema-validate authz-schema seed api dequeuer mcp
+.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate authz-schema-validate authz-schema seed api worker dequeuer mcp
 
 PROOFPLANE_CONFIG ?= config/local.yaml
 
@@ -20,6 +20,7 @@ help:
 		'  make authz-schema      Apply the configured SpiceDB schema' \
 		'  make seed              Run seed binary' \
 		'  make api               Run API binary' \
+		'  make worker            Run worker binary' \
 		'  make dequeuer          Run outbox dequeuer binary' \
 		'  make mcp               Run MCP binary'
 
@@ -69,6 +70,9 @@ seed:
 
 api:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api
+
+worker:
+	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin worker
 
 dequeuer:
 	PUBSUB_EMULATOR_HOST=127.0.0.1:8085 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
