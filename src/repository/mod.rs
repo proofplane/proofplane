@@ -17,6 +17,9 @@ mod outbox;
 mod workspaces;
 
 pub use error::Error;
+pub use evidence_submissions::{
+    AttachmentScanCompletion, AttachmentScanFailure, PendingAttachmentScanWork,
+};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 
 pub struct Postgres {

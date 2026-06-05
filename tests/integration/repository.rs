@@ -8,7 +8,7 @@ use proofplane::domain::{
     UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
-use proofplane::repository::NewOutboxMessage;
+use proofplane::repository::{AttachmentScanCompletion, AttachmentScanFailure, NewOutboxMessage};
 use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
 use uuid::Uuid;
@@ -567,6 +567,178 @@ async fn evidence_submission_detail_includes_attachments_with_scan_rows() {
 }
 
 #[tokio::test]
+async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_key() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+
+    let work = postgres
+        .load_pending_attachment_scan_work(
+            attachment.attachment.id,
+            &attachment.attachment.object_key,
+        )
+        .await
+        .expect("pending scan work loads")
+        .expect("pending scan work exists");
+
+    assert_eq!(work.workspace_id, request.workspace_id);
+    assert_eq!(work.evidence_submission_id, submission.id);
+    assert_eq!(work.evidence_attachment_id, attachment.attachment.id);
+    assert_eq!(work.filename, attachment.attachment.filename);
+    assert_eq!(work.content_type, attachment.attachment.content_type);
+    assert_eq!(work.content_length, attachment.attachment.content_length);
+    assert_eq!(work.object_key, attachment.attachment.object_key);
+    assert_eq!(work.scan_status, AttachmentScanStatus::Pending);
+
+    assert!(postgres
+        .load_pending_attachment_scan_work(attachment.attachment.id, "stale-key")
+        .await
+        .expect("stale scan work lookup resolves")
+        .is_none());
+}
+
+#[tokio::test]
+async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
+    let quarantine_key = attachment.attachment.object_key.clone();
+    let final_key = format!(
+        "workspaces/{}/evidence-submissions/{}/attachments/{}/{}",
+        request.workspace_id,
+        submission.id,
+        attachment.attachment.id,
+        attachment.attachment.filename
+    );
+
+    assert!(postgres
+        .mark_attachment_scan_clean(
+            attachment.attachment.id,
+            &quarantine_key,
+            &final_key,
+            &scan_completion("noop"),
+        )
+        .await
+        .expect("clean scan marks"));
+
+    let detail = postgres
+        .in_actor_context_read(actor, async move |context| {
+            context.get_evidence_submission(submission.id).await
+        })
+        .await
+        .expect("submission detail resolves")
+        .expect("submission detail exists");
+    let finalized = detail
+        .attachments
+        .iter()
+        .find(|candidate| candidate.attachment.id == attachment.attachment.id)
+        .expect("attachment remains present");
+
+    assert_eq!(finalized.attachment.object_key, final_key);
+    assert_eq!(finalized.scan.scan_status, AttachmentScanStatus::Clean);
+    assert_eq!(finalized.scan.scanner_name.as_deref(), Some("noop"));
+    assert!(finalized.scan.scanned_at.is_some());
+    assert!(finalized.scan.scan_failure_reason.is_none());
+
+    assert!(!postgres
+        .mark_attachment_scan_clean(
+            attachment.attachment.id,
+            &quarantine_key,
+            "stale-final-key",
+            &scan_completion("noop"),
+        )
+        .await
+        .expect("duplicate clean scan resolves"));
+}
+
+#[tokio::test]
+async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantined() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let malicious = create_repository_attachment(postgres, actor.clone(), submission.id).await;
+    let failed = postgres
+        .in_actor_context(actor.clone(), async move |context| {
+            context
+                .create_evidence_attachment(&attachment_payload(submission.id, "failed-scan"))
+                .await
+        })
+        .await
+        .expect("second attachment creates");
+    let malicious_key = malicious.attachment.object_key.clone();
+    let failed_key = failed.attachment.object_key.clone();
+
+    assert!(postgres
+        .mark_attachment_scan_malicious(
+            malicious.attachment.id,
+            &malicious_key,
+            &scan_failure("EICAR-Test-File"),
+        )
+        .await
+        .expect("malicious scan marks"));
+    assert!(postgres
+        .mark_attachment_scan_failed(
+            failed.attachment.id,
+            &failed_key,
+            &scan_failure("scanner refused object"),
+        )
+        .await
+        .expect("failed scan marks"));
+
+    let detail = postgres
+        .in_actor_context_read(actor, async move |context| {
+            context.get_evidence_submission(submission.id).await
+        })
+        .await
+        .expect("submission detail resolves")
+        .expect("submission detail exists");
+
+    let malicious_detail = detail
+        .attachments
+        .iter()
+        .find(|candidate| candidate.attachment.id == malicious.attachment.id)
+        .expect("malicious attachment exists");
+    assert_eq!(malicious_detail.attachment.object_key, malicious_key);
+    assert_eq!(
+        malicious_detail.scan.scan_status,
+        AttachmentScanStatus::Malicious
+    );
+    assert_eq!(
+        malicious_detail.scan.scan_failure_reason.as_deref(),
+        Some("EICAR-Test-File")
+    );
+
+    let failed_detail = detail
+        .attachments
+        .iter()
+        .find(|candidate| candidate.attachment.id == failed.attachment.id)
+        .expect("failed attachment exists");
+    assert_eq!(failed_detail.attachment.object_key, failed_key);
+    assert_eq!(failed_detail.scan.scan_status, AttachmentScanStatus::Failed);
+    assert_eq!(
+        failed_detail.scan.scan_failure_reason.as_deref(),
+        Some("scanner refused object")
+    );
+
+    assert!(!postgres
+        .mark_attachment_scan_failed(
+            failed.attachment.id,
+            &failed_key,
+            &scan_failure("duplicate")
+        )
+        .await
+        .expect("duplicate failed scan resolves"));
+}
+
+#[tokio::test]
 async fn latest_evidence_submission_for_request_returns_newest_visible_submission() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
@@ -896,6 +1068,23 @@ fn outbox_payload(
         aggregate_id: aggregate_id.into(),
         payload: json!({ "id": "payload-id" }),
         request_id: None,
+    }
+}
+
+fn scan_completion(scanner_name: &str) -> AttachmentScanCompletion {
+    AttachmentScanCompletion {
+        scanner_name: scanner_name.to_owned(),
+        scanner_version: Some("test-version".to_owned()),
+        scanned_at: Utc::now(),
+    }
+}
+
+fn scan_failure(reason: &str) -> AttachmentScanFailure {
+    AttachmentScanFailure {
+        scanner_name: "test-scanner".to_owned(),
+        scanner_version: Some("test-version".to_owned()),
+        scanned_at: Utc::now(),
+        reason: reason.to_owned(),
     }
 }
 

@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Bytes,
-    extract::MatchedPath,
+    extract::{MatchedPath, State},
     http::{Request, StatusCode},
     middleware,
     response::Response,
@@ -18,7 +18,8 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    handlers,
+    handlers::attachment_scan::AttachmentScanHandler,
+    object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
         error::not_found,
@@ -26,6 +27,7 @@ use crate::{
         metrics::{self, MetricsState},
         request_context::attach_request_id,
     },
+    scanner::NoopMalwareScanner,
     validate,
     validation::Validation,
 };
@@ -69,13 +71,50 @@ pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
+    pub object_store: Arc<FilesystemObjectStore>,
+    pub scanner: Arc<NoopMalwareScanner>,
     pub metrics: PrometheusHandle,
     pub live_path: String,
     pub ready_path: String,
     pub dependency_timeout_ms: u64,
 }
 
+#[derive(Clone)]
+pub struct WorkerState {
+    attachment_scan_handler:
+        Option<AttachmentScanHandler<Postgres, FilesystemObjectStore, NoopMalwareScanner>>,
+}
+
+impl WorkerState {
+    pub fn new(
+        postgres: Arc<Postgres>,
+        object_store: Arc<FilesystemObjectStore>,
+        scanner: Arc<NoopMalwareScanner>,
+    ) -> Self {
+        Self {
+            attachment_scan_handler: Some(AttachmentScanHandler::new(
+                postgres,
+                object_store,
+                scanner,
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            attachment_scan_handler: None,
+        }
+    }
+}
+
 pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
+    let state = WorkerState::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store,
+        dependencies.scanner,
+    );
+
     Router::new()
         .nest(&dependencies.live_path, health::livez_router())
         .nest(
@@ -91,7 +130,7 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
                 handle: dependencies.metrics,
             }),
         )
-        .merge(router())
+        .merge(router(state))
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))
         .layer(
@@ -122,11 +161,13 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
         )
 }
 
-pub fn router() -> Router {
-    Router::new().route("/pubsub/messages", post(pubsub_message))
+pub fn router(state: WorkerState) -> Router {
+    Router::new()
+        .route("/pubsub/messages", post(pubsub_message))
+        .with_state(state)
 }
 
-async fn pubsub_message(body: Bytes) -> StatusCode {
+async fn pubsub_message(State(state): State<WorkerState>, body: Bytes) -> StatusCode {
     let message = match decode_worker_message(&body) {
         Ok(message) => message,
         Err(error) => {
@@ -135,13 +176,18 @@ async fn pubsub_message(body: Bytes) -> StatusCode {
         }
     };
 
-    dispatch(message).await
+    dispatch(state, message).await
 }
 
-pub async fn dispatch(message: WorkerMessage) -> StatusCode {
+pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode {
     match message.event_type.as_str() {
         ATTACHMENT_SCAN_REQUESTED => {
-            match handlers::attachment_scan::handle_scan_requested(message).await {
+            let Some(handler) = state.attachment_scan_handler else {
+                tracing::info!("worker message accepted without attachment scan handler");
+                return StatusCode::NO_CONTENT;
+            };
+
+            match handler.handle_scan_requested(message).await {
                 Ok(()) => StatusCode::NO_CONTENT,
                 Err(error) => {
                     tracing::error!(%error, "retryable worker handler failure");
@@ -362,24 +408,29 @@ mod tests {
 
     #[tokio::test]
     async fn dispatches_known_event_successfully() {
-        let status =
-            dispatch(decode_worker_message(&valid_envelope("attachment.scan_requested")).unwrap())
-                .await;
+        let status = dispatch(
+            WorkerState::empty(),
+            decode_worker_message(&valid_envelope("attachment.scan_requested")).unwrap(),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
     async fn dispatches_unknown_event_as_non_retryable_success() {
-        let status =
-            dispatch(decode_worker_message(&valid_envelope("unknown.event")).unwrap()).await;
+        let status = dispatch(
+            WorkerState::empty(),
+            decode_worker_message(&valid_envelope("unknown.event")).unwrap(),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
     async fn worker_route_acknowledges_valid_known_event() {
-        let server = TestServer::new(router());
+        let server = TestServer::new(router(WorkerState::empty()));
 
         let response = server
             .post("/pubsub/messages")
@@ -394,7 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_route_acknowledges_malformed_and_unknown_events() {
-        let server = TestServer::new(router());
+        let server = TestServer::new(router(WorkerState::empty()));
 
         server
             .post("/pubsub/messages")

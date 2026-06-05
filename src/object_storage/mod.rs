@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -27,6 +27,12 @@ pub trait ObjectStore {
     async fn get_object(&self, key: ObjectKey) -> Result<ObjectStream, StorageError>;
 
     async fn head_object(&self, key: ObjectKey) -> Result<ObjectMetadata, StorageError>;
+
+    async fn copy_object(
+        &self,
+        source: ObjectKey,
+        destination: ObjectKey,
+    ) -> Result<ObjectMetadata, StorageError>;
 
     async fn delete_object(&self, key: ObjectKey) -> Result<(), StorageError>;
 }
@@ -269,6 +275,21 @@ impl ObjectStore for FilesystemObjectStore {
             .map_err(|source| StorageError::MetadataPersistence { source })
     }
 
+    async fn copy_object(
+        &self,
+        source: ObjectKey,
+        destination: ObjectKey,
+    ) -> Result<ObjectMetadata, StorageError> {
+        let object = self.get_object(source).await?;
+
+        self.put_object(PutObjectRequest {
+            key: destination,
+            content_type: object.metadata.content_type,
+            chunks: stream::once(async move { Ok(Bytes::from(object.bytes)) }),
+        })
+        .await
+    }
+
     async fn delete_object(&self, key: ObjectKey) -> Result<(), StorageError> {
         remove_file_if_exists(self.object_path(&key)).await?;
         remove_file_if_exists(self.metadata_path(&key)).await
@@ -490,6 +511,34 @@ mod tests {
             read.sha256,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
+    }
+
+    #[tokio::test]
+    async fn copy_preserves_bytes_and_metadata_at_destination() {
+        let store = FilesystemObjectStore::new(temp_dir("copy")).await.unwrap();
+        let source = test_key("quarantine/artifact.txt");
+        let destination = test_key("final/artifact.txt");
+
+        let source_metadata = store
+            .put_object(PutObjectRequest {
+                key: source.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: chunks(["hello"]),
+            })
+            .await
+            .unwrap();
+
+        let copied = store
+            .copy_object(source.clone(), destination.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(copied.key, destination);
+        assert_eq!(copied.content_type, source_metadata.content_type);
+        assert_eq!(copied.content_length, source_metadata.content_length);
+        assert_eq!(copied.sha256, source_metadata.sha256);
+        assert_eq!(store.get_object(source).await.unwrap().bytes, b"hello");
+        assert_eq!(store.get_object(copied.key).await.unwrap().bytes, b"hello");
     }
 
     #[tokio::test]
