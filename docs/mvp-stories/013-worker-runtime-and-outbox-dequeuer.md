@@ -43,9 +43,10 @@ The worker exposes a Pub/Sub push endpoint such as:
 POST /pubsub/messages
 ```
 
-The endpoint accepts the Pub/Sub push envelope, decodes the base64 message
-payload, reads metadata attributes added by the dequeuer, normalizes the request
-into an internal `WorkerMessage`, and dispatches by `event_type`.
+The endpoint accepts the Pub/Sub push envelope, decodes the base64
+self-describing message payload into an internal `WorkerMessage`, and
+dispatches by `event_type`. Application metadata lives in the JSON payload, not
+Pub/Sub attributes.
 
 The internal message shape should be independent of the transport envelope:
 
@@ -55,8 +56,8 @@ pub struct WorkerMessage {
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
+    pub request_id: Option<String>,
     pub payload: serde_json::Value,
-    pub attributes: BTreeMap<String, String>,
     pub delivery_attempt: Option<u32>,
 }
 ```

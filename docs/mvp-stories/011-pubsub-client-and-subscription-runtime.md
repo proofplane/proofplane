@@ -56,7 +56,8 @@ Remaining subscription-runtime work should support:
   config.
 - Publisher construction provisions every registered application topic and fails
   if topic existence/create calls fail.
-- Published messages preserve payload bytes and stringified attributes.
+- Published messages preserve payload bytes and do not use Pub/Sub attributes
+  for application metadata.
 - Subscriber recovery, ack/nack, retry loops, and dead-letter behavior remain
   deferred until the subscription worker runtime is implemented.
 
@@ -66,7 +67,7 @@ Remaining subscription-runtime work should support:
   path formatting, SDK error mapping, and the application topic registry.
 - Dequeuer unit tests use the fake publisher for success and failure behavior.
 - Integration tests verify the concrete publisher can publish an outbox row
-  through the Pub/Sub emulator and that the payload/attributes are received.
+  through the Pub/Sub emulator and that the self-describing payload is received.
 - Subscriber restart and dead-letter tests remain deferred.
 
 ## QA Guide
@@ -76,4 +77,4 @@ Remaining subscription-runtime work should support:
 3. Confirm publisher startup creates `proof.message_bus`.
 4. Insert an outbox row for `proof.message_bus`.
 5. Run the dequeuer and confirm a test subscription receives the published
-   payload and attributes.
+   self-describing payload.

@@ -896,7 +896,7 @@ fn outbox_payload(
         aggregate_type: aggregate_type.to_owned(),
         aggregate_id: aggregate_id.into(),
         payload: json!({ "id": "payload-id" }),
-        attributes: json!({ "source": "integration-test" }),
+        request_id: None,
     }
 }
 

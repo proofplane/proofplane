@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Bytes,
@@ -36,8 +36,8 @@ pub struct WorkerMessage {
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
+    pub request_id: Option<String>,
     pub payload: Value,
-    pub attributes: BTreeMap<String, String>,
     pub delivery_attempt: Option<u32>,
 }
 
@@ -51,8 +51,8 @@ pub enum WorkerMessageDecodeError {
     InvalidBase64,
     #[error("message data must be a JSON payload")]
     PayloadJson,
-    #[error("message attributes must include {0}")]
-    MissingAttribute(&'static str),
+    #[error("message data envelope must include {0}")]
+    MissingField(&'static str),
 }
 
 #[derive(Debug, Error)]
@@ -157,33 +157,49 @@ pub fn decode_worker_message(body: &[u8]) -> Result<WorkerMessage, WorkerMessage
     let data = STANDARD
         .decode(message.data.as_bytes())
         .map_err(|_| WorkerMessageDecodeError::InvalidBase64)?;
-    let payload =
+    let data_payload: Value =
         serde_json::from_slice(&data).map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
-    let attributes = message.attributes;
-    let event_type = required_attribute(&attributes, "event_type")?;
-    let aggregate_type = required_attribute(&attributes, "aggregate_type")?;
-    let aggregate_id = required_attribute(&attributes, "aggregate_id")?;
+    let data = WorkerMessageData::try_from(data_payload)?;
 
     Ok(WorkerMessage {
         message_id: message.message_id,
-        event_type,
-        aggregate_type,
-        aggregate_id,
-        payload,
-        attributes,
+        event_type: data.event_type,
+        aggregate_type: data.aggregate_type,
+        aggregate_id: data.aggregate_id,
+        request_id: data.request_id,
+        payload: data.payload,
         delivery_attempt: envelope.delivery_attempt,
     })
 }
 
-fn required_attribute(
-    attributes: &BTreeMap<String, String>,
-    key: &'static str,
-) -> Result<String, WorkerMessageDecodeError> {
-    attributes
-        .get(key)
-        .filter(|value| !value.trim().is_empty())
-        .cloned()
-        .ok_or(WorkerMessageDecodeError::MissingAttribute(key))
+#[derive(Debug, Deserialize)]
+struct WorkerMessageData {
+    event_type: String,
+    aggregate_type: String,
+    aggregate_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
+    payload: Value,
+}
+
+impl TryFrom<Value> for WorkerMessageData {
+    type Error = WorkerMessageDecodeError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let data: Self =
+            serde_json::from_value(value).map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
+        if data.event_type.trim().is_empty() {
+            return Err(WorkerMessageDecodeError::MissingField("event_type"));
+        }
+        if data.aggregate_type.trim().is_empty() {
+            return Err(WorkerMessageDecodeError::MissingField("aggregate_type"));
+        }
+        if data.aggregate_id.trim().is_empty() {
+            return Err(WorkerMessageDecodeError::MissingField("aggregate_id"));
+        }
+
+        Ok(data)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,8 +214,6 @@ struct PushEnvelopeMessage {
     #[serde(rename = "messageId")]
     message_id: String,
     data: String,
-    #[serde(default)]
-    attributes: BTreeMap<String, String>,
 }
 
 #[cfg(test)]
@@ -219,11 +233,43 @@ mod tests {
         assert_eq!(message.aggregate_type, "evidence_attachment");
         assert_eq!(message.aggregate_id, "attachment-1");
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
-        assert_eq!(
-            message.attributes["event_type"],
-            "attachment.scan_requested"
-        );
+        assert_eq!(message.request_id.as_deref(), Some("request-1"));
         assert_eq!(message.delivery_attempt, Some(2));
+    }
+
+    #[test]
+    fn ignores_pubsub_attributes_when_decoding_worker_message() {
+        let envelope = json!({
+            "message": {
+                "messageId": "message-1",
+                "data": STANDARD.encode(
+                    json!({
+                        "event_type": "attachment.scan_requested",
+                        "aggregate_type": "evidence_attachment",
+                        "aggregate_id": "attachment-1",
+                        "request_id": "request-1",
+                        "payload": { "scan_id": "scan-1" }
+                    })
+                    .to_string()
+                    .as_bytes()
+                ),
+                "attributes": {
+                    "event_type": "wrong.event",
+                    "aggregate_type": "wrong_aggregate",
+                    "aggregate_id": "wrong-id"
+                }
+            },
+            "deliveryAttempt": 2
+        });
+        let message =
+            decode_worker_message(envelope.to_string().as_bytes()).expect("worker message decodes");
+
+        assert_eq!(message.message_id, "message-1");
+        assert_eq!(message.event_type, "attachment.scan_requested");
+        assert_eq!(message.aggregate_type, "evidence_attachment");
+        assert_eq!(message.aggregate_id, "attachment-1");
+        assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
+        assert_eq!(message.request_id.as_deref(), Some("request-1"));
     }
 
     #[test]
@@ -241,7 +287,6 @@ mod tests {
             "message": {
                 "messageId": "message-1",
                 "data": STANDARD.encode(b"not-json"),
-                "attributes": routing_attributes("attachment.scan_requested")
             }
         });
 
@@ -260,19 +305,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_routing_attributes() {
+    fn rejects_missing_routing_metadata() {
         let envelope = json!({
             "message": {
                 "messageId": "message-1",
                 "data": STANDARD.encode(br#"{"scan_id":"scan-1"}"#),
-                "attributes": {}
             }
         });
 
         assert_eq!(
             decode_worker_message(envelope.to_string().as_bytes())
                 .expect_err("routing metadata is missing"),
-            WorkerMessageDecodeError::MissingAttribute("event_type")
+            WorkerMessageDecodeError::PayloadJson
         );
     }
 
@@ -329,23 +373,21 @@ mod tests {
         json!({
             "message": {
                 "messageId": "message-1",
-                "data": STANDARD.encode(br#"{"scan_id":"scan-1"}"#),
-                "attributes": routing_attributes(event_type)
+                "data": STANDARD.encode(
+                    json!({
+                        "event_type": event_type,
+                        "aggregate_type": "evidence_attachment",
+                        "aggregate_id": "attachment-1",
+                        "request_id": "request-1",
+                        "payload": { "scan_id": "scan-1" }
+                    })
+                    .to_string()
+                    .as_bytes()
+                )
             },
             "deliveryAttempt": 2
         })
         .to_string()
         .into_bytes()
-    }
-
-    fn routing_attributes(event_type: &str) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("event_type".to_owned(), event_type.to_owned()),
-            (
-                "aggregate_type".to_owned(),
-                "evidence_attachment".to_owned(),
-            ),
-            ("aggregate_id".to_owned(), "attachment-1".to_owned()),
-        ])
     }
 }

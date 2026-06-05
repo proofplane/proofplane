@@ -70,7 +70,7 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
 
     assert_eq!(
         dequeuer
-            .run_once(Utc::now())
+            .run_once(Utc::now() + chrono::Duration::seconds(1))
             .await
             .expect("dequeuer run succeeds"),
         1
@@ -85,19 +85,18 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
     received.ack().await.expect("message acks");
     let message = received.message;
 
-    assert_eq!(message.data, br#"{"scan_id":"scan-1"}"#.to_vec());
-    assert_eq!(message.attributes["source"], "integration-test");
-    assert_eq!(message.attributes["priority"], "5");
     assert_eq!(
-        message.attributes["outbox_message_id"],
-        outbox_id.to_string()
+        serde_json::from_slice::<serde_json::Value>(&message.data).expect("message data is JSON"),
+        json!({
+            "outbox_message_id": outbox_id.to_string(),
+            "event_type": "attachment.scan_requested",
+            "aggregate_type": "evidence_attachment",
+            "aggregate_id": "attachment-1",
+            "request_id": null,
+            "payload": { "scan_id": "scan-1" },
+        })
     );
-    assert_eq!(
-        message.attributes["event_type"],
-        "attachment.scan_requested"
-    );
-    assert_eq!(message.attributes["aggregate_type"], "evidence_attachment");
-    assert_eq!(message.attributes["aggregate_id"], "attachment-1");
+    assert!(message.attributes.is_empty());
 }
 
 #[tokio::test]
@@ -231,7 +230,7 @@ async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
         aggregate_type: "evidence_attachment".to_owned(),
         aggregate_id: "attachment-1".to_owned(),
         payload: json!({ "scan_id": "scan-1" }),
-        attributes: json!({ "source": "integration-test", "priority": 5 }),
+        request_id: None,
     };
 
     postgres

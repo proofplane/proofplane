@@ -40,6 +40,7 @@ use crate::{
     routes::{
         authentication::{authorize_workspace_route, ActorContext},
         error::{domain_errors, ApiError},
+        request_context::RequestId,
     },
     services::evidence_submissions::{EvidenceSubmissionService, UploadEvidenceAttachmentPayload},
     validate,
@@ -344,6 +345,7 @@ async fn upload_evidence_attachment(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionAttachmentPath>,
     Extension(actor): Extension<ActorContext>,
+    Extension(request_id): Extension<RequestId>,
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<EvidenceAttachmentUploadResponse>), ApiError> {
     let submission_id = EvidenceSubmissionId::from(path.submission_id);
@@ -364,7 +366,7 @@ async fn upload_evidence_attachment(
             .await?;
     let attachment = state
         .service
-        .create_attachment(actor, submission_id, payload)
+        .create_attachment(actor, request_id.0, submission_id, payload)
         .await?;
 
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))

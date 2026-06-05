@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use async_trait::async_trait;
 use google_cloud_gax::grpc::{Code, Status};
 use google_cloud_gax::retry::RetrySetting;
@@ -43,15 +41,11 @@ impl MessageId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboundMessage {
     pub data: Vec<u8>,
-    pub attributes: BTreeMap<String, String>,
 }
 
 impl OutboundMessage {
-    pub fn new(data: impl Into<Vec<u8>>, attributes: BTreeMap<String, String>) -> Self {
-        Self {
-            data: data.into(),
-            attributes,
-        }
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
+        Self { data: data.into() }
     }
 }
 
@@ -260,7 +254,6 @@ pub fn topic_path(project_id: &str, topic: &TopicName) -> String {
 fn to_google_message(message: OutboundMessage) -> PubsubMessage {
     PubsubMessage {
         data: message.data,
-        attributes: message.attributes.into_iter().collect(),
         ..Default::default()
     }
 }
@@ -384,8 +377,6 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use google_cloud_gax::grpc::Status;
 
     use super::{
@@ -422,10 +413,9 @@ mod tests {
 
     #[test]
     fn stores_outbound_message() {
-        let message = OutboundMessage::new(b"{}".to_vec(), BTreeMap::new());
+        let message = OutboundMessage::new(b"{}".to_vec());
 
         assert_eq!(message.data, b"{}".to_vec());
-        assert!(message.attributes.is_empty());
     }
 
     #[test]
@@ -437,26 +427,13 @@ mod tests {
     }
 
     #[test]
-    fn converts_outbound_message_to_sdk_message_without_changing_payload_or_attributes() {
-        let message = OutboundMessage::new(
-            b"{\"id\":\"message-1\"}".to_vec(),
-            BTreeMap::from([
-                (
-                    "event_type".to_owned(),
-                    "attachment.scan_requested".to_owned(),
-                ),
-                ("source".to_owned(), "outbox".to_owned()),
-            ]),
-        );
+    fn converts_outbound_message_to_sdk_message_without_changing_payload() {
+        let message = OutboundMessage::new(b"{\"id\":\"message-1\"}".to_vec());
 
         let sdk_message = to_google_message(message);
 
         assert_eq!(sdk_message.data, b"{\"id\":\"message-1\"}".to_vec());
-        assert_eq!(
-            sdk_message.attributes["event_type"],
-            "attachment.scan_requested"
-        );
-        assert_eq!(sdk_message.attributes["source"], "outbox");
+        assert!(sdk_message.attributes.is_empty());
     }
 
     #[test]

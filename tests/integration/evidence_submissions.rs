@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use axum_test::multipart::{MultipartForm, Part};
 use chrono::{Duration, SecondsFormat, Utc};
+use proofplane::{pubsub::MESSAGE_BUS_TOPIC, worker::ATTACHMENT_SCAN_REQUESTED};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -78,9 +79,11 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
     let bytes = br#"{"ok":true}"#;
+    let request_id = Uuid::new_v4();
 
     let response = app
         .post(&attachment_collection_path(workspace_id, submission_id))
+        .add_header("x-request-id", request_id.to_string())
         .multipart(attachment_form(
             bytes,
             "artifact.json",
@@ -131,6 +134,30 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         .await
         .json::<Value>();
     assert_eq!(detail["attachments"], json!([body]));
+
+    let outbox_messages = app
+        .postgres()
+        .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 10)
+        .await
+        .expect("outbox messages list");
+    assert_eq!(outbox_messages.len(), 1);
+    let scan_request = &outbox_messages[0];
+    assert_eq!(scan_request.topic.as_str(), MESSAGE_BUS_TOPIC);
+    assert_eq!(scan_request.event_type, ATTACHMENT_SCAN_REQUESTED);
+    assert_eq!(scan_request.aggregate_type, "evidence_attachment");
+    assert_eq!(
+        scan_request.aggregate_id,
+        body["attachment"]["id"].as_str().expect("id is a string")
+    );
+    assert_eq!(
+        scan_request.payload,
+        json!({
+            "evidence_attachment_id": body["attachment"]["id"],
+            "evidence_submission_id": submission_id.to_string(),
+            "object_key": object_key,
+        })
+    );
+    assert_eq!(scan_request.request_id, Some(request_id));
 }
 
 #[tokio::test]

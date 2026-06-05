@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio_postgres::Row;
+use uuid::Uuid;
 
 use crate::{pubsub::TopicName, services::ServiceContext};
 
@@ -13,7 +14,7 @@ pub struct NewOutboxMessage {
     pub aggregate_type: String,
     pub aggregate_id: String,
     pub payload: Value,
-    pub attributes: Value,
+    pub request_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +25,7 @@ pub struct OutboxMessage {
     pub aggregate_type: String,
     pub aggregate_id: String,
     pub payload: Value,
-    pub attributes: Value,
+    pub request_id: Option<Uuid>,
     pub attempt_count: i32,
     pub next_available_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
@@ -45,7 +46,7 @@ INSERT INTO outbox_messages (
     aggregate_type,
     aggregate_id,
     payload,
-    attributes
+    request_id
 )
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING
@@ -55,7 +56,7 @@ RETURNING
     aggregate_type,
     aggregate_id,
     payload,
-    attributes,
+    request_id,
     attempt_count,
     next_available_at,
     created_at
@@ -66,7 +67,7 @@ RETURNING
                     &message.aggregate_type,
                     &message.aggregate_id,
                     &message.payload,
-                    &message.attributes,
+                    &message.request_id,
                 ],
             )
             .await?;
@@ -92,7 +93,7 @@ SELECT
     aggregate_type,
     aggregate_id,
     payload,
-    attributes,
+    request_id,
     attempt_count,
     next_available_at,
     created_at
@@ -124,7 +125,7 @@ SELECT
     aggregate_type,
     aggregate_id,
     payload,
-    attributes,
+    request_id,
     attempt_count,
     next_available_at,
     created_at
@@ -180,7 +181,7 @@ fn outbox_message_from_row(row: Row) -> Result<OutboxMessage, Error> {
         aggregate_type: row.try_get("aggregate_type")?,
         aggregate_id: row.try_get("aggregate_id")?,
         payload: row.try_get("payload")?,
-        attributes: row.try_get("attributes")?,
+        request_id: row.try_get("request_id")?,
         attempt_count: row.try_get("attempt_count")?,
         next_available_at: row.try_get("next_available_at")?,
         created_at: row.try_get("created_at")?,

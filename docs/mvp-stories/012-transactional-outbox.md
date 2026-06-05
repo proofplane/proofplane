@@ -21,7 +21,7 @@ Add an `outbox_messages` table with:
 - `aggregate_type TEXT NOT NULL`
 - `aggregate_id TEXT NOT NULL`
 - `payload JSONB NOT NULL`
-- `attributes JSONB NOT NULL DEFAULT '{}'::jsonb`
+- `request_id UUID`
 - `attempt_count INTEGER NOT NULL DEFAULT 0`
 - `next_available_at TIMESTAMPTZ NOT NULL DEFAULT now()`
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
@@ -32,9 +32,8 @@ successful publish, listing exhausted rows, and recording publish failures by
 incrementing `attempt_count` and scheduling `next_available_at`.
 
 The Pub/Sub side exposes a static-dispatch publisher trait for `OutboundMessage`
-and `TopicName`. The single-process dequeuer polls due rows, publishes each
-payload to the topic stored on the row, adds outbox metadata attributes
-(`outbox_message_id`, `event_type`, `aggregate_type`, `aggregate_id`), deletes
+and `TopicName`. The single-process dequeuer polls due rows, publishes a
+self-describing JSON message envelope to the topic stored on the row, deletes
 only after publish success, and retries failures with backoff while the row
 remains in the table.
 
@@ -64,8 +63,8 @@ Duplicate publishes are acceptable if the process crashes after publish but befo
   listing, and retry scheduling.
 - Dequeuer unit tests use a fake publisher for success, transient failure, and exhausted retry behavior.
 - Pub/Sub/emulator integration test verifies publisher construction provisions
-  the application topic, the dequeuer publishes payload/attributes, and the row
-  is deleted.
+  the application topic, the dequeuer publishes the self-describing message
+  envelope, and the row is deleted.
 
 ## QA Guide
 

@@ -6,6 +6,7 @@ pub async fn handle_scan_requested(message: WorkerMessage) -> Result<(), Retryab
         event_type = %message.event_type,
         aggregate_type = %message.aggregate_type,
         aggregate_id = %message.aggregate_id,
+        request_id = ?message.request_id,
         delivery_attempt = ?message.delivery_attempt,
         "worker message accepted"
     );
