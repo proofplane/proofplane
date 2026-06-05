@@ -358,8 +358,7 @@ async fn create_maps_validation_errors_to_bad_request() {
             "coverage_start_at": "2026-04-01T00:00:00Z",
             "coverage_end_at": "2026-03-31T23:59:59Z",
             "source_system": " ",
-            "collection_method": "",
-            "provenance": ["not", "an", "object"]
+            "collection_method": ""
         }))
         .await;
 
@@ -375,39 +374,9 @@ async fn create_maps_validation_errors_to_bad_request() {
     assert!(details
         .iter()
         .any(|detail| detail == "collection_method must not be empty"));
-    assert!(details
-        .iter()
-        .any(|detail| detail == "provenance must be a JSON object"));
     assert!(details.iter().any(
         |detail| detail == "coverage_end_at must be greater than or equal to coverage_start_at"
     ));
-}
-
-#[tokio::test]
-async fn create_defaults_omitted_provenance_to_empty_object() {
-    let app = TestApp::builder()
-        .workspace("workspace", "Default provenance workspace")
-        .with_default_membership()
-        .build()
-        .await;
-    let workspace_id = app.workspace_id("workspace");
-    let request = app
-        .create_evidence_request(workspace_id, &evidence_request("Default provenance target"))
-        .await;
-    let evidence_request_id = created_id(&request);
-
-    let response = app
-        .post(&collection_path(workspace_id, evidence_request_id))
-        .json(&json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-03-31T23:59:59Z",
-            "source_system": "okta",
-            "collection_method": "api_export"
-        }))
-        .await;
-
-    response.assert_status_ok();
-    assert_eq!(response.json::<Value>()["provenance"], json!({}));
 }
 
 #[tokio::test]
@@ -572,11 +541,7 @@ fn evidence_submission() -> Value {
         "coverage_start_at": "2026-01-01T00:00:00Z",
         "coverage_end_at": "2026-03-31T23:59:59Z",
         "source_system": "okta",
-        "collection_method": "api_export",
-        "provenance": {
-            "external_run_id": "run-123",
-            "exported_at": "2026-04-01T00:00:00Z"
-        }
+        "collection_method": "api_export"
     })
 }
 
@@ -586,7 +551,6 @@ fn assert_submission_matches(response: &Value, request: &Value) {
         "coverage_end_at",
         "source_system",
         "collection_method",
-        "provenance",
     ] {
         assert_eq!(response[field], request[field], "field {field} differs");
     }

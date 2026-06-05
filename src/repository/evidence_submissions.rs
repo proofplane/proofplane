@@ -28,13 +28,12 @@ INSERT INTO evidence_submissions (
     coverage_start_at,
     coverage_end_at,
     source_system,
-    collection_method,
-    provenance
+    collection_method
 )
-SELECT er.id, $2, $3, $4, $5, $6, $7
+SELECT er.id, $2, $3, $4, $5, $6
 FROM evidence_requests er
 WHERE er.id = $1
-  AND er.workspace_id = $8
+  AND er.workspace_id = $7
 RETURNING
     id,
     evidence_request_id,
@@ -43,8 +42,7 @@ RETURNING
     coverage_start_at,
     coverage_end_at,
     source_system,
-    collection_method,
-    provenance
+    collection_method
 "#,
                 &[
                     &Uuid::from(payload.evidence_request_id),
@@ -53,7 +51,6 @@ RETURNING
                     &payload.coverage_end_at,
                     &payload.source_system,
                     &payload.collection_method,
-                    &payload.provenance,
                     &Uuid::from(self.workspace_id),
                 ],
             )
@@ -106,7 +103,6 @@ SELECT
     s.coverage_end_at,
     s.source_system,
     s.collection_method,
-    s.provenance,
     a.id AS attachment_id,
     a.evidence_submission_id AS attachment_submission_id,
     a.filename,
@@ -163,7 +159,6 @@ SELECT
     s.coverage_end_at,
     s.source_system,
     s.collection_method,
-    s.provenance,
     a.id AS attachment_id,
     a.evidence_submission_id AS attachment_submission_id,
     a.filename,
@@ -335,7 +330,6 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         coverage_end_at: row.try_get("coverage_end_at")?,
         source_system: row.try_get("source_system")?,
         collection_method: row.try_get("collection_method")?,
-        provenance: row.try_get("provenance")?,
     })
 }
 

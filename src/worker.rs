@@ -26,6 +26,8 @@ use crate::{
         metrics::{self, MetricsState},
         request_context::attach_request_id,
     },
+    validate,
+    validation::Validation,
 };
 
 pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
@@ -51,6 +53,12 @@ pub enum WorkerMessageDecodeError {
     InvalidBase64,
     #[error("message data must be a JSON payload")]
     PayloadJson,
+    #[error("message data envelope is invalid")]
+    DataValidation(Vec<WorkerMessageDataValidationError>),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WorkerMessageDataValidationError {
     #[error("message data envelope must include {0}")]
     MissingField(&'static str),
 }
@@ -157,9 +165,11 @@ pub fn decode_worker_message(body: &[u8]) -> Result<WorkerMessage, WorkerMessage
     let data = STANDARD
         .decode(message.data.as_bytes())
         .map_err(|_| WorkerMessageDecodeError::InvalidBase64)?;
-    let data_payload: Value =
-        serde_json::from_slice(&data).map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
-    let data = WorkerMessageData::try_from(data_payload)?;
+    let data = serde_json::from_slice::<WorkerMessageDataDTO>(&data)
+        .map_err(|_| WorkerMessageDecodeError::PayloadJson)?
+        .into_message_data()
+        .into_result()
+        .map_err(WorkerMessageDecodeError::DataValidation)?;
 
     Ok(WorkerMessage {
         message_id: message.message_id,
@@ -173,33 +183,58 @@ pub fn decode_worker_message(body: &[u8]) -> Result<WorkerMessage, WorkerMessage
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkerMessageDataDTO {
+    event_type: Option<String>,
+    aggregate_type: Option<String>,
+    aggregate_id: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    payload: Option<Value>,
+}
+
+impl WorkerMessageDataDTO {
+    fn into_message_data(self) -> Validation<WorkerMessageData, WorkerMessageDataValidationError> {
+        validate! {
+            event_type <- required_message_string("event_type", self.event_type),
+            aggregate_type <- required_message_string("aggregate_type", self.aggregate_type),
+            aggregate_id <- required_message_string("aggregate_id", self.aggregate_id),
+            payload <- required_message_value("payload", self.payload),
+            => WorkerMessageData {
+                event_type,
+                aggregate_type,
+                aggregate_id,
+                request_id: self.request_id,
+                payload,
+            },
+        }
+    }
+}
+
 struct WorkerMessageData {
     event_type: String,
     aggregate_type: String,
     aggregate_id: String,
-    #[serde(default)]
     request_id: Option<String>,
     payload: Value,
 }
 
-impl TryFrom<Value> for WorkerMessageData {
-    type Error = WorkerMessageDecodeError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let data: Self =
-            serde_json::from_value(value).map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
-        if data.event_type.trim().is_empty() {
-            return Err(WorkerMessageDecodeError::MissingField("event_type"));
-        }
-        if data.aggregate_type.trim().is_empty() {
-            return Err(WorkerMessageDecodeError::MissingField("aggregate_type"));
-        }
-        if data.aggregate_id.trim().is_empty() {
-            return Err(WorkerMessageDecodeError::MissingField("aggregate_id"));
-        }
-
-        Ok(data)
+fn required_message_string(
+    field: &'static str,
+    value: Option<String>,
+) -> Validation<String, WorkerMessageDataValidationError> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Validation::valid(value),
+        _ => Validation::invalid(WorkerMessageDataValidationError::MissingField(field)),
     }
+}
+
+fn required_message_value(
+    field: &'static str,
+    value: Option<Value>,
+) -> Validation<Value, WorkerMessageDataValidationError> {
+    value.map(Validation::valid).unwrap_or_else(|| {
+        Validation::invalid(WorkerMessageDataValidationError::MissingField(field))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,7 +351,12 @@ mod tests {
         assert_eq!(
             decode_worker_message(envelope.to_string().as_bytes())
                 .expect_err("routing metadata is missing"),
-            WorkerMessageDecodeError::PayloadJson
+            WorkerMessageDecodeError::DataValidation(vec![
+                WorkerMessageDataValidationError::MissingField("event_type"),
+                WorkerMessageDataValidationError::MissingField("aggregate_type"),
+                WorkerMessageDataValidationError::MissingField("aggregate_id"),
+                WorkerMessageDataValidationError::MissingField("payload"),
+            ])
         );
     }
 

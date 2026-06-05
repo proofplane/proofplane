@@ -1,7 +1,6 @@
 use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 use super::{ids::uuid_id, ActorId, DomainError, EvidenceRequestId};
 
@@ -64,9 +63,6 @@ pub struct EvidenceSubmission {
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
-    // Integration-specific receipt metadata, such as external run IDs,
-    // source URLs, export timestamps, or webhook delivery IDs.
-    pub provenance: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +72,6 @@ pub struct CreateEvidenceSubmissionPayload {
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
-    pub provenance: Value,
 }
 
 /**

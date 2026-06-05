@@ -23,7 +23,6 @@ use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use sfv::{BareItem, Dictionary, ListEntry, Parser};
 use tracing::error;
 use uuid::Uuid;
@@ -138,7 +137,6 @@ struct EvidenceSubmissionDTO {
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
-    provenance: Option<Value>,
 }
 
 impl EvidenceSubmissionDTO {
@@ -152,7 +150,6 @@ impl EvidenceSubmissionDTO {
         validate! {
             source_system <- required_text("source_system", self.source_system),
             collection_method <- required_text("collection_method", self.collection_method),
-            provenance <- validate_provenance(self.provenance),
             coverage_window <- validate_coverage_window(coverage_start_at, coverage_end_at),
             => CreateEvidenceSubmissionPayload {
                 evidence_request_id,
@@ -160,7 +157,6 @@ impl EvidenceSubmissionDTO {
                 coverage_end_at: coverage_window.1,
                 source_system,
                 collection_method,
-                provenance,
             },
         }
     }
@@ -191,7 +187,6 @@ struct EvidenceSubmissionResponse {
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
-    provenance: Value,
 }
 
 impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
@@ -205,7 +200,6 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
             coverage_end_at: submission.coverage_end_at,
             source_system: submission.source_system,
             collection_method: submission.collection_method,
-            provenance: submission.provenance,
         }
     }
 }
@@ -524,14 +518,6 @@ fn encode_crc32c_base64(value: u32) -> String {
     BASE64_STANDARD.encode(value.to_be_bytes())
 }
 
-fn validate_provenance(value: Option<Value>) -> Validation<Value, DomainError> {
-    match value {
-        None => Validation::valid(Value::Object(Map::new())),
-        Some(value @ Value::Object(_)) => Validation::valid(value),
-        Some(_) => Validation::invalid(DomainError::InvalidProvenanceObject),
-    }
-}
-
 fn validate_coverage_window(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -546,7 +532,6 @@ fn validate_coverage_window(
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, Utc};
-    use serde_json::json;
     use uuid::Uuid;
 
     use super::{
@@ -557,15 +542,11 @@ mod tests {
 
     #[test]
     fn submission_dto_maps_to_create_payload() {
-        let payload = valid_dto(None)
-            .into_new(request_id())
-            .into_result()
-            .unwrap();
+        let payload = valid_dto().into_new(request_id()).into_result().unwrap();
 
         assert_eq!(payload.evidence_request_id, request_id());
         assert_eq!(payload.source_system, "okta");
         assert_eq!(payload.collection_method, "api_export");
-        assert_eq!(payload.provenance, json!({}));
     }
 
     #[test]
@@ -575,7 +556,6 @@ mod tests {
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: " ".to_owned(),
             collection_method: "\t".to_owned(),
-            provenance: Some(json!("external-run-123")),
         }
         .into_new(request_id())
         .into_result()
@@ -590,7 +570,6 @@ mod tests {
                 DomainError::EmptyRequiredText {
                     field: "collection_method"
                 },
-                DomainError::InvalidProvenanceObject,
                 DomainError::InvalidCoverageWindow,
             ]
         );
@@ -660,13 +639,12 @@ mod tests {
 
         assert_eq!(error, "checksum_crc32c does not match file content");
     }
-    fn valid_dto(provenance: Option<serde_json::Value>) -> EvidenceSubmissionDTO {
+    fn valid_dto() -> EvidenceSubmissionDTO {
         EvidenceSubmissionDTO {
             coverage_start_at: instant("2026-01-01T00:00:00Z"),
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: "okta".to_owned(),
             collection_method: "api_export".to_owned(),
-            provenance,
         }
     }
 

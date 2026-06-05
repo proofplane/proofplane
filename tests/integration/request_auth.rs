@@ -432,8 +432,7 @@ fn submission_body() -> Value {
         "coverage_start_at": "2026-01-01T00:00:00Z",
         "coverage_end_at": "2026-03-31T23:59:59Z",
         "source_system": "okta",
-        "collection_method": "api_export",
-        "provenance": {}
+        "collection_method": "api_export"
     })
 }
 

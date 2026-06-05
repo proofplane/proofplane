@@ -156,7 +156,6 @@ CREATE TABLE IF NOT EXISTS evidence_submissions (
     coverage_end_at TIMESTAMPTZ NOT NULL,
     source_system TEXT NOT NULL,
     collection_method TEXT NOT NULL,
-    provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
     CHECK (coverage_end_at >= coverage_start_at)
 );
 
