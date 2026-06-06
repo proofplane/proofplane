@@ -364,6 +364,10 @@ where
 
     async fn delete_quarantine_object(&self, object_key: &str) {
         let Ok(key) = ObjectKey::parse(object_key.to_owned()) else {
+            tracing::warn!(
+                object_key = %object_key,
+                "failed to parse object_key when attempting to delete quarantined object"
+            );
             return;
         };
 
