@@ -107,7 +107,7 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         hex::encode(Sha256::digest(bytes))
     );
     assert_eq!(body["attachment"]["checksum_crc32c"], crc32c_base64(bytes));
-    assert_eq!(body["attachment"]["upload_status"], "pending_upload");
+    assert_eq!(body["attachment"]["upload_status"], "pending");
     assert!(body["attachment"]["object_key"]
         .as_str()
         .expect("object key is a string")

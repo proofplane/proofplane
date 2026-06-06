@@ -18,10 +18,10 @@ pub enum AttachmentUploadStatus {
 impl AttachmentUploadStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::PendingUpload => "pending_upload",
+            Self::PendingUpload => "pending",
             Self::Uploaded => "uploaded",
             Self::ContainsVirus => "contains_virus",
-            Self::FailedUpload => "failed_upload",
+            Self::FailedUpload => "failed",
         }
     }
 }
@@ -37,10 +37,10 @@ impl FromStr for AttachmentUploadStatus {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "pending_upload" => Ok(Self::PendingUpload),
+            "pending" => Ok(Self::PendingUpload),
             "uploaded" => Ok(Self::Uploaded),
             "contains_virus" => Ok(Self::ContainsVirus),
-            "failed_upload" => Ok(Self::FailedUpload),
+            "failed" => Ok(Self::FailedUpload),
             _ => Err(DomainError::InvalidEnumValue {
                 field: "upload_status",
                 value: value.to_owned(),
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn upload_status_parses_allowed_values() {
         assert_eq!(
-            AttachmentUploadStatus::from_str("pending_upload").unwrap(),
+            AttachmentUploadStatus::from_str("pending").unwrap(),
             AttachmentUploadStatus::PendingUpload
         );
         assert_eq!(
@@ -149,7 +149,7 @@ mod tests {
             AttachmentUploadStatus::ContainsVirus
         );
         assert_eq!(
-            AttachmentUploadStatus::from_str("failed_upload").unwrap(),
+            AttachmentUploadStatus::from_str("failed").unwrap(),
             AttachmentUploadStatus::FailedUpload
         );
     }

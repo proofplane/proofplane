@@ -171,8 +171,8 @@ CREATE TABLE IF NOT EXISTS evidence_attachments (
     object_key TEXT NOT NULL UNIQUE,
     checksum_sha256 TEXT NOT NULL,
     checksum_crc32c TEXT NOT NULL,
-    upload_status TEXT NOT NULL DEFAULT 'pending_upload'
-        CHECK (upload_status IN ('pending_upload', 'uploaded', 'contains_virus', 'failed_upload'))
+    upload_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (upload_status IN ('pending', 'uploaded', 'contains_virus', 'failed'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_evidence_attachments_submission

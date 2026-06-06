@@ -51,7 +51,7 @@ JOIN evidence_submissions s ON s.id = a.evidence_submission_id
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE a.id = $1
   AND a.object_key = $2
-  AND a.upload_status = 'pending_upload'
+  AND a.upload_status = 'pending'
 "#,
                 &[&Uuid::from(evidence_attachment_id), &quarantine_object_key],
             )
@@ -78,7 +78,7 @@ SET object_key = $3,
     upload_status = 'uploaded'
 WHERE a.id = $1
   AND a.object_key = $2
-  AND a.upload_status = 'pending_upload'
+  AND a.upload_status = 'pending'
 "#,
                 &[
                     &Uuid::from(evidence_attachment_id),
@@ -136,7 +136,7 @@ UPDATE evidence_attachments a
 SET upload_status = $3
 WHERE a.id = $1
   AND a.object_key = $2
-  AND a.upload_status = 'pending_upload'
+  AND a.upload_status = 'pending'
 "#,
                 &[
                     &Uuid::from(evidence_attachment_id),
@@ -333,7 +333,7 @@ INSERT INTO evidence_attachments (
     checksum_crc32c,
     upload_status
 )
-SELECT s.id, $2, $3, $4, $5, $6, $7, 'pending_upload'
+SELECT s.id, $2, $3, $4, $5, $6, $7, 'pending'
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE s.id = $1
