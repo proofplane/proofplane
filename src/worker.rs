@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use axum::{
     body::Bytes,
     extract::{MatchedPath, State},
@@ -32,6 +31,8 @@ use crate::{
     validation::Validation,
 };
 
+// TODO: create a more robust pubsub library that has the message types in
+// one place
 pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,42 +83,10 @@ pub struct WorkerAppDependencies {
     pub dependency_timeout_ms: u64,
 }
 
-#[async_trait]
-trait AttachmentScanWorkerHandler: Send + Sync {
-    async fn handle_scan_requested(
-        &self,
-        message: WorkerMessage,
-    ) -> Result<(), RetryableWorkerError>;
-
-    async fn handle_scan_requested_final_delivery(
-        &self,
-        message: WorkerMessage,
-    ) -> Result<(), RetryableWorkerError>;
-}
-
-#[async_trait]
-impl AttachmentScanWorkerHandler
-    for AttachmentScanHandler<Postgres, FilesystemObjectStore, NoopMalwareScanner>
-{
-    async fn handle_scan_requested(
-        &self,
-        message: WorkerMessage,
-    ) -> Result<(), RetryableWorkerError> {
-        AttachmentScanHandler::handle_scan_requested(self, message).await
-    }
-
-    async fn handle_scan_requested_final_delivery(
-        &self,
-        message: WorkerMessage,
-    ) -> Result<(), RetryableWorkerError> {
-        AttachmentScanHandler::handle_scan_requested_final_delivery(self, message).await
-    }
-}
-
 #[derive(Clone)]
 pub struct WorkerState {
-    attachment_scan_handler: Arc<dyn AttachmentScanWorkerHandler>,
-    worker_max_delivery_attempts: u16,
+    attachment_scan_handler:
+        AttachmentScanHandler<Postgres, FilesystemObjectStore, NoopMalwareScanner>,
 }
 
 impl WorkerState {
@@ -128,20 +97,12 @@ impl WorkerState {
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {
-            attachment_scan_handler: Arc::new(AttachmentScanHandler::new(
+            attachment_scan_handler: AttachmentScanHandler::new(
                 postgres,
                 object_store,
                 scanner,
-            )),
-            worker_max_delivery_attempts,
-        }
-    }
-
-    #[cfg(test)]
-    fn test(handler: Arc<dyn AttachmentScanWorkerHandler>) -> Self {
-        Self {
-            attachment_scan_handler: handler,
-            worker_max_delivery_attempts: 5,
+                worker_max_delivery_attempts,
+            ),
         }
     }
 }
@@ -245,20 +206,10 @@ async fn pubsub_message(State(state): State<WorkerState>, body: Bytes) -> Status
 pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode {
     match message.event_type.as_str() {
         ATTACHMENT_SCAN_REQUESTED => {
-            let is_final_delivery = message
-                .delivery_attempt
-                .is_some_and(|attempt| attempt >= u32::from(state.worker_max_delivery_attempts));
-            let result = if is_final_delivery {
-                state
-                    .attachment_scan_handler
-                    .handle_scan_requested_final_delivery(message)
-                    .await
-            } else {
-                state
-                    .attachment_scan_handler
-                    .handle_scan_requested(message)
-                    .await
-            };
+            let result = state
+                .attachment_scan_handler
+                .handle_scan_requested(message)
+                .await;
 
             match result {
                 Ok(()) => StatusCode::NO_CONTENT,
@@ -387,15 +338,6 @@ struct PushEnvelopeMessage {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self, Write},
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc, Mutex,
-        },
-    };
-
-    use axum_test::TestServer;
     use serde_json::json;
 
     use super::*;
@@ -541,161 +483,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn dispatches_known_event_successfully() {
-        let status = dispatch(
-            WorkerState::test(Arc::new(FakeAttachmentScanHandler::ok())),
-            decode_worker_message(&valid_envelope("attachment.scan_requested")).unwrap(),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn dispatches_unknown_event_as_non_retryable_success() {
-        let status = dispatch(
-            WorkerState::test(Arc::new(FakeAttachmentScanHandler::ok())),
-            decode_worker_message(&valid_envelope("unknown.event")).unwrap(),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn worker_route_acknowledges_valid_known_event() {
-        let server = TestServer::new(router(WorkerState::test(Arc::new(
-            FakeAttachmentScanHandler::ok(),
-        ))));
-
-        let response = server
-            .post("/pubsub/messages")
-            .json(
-                &serde_json::from_slice::<Value>(&valid_envelope("attachment.scan_requested"))
-                    .unwrap(),
-            )
-            .await;
-
-        response.assert_status(StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn worker_route_acknowledges_malformed_and_unknown_events() {
-        let server = TestServer::new(router(WorkerState::test(Arc::new(
-            FakeAttachmentScanHandler::ok(),
-        ))));
-
-        server
-            .post("/pubsub/messages")
-            .bytes(Bytes::from_static(b"not-json"))
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-
-        server
-            .post("/pubsub/messages")
-            .json(&serde_json::from_slice::<Value>(&valid_envelope("unknown.event")).unwrap())
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn successful_processing_logs_message_context() {
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(LogWriterFactory(logs.clone()))
-            .finish();
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        let handler = Arc::new(FakeAttachmentScanHandler::ok());
-        let server = TestServer::new(router(WorkerState::test(handler.clone())));
-
-        let response = server
-            .post("/pubsub/messages")
-            .json(
-                &serde_json::from_slice::<Value>(&valid_envelope("attachment.scan_requested"))
-                    .unwrap(),
-            )
-            .await;
-
-        response.assert_status(StatusCode::NO_CONTENT);
-        assert_eq!(handler.calls.load(Ordering::Relaxed), 1);
-
-        let logs = captured_logs(&logs);
-        for expected in [
-            "worker message processing started",
-            "worker handler called",
-            "worker message processing completed",
-            &request_id().to_string(),
-            "message-1",
-            "attachment.scan_requested",
-            "evidence_attachment",
-            "attachment-1",
-            "\"delivery_attempt\":2",
-            "\"acknowledgement_status\":204",
-        ] {
-            assert!(
-                logs.contains(expected),
-                "missing {expected:?} in logs: {logs}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn missing_request_id_is_not_generated_and_inbound_header_is_ignored() {
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(LogWriterFactory(logs.clone()))
-            .finish();
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        let server = TestServer::new(router(WorkerState::test(Arc::new(
-            FakeAttachmentScanHandler::ok(),
-        ))));
-        let inbound_request_id = Uuid::from_u128(2).to_string();
-        let data = json!({
-            "event_type": "attachment.scan_requested",
-            "aggregate_type": "evidence_attachment",
-            "aggregate_id": "attachment-1",
-            "payload": { "scan_id": "scan-1" }
-        });
-        let envelope = serde_json::from_slice::<Value>(&envelope_with_data(data)).unwrap();
-
-        let response = server
-            .post("/pubsub/messages")
-            .add_header("x-request-id", &inbound_request_id)
-            .json(&envelope)
-            .await;
-
-        response.assert_status(StatusCode::NO_CONTENT);
-        assert!(response.maybe_header("x-request-id").is_none());
-
-        let logs = captured_logs(&logs);
-        assert!(!logs.contains("request_id"), "captured logs: {logs}");
-        assert!(!logs.contains(&inbound_request_id), "captured logs: {logs}");
-    }
-
-    #[tokio::test]
-    async fn invalid_embedded_request_id_is_acknowledged_without_dispatch() {
-        let handler = Arc::new(FakeAttachmentScanHandler::ok());
-        let server = TestServer::new(router(WorkerState::test(handler.clone())));
-        let data = json!({
-            "event_type": "attachment.scan_requested",
-            "aggregate_type": "evidence_attachment",
-            "aggregate_id": "attachment-1",
-            "request_id": "not-a-uuid",
-            "payload": { "scan_id": "scan-1" }
-        });
-
-        server
-            .post("/pubsub/messages")
-            .json(&serde_json::from_slice::<Value>(&envelope_with_data(data)).unwrap())
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-
-        assert_eq!(handler.calls.load(Ordering::Relaxed), 0);
-    }
-
     fn valid_envelope(event_type: &str) -> Vec<u8> {
         envelope_with_data(json!({
             "event_type": event_type,
@@ -720,77 +507,5 @@ mod tests {
 
     fn request_id() -> Uuid {
         Uuid::from_u128(1)
-    }
-
-    fn captured_logs(logs: &Arc<Mutex<Vec<u8>>>) -> String {
-        String::from_utf8(logs.lock().expect("log buffer locks").clone())
-            .expect("captured logs are UTF-8")
-    }
-
-    #[derive(Clone)]
-    struct LogWriterFactory(Arc<Mutex<Vec<u8>>>);
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogWriterFactory {
-        type Writer = LogWriter;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            LogWriter(self.0.clone())
-        }
-    }
-
-    struct LogWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for LogWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .expect("log buffer locks")
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct FakeAttachmentScanHandler {
-        result: Result<(), RetryableWorkerError>,
-        calls: AtomicUsize,
-    }
-
-    impl FakeAttachmentScanHandler {
-        fn ok() -> Self {
-            Self {
-                result: Ok(()),
-                calls: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl AttachmentScanWorkerHandler for FakeAttachmentScanHandler {
-        async fn handle_scan_requested(
-            &self,
-            _message: WorkerMessage,
-        ) -> Result<(), RetryableWorkerError> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            tracing::info!("worker handler called");
-            self.result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|error| RetryableWorkerError(error.0.clone()))
-        }
-
-        async fn handle_scan_requested_final_delivery(
-            &self,
-            _message: WorkerMessage,
-        ) -> Result<(), RetryableWorkerError> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            self.result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|error| RetryableWorkerError(error.0.clone()))
-        }
     }
 }

@@ -155,6 +155,7 @@ pub struct AttachmentScanHandler<R, S, C> {
     repository: Arc<R>,
     object_store: Arc<S>,
     scanner: Arc<C>,
+    max_delivery_attempts: u16,
 }
 
 impl<R, S, C> Clone for AttachmentScanHandler<R, S, C> {
@@ -163,16 +164,23 @@ impl<R, S, C> Clone for AttachmentScanHandler<R, S, C> {
             repository: self.repository.clone(),
             object_store: self.object_store.clone(),
             scanner: self.scanner.clone(),
+            max_delivery_attempts: self.max_delivery_attempts,
         }
     }
 }
 
 impl<R, S, C> AttachmentScanHandler<R, S, C> {
-    pub fn new(repository: Arc<R>, object_store: Arc<S>, scanner: Arc<C>) -> Self {
+    pub fn new(
+        repository: Arc<R>,
+        object_store: Arc<S>,
+        scanner: Arc<C>,
+        max_delivery_attempts: u16,
+    ) -> Self {
         Self {
             repository,
             object_store,
             scanner,
+            max_delivery_attempts,
         }
     }
 }
@@ -187,23 +195,9 @@ where
         &self,
         message: WorkerMessage,
     ) -> Result<(), RetryableWorkerError> {
-        self.handle_scan_requested_with_delivery(message, false)
-            .await
-    }
-
-    pub async fn handle_scan_requested_final_delivery(
-        &self,
-        message: WorkerMessage,
-    ) -> Result<(), RetryableWorkerError> {
-        self.handle_scan_requested_with_delivery(message, true)
-            .await
-    }
-
-    async fn handle_scan_requested_with_delivery(
-        &self,
-        message: WorkerMessage,
-        final_delivery: bool,
-    ) -> Result<(), RetryableWorkerError> {
+        let final_delivery = message
+            .delivery_attempt
+            .is_some_and(|attempt| attempt >= u32::from(self.max_delivery_attempts));
         let payload = match ScanRequestedPayload::try_from_message(&message) {
             Ok(payload) => payload,
             Err(error) => {
@@ -599,25 +593,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scanner_adapter_errors_are_retryable() {
+    async fn scanner_adapter_error_without_delivery_attempt_is_retryable() {
         let fixture = Fixture::scanner_error();
+        let mut message = fixture.message();
+        message.delivery_attempt = None;
 
-        let result = fixture
-            .handler()
-            .handle_scan_requested(fixture.message())
-            .await;
+        let result = fixture.handler().handle_scan_requested(message).await;
 
         assert!(result.is_err());
         assert!(fixture.repository.state.lock().unwrap().failed.is_empty());
     }
 
     #[tokio::test]
-    async fn scanner_adapter_errors_mark_failed_on_final_delivery() {
+    async fn scanner_adapter_error_below_maximum_is_retryable() {
         let fixture = Fixture::scanner_error();
+        let mut message = fixture.message();
+        message.delivery_attempt = Some(u32::from(MAX_DELIVERY_ATTEMPTS - 1));
+
+        let result = fixture.handler().handle_scan_requested(message).await;
+
+        assert!(result.is_err());
+        assert!(fixture.repository.state.lock().unwrap().failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scanner_adapter_error_at_maximum_marks_failed() {
+        let fixture = Fixture::scanner_error();
+        let mut message = fixture.message();
+        message.delivery_attempt = Some(u32::from(MAX_DELIVERY_ATTEMPTS));
 
         fixture
             .handler()
-            .handle_scan_requested_final_delivery(fixture.message())
+            .handle_scan_requested(message)
+            .await
+            .expect("handler succeeds");
+
+        let repo = fixture.repository.state.lock().unwrap();
+        assert_eq!(repo.failed.len(), 1);
+        assert!(repo.failed[0].2.contains("malware scanner is unavailable"));
+        drop(repo);
+
+        let store = fixture.object_store.state.lock().unwrap();
+        assert_eq!(store.deleted, vec![fixture.object_key.clone()]);
+    }
+
+    #[tokio::test]
+    async fn scanner_adapter_error_above_maximum_marks_failed() {
+        let fixture = Fixture::scanner_error();
+        let mut message = fixture.message();
+        message.delivery_attempt = Some(u32::from(MAX_DELIVERY_ATTEMPTS) + 1);
+
+        fixture
+            .handler()
+            .handle_scan_requested(message)
             .await
             .expect("handler succeeds");
 
@@ -689,6 +717,8 @@ mod tests {
         scanner: Arc<FakeScanner>,
     }
 
+    const MAX_DELIVERY_ATTEMPTS: u16 = 5;
+
     impl Fixture {
         fn new(outcome: MalwareScanOutcome) -> Self {
             let attachment_id = Uuid::new_v4();
@@ -731,6 +761,7 @@ mod tests {
                 self.repository.clone(),
                 self.object_store.clone(),
                 self.scanner.clone(),
+                MAX_DELIVERY_ATTEMPTS,
             )
         }
 
