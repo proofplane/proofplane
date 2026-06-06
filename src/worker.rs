@@ -70,6 +70,7 @@ pub enum WorkerMessageDataValidationError {
 
 #[derive(Debug, Error)]
 #[error("retryable handler failure: {0}")]
+/// Returning this error produces an HTTP 500 so Pub/Sub retries the delivery.
 pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {

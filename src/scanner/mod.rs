@@ -35,6 +35,9 @@ pub enum MalwareScanOutcome {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MalwareScanError {
+    #[error("object was not found in storage")]
+    ObjectNotFound,
+
     #[error("malware scanner is unavailable: {reason}")]
     Unavailable { reason: String },
 
@@ -140,6 +143,10 @@ mod tests {
 
     #[test]
     fn malware_scan_error_formats_basic_adapter_failures() {
+        assert_eq!(
+            MalwareScanError::ObjectNotFound.to_string(),
+            "object was not found in storage"
+        );
         assert_eq!(
             MalwareScanError::Unavailable {
                 reason: "clamd connection refused".to_owned()

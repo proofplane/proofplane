@@ -147,7 +147,6 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
     assert_eq!(
         scan_request.payload,
         json!({
-            "evidence_attachment_id": body["attachment"]["id"],
             "evidence_submission_id": submission_id.to_string(),
             "object_key": object_key,
         })

@@ -9,6 +9,7 @@ use crate::{
 
 mod actors;
 mod api_credentials;
+mod attachment_scan;
 mod controls;
 pub mod error;
 mod evidence_requests;
@@ -16,6 +17,7 @@ mod evidence_submissions;
 mod outbox;
 mod workspaces;
 
+pub use attachment_scan::AttachmentScanRepository;
 pub use error::Error;
 pub use evidence_submissions::PendingAttachmentUploadWork;
 pub use outbox::{NewOutboxMessage, OutboxMessage};

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use tokio_postgres::Row;
 use uuid::Uuid;
 

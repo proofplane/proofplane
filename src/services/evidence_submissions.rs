@@ -199,7 +199,6 @@ fn attachment_scan_requested_message(
         aggregate_type: "evidence_attachment".to_owned(),
         aggregate_id: Uuid::from(attachment.id).to_string(),
         payload: serde_json::json!({
-            "evidence_attachment_id": Uuid::from(attachment.id).to_string(),
             "evidence_submission_id": Uuid::from(attachment.evidence_submission_id).to_string(),
             "object_key": attachment.object_key,
         }),
