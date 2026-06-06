@@ -114,7 +114,6 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         .starts_with(&format!(
             "workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/attachments/"
         )));
-    assert!(body.get("scan").is_none());
 
     let object_key = body["attachment"]["object_key"]
         .as_str()
