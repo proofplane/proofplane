@@ -79,6 +79,7 @@ async fn run() -> Result<(), Error> {
         postgres,
         object_store,
         scanner,
+        worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,
         live_path: config.health.live_path.clone(),
         ready_path: config.health.ready_path.clone(),

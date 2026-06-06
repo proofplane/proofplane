@@ -107,18 +107,14 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         hex::encode(Sha256::digest(bytes))
     );
     assert_eq!(body["attachment"]["checksum_crc32c"], crc32c_base64(bytes));
+    assert_eq!(body["attachment"]["upload_status"], "pending_upload");
     assert!(body["attachment"]["object_key"]
         .as_str()
         .expect("object key is a string")
         .starts_with(&format!(
             "workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/attachments/"
         )));
-    assert_eq!(body["scan"]["scan_status"], "pending");
-    assert_eq!(
-        body["scan"]["evidence_attachment_id"],
-        body["attachment"]["id"]
-    );
-    assert_timestamp(&body["scan"]["updated_at"]);
+    assert!(body.get("scan").is_none());
 
     let object_key = body["attachment"]["object_key"]
         .as_str()
@@ -133,7 +129,7 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         .get(&item_path(workspace_id, submission_id))
         .await
         .json::<Value>();
-    assert_eq!(detail["attachments"], json!([body]));
+    assert_eq!(detail["attachments"], json!([body["attachment"]]));
 
     let outbox_messages = app
         .postgres()

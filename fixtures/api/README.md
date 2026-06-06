@@ -218,28 +218,23 @@ curl --include \
 
 ## Submissions
 
-```
-REQ_JSON=$(curl --fail-with-body \
-  --request POST \
-  --header 'content-type: application/json' \
+```bash
+EVIDENCE_REQUEST_ID=$(curl --fail-with-body \
   --header "x-proofplane-actor-id: $ACTOR_ID" \
   --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
-  --data @fixtures/api/evidence-requests/create-quarterly-access-review.json \
-  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests")
-
-export EVIDENCE_REQUEST_ID=$(jq -r .id <<< "$REQ_JSON")
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests" | jq -rc '.[] | select(.title=="Monthly vulnerability scan") | .id')
 
 SUB_JSON=$(curl --fail-with-body \
   --request POST \
   --header 'content-type: application/json' \
   --header "x-proofplane-actor-id: $ACTOR_ID" \
   --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
-  --data @fixtures/api/evidence-submissions/create-manual-qa-submission.json \
+  --data @fixtures/api/evidence-submissions/monthly-vulnerability-scan.json \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-requests/$EVIDENCE_REQUEST_ID/submissions")
 
 export SUBMISSION_ID=$(jq -r .id <<< "$SUB_JSON")
 
-DIGEST=$(scripts/content-digest-crc32c.py fixtures/api/evidence-submissions/manual-qa-attachment.txt)
+DIGEST=$(scripts/content-digest-crc32c.py fixtures/api/evidence-submissions/vuln-scanner-results.txt)
 printf 'Content-Digest: %s\n' "$DIGEST" > /tmp/proofplane-part-headers.txt
 
 ATTACH_JSON=$(curl --fail-with-body \
@@ -247,7 +242,7 @@ ATTACH_JSON=$(curl --fail-with-body \
   --header "x-request-id: $(uuidgen)" \
   --header "x-proofplane-actor-id: $ACTOR_ID" \
   --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
-  --form "file=@fixtures/api/evidence-submissions/manual-qa-attachment.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
+  --form "file=@fixtures/api/evidence-submissions/vuln-scan-results.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments")
 
 echo "$ATTACH_JSON" | jq .

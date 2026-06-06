@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -9,9 +8,7 @@ use uuid::Uuid;
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
-    repository::{
-        AttachmentScanCompletion, AttachmentScanFailure, PendingAttachmentScanWork, Postgres,
-    },
+    repository::{PendingAttachmentUploadWork, Postgres},
     scanner::{
         MalwareScanError, MalwareScanOutcome, MalwareScanResult, MalwareScanner, ScanObjectRequest,
     },
@@ -23,32 +20,31 @@ const SAFE_REASON_MAX_CHARS: usize = 512;
 
 #[async_trait]
 pub trait AttachmentScanRepository: Send + Sync {
-    async fn load_pending_attachment_scan_work(
+    async fn load_pending_attachment_upload_work(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-    ) -> Result<Option<PendingAttachmentScanWork>, AttachmentScanRepositoryError>;
+    ) -> Result<Option<PendingAttachmentUploadWork>, AttachmentScanRepositoryError>;
 
-    async fn mark_attachment_scan_clean(
+    async fn mark_attachment_uploaded(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
         final_object_key: &str,
-        completion: AttachmentScanCompletion,
     ) -> Result<bool, AttachmentScanRepositoryError>;
 
-    async fn mark_attachment_scan_malicious(
+    async fn mark_attachment_contains_virus(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        failure: AttachmentScanFailure,
+        reason: String,
     ) -> Result<bool, AttachmentScanRepositoryError>;
 
-    async fn mark_attachment_scan_failed(
+    async fn mark_attachment_upload_failed(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        failure: AttachmentScanFailure,
+        reason: String,
     ) -> Result<bool, AttachmentScanRepositoryError>;
 }
 
@@ -58,12 +54,12 @@ pub struct AttachmentScanRepositoryError(pub String);
 
 #[async_trait]
 impl AttachmentScanRepository for Postgres {
-    async fn load_pending_attachment_scan_work(
+    async fn load_pending_attachment_upload_work(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-    ) -> Result<Option<PendingAttachmentScanWork>, AttachmentScanRepositoryError> {
-        Postgres::load_pending_attachment_scan_work(
+    ) -> Result<Option<PendingAttachmentUploadWork>, AttachmentScanRepositoryError> {
+        Postgres::load_pending_attachment_upload_work(
             self,
             evidence_attachment_id,
             quarantine_object_key,
@@ -72,51 +68,49 @@ impl AttachmentScanRepository for Postgres {
         .map_err(|error| AttachmentScanRepositoryError(error.to_string()))
     }
 
-    async fn mark_attachment_scan_clean(
+    async fn mark_attachment_uploaded(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
         final_object_key: &str,
-        completion: AttachmentScanCompletion,
     ) -> Result<bool, AttachmentScanRepositoryError> {
-        Postgres::mark_attachment_scan_clean(
+        Postgres::mark_attachment_uploaded(
             self,
             evidence_attachment_id,
             quarantine_object_key,
             final_object_key,
-            &completion,
         )
         .await
         .map_err(|error| AttachmentScanRepositoryError(error.to_string()))
     }
 
-    async fn mark_attachment_scan_malicious(
+    async fn mark_attachment_contains_virus(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        failure: AttachmentScanFailure,
+        reason: String,
     ) -> Result<bool, AttachmentScanRepositoryError> {
-        Postgres::mark_attachment_scan_malicious(
+        Postgres::mark_attachment_contains_virus(
             self,
             evidence_attachment_id,
             quarantine_object_key,
-            &failure,
+            &reason,
         )
         .await
         .map_err(|error| AttachmentScanRepositoryError(error.to_string()))
     }
 
-    async fn mark_attachment_scan_failed(
+    async fn mark_attachment_upload_failed(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        failure: AttachmentScanFailure,
+        reason: String,
     ) -> Result<bool, AttachmentScanRepositoryError> {
-        Postgres::mark_attachment_scan_failed(
+        Postgres::mark_attachment_upload_failed(
             self,
             evidence_attachment_id,
             quarantine_object_key,
-            &failure,
+            &reason,
         )
         .await
         .map_err(|error| AttachmentScanRepositoryError(error.to_string()))
@@ -193,6 +187,23 @@ where
         &self,
         message: WorkerMessage,
     ) -> Result<(), RetryableWorkerError> {
+        self.handle_scan_requested_with_delivery(message, false)
+            .await
+    }
+
+    pub async fn handle_scan_requested_final_delivery(
+        &self,
+        message: WorkerMessage,
+    ) -> Result<(), RetryableWorkerError> {
+        self.handle_scan_requested_with_delivery(message, true)
+            .await
+    }
+
+    async fn handle_scan_requested_with_delivery(
+        &self,
+        message: WorkerMessage,
+        final_delivery: bool,
+    ) -> Result<(), RetryableWorkerError> {
         let payload = match ScanRequestedPayload::try_from_message(&message) {
             Ok(payload) => payload,
             Err(error) => {
@@ -207,7 +218,7 @@ where
 
         let Some(work) = self
             .repository
-            .load_pending_attachment_scan_work(
+            .load_pending_attachment_upload_work(
                 payload.evidence_attachment_id,
                 payload.object_key.as_str(),
             )
@@ -236,7 +247,7 @@ where
         if let Err(error) = self.object_store.head_object(quarantine_key.clone()).await {
             return match error {
                 StorageError::NotFound => {
-                    self.mark_failed(&work, "object-store", None, MISSING_OBJECT_FAILURE_REASON)
+                    self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
                         .await?;
                     Ok(())
                 }
@@ -252,8 +263,16 @@ where
                 content_length: scan_content_length(&work)?,
                 sha256: work.checksum_sha256.clone(),
             })
-            .await
-            .map_err(scan_error)?;
+            .await;
+
+        let scan_result = match scan_result {
+            Ok(scan_result) => scan_result,
+            Err(error) if final_delivery => {
+                self.mark_failed(&work, error.to_string()).await?;
+                return Ok(());
+            }
+            Err(error) => return Err(scan_error(error)),
+        };
 
         self.apply_scan_result(work, quarantine_key, scan_result)
             .await
@@ -261,7 +280,7 @@ where
 
     async fn apply_scan_result(
         &self,
-        work: PendingAttachmentScanWork,
+        work: PendingAttachmentUploadWork,
         quarantine_key: ObjectKey,
         scan_result: MalwareScanResult,
     ) -> Result<(), RetryableWorkerError> {
@@ -275,15 +294,10 @@ where
 
                 let updated = self
                     .repository
-                    .mark_attachment_scan_clean(
+                    .mark_attachment_uploaded(
                         work.evidence_attachment_id,
                         quarantine_key.as_str(),
                         final_key.as_str(),
-                        AttachmentScanCompletion {
-                            scanner_name: scan_result.scanner_name,
-                            scanner_version: scan_result.scanner_version,
-                            scanned_at: Utc::now(),
-                        },
                     )
                     .await
                     .map_err(retryable)?;
@@ -299,73 +313,66 @@ where
 
                 Ok(())
             }
-            MalwareScanOutcome::Malicious { reason } => {
-                self.mark_malicious(
-                    &work,
-                    scan_result.scanner_name,
-                    scan_result.scanner_version,
-                    reason,
-                )
-                .await
-            }
-            MalwareScanOutcome::Failed { reason } => {
-                self.mark_failed(
-                    &work,
-                    scan_result.scanner_name,
-                    scan_result.scanner_version,
-                    reason,
-                )
-                .await
-            }
+            MalwareScanOutcome::Malicious { reason } => self.mark_malicious(&work, reason).await,
+            MalwareScanOutcome::Failed { reason } => self.mark_failed(&work, reason).await,
         }
     }
 
     async fn mark_malicious(
         &self,
-        work: &PendingAttachmentScanWork,
-        scanner_name: impl Into<String>,
-        scanner_version: Option<String>,
+        work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
     ) -> Result<(), RetryableWorkerError> {
-        self.repository
-            .mark_attachment_scan_malicious(
+        let updated = self
+            .repository
+            .mark_attachment_contains_virus(
                 work.evidence_attachment_id,
                 &work.object_key,
-                AttachmentScanFailure {
-                    scanner_name: scanner_name.into(),
-                    scanner_version,
-                    scanned_at: Utc::now(),
-                    reason: safe_failure_reason(reason.as_ref()),
-                },
+                safe_failure_reason(reason.as_ref()),
             )
             .await
             .map_err(retryable)?;
+
+        if updated {
+            self.delete_quarantine_object(&work.object_key).await;
+        }
 
         Ok(())
     }
 
     async fn mark_failed(
         &self,
-        work: &PendingAttachmentScanWork,
-        scanner_name: impl Into<String>,
-        scanner_version: Option<String>,
+        work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
     ) -> Result<(), RetryableWorkerError> {
-        self.repository
-            .mark_attachment_scan_failed(
+        let updated = self
+            .repository
+            .mark_attachment_upload_failed(
                 work.evidence_attachment_id,
                 &work.object_key,
-                AttachmentScanFailure {
-                    scanner_name: scanner_name.into(),
-                    scanner_version,
-                    scanned_at: Utc::now(),
-                    reason: safe_failure_reason(reason.as_ref()),
-                },
+                safe_failure_reason(reason.as_ref()),
             )
             .await
             .map_err(retryable)?;
 
+        if updated {
+            self.delete_quarantine_object(&work.object_key).await;
+        }
+
         Ok(())
+    }
+
+    async fn delete_quarantine_object(&self, object_key: &str) {
+        let Ok(key) = ObjectKey::parse(object_key.to_owned()) else {
+            return;
+        };
+
+        if let Err(error) = self.object_store.delete_object(key).await {
+            tracing::warn!(
+                error = %error,
+                "failed to delete quarantined attachment object after terminal scan result"
+            );
+        }
     }
 }
 
@@ -435,7 +442,7 @@ enum PermanentScanMessageError {
 }
 
 fn final_attachment_object_key(
-    work: &PendingAttachmentScanWork,
+    work: &PendingAttachmentUploadWork,
 ) -> Result<ObjectKey, StorageError> {
     ObjectKey::new(
         work.workspace_id,
@@ -447,7 +454,7 @@ fn final_attachment_object_key(
     )
 }
 
-fn scan_content_length(work: &PendingAttachmentScanWork) -> Result<u64, RetryableWorkerError> {
+fn scan_content_length(work: &PendingAttachmentUploadWork) -> Result<u64, RetryableWorkerError> {
     u64::try_from(work.content_length)
         .map_err(|_| RetryableWorkerError("pending attachment has negative length".to_owned()))
 }
@@ -469,7 +476,7 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::{
-        domain::{AttachmentScanStatus, WorkspaceId},
+        domain::{AttachmentUploadStatus, WorkspaceId},
         scanner::{MalwareScanOutcome, MalwareScanResult},
     };
 
@@ -583,7 +590,7 @@ mod tests {
 
             let store = fixture.object_store.state.lock().unwrap();
             assert!(store.copied.is_empty());
-            assert!(store.deleted.is_empty());
+            assert_eq!(store.deleted, vec![fixture.object_key.clone()]);
         }
     }
 
@@ -601,6 +608,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scanner_adapter_errors_mark_failed_on_final_delivery() {
+        let fixture = Fixture::scanner_error();
+
+        fixture
+            .handler()
+            .handle_scan_requested_final_delivery(fixture.message())
+            .await
+            .expect("handler succeeds");
+
+        let repo = fixture.repository.state.lock().unwrap();
+        assert_eq!(repo.failed.len(), 1);
+        assert!(repo.failed[0].2.contains("malware scanner is unavailable"));
+        drop(repo);
+
+        let store = fixture.object_store.state.lock().unwrap();
+        assert_eq!(store.deleted, vec![fixture.object_key.clone()]);
+    }
+
+    #[tokio::test]
     async fn missing_quarantine_object_marks_failed_and_acknowledges() {
         let fixture = Fixture::missing_object();
 
@@ -612,7 +638,7 @@ mod tests {
 
         let repo = fixture.repository.state.lock().unwrap();
         assert_eq!(repo.failed.len(), 1);
-        assert_eq!(repo.failed[0].2.reason, MISSING_OBJECT_FAILURE_REASON);
+        assert_eq!(repo.failed[0].2, MISSING_OBJECT_FAILURE_REASON);
     }
 
     #[tokio::test]
@@ -716,19 +742,14 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRepositoryState {
-        work: Option<PendingAttachmentScanWork>,
-        cleaned: Vec<(
-            EvidenceAttachmentId,
-            String,
-            String,
-            AttachmentScanCompletion,
-        )>,
-        malicious: Vec<(EvidenceAttachmentId, String, AttachmentScanFailure)>,
-        failed: Vec<(EvidenceAttachmentId, String, AttachmentScanFailure)>,
+        work: Option<PendingAttachmentUploadWork>,
+        cleaned: Vec<(EvidenceAttachmentId, String, String)>,
+        malicious: Vec<(EvidenceAttachmentId, String, String)>,
+        failed: Vec<(EvidenceAttachmentId, String, String)>,
     }
 
     impl FakeRepository {
-        fn with_work(work: PendingAttachmentScanWork) -> Self {
+        fn with_work(work: PendingAttachmentUploadWork) -> Self {
             Self {
                 state: Mutex::new(FakeRepositoryState {
                     work: Some(work),
@@ -744,54 +765,52 @@ mod tests {
 
     #[async_trait]
     impl AttachmentScanRepository for FakeRepository {
-        async fn load_pending_attachment_scan_work(
+        async fn load_pending_attachment_upload_work(
             &self,
             _evidence_attachment_id: EvidenceAttachmentId,
             _quarantine_object_key: &str,
-        ) -> Result<Option<PendingAttachmentScanWork>, AttachmentScanRepositoryError> {
+        ) -> Result<Option<PendingAttachmentUploadWork>, AttachmentScanRepositoryError> {
             Ok(self.state.lock().unwrap().work.clone())
         }
 
-        async fn mark_attachment_scan_clean(
+        async fn mark_attachment_uploaded(
             &self,
             evidence_attachment_id: EvidenceAttachmentId,
             quarantine_object_key: &str,
             final_object_key: &str,
-            completion: AttachmentScanCompletion,
         ) -> Result<bool, AttachmentScanRepositoryError> {
             self.state.lock().unwrap().cleaned.push((
                 evidence_attachment_id,
                 quarantine_object_key.to_owned(),
                 final_object_key.to_owned(),
-                completion,
             ));
             Ok(true)
         }
 
-        async fn mark_attachment_scan_malicious(
+        async fn mark_attachment_contains_virus(
             &self,
             evidence_attachment_id: EvidenceAttachmentId,
             quarantine_object_key: &str,
-            failure: AttachmentScanFailure,
+            reason: String,
         ) -> Result<bool, AttachmentScanRepositoryError> {
             self.state.lock().unwrap().malicious.push((
                 evidence_attachment_id,
                 quarantine_object_key.to_owned(),
-                failure,
+                reason,
             ));
             Ok(true)
         }
 
-        async fn mark_attachment_scan_failed(
+        async fn mark_attachment_upload_failed(
             &self,
             evidence_attachment_id: EvidenceAttachmentId,
             quarantine_object_key: &str,
-            failure: AttachmentScanFailure,
+            reason: String,
         ) -> Result<bool, AttachmentScanRepositoryError> {
             self.state.lock().unwrap().failed.push((
                 evidence_attachment_id,
                 quarantine_object_key.to_owned(),
-                failure,
+                reason,
             ));
             Ok(true)
         }
@@ -893,8 +912,8 @@ mod tests {
         submission_id: Uuid,
         workspace_id: Uuid,
         object_key: &str,
-    ) -> PendingAttachmentScanWork {
-        PendingAttachmentScanWork {
+    ) -> PendingAttachmentUploadWork {
+        PendingAttachmentUploadWork {
             workspace_id: WorkspaceId::from(workspace_id),
             evidence_submission_id: EvidenceSubmissionId::from(submission_id),
             evidence_attachment_id: EvidenceAttachmentId::from(attachment_id),
@@ -904,7 +923,7 @@ mod tests {
             object_key: object_key.to_owned(),
             checksum_sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
                 .to_owned(),
-            scan_status: AttachmentScanStatus::Pending,
+            upload_status: AttachmentUploadStatus::PendingUpload,
         }
     }
 
@@ -914,7 +933,7 @@ mod tests {
             event_type: "attachment.scan_requested".to_owned(),
             aggregate_type: "evidence_attachment".to_owned(),
             aggregate_id: attachment_id.to_string(),
-            request_id: Some("request-1".to_owned()),
+            request_id: Some(Uuid::from_u128(1)),
             payload: serde_json::json!({
                 "evidence_attachment_id": attachment_id.to_string(),
                 "evidence_submission_id": submission_id.to_string(),

@@ -170,22 +170,13 @@ CREATE TABLE IF NOT EXISTS evidence_attachments (
     content_length BIGINT NOT NULL CHECK (content_length >= 0),
     object_key TEXT NOT NULL UNIQUE,
     checksum_sha256 TEXT NOT NULL,
-    checksum_crc32c TEXT NOT NULL
+    checksum_crc32c TEXT NOT NULL,
+    upload_status TEXT NOT NULL DEFAULT 'pending_upload'
+        CHECK (upload_status IN ('pending_upload', 'uploaded', 'contains_virus', 'failed_upload'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_evidence_attachments_submission
     ON evidence_attachments (evidence_submission_id, filename, id);
 
-CREATE TABLE IF NOT EXISTS evidence_attachment_scans (
-    evidence_attachment_id UUID PRIMARY KEY REFERENCES evidence_attachments(id),
-    scan_status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (scan_status IN ('pending', 'clean', 'malicious', 'failed')),
-    scanner_name TEXT,
-    scanner_version TEXT,
-    scanned_at TIMESTAMPTZ,
-    scan_failure_reason TEXT,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_attachment_scans_status
-    ON evidence_attachment_scans (scan_status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_attachments_upload_status
+    ON evidence_attachments (upload_status, id);

@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    ActorId, ActorKind, AttachmentScanStatus, CreateActorPayload, CreateApiCredentialPayload,
+    ActorId, ActorKind, AttachmentUploadStatus, CreateActorPayload, CreateApiCredentialPayload,
     CreateControlPayload, CreateEvidenceAttachmentPayload,
     CreateEvidenceRequestControlMappingPayload, CreateEvidenceRequestPayload,
     CreateEvidenceSubmissionPayload, CreateWorkspacePayload, EvidenceRequestCadence,
@@ -8,7 +8,7 @@ use proofplane::domain::{
     UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
-use proofplane::repository::{AttachmentScanCompletion, AttachmentScanFailure, NewOutboxMessage};
+use proofplane::repository::NewOutboxMessage;
 use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
 use uuid::Uuid;
@@ -491,7 +491,7 @@ async fn evidence_submission_detail_starts_with_empty_attachment_list() {
 }
 
 #[tokio::test]
-async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan() {
+async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_upload() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
@@ -508,13 +508,11 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan
         .await
         .expect("attachment creates");
 
-    assert_eq!(attachment.attachment.evidence_submission_id, submission.id);
+    assert_eq!(attachment.evidence_submission_id, submission.id);
     assert_eq!(
-        attachment.scan.evidence_attachment_id,
-        attachment.attachment.id
+        attachment.upload_status,
+        AttachmentUploadStatus::PendingUpload
     );
-    assert_eq!(attachment.scan.scan_status, AttachmentScanStatus::Pending);
-    assert!(attachment.scan.scanner_name.is_none());
 
     let missing = postgres
         .in_actor_context(actor.clone(), async move |context| {
@@ -546,7 +544,7 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_scan
 }
 
 #[tokio::test]
-async fn evidence_submission_detail_includes_attachments_with_scan_rows() {
+async fn evidence_submission_detail_includes_attachments_with_upload_status() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
@@ -576,25 +574,22 @@ async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_ke
     let attachment = create_repository_attachment(postgres, actor, submission.id).await;
 
     let work = postgres
-        .load_pending_attachment_scan_work(
-            attachment.attachment.id,
-            &attachment.attachment.object_key,
-        )
+        .load_pending_attachment_upload_work(attachment.id, &attachment.object_key)
         .await
         .expect("pending scan work loads")
         .expect("pending scan work exists");
 
     assert_eq!(work.workspace_id, request.workspace_id);
     assert_eq!(work.evidence_submission_id, submission.id);
-    assert_eq!(work.evidence_attachment_id, attachment.attachment.id);
-    assert_eq!(work.filename, attachment.attachment.filename);
-    assert_eq!(work.content_type, attachment.attachment.content_type);
-    assert_eq!(work.content_length, attachment.attachment.content_length);
-    assert_eq!(work.object_key, attachment.attachment.object_key);
-    assert_eq!(work.scan_status, AttachmentScanStatus::Pending);
+    assert_eq!(work.evidence_attachment_id, attachment.id);
+    assert_eq!(work.filename, attachment.filename);
+    assert_eq!(work.content_type, attachment.content_type);
+    assert_eq!(work.content_length, attachment.content_length);
+    assert_eq!(work.object_key, attachment.object_key);
+    assert_eq!(work.upload_status, AttachmentUploadStatus::PendingUpload);
 
     assert!(postgres
-        .load_pending_attachment_scan_work(attachment.attachment.id, "stale-key")
+        .load_pending_attachment_upload_work(attachment.id, "stale-key")
         .await
         .expect("stale scan work lookup resolves")
         .is_none());
@@ -608,22 +603,14 @@ async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
     let request = create_repository_evidence_request(postgres, actor.clone()).await;
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
     let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
-    let quarantine_key = attachment.attachment.object_key.clone();
+    let quarantine_key = attachment.object_key.clone();
     let final_key = format!(
         "workspaces/{}/evidence-submissions/{}/attachments/{}/{}",
-        request.workspace_id,
-        submission.id,
-        attachment.attachment.id,
-        attachment.attachment.filename
+        request.workspace_id, submission.id, attachment.id, attachment.filename
     );
 
     assert!(postgres
-        .mark_attachment_scan_clean(
-            attachment.attachment.id,
-            &quarantine_key,
-            &final_key,
-            &scan_completion("noop"),
-        )
+        .mark_attachment_uploaded(attachment.id, &quarantine_key, &final_key,)
         .await
         .expect("clean scan marks"));
 
@@ -637,22 +624,14 @@ async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
     let finalized = detail
         .attachments
         .iter()
-        .find(|candidate| candidate.attachment.id == attachment.attachment.id)
+        .find(|candidate| candidate.id == attachment.id)
         .expect("attachment remains present");
 
-    assert_eq!(finalized.attachment.object_key, final_key);
-    assert_eq!(finalized.scan.scan_status, AttachmentScanStatus::Clean);
-    assert_eq!(finalized.scan.scanner_name.as_deref(), Some("noop"));
-    assert!(finalized.scan.scanned_at.is_some());
-    assert!(finalized.scan.scan_failure_reason.is_none());
+    assert_eq!(finalized.object_key, final_key);
+    assert_eq!(finalized.upload_status, AttachmentUploadStatus::Uploaded);
 
     assert!(!postgres
-        .mark_attachment_scan_clean(
-            attachment.attachment.id,
-            &quarantine_key,
-            "stale-final-key",
-            &scan_completion("noop"),
-        )
+        .mark_attachment_uploaded(attachment.id, &quarantine_key, "stale-final-key",)
         .await
         .expect("duplicate clean scan resolves"));
 }
@@ -673,23 +652,15 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
         })
         .await
         .expect("second attachment creates");
-    let malicious_key = malicious.attachment.object_key.clone();
-    let failed_key = failed.attachment.object_key.clone();
+    let malicious_key = malicious.object_key.clone();
+    let failed_key = failed.object_key.clone();
 
     assert!(postgres
-        .mark_attachment_scan_malicious(
-            malicious.attachment.id,
-            &malicious_key,
-            &scan_failure("EICAR-Test-File"),
-        )
+        .mark_attachment_contains_virus(malicious.id, &malicious_key, "EICAR-Test-File",)
         .await
         .expect("malicious scan marks"));
     assert!(postgres
-        .mark_attachment_scan_failed(
-            failed.attachment.id,
-            &failed_key,
-            &scan_failure("scanner refused object"),
-        )
+        .mark_attachment_upload_failed(failed.id, &failed_key, "scanner refused object",)
         .await
         .expect("failed scan marks"));
 
@@ -704,36 +675,27 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let malicious_detail = detail
         .attachments
         .iter()
-        .find(|candidate| candidate.attachment.id == malicious.attachment.id)
+        .find(|candidate| candidate.id == malicious.id)
         .expect("malicious attachment exists");
-    assert_eq!(malicious_detail.attachment.object_key, malicious_key);
+    assert_eq!(malicious_detail.object_key, malicious_key);
     assert_eq!(
-        malicious_detail.scan.scan_status,
-        AttachmentScanStatus::Malicious
-    );
-    assert_eq!(
-        malicious_detail.scan.scan_failure_reason.as_deref(),
-        Some("EICAR-Test-File")
+        malicious_detail.upload_status,
+        AttachmentUploadStatus::ContainsVirus
     );
 
     let failed_detail = detail
         .attachments
         .iter()
-        .find(|candidate| candidate.attachment.id == failed.attachment.id)
+        .find(|candidate| candidate.id == failed.id)
         .expect("failed attachment exists");
-    assert_eq!(failed_detail.attachment.object_key, failed_key);
-    assert_eq!(failed_detail.scan.scan_status, AttachmentScanStatus::Failed);
+    assert_eq!(failed_detail.object_key, failed_key);
     assert_eq!(
-        failed_detail.scan.scan_failure_reason.as_deref(),
-        Some("scanner refused object")
+        failed_detail.upload_status,
+        AttachmentUploadStatus::FailedUpload
     );
 
     assert!(!postgres
-        .mark_attachment_scan_failed(
-            failed.attachment.id,
-            &failed_key,
-            &scan_failure("duplicate")
-        )
+        .mark_attachment_upload_failed(failed.id, &failed_key, "duplicate")
         .await
         .expect("duplicate failed scan resolves"));
 }
@@ -995,7 +957,7 @@ async fn create_repository_attachment(
     postgres: &proofplane::repository::Postgres,
     actor: ActorContext,
     submission_id: EvidenceSubmissionId,
-) -> proofplane::domain::EvidenceAttachmentWithScan {
+) -> proofplane::domain::EvidenceAttachment {
     postgres
         .in_actor_context(actor, async move |context| {
             context
@@ -1068,23 +1030,6 @@ fn outbox_payload(
         aggregate_id: aggregate_id.into(),
         payload: json!({ "id": "payload-id" }),
         request_id: None,
-    }
-}
-
-fn scan_completion(scanner_name: &str) -> AttachmentScanCompletion {
-    AttachmentScanCompletion {
-        scanner_name: scanner_name.to_owned(),
-        scanner_version: Some("test-version".to_owned()),
-        scanned_at: Utc::now(),
-    }
-}
-
-fn scan_failure(reason: &str) -> AttachmentScanFailure {
-    AttachmentScanFailure {
-        scanner_name: "test-scanner".to_owned(),
-        scanner_version: Some("test-version".to_owned()),
-        scanned_at: Utc::now(),
-        reason: reason.to_owned(),
     }
 }
 

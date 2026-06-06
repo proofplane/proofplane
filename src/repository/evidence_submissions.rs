@@ -1,13 +1,12 @@
-use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        ActorId, AttachmentScanStatus, CreateEvidenceAttachmentPayload,
+        ActorId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
         CreateEvidenceSubmissionPayload, EvidenceAttachment, EvidenceAttachmentId,
-        EvidenceAttachmentScan, EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspaceId,
+        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        WorkspaceId,
     },
     services::{ReadServiceContext, ServiceContext},
 };
@@ -15,7 +14,7 @@ use crate::{
 use super::{Error, Postgres};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingAttachmentScanWork {
+pub struct PendingAttachmentUploadWork {
     pub workspace_id: WorkspaceId,
     pub evidence_submission_id: EvidenceSubmissionId,
     pub evidence_attachment_id: EvidenceAttachmentId,
@@ -24,30 +23,15 @@ pub struct PendingAttachmentScanWork {
     pub content_length: i64,
     pub object_key: String,
     pub checksum_sha256: String,
-    pub scan_status: AttachmentScanStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachmentScanCompletion {
-    pub scanner_name: String,
-    pub scanner_version: Option<String>,
-    pub scanned_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachmentScanFailure {
-    pub scanner_name: String,
-    pub scanner_version: Option<String>,
-    pub scanned_at: DateTime<Utc>,
-    pub reason: String,
+    pub upload_status: AttachmentUploadStatus,
 }
 
 impl Postgres {
-    pub async fn load_pending_attachment_scan_work(
+    pub async fn load_pending_attachment_upload_work(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-    ) -> Result<Option<PendingAttachmentScanWork>, Error> {
+    ) -> Result<Option<PendingAttachmentUploadWork>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
@@ -61,14 +45,13 @@ SELECT
     a.content_length,
     a.object_key,
     a.checksum_sha256,
-    scan.scan_status
+    a.upload_status
 FROM evidence_attachments a
 JOIN evidence_submissions s ON s.id = a.evidence_submission_id
 JOIN evidence_requests er ON er.id = s.evidence_request_id
-JOIN evidence_attachment_scans scan ON scan.evidence_attachment_id = a.id
 WHERE a.id = $1
   AND a.object_key = $2
-  AND scan.scan_status = 'pending'
+  AND a.upload_status = 'pending_upload'
 "#,
                 &[&Uuid::from(evidence_attachment_id), &quarantine_object_key],
             )
@@ -76,119 +59,89 @@ WHERE a.id = $1
 
         rows.into_iter()
             .next()
-            .map(|row| pending_attachment_scan_work_from_row(&row))
+            .map(|row| pending_attachment_upload_work_from_row(&row))
             .transpose()
     }
 
-    pub async fn mark_attachment_scan_clean(
+    pub async fn mark_attachment_uploaded(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
         final_object_key: &str,
-        completion: &AttachmentScanCompletion,
-    ) -> Result<bool, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let rows = transaction
-            .execute(
-                r#"
-WITH updated_scan AS (
-    UPDATE evidence_attachment_scans scan
-    SET scan_status = 'clean',
-        scanner_name = $3,
-        scanner_version = $4,
-        scanned_at = $5,
-        scan_failure_reason = NULL,
-        updated_at = now()
-    FROM evidence_attachments a
-    WHERE scan.evidence_attachment_id = a.id
-      AND scan.evidence_attachment_id = $1
-      AND scan.scan_status = 'pending'
-      AND a.object_key = $2
-    RETURNING scan.evidence_attachment_id
-)
-UPDATE evidence_attachments a
-SET object_key = $6
-FROM updated_scan
-WHERE a.id = updated_scan.evidence_attachment_id
-"#,
-                &[
-                    &Uuid::from(evidence_attachment_id),
-                    &quarantine_object_key,
-                    &completion.scanner_name,
-                    &completion.scanner_version,
-                    &completion.scanned_at,
-                    &final_object_key,
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
-
-        Ok(rows > 0)
-    }
-
-    pub async fn mark_attachment_scan_malicious(
-        &self,
-        evidence_attachment_id: EvidenceAttachmentId,
-        quarantine_object_key: &str,
-        failure: &AttachmentScanFailure,
-    ) -> Result<bool, Error> {
-        self.mark_attachment_scan_terminal_failure(
-            evidence_attachment_id,
-            quarantine_object_key,
-            AttachmentScanStatus::Malicious,
-            failure,
-        )
-        .await
-    }
-
-    pub async fn mark_attachment_scan_failed(
-        &self,
-        evidence_attachment_id: EvidenceAttachmentId,
-        quarantine_object_key: &str,
-        failure: &AttachmentScanFailure,
-    ) -> Result<bool, Error> {
-        self.mark_attachment_scan_terminal_failure(
-            evidence_attachment_id,
-            quarantine_object_key,
-            AttachmentScanStatus::Failed,
-            failure,
-        )
-        .await
-    }
-
-    async fn mark_attachment_scan_terminal_failure(
-        &self,
-        evidence_attachment_id: EvidenceAttachmentId,
-        quarantine_object_key: &str,
-        status: AttachmentScanStatus,
-        failure: &AttachmentScanFailure,
     ) -> Result<bool, Error> {
         let client = self.get().await?;
         let rows = client
             .execute(
                 r#"
-UPDATE evidence_attachment_scans scan
-SET scan_status = $3,
-    scanner_name = $4,
-    scanner_version = $5,
-    scanned_at = $6,
-    scan_failure_reason = $7,
-    updated_at = now()
-FROM evidence_attachments a
-WHERE scan.evidence_attachment_id = a.id
-  AND scan.evidence_attachment_id = $1
-  AND scan.scan_status = 'pending'
+UPDATE evidence_attachments a
+SET object_key = $3,
+    upload_status = 'uploaded'
+WHERE a.id = $1
   AND a.object_key = $2
+  AND a.upload_status = 'pending_upload'
+"#,
+                &[
+                    &Uuid::from(evidence_attachment_id),
+                    &quarantine_object_key,
+                    &final_object_key,
+                ],
+            )
+            .await?;
+
+        Ok(rows > 0)
+    }
+
+    pub async fn mark_attachment_contains_virus(
+        &self,
+        evidence_attachment_id: EvidenceAttachmentId,
+        quarantine_object_key: &str,
+        reason: &str,
+    ) -> Result<bool, Error> {
+        self.mark_attachment_terminal_upload_status(
+            evidence_attachment_id,
+            quarantine_object_key,
+            AttachmentUploadStatus::ContainsVirus,
+            reason,
+        )
+        .await
+    }
+
+    pub async fn mark_attachment_upload_failed(
+        &self,
+        evidence_attachment_id: EvidenceAttachmentId,
+        quarantine_object_key: &str,
+        reason: &str,
+    ) -> Result<bool, Error> {
+        self.mark_attachment_terminal_upload_status(
+            evidence_attachment_id,
+            quarantine_object_key,
+            AttachmentUploadStatus::FailedUpload,
+            reason,
+        )
+        .await
+    }
+
+    async fn mark_attachment_terminal_upload_status(
+        &self,
+        evidence_attachment_id: EvidenceAttachmentId,
+        quarantine_object_key: &str,
+        status: AttachmentUploadStatus,
+        _reason: &str,
+    ) -> Result<bool, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .execute(
+                r#"
+UPDATE evidence_attachments a
+SET upload_status = $3
+WHERE a.id = $1
+  AND a.object_key = $2
+  AND a.upload_status = 'pending_upload'
 "#,
                 &[
                     &Uuid::from(evidence_attachment_id),
                     &quarantine_object_key,
                     &status.as_str(),
-                    &failure.scanner_name,
-                    &failure.scanner_version,
-                    &failure.scanned_at,
-                    &failure.reason,
                 ],
             )
             .await?;
@@ -295,17 +248,10 @@ SELECT
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
-    scan.evidence_attachment_id AS scan_attachment_id,
-    scan.scan_status,
-    scan.scanner_name,
-    scan.scanner_version,
-    scan.scanned_at,
-    scan.scan_failure_reason,
-    scan.updated_at AS scan_updated_at
+    a.upload_status
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
-LEFT JOIN evidence_attachment_scans scan ON scan.evidence_attachment_id = a.id
 WHERE s.id = $1
   AND er.workspace_id = $2
 ORDER BY a.filename, a.id
@@ -351,17 +297,10 @@ SELECT
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
-    scan.evidence_attachment_id AS scan_attachment_id,
-    scan.scan_status,
-    scan.scanner_name,
-    scan.scanner_version,
-    scan.scanned_at,
-    scan.scan_failure_reason,
-    scan.updated_at AS scan_updated_at
+    a.upload_status
 FROM latest_submission latest
 JOIN evidence_submissions s ON s.id = latest.id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
-LEFT JOIN evidence_attachment_scans scan ON scan.evidence_attachment_id = a.id
 ORDER BY a.filename, a.id
 "#,
                 &[
@@ -379,7 +318,7 @@ impl ServiceContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,
-    ) -> Result<EvidenceAttachmentWithScan, Error> {
+    ) -> Result<EvidenceAttachment, Error> {
         let rows = self
             .transaction
             .query(
@@ -391,9 +330,10 @@ INSERT INTO evidence_attachments (
     content_length,
     object_key,
     checksum_sha256,
-    checksum_crc32c
+    checksum_crc32c,
+    upload_status
 )
-SELECT s.id, $2, $3, $4, $5, $6, $7
+SELECT s.id, $2, $3, $4, $5, $6, $7, 'pending_upload'
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE s.id = $1
@@ -406,7 +346,8 @@ RETURNING
     content_length,
     object_key,
     checksum_sha256,
-    checksum_crc32c
+    checksum_crc32c,
+    upload_status
 "#,
                 &[
                     &Uuid::from(payload.evidence_submission_id),
@@ -426,42 +367,7 @@ RETURNING
                 "attachment insert requires an existing workspace-scoped submission",
             ));
         };
-        let attachment = evidence_attachment_from_row(&row)?;
-        let scan = self.create_pending_attachment_scan(attachment.id).await?;
-
-        Ok(EvidenceAttachmentWithScan { attachment, scan })
-    }
-
-    async fn create_pending_attachment_scan(
-        &self,
-        evidence_attachment_id: EvidenceAttachmentId,
-    ) -> Result<EvidenceAttachmentScan, Error> {
-        let rows = self
-            .transaction
-            .query(
-                r#"
-INSERT INTO evidence_attachment_scans (evidence_attachment_id, scan_status)
-VALUES ($1, 'pending')
-RETURNING
-    evidence_attachment_id AS scan_attachment_id,
-    scan_status,
-    scanner_name,
-    scanner_version,
-    scanned_at,
-    scan_failure_reason,
-    updated_at AS scan_updated_at
-"#,
-                &[&Uuid::from(evidence_attachment_id)],
-            )
-            .await?;
-
-        let Some(row) = rows.into_iter().next() else {
-            return Err(Error::InvariantViolation(
-                "pending attachment scan insert returned no row",
-            ));
-        };
-
-        evidence_attachment_scan_from_row(&row)
+        evidence_attachment_from_row(&row)
     }
 }
 
@@ -475,7 +381,7 @@ fn evidence_submission_detail_from_rows(
     let submission = evidence_submission_from_row(first_row)?;
     let attachments = rows
         .iter()
-        .filter_map(evidence_attachment_with_scan_from_row)
+        .filter_map(evidence_attachment_from_optional_row)
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Some(EvidenceSubmissionDetail {
@@ -484,22 +390,14 @@ fn evidence_submission_detail_from_rows(
     }))
 }
 
-fn evidence_attachment_with_scan_from_row(
-    row: &Row,
-) -> Option<Result<EvidenceAttachmentWithScan, Error>> {
+fn evidence_attachment_from_optional_row(row: &Row) -> Option<Result<EvidenceAttachment, Error>> {
     match row.try_get::<_, Option<Uuid>>("attachment_id") {
         Ok(Some(_)) => {}
         Ok(None) => return None,
         Err(error) => return Some(Err(Error::Database(error))),
     }
 
-    let attachment = evidence_attachment_from_row(row);
-    let scan = evidence_attachment_scan_from_row(row);
-
-    Some(match (attachment, scan) {
-        (Ok(attachment), Ok(scan)) => Ok(EvidenceAttachmentWithScan { attachment, scan }),
-        (Err(error), _) | (_, Err(error)) => Err(error),
-    })
+    Some(evidence_attachment_from_row(row))
 }
 
 fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> {
@@ -533,33 +431,20 @@ fn evidence_attachment_from_row(row: &Row) -> Result<EvidenceAttachment, Error> 
         object_key: row.try_get("object_key")?,
         checksum_sha256: row.try_get("checksum_sha256")?,
         checksum_crc32c: row.try_get("checksum_crc32c")?,
+        upload_status: row
+            .try_get::<_, String>("upload_status")?
+            .parse::<AttachmentUploadStatus>()?,
     })
 }
 
-fn evidence_attachment_scan_from_row(row: &Row) -> Result<EvidenceAttachmentScan, Error> {
-    let scan_status = row
-        .try_get::<_, String>("scan_status")?
-        .parse::<AttachmentScanStatus>()?;
+fn pending_attachment_upload_work_from_row(
+    row: &Row,
+) -> Result<PendingAttachmentUploadWork, Error> {
+    let upload_status = row
+        .try_get::<_, String>("upload_status")?
+        .parse::<AttachmentUploadStatus>()?;
 
-    Ok(EvidenceAttachmentScan {
-        evidence_attachment_id: EvidenceAttachmentId::from(
-            row.try_get::<_, Uuid>("scan_attachment_id")?,
-        ),
-        scan_status,
-        scanner_name: row.try_get("scanner_name")?,
-        scanner_version: row.try_get("scanner_version")?,
-        scanned_at: row.try_get("scanned_at")?,
-        scan_failure_reason: row.try_get("scan_failure_reason")?,
-        updated_at: row.try_get("scan_updated_at")?,
-    })
-}
-
-fn pending_attachment_scan_work_from_row(row: &Row) -> Result<PendingAttachmentScanWork, Error> {
-    let scan_status = row
-        .try_get::<_, String>("scan_status")?
-        .parse::<AttachmentScanStatus>()?;
-
-    Ok(PendingAttachmentScanWork {
+    Ok(PendingAttachmentUploadWork {
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         evidence_submission_id: EvidenceSubmissionId::from(
             row.try_get::<_, Uuid>("evidence_submission_id")?,
@@ -572,6 +457,6 @@ fn pending_attachment_scan_work_from_row(row: &Row) -> Result<PendingAttachmentS
         content_length: row.try_get("content_length")?,
         object_key: row.try_get("object_key")?,
         checksum_sha256: row.try_get("checksum_sha256")?,
-        scan_status,
+        upload_status,
     })
 }
