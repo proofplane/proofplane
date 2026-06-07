@@ -9,6 +9,7 @@ use crate::{
 
 mod actors;
 mod api_credentials;
+mod attachment_scan;
 mod controls;
 pub mod error;
 mod evidence_requests;
@@ -16,7 +17,9 @@ mod evidence_submissions;
 mod outbox;
 mod workspaces;
 
+pub use attachment_scan::{AttachmentFinalizationRepository, AttachmentScanRepository};
 pub use error::Error;
+pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 
 pub struct Postgres {

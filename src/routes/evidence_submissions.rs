@@ -32,8 +32,7 @@ use crate::{
     authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment,
-        EvidenceAttachmentScan, EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     object_storage::StorageError,
     routes::{
@@ -214,6 +213,7 @@ struct EvidenceAttachmentResponse {
     object_key: String,
     checksum_sha256: String,
     checksum_crc32c: String,
+    upload_status: &'static str,
 }
 
 impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
@@ -227,46 +227,7 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
             object_key: attachment.object_key,
             checksum_sha256: attachment.checksum_sha256,
             checksum_crc32c: attachment.checksum_crc32c,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct EvidenceAttachmentScanResponse {
-    evidence_attachment_id: Uuid,
-    scan_status: &'static str,
-    scanner_name: Option<String>,
-    scanner_version: Option<String>,
-    scanned_at: Option<DateTime<Utc>>,
-    scan_failure_reason: Option<String>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<EvidenceAttachmentScan> for EvidenceAttachmentScanResponse {
-    fn from(scan: EvidenceAttachmentScan) -> Self {
-        Self {
-            evidence_attachment_id: Uuid::from(scan.evidence_attachment_id),
-            scan_status: scan.scan_status.as_str(),
-            scanner_name: scan.scanner_name,
-            scanner_version: scan.scanner_version,
-            scanned_at: scan.scanned_at,
-            scan_failure_reason: scan.scan_failure_reason,
-            updated_at: scan.updated_at,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct EvidenceAttachmentWithScanResponse {
-    attachment: EvidenceAttachmentResponse,
-    scan: EvidenceAttachmentScanResponse,
-}
-
-impl From<EvidenceAttachmentWithScan> for EvidenceAttachmentWithScanResponse {
-    fn from(value: EvidenceAttachmentWithScan) -> Self {
-        Self {
-            attachment: value.attachment.into(),
-            scan: value.scan.into(),
+            upload_status: attachment.upload_status.as_str(),
         }
     }
 }
@@ -274,7 +235,7 @@ impl From<EvidenceAttachmentWithScan> for EvidenceAttachmentWithScanResponse {
 #[derive(Debug, Serialize)]
 struct EvidenceSubmissionDetailResponse {
     submission: EvidenceSubmissionResponse,
-    attachments: Vec<EvidenceAttachmentWithScanResponse>,
+    attachments: Vec<EvidenceAttachmentResponse>,
 }
 
 impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
@@ -323,14 +284,12 @@ async fn get_evidence_submission(
 #[derive(Debug, Serialize)]
 struct EvidenceAttachmentUploadResponse {
     attachment: EvidenceAttachmentResponse,
-    scan: EvidenceAttachmentScanResponse,
 }
 
-impl From<EvidenceAttachmentWithScan> for EvidenceAttachmentUploadResponse {
-    fn from(value: EvidenceAttachmentWithScan) -> Self {
+impl From<EvidenceAttachment> for EvidenceAttachmentUploadResponse {
+    fn from(value: EvidenceAttachment) -> Self {
         Self {
-            attachment: value.attachment.into(),
-            scan: value.scan.into(),
+            attachment: value.into(),
         }
     }
 }

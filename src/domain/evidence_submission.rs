@@ -8,41 +8,44 @@ uuid_id!(EvidenceSubmissionId);
 uuid_id!(EvidenceAttachmentId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttachmentScanStatus {
-    Pending,
-    Clean,
-    Malicious,
-    Failed,
+pub enum AttachmentUploadStatus {
+    PendingUpload,
+    Finalizing,
+    Uploaded,
+    ContainsVirus,
+    FailedUpload,
 }
 
-impl AttachmentScanStatus {
+impl AttachmentUploadStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Pending => "pending",
-            Self::Clean => "clean",
-            Self::Malicious => "malicious",
-            Self::Failed => "failed",
+            Self::PendingUpload => "pending",
+            Self::Finalizing => "finalizing",
+            Self::Uploaded => "uploaded",
+            Self::ContainsVirus => "contains_virus",
+            Self::FailedUpload => "failed",
         }
     }
 }
 
-impl fmt::Display for AttachmentScanStatus {
+impl fmt::Display for AttachmentUploadStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl FromStr for AttachmentScanStatus {
+impl FromStr for AttachmentUploadStatus {
     type Err = DomainError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "pending" => Ok(Self::Pending),
-            "clean" => Ok(Self::Clean),
-            "malicious" => Ok(Self::Malicious),
-            "failed" => Ok(Self::Failed),
+            "pending" => Ok(Self::PendingUpload),
+            "finalizing" => Ok(Self::Finalizing),
+            "uploaded" => Ok(Self::Uploaded),
+            "contains_virus" => Ok(Self::ContainsVirus),
+            "failed" => Ok(Self::FailedUpload),
             _ => Err(DomainError::InvalidEnumValue {
-                field: "scan_status",
+                field: "upload_status",
                 value: value.to_owned(),
             }),
         }
@@ -89,6 +92,7 @@ pub struct EvidenceAttachment {
     pub object_key: String,
     pub checksum_sha256: String,
     pub checksum_crc32c: String,
+    pub upload_status: AttachmentUploadStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,31 +106,10 @@ pub struct CreateEvidenceAttachmentPayload {
     pub checksum_crc32c: String,
 }
 
-/**
- * EvidenceAttachmentScan is a record of a virus scan done to an uploaded
- * evidence attachment.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceAttachmentScan {
-    pub evidence_attachment_id: EvidenceAttachmentId,
-    pub scan_status: AttachmentScanStatus,
-    pub scanner_name: Option<String>,
-    pub scanner_version: Option<String>,
-    pub scanned_at: Option<DateTime<Utc>>,
-    pub scan_failure_reason: Option<String>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceAttachmentWithScan {
-    pub attachment: EvidenceAttachment,
-    pub scan: EvidenceAttachmentScan,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceSubmissionDetail {
     pub submission: EvidenceSubmission,
-    pub attachments: Vec<EvidenceAttachmentWithScan>,
+    pub attachments: Vec<EvidenceAttachment>,
 }
 
 #[cfg(test)]
@@ -135,7 +118,7 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{AttachmentScanStatus, EvidenceAttachmentId, EvidenceSubmissionId};
+    use super::{AttachmentUploadStatus, EvidenceAttachmentId, EvidenceSubmissionId};
     use crate::domain::DomainError;
 
     #[test]
@@ -155,31 +138,35 @@ mod tests {
     }
 
     #[test]
-    fn scan_status_parses_allowed_values() {
+    fn upload_status_parses_allowed_values() {
         assert_eq!(
-            AttachmentScanStatus::from_str("pending").unwrap(),
-            AttachmentScanStatus::Pending
+            AttachmentUploadStatus::from_str("pending").unwrap(),
+            AttachmentUploadStatus::PendingUpload
         );
         assert_eq!(
-            AttachmentScanStatus::from_str("clean").unwrap(),
-            AttachmentScanStatus::Clean
+            AttachmentUploadStatus::from_str("finalizing").unwrap(),
+            AttachmentUploadStatus::Finalizing
         );
         assert_eq!(
-            AttachmentScanStatus::from_str("malicious").unwrap(),
-            AttachmentScanStatus::Malicious
+            AttachmentUploadStatus::from_str("uploaded").unwrap(),
+            AttachmentUploadStatus::Uploaded
         );
         assert_eq!(
-            AttachmentScanStatus::from_str("failed").unwrap(),
-            AttachmentScanStatus::Failed
+            AttachmentUploadStatus::from_str("contains_virus").unwrap(),
+            AttachmentUploadStatus::ContainsVirus
+        );
+        assert_eq!(
+            AttachmentUploadStatus::from_str("failed").unwrap(),
+            AttachmentUploadStatus::FailedUpload
         );
     }
 
     #[test]
-    fn scan_status_rejects_invalid_values() {
+    fn upload_status_rejects_invalid_values() {
         assert_eq!(
-            AttachmentScanStatus::from_str("skipped").unwrap_err(),
+            AttachmentUploadStatus::from_str("skipped").unwrap_err(),
             DomainError::InvalidEnumValue {
-                field: "scan_status",
+                field: "upload_status",
                 value: "skipped".to_owned()
             }
         );

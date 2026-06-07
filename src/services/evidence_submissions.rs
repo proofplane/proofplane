@@ -3,8 +3,7 @@ use std::sync::Arc;
 use crate::{
     domain::{
         CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
-        EvidenceAttachmentWithScan, EvidenceRequestId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
@@ -150,7 +149,7 @@ impl EvidenceSubmissionService {
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
         mut payload: UploadEvidenceAttachmentPayload,
-    ) -> Result<EvidenceAttachmentWithScan, Error> {
+    ) -> Result<EvidenceAttachment, Error> {
         payload.evidence_submission_id = submission_id;
 
         let create_payload = CreateEvidenceAttachmentPayload {
@@ -169,7 +168,7 @@ impl EvidenceSubmissionService {
                 let attachment = context.create_evidence_attachment(&create_payload).await?;
                 context
                     .append_outbox_message(&attachment_scan_requested_message(
-                        &attachment.attachment,
+                        &attachment,
                         request_id,
                     ))
                     .await?;
@@ -200,7 +199,6 @@ fn attachment_scan_requested_message(
         aggregate_type: "evidence_attachment".to_owned(),
         aggregate_id: Uuid::from(attachment.id).to_string(),
         payload: serde_json::json!({
-            "evidence_attachment_id": Uuid::from(attachment.id).to_string(),
             "evidence_submission_id": Uuid::from(attachment.evidence_submission_id).to_string(),
             "object_key": attachment.object_key,
         }),

@@ -56,7 +56,7 @@ pub struct WorkerMessage {
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
-    pub request_id: Option<String>,
+    pub request_id: Option<Uuid>,
     pub payload: serde_json::Value,
     pub delivery_attempt: Option<u32>,
 }
@@ -66,6 +66,15 @@ The worker returns a successful push acknowledgement only after the handler
 succeeds. For Pub/Sub push delivery, `102`, `200`, `201`, `202`, and `204` are
 successful acknowledgements; any other status code causes retry. Prefer `204 No
 Content` for successful handler completion.
+
+Pub/Sub HTTP is transport context, not application request context. Generic HTTP
+tracing records the method, route, status, and latency, but the worker ignores
+inbound `x-request-id` headers and does not add that header to responses. After
+decoding, each message is processed inside a `worker_message` tracing span with
+its `message_id`, `event_type`, `aggregate_type`, `aggregate_id`,
+`delivery_attempt`, and optional payload `request_id`. Handler logs inherit
+those fields. Malformed envelopes are logged outside a message span because
+their metadata has not been validated.
 
 Failure policy:
 
@@ -144,8 +153,11 @@ return unimplemented, so local subscriptions are not left stale.
 - Unit tests cover base64 payload decoding, JSON payload parsing,
   self-describing message validation, ignoring Pub/Sub attributes, and optional
   `deliveryAttempt`.
-- Unit tests cover dispatch success, unknown event handling, malformed envelope
-  handling, retryable handler failure, and route-level `204`/`500` behavior.
+- Unit tests cover normal, final-delivery, and unknown-event dispatch
+  classification, including missing delivery attempts and attempts below, at,
+  and above the configured maximum.
+- Attachment handler tests cover retryable failures and final-delivery terminal
+  handling.
 - Integration test provisions the message bus topic, worker dead-letter topic,
   and worker push subscription against Deltio through the dequeuer-owned
   provisioning helper, including the create and reconciliation path.
@@ -162,3 +174,7 @@ return unimplemented, so local subscriptions are not left stale.
 5. Confirm the worker handles the pushed message and returns success.
 6. Force a retryable handler failure and confirm Deltio retries, then
    dead-letters after the configured maximum delivery attempts.
+7. Confirm structured logs include the message span fields and processing
+   start/completion records.
+8. Send a push request with an `x-request-id` header and confirm the worker
+   ignores it and does not add `x-request-id` to the response.

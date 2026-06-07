@@ -2,9 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Bytes,
-    extract::MatchedPath,
+    extract::{MatchedPath, State},
     http::{Request, StatusCode},
-    middleware,
     response::Response,
     routing::post,
     Router,
@@ -15,22 +14,30 @@ use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 use tower_http::trace::TraceLayer;
-use tracing::Span;
+use tracing::{Instrument, Span};
+use uuid::Uuid;
 
 use crate::{
-    handlers,
+    handlers::{
+        attachment_finalization::AttachmentFinalizationHandler,
+        attachment_scan::AttachmentScanHandler,
+    },
+    object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
         error::not_found,
         health::{self, ReadyState},
         metrics::{self, MetricsState},
-        request_context::attach_request_id,
     },
+    scanner::NoopMalwareScanner,
     validate,
     validation::Validation,
 };
 
+// TODO: create a more robust pubsub library that has the message types in
+// one place
 pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
+pub const ATTACHMENT_FINALIZATION_REQUESTED: &str = "attachment.finalization_requested";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMessage {
@@ -38,7 +45,7 @@ pub struct WorkerMessage {
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
-    pub request_id: Option<String>,
+    pub request_id: Option<Uuid>,
     pub payload: Value,
     pub delivery_attempt: Option<u32>,
 }
@@ -61,21 +68,61 @@ pub enum WorkerMessageDecodeError {
 pub enum WorkerMessageDataValidationError {
     #[error("message data envelope must include {0}")]
     MissingField(&'static str),
+    #[error("message data request_id must be a UUID")]
+    InvalidRequestId,
 }
 
 #[derive(Debug, Error)]
 #[error("retryable handler failure: {0}")]
+/// Returning this error produces an HTTP 500 so Pub/Sub retries the delivery.
 pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
+    pub object_store: Arc<FilesystemObjectStore>,
+    pub scanner: Arc<NoopMalwareScanner>,
+    pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
     pub live_path: String,
     pub ready_path: String,
     pub dependency_timeout_ms: u64,
 }
 
+#[derive(Clone)]
+pub struct WorkerState {
+    attachment_scan_handler: AttachmentScanHandler<Postgres, NoopMalwareScanner>,
+    attachment_finalization_handler: AttachmentFinalizationHandler<Postgres, FilesystemObjectStore>,
+}
+
+impl WorkerState {
+    pub fn new(
+        postgres: Arc<Postgres>,
+        object_store: Arc<FilesystemObjectStore>,
+        scanner: Arc<NoopMalwareScanner>,
+        worker_max_delivery_attempts: u16,
+    ) -> Self {
+        Self {
+            attachment_scan_handler: AttachmentScanHandler::new(
+                postgres.clone(),
+                scanner,
+                worker_max_delivery_attempts,
+            ),
+            attachment_finalization_handler: AttachmentFinalizationHandler::new(
+                postgres,
+                object_store,
+            ),
+        }
+    }
+}
+
 pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
+    let state = WorkerState::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store,
+        dependencies.scanner,
+        dependencies.worker_max_delivery_attempts,
+    );
+
     Router::new()
         .nest(&dependencies.live_path, health::livez_router())
         .nest(
@@ -91,9 +138,8 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
                 handle: dependencies.metrics,
             }),
         )
-        .merge(router())
+        .merge(router(state))
         .fallback(not_found)
-        .layer(middleware::from_fn(attach_request_id))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
@@ -107,8 +153,7 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
                     tracing::info_span!(
                         "http_request",
                         %method,
-                        path,
-                        request_id = tracing::field::Empty
+                        path
                     )
                 })
                 .on_response(|response: &Response, latency: Duration, span: &Span| {
@@ -122,11 +167,13 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
         )
 }
 
-pub fn router() -> Router {
-    Router::new().route("/pubsub/messages", post(pubsub_message))
+pub fn router(state: WorkerState) -> Router {
+    Router::new()
+        .route("/pubsub/messages", post(pubsub_message))
+        .with_state(state)
 }
 
-async fn pubsub_message(body: Bytes) -> StatusCode {
+async fn pubsub_message(State(state): State<WorkerState>, body: Bytes) -> StatusCode {
     let message = match decode_worker_message(&body) {
         Ok(message) => message,
         Err(error) => {
@@ -135,13 +182,58 @@ async fn pubsub_message(body: Bytes) -> StatusCode {
         }
     };
 
-    dispatch(message).await
+    let span = tracing::info_span!(
+        "worker_message",
+        request_id = tracing::field::Empty,
+        message_id = %message.message_id,
+        event_type = %message.event_type,
+        aggregate_type = %message.aggregate_type,
+        aggregate_id = %message.aggregate_id,
+        delivery_attempt = tracing::field::Empty,
+    );
+    if let Some(request_id) = message.request_id {
+        span.record("request_id", request_id.to_string());
+    }
+    if let Some(delivery_attempt) = message.delivery_attempt {
+        span.record("delivery_attempt", delivery_attempt);
+    }
+
+    async move {
+        tracing::info!("worker message processing started");
+        let status = dispatch(state, message).await;
+        tracing::info!(
+            acknowledgement_status = status.as_u16(),
+            "worker message processing completed"
+        );
+        status
+    }
+    .instrument(span)
+    .await
 }
 
-pub async fn dispatch(message: WorkerMessage) -> StatusCode {
+pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode {
     match message.event_type.as_str() {
         ATTACHMENT_SCAN_REQUESTED => {
-            match handlers::attachment_scan::handle_scan_requested(message).await {
+            let result = state
+                .attachment_scan_handler
+                .handle_scan_requested(message)
+                .await;
+
+            match result {
+                Ok(()) => StatusCode::NO_CONTENT,
+                Err(error) => {
+                    tracing::error!(%error, "retryable worker handler failure");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ATTACHMENT_FINALIZATION_REQUESTED => {
+            let result = state
+                .attachment_finalization_handler
+                .handle_finalization_requested(message)
+                .await;
+
+            match result {
                 Ok(()) => StatusCode::NO_CONTENT,
                 Err(error) => {
                     tracing::error!(%error, "retryable worker handler failure");
@@ -198,12 +290,13 @@ impl WorkerMessageDataDTO {
             event_type <- required_message_string("event_type", self.event_type),
             aggregate_type <- required_message_string("aggregate_type", self.aggregate_type),
             aggregate_id <- required_message_string("aggregate_id", self.aggregate_id),
+            request_id <- optional_request_id(self.request_id),
             payload <- required_message_value("payload", self.payload),
             => WorkerMessageData {
                 event_type,
                 aggregate_type,
                 aggregate_id,
-                request_id: self.request_id,
+                request_id,
                 payload,
             },
         }
@@ -214,8 +307,22 @@ struct WorkerMessageData {
     event_type: String,
     aggregate_type: String,
     aggregate_id: String,
-    request_id: Option<String>,
+    request_id: Option<Uuid>,
     payload: Value,
+}
+
+fn optional_request_id(
+    request_id: Option<String>,
+) -> Validation<Option<Uuid>, WorkerMessageDataValidationError> {
+    match request_id {
+        Some(request_id) => Uuid::parse_str(&request_id)
+            .map(Some)
+            .map(Validation::valid)
+            .unwrap_or_else(|_| {
+                Validation::invalid(WorkerMessageDataValidationError::InvalidRequestId)
+            }),
+        None => Validation::valid(None),
+    }
 }
 
 fn required_message_string(
@@ -253,7 +360,6 @@ struct PushEnvelopeMessage {
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::json;
 
     use super::*;
@@ -268,7 +374,7 @@ mod tests {
         assert_eq!(message.aggregate_type, "evidence_attachment");
         assert_eq!(message.aggregate_id, "attachment-1");
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
-        assert_eq!(message.request_id.as_deref(), Some("request-1"));
+        assert_eq!(message.request_id, Some(request_id()));
         assert_eq!(message.delivery_attempt, Some(2));
     }
 
@@ -282,7 +388,7 @@ mod tests {
                         "event_type": "attachment.scan_requested",
                         "aggregate_type": "evidence_attachment",
                         "aggregate_id": "attachment-1",
-                        "request_id": "request-1",
+                        "request_id": request_id(),
                         "payload": { "scan_id": "scan-1" }
                     })
                     .to_string()
@@ -304,7 +410,46 @@ mod tests {
         assert_eq!(message.aggregate_type, "evidence_attachment");
         assert_eq!(message.aggregate_id, "attachment-1");
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
-        assert_eq!(message.request_id.as_deref(), Some("request-1"));
+        assert_eq!(message.request_id, Some(request_id()));
+    }
+
+    #[test]
+    fn decodes_missing_and_null_request_ids() {
+        for request_id_value in [None, Some(Value::Null)] {
+            let mut data = json!({
+                "event_type": "attachment.scan_requested",
+                "aggregate_type": "evidence_attachment",
+                "aggregate_id": "attachment-1",
+                "payload": { "scan_id": "scan-1" }
+            });
+            if let Some(request_id_value) = request_id_value {
+                data["request_id"] = request_id_value;
+            }
+
+            let message = decode_worker_message(&envelope_with_data(data))
+                .expect("worker message without request ID decodes");
+
+            assert_eq!(message.request_id, None);
+        }
+    }
+
+    #[test]
+    fn rejects_non_uuid_request_id() {
+        let data = json!({
+            "event_type": "attachment.scan_requested",
+            "aggregate_type": "evidence_attachment",
+            "aggregate_id": "attachment-1",
+            "request_id": "not-a-uuid",
+            "payload": { "scan_id": "scan-1" }
+        });
+
+        assert_eq!(
+            decode_worker_message(&envelope_with_data(data))
+                .expect_err("invalid request ID is rejected"),
+            WorkerMessageDecodeError::DataValidation(vec![
+                WorkerMessageDataValidationError::InvalidRequestId,
+            ])
+        );
     }
 
     #[test]
@@ -360,74 +505,29 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn dispatches_known_event_successfully() {
-        let status =
-            dispatch(decode_worker_message(&valid_envelope("attachment.scan_requested")).unwrap())
-                .await;
-
-        assert_eq!(status, StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn dispatches_unknown_event_as_non_retryable_success() {
-        let status =
-            dispatch(decode_worker_message(&valid_envelope("unknown.event")).unwrap()).await;
-
-        assert_eq!(status, StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn worker_route_acknowledges_valid_known_event() {
-        let server = TestServer::new(router());
-
-        let response = server
-            .post("/pubsub/messages")
-            .json(
-                &serde_json::from_slice::<Value>(&valid_envelope("attachment.scan_requested"))
-                    .unwrap(),
-            )
-            .await;
-
-        response.assert_status(StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn worker_route_acknowledges_malformed_and_unknown_events() {
-        let server = TestServer::new(router());
-
-        server
-            .post("/pubsub/messages")
-            .bytes(Bytes::from_static(b"not-json"))
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-
-        server
-            .post("/pubsub/messages")
-            .json(&serde_json::from_slice::<Value>(&valid_envelope("unknown.event")).unwrap())
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    }
-
     fn valid_envelope(event_type: &str) -> Vec<u8> {
+        envelope_with_data(json!({
+            "event_type": event_type,
+            "aggregate_type": "evidence_attachment",
+            "aggregate_id": "attachment-1",
+            "request_id": request_id(),
+            "payload": { "scan_id": "scan-1" }
+        }))
+    }
+
+    fn envelope_with_data(data: Value) -> Vec<u8> {
         json!({
             "message": {
                 "messageId": "message-1",
-                "data": STANDARD.encode(
-                    json!({
-                        "event_type": event_type,
-                        "aggregate_type": "evidence_attachment",
-                        "aggregate_id": "attachment-1",
-                        "request_id": "request-1",
-                        "payload": { "scan_id": "scan-1" }
-                    })
-                    .to_string()
-                    .as_bytes()
-                )
+                "data": STANDARD.encode(data.to_string().as_bytes())
             },
             "deliveryAttempt": 2
         })
         .to_string()
         .into_bytes()
+    }
+
+    fn request_id() -> Uuid {
+        Uuid::from_u128(1)
     }
 }

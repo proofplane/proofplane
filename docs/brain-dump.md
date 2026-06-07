@@ -13,3 +13,7 @@ I wonder how Authzed can be used to create a system where different actors actua
 permissions that are set in the platform as opposed to schematically. For example, a human user should
 be able to give an AI agent actor the ability to read and even write evidence requests but keep them
 from submitting the evidence, instead keeping that permission for their corresponding human actor.
+
+## Updating Frameworks
+
+If SOC2 gets an update how do we handle it?

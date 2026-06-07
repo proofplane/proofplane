@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    config, observability, repository, store,
+    config, object_storage, observability, repository,
+    scanner::NoopMalwareScanner,
+    store,
     worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
 };
@@ -31,6 +33,9 @@ enum Error {
 
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
+
+    #[error("object storage initialization error")]
+    ObjectStorage(#[from] object_storage::StorageError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -56,6 +61,8 @@ async fn run() -> Result<(), Error> {
 
     let pool = store::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
     let postgres = Arc::new(repository::Postgres::new(pool));
+    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let scanner = Arc::new(NoopMalwareScanner);
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
     let listener = TcpListener::bind(config.server.worker_bind)
@@ -70,6 +77,9 @@ async fn run() -> Result<(), Error> {
 
     let app = create_worker_app(WorkerAppDependencies {
         postgres,
+        object_store,
+        scanner,
+        worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,
         live_path: config.health.live_path.clone(),
         ready_path: config.health.ready_path.clone(),
