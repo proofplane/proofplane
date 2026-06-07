@@ -10,6 +10,7 @@ uuid_id!(EvidenceAttachmentId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentUploadStatus {
     PendingUpload,
+    Finalizing,
     Uploaded,
     ContainsVirus,
     FailedUpload,
@@ -19,6 +20,7 @@ impl AttachmentUploadStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PendingUpload => "pending",
+            Self::Finalizing => "finalizing",
             Self::Uploaded => "uploaded",
             Self::ContainsVirus => "contains_virus",
             Self::FailedUpload => "failed",
@@ -38,6 +40,7 @@ impl FromStr for AttachmentUploadStatus {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "pending" => Ok(Self::PendingUpload),
+            "finalizing" => Ok(Self::Finalizing),
             "uploaded" => Ok(Self::Uploaded),
             "contains_virus" => Ok(Self::ContainsVirus),
             "failed" => Ok(Self::FailedUpload),
@@ -139,6 +142,10 @@ mod tests {
         assert_eq!(
             AttachmentUploadStatus::from_str("pending").unwrap(),
             AttachmentUploadStatus::PendingUpload
+        );
+        assert_eq!(
+            AttachmentUploadStatus::from_str("finalizing").unwrap(),
+            AttachmentUploadStatus::Finalizing
         );
         assert_eq!(
             AttachmentUploadStatus::from_str("uploaded").unwrap(),

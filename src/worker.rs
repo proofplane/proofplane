@@ -18,7 +18,10 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::{
-    handlers::attachment_scan::AttachmentScanHandler,
+    handlers::{
+        attachment_finalization::AttachmentFinalizationHandler,
+        attachment_scan::AttachmentScanHandler,
+    },
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
@@ -34,6 +37,7 @@ use crate::{
 // TODO: create a more robust pubsub library that has the message types in
 // one place
 pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
+pub const ATTACHMENT_FINALIZATION_REQUESTED: &str = "attachment.finalization_requested";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMessage {
@@ -86,8 +90,8 @@ pub struct WorkerAppDependencies {
 
 #[derive(Clone)]
 pub struct WorkerState {
-    attachment_scan_handler:
-        AttachmentScanHandler<Postgres, FilesystemObjectStore, NoopMalwareScanner>,
+    attachment_scan_handler: AttachmentScanHandler<Postgres, NoopMalwareScanner>,
+    attachment_finalization_handler: AttachmentFinalizationHandler<Postgres, FilesystemObjectStore>,
 }
 
 impl WorkerState {
@@ -99,10 +103,13 @@ impl WorkerState {
     ) -> Self {
         Self {
             attachment_scan_handler: AttachmentScanHandler::new(
-                postgres,
-                object_store,
+                postgres.clone(),
                 scanner,
                 worker_max_delivery_attempts,
+            ),
+            attachment_finalization_handler: AttachmentFinalizationHandler::new(
+                postgres,
+                object_store,
             ),
         }
     }
@@ -210,6 +217,20 @@ pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode 
             let result = state
                 .attachment_scan_handler
                 .handle_scan_requested(message)
+                .await;
+
+            match result {
+                Ok(()) => StatusCode::NO_CONTENT,
+                Err(error) => {
+                    tracing::error!(%error, "retryable worker handler failure");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ATTACHMENT_FINALIZATION_REQUESTED => {
+            let result = state
+                .attachment_finalization_handler
+                .handle_finalization_requested(message)
                 .await;
 
             match result {

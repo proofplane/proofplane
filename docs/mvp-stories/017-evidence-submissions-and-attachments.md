@@ -4,11 +4,16 @@
 
 Partially complete. Submission creation, submission detail retrieval, multipart
 attachment upload, CRC32C validation, filesystem object writes, attachment
-metadata, and pending scan records are implemented. Scanner dispatch through the
-transactional outbox and Pub/Sub push worker path is implemented with a log-only
-`attachment.scan_requested` handler. Scanner execution, finalization of clean
-files, download enforcement, malware scanner adapters, latest-submission API,
-audit polish, and seed data remain open.
+metadata, pending scan records, scanner dispatch through the transactional
+outbox and Pub/Sub push worker path, and the object-based malware scanner
+boundary with noop implementation are implemented. The worker now handles
+`attachment.scan_requested` messages by scanning quarantined objects and
+persisting malicious or failed scan outcomes. Clean scans atomically transition
+attachments to `finalizing` and enqueue `attachment.finalization_requested`;
+that handler copies the object, marks it uploaded, and best-effort deletes the
+quarantine copy.
+Download enforcement, malware scanner adapters, latest-submission API, audit
+polish, and seed data remain open.
 
 ## Goal
 
@@ -39,13 +44,17 @@ The implemented scan dispatch slice emits an `attachment.scan_requested` event
 when a quarantined upload is accepted. The event is appended in the same
 database transaction as the attachment metadata and pending scan record, then
 published by the standalone dequeuer to Pub/Sub and delivered to the worker's
-push endpoint. The current handler only accepts/logs the message; scanner
-execution and finalization are later slices.
+push endpoint. The worker loads pending scan work and scans the quarantined
+object. Clean results enqueue finalization in the same transaction as the
+`pending` to `finalizing` state change. A separate worker delivery copies the
+object to its final path and marks it `uploaded`. Duplicate or stale messages
+at either stage are acknowledged no-ops.
 
 Quarantined files are not usable evidence. When scanning returns `clean`, the
-worker moves or copies the file to the final workspace-scoped object path in the
-same bucket and marks the attachment usable. Workspaces should be organized by
-dedicated object key prefixes rather than separate buckets in the MVP.
+worker requests a separate finalization delivery. That delivery copies the file
+to the final workspace-scoped object path in the same bucket and marks the
+attachment usable. Workspaces should be organized by dedicated object key
+prefixes rather than separate buckets in the MVP.
 
 Document uploads must pass through a pluggable malware scanning boundary before
 they can be treated as usable evidence. Model scanning as an adapter, not as a
@@ -53,7 +62,6 @@ ClamAV-specific domain concept:
 
 ```rust
 pub trait MalwareScanner {
-    async fn scan_bytes(&self, request: ScanBytesRequest) -> Result<MalwareScanResult, MalwareScanError>;
     async fn scan_object(&self, request: ScanObjectRequest) -> Result<MalwareScanResult, MalwareScanError>;
 }
 ```
@@ -151,9 +159,9 @@ Submissions must distinguish system receipt time from the evidence effective or 
 3. Submission API without file uploads: add the basic REST surface for creating an accepted submission record and reading its details before introducing binary upload handling.
 4. Multipart attachment upload API and CRC32C validation: accept uploaded bytes for an existing submission, require caller-provided CRC32C, reject mismatches, write the file to quarantine object storage, create attachment metadata plus a `pending` scan record, and return `202 Accepted`.
 5. Scan dispatch through transactional outbox: enqueue attachment-scan work when a quarantined upload is accepted, publish it through the existing outbox to Pub/Sub flow, and keep scanner message payloads based on attachment IDs and quarantine object keys. Implemented.
-6. Malware scanner boundary and noop implementation: add scanner request, result, and error types plus `NoopMalwareScanner` for tests and flows that do not exercise scanning behavior.
-7. Scan worker finalization: consume scan messages, scan quarantined objects, persist scan results, move or copy `clean` files to final workspace-scoped object paths, and leave malicious or failed files quarantined and unusable.
-8. Scan state enforcement: block normal download and source-material use unless file attachments have scan status `clean` and a finalized object reference.
+6. Malware scanner boundary and noop implementation: add scanner request, result, and error types plus `NoopMalwareScanner` for tests and flows that do not exercise scanning behavior. Implemented.
+7. Scan worker finalization: consume scan messages, scan quarantined objects, persist scan results, move or copy `clean` files to final workspace-scoped object paths, and leave malicious or failed files quarantined and unusable. Implemented.
+8. Scan state enforcement: block normal download and source-material use unless file attachments have scan status `clean` and a finalized object reference. Next active slice.
 9. ClamAV adapter and scanner configuration: add the local/self-hosted scanner implementation, timeout settings, scanner selection, and adapter tests for clean, malicious, failed, and timeout outcomes.
 10. Download and retrieval API: expose normal attachment download paths that  refuse pending, malicious, failed, and unfinalized attachments.
 11. Latest submission query/API, seed data, and audit polish: complete the
@@ -167,9 +175,9 @@ Recommended implementation order:
 3. Submission API without file uploads.
 4. Multipart attachment upload API and CRC32C validation.
 5. Scan dispatch through transactional outbox. Implemented.
-6. Malware scanner boundary and noop implementation.
-7. Scan worker finalization.
-8. Scan state enforcement.
+6. Malware scanner boundary and noop implementation. Implemented.
+7. Scan worker finalization. Implemented.
+8. Scan state enforcement. Next active slice.
 9. ClamAV adapter and scanner configuration.
 10. Download and retrieval API.
 11. Latest submission query/API, seed data, and audit polish.

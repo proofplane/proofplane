@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -9,10 +8,12 @@ use crate::{
         EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
         WorkspaceId,
     },
+    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     services::{ReadServiceContext, ServiceContext},
+    worker::ATTACHMENT_FINALIZATION_REQUESTED,
 };
 
-use super::{Error, Postgres};
+use super::{Error, NewOutboxMessage, Postgres};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAttachmentUploadWork {
@@ -26,6 +27,8 @@ pub struct PendingAttachmentUploadWork {
     pub checksum_sha256: String,
     pub upload_status: AttachmentUploadStatus,
 }
+
+pub type FinalizingAttachmentUploadWork = PendingAttachmentUploadWork;
 
 impl Postgres {
     pub async fn load_pending_attachment_upload_work(
@@ -64,6 +67,112 @@ WHERE a.id = $1
             .transpose()
     }
 
+    pub async fn request_attachment_finalization(
+        &self,
+        work: &PendingAttachmentUploadWork,
+        request_id: Option<Uuid>,
+    ) -> Result<bool, Error> {
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let updated = transaction
+            .execute(
+                r#"
+UPDATE evidence_attachments
+SET upload_status = 'finalizing'
+WHERE id = $1
+  AND evidence_submission_id = $2
+  AND object_key = $3
+  AND upload_status = 'pending'
+"#,
+                &[
+                    &Uuid::from(work.evidence_attachment_id),
+                    &Uuid::from(work.evidence_submission_id),
+                    &work.object_key,
+                ],
+            )
+            .await?;
+
+        if updated == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+
+        let message = NewOutboxMessage {
+            topic: TopicName::new(MESSAGE_BUS_TOPIC),
+            event_type: ATTACHMENT_FINALIZATION_REQUESTED.to_owned(),
+            aggregate_type: "evidence_attachment".to_owned(),
+            aggregate_id: Uuid::from(work.evidence_attachment_id).to_string(),
+            payload: serde_json::json!({
+                "evidence_submission_id": Uuid::from(work.evidence_submission_id).to_string(),
+                "object_key": work.object_key,
+            }),
+            request_id,
+        };
+        transaction
+            .execute(
+                r#"
+INSERT INTO outbox_messages (
+    topic, event_type, aggregate_type, aggregate_id, payload, request_id
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+"#,
+                &[
+                    &message.topic.as_str(),
+                    &message.event_type,
+                    &message.aggregate_type,
+                    &message.aggregate_id,
+                    &message.payload,
+                    &message.request_id,
+                ],
+            )
+            .await?;
+        transaction.commit().await?;
+
+        Ok(true)
+    }
+
+    pub async fn load_finalizing_attachment_upload_work(
+        &self,
+        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_submission_id: EvidenceSubmissionId,
+        quarantine_object_key: &str,
+    ) -> Result<Option<FinalizingAttachmentUploadWork>, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .query(
+                r#"
+SELECT
+    er.workspace_id,
+    a.evidence_submission_id,
+    a.id AS attachment_id,
+    a.filename,
+    a.content_type,
+    a.content_length,
+    a.object_key,
+    a.checksum_sha256,
+    a.upload_status
+FROM evidence_attachments a
+JOIN evidence_submissions s ON s.id = a.evidence_submission_id
+JOIN evidence_requests er ON er.id = s.evidence_request_id
+WHERE a.id = $1
+  AND a.evidence_submission_id = $2
+  AND a.object_key = $3
+  AND a.upload_status = 'finalizing'
+"#,
+                &[
+                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_submission_id),
+                    &quarantine_object_key,
+                ],
+            )
+            .await?;
+
+        rows.into_iter()
+            .next()
+            .map(|row| pending_attachment_upload_work_from_row(&row))
+            .transpose()
+    }
+
     pub async fn mark_attachment_uploaded(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
@@ -79,7 +188,7 @@ SET object_key = $3,
     upload_status = 'uploaded'
 WHERE a.id = $1
   AND a.object_key = $2
-  AND a.upload_status = 'pending'
+  AND a.upload_status = 'finalizing'
 "#,
                 &[
                     &Uuid::from(evidence_attachment_id),

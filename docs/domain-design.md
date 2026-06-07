@@ -43,7 +43,9 @@ Evidence Attachments are the files or objects supplied with a submission. They
 belong to a single Evidence Submission and carry object-storage location,
 filename, content type, content length, SHA-256, and CRC32C checksums. Attachment
 bytes are first stored in quarantine object storage, then the attachment record
-and a pending scan record are created together.
+and a pending scan record are created together. Clean scans atomically move the
+attachment to `finalizing` and enqueue a finalization message; finalization
+copies the object to its stable path before marking it `uploaded`.
 
 Evidence Attachment Scans track the malware-scan state for each attachment. The
 scan status starts as `pending` and can move to `clean`, `malicious`, or

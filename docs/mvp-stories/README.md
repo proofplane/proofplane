@@ -22,7 +22,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Partial | Filesystem-backed local/test object storage is implemented and used by attachment uploads; the production GCS adapter remains open. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until specific product event contracts are added. |
-| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment metadata, pending scan records, and scan-request outbox dispatch are in place; scanner execution, finalization, download enforcement, latest-submission API, audit polish, and seed data remain open. |
+| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment metadata, pending scan records, scan-request outbox dispatch, scanner boundary, and scan worker finalization are in place; download enforcement, latest-submission API, audit polish, and seed data remain open. |
 | 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
@@ -46,8 +46,9 @@ Near-term parallel lanes:
 
 - Story 017 is the current mainline product surface. Its submission and upload
   slices are partially complete and scan-request dispatch is wired through the
-  outbox/Pub/Sub push worker path; the next work is scanner boundaries,
-  scan-state enforcement, finalization, download enforcement, and
+  outbox/Pub/Sub push worker path, with scanning and clean-object finalization
+  split into independently retryable deliveries; the next work is scan-state
+  enforcement, download enforcement, and
   latest-submission polish.
 - Later stories should extend the integration harness with reusable Pub/Sub,
   object-storage, config, and binary helpers as those boundaries become shared.
@@ -93,8 +94,9 @@ Product lanes:
 - Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015. Its submission/upload slices already use the
   actor context from story 010 and its upload-accepted scan dispatch uses the
-  outbox/Pub/Sub push path from stories 011-013; remaining work should focus on
-  scanner execution, scan-state enforcement, latest-submission reads, and
+  outbox/Pub/Sub push path from stories 011-013. The noop scanner boundary is
+  implemented; remaining work should focus on scanner execution, scan-state
+  enforcement, latest-submission reads, and
   audit polish.
 - Story 018 is deferred until customer feedback shows that Proofplane should own approval state.
 - Story 019 depends on the evidence/control/submission model from 015-017, with usability gated by attachment scan state rather than submission approval.

@@ -596,7 +596,7 @@ async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_ke
 }
 
 #[tokio::test]
-async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
+async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_uploaded() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
@@ -604,6 +604,59 @@ async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
     let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
     let quarantine_key = attachment.object_key.clone();
+    let work = postgres
+        .load_pending_attachment_upload_work(attachment.id, &quarantine_key)
+        .await
+        .expect("pending work loads")
+        .expect("pending work exists");
+    let request_id = Uuid::new_v4();
+
+    assert!(postgres
+        .request_attachment_finalization(&work, Some(request_id))
+        .await
+        .expect("clean scan hands off"));
+    assert!(!postgres
+        .request_attachment_finalization(&work, Some(request_id))
+        .await
+        .expect("duplicate clean scan resolves"));
+
+    let client = postgres.get().await.expect("connection opens");
+    let outbox = client
+        .query_one(
+            r#"
+SELECT event_type, aggregate_id, payload, request_id
+FROM outbox_messages
+WHERE event_type = 'attachment.finalization_requested'
+  AND aggregate_id = $1
+"#,
+            &[&Uuid::from(attachment.id).to_string()],
+        )
+        .await
+        .expect("finalization outbox message loads");
+    assert_eq!(
+        outbox.get::<_, String>("event_type"),
+        "attachment.finalization_requested"
+    );
+    assert_eq!(
+        outbox.get::<_, Option<Uuid>>("request_id"),
+        Some(request_id)
+    );
+    assert_eq!(
+        outbox.get::<_, serde_json::Value>("payload"),
+        serde_json::json!({
+            "evidence_submission_id": Uuid::from(submission.id).to_string(),
+            "object_key": quarantine_key,
+        })
+    );
+    drop(client);
+
+    let finalizing = postgres
+        .load_finalizing_attachment_upload_work(attachment.id, submission.id, &quarantine_key)
+        .await
+        .expect("finalizing work loads")
+        .expect("finalizing work exists");
+    assert_eq!(finalizing.upload_status, AttachmentUploadStatus::Finalizing);
+
     let final_key = format!(
         "workspaces/{}/evidence-submissions/{}/attachments/{}/{}",
         request.workspace_id, submission.id, attachment.id, attachment.filename
@@ -612,7 +665,7 @@ async fn attachment_scan_clean_update_finalizes_attachment_atomically() {
     assert!(postgres
         .mark_attachment_uploaded(attachment.id, &quarantine_key, &final_key,)
         .await
-        .expect("clean scan marks"));
+        .expect("finalization marks uploaded"));
 
     let detail = postgres
         .in_actor_context_read(actor, async move |context| {
