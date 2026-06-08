@@ -242,7 +242,7 @@ ATTACH_JSON=$(curl --fail-with-body \
   --header "x-request-id: $(uuidgen)" \
   --header "x-proofplane-actor-id: $ACTOR_ID" \
   --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
-  --form "file=@fixtures/api/evidence-submissions/vuln-scan-results.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
+  --form "file=@fixtures/api/evidence-submissions/vuln-scanner-results.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments")
 
 echo "$ATTACH_JSON" | jq .
