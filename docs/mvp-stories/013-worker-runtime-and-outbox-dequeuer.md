@@ -156,8 +156,10 @@ return unimplemented, so local subscriptions are not left stale.
 - Unit tests cover normal, final-delivery, and unknown-event dispatch
   classification, including missing delivery attempts and attempts below, at,
   and above the configured maximum.
-- Attachment handler tests cover retryable failures and final-delivery terminal
-  handling.
+- Attachment handler integration tests use concrete Postgres and cover
+  retryable failures, final-delivery terminal handling, idempotent duplicate
+  delivery, atomic outbox handoff, and database rollback. Fakes are limited to
+  scanner and object-storage adapter boundaries.
 - Integration test provisions the message bus topic, worker dead-letter topic,
   and worker push subscription against Deltio through the dequeuer-owned
   provisioning helper, including the create and reconciliation path.

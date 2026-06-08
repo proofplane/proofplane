@@ -162,9 +162,7 @@ data, maps malformed or unknown events to acknowledgements, and maps retryable
 handler failures to `500`.
 
 Domain-specific worker behavior belongs under `src/handlers`. The worker
-dispatch layer should multiplex by event type and call the appropriate handler,
-not use dynamically injected handler traits for the current single-process
-runtime.
+dispatch layer should multiplex by event type and call the appropriate handler.
 
 ### `src/pubsub`
 

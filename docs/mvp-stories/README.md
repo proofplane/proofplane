@@ -22,12 +22,12 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Partial | Filesystem-backed local/test object storage is implemented and used by attachment uploads; the production GCS adapter remains open. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until specific product event contracts are added. |
-| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment metadata, pending scan records, scan-request outbox dispatch, scanner boundary, and scan worker finalization are in place; download enforcement, latest-submission API, audit polish, and seed data remain open. |
+| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment lifecycle status, scan-request outbox dispatch, scanner boundary, and idempotent scan/finalization workers are in place; download enforcement, latest-submission API, audit polish, and seed data remain open. |
 | 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
 | 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
-| 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Planned | Add integration coverage for readiness and fail-closed dependency behavior before release hardening. |
+| 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Partial | Concrete-Postgres attachment worker rollback/retry coverage is in place; readiness, SpiceDB, Pub/Sub, and public API storage-failure coverage remain open. |
 | 023. [Prometheus Metrics Instrumentation](./023-prometheus-metrics-instrumentation.md) | Planned | Add application metrics on top of the existing `/metrics` scaffold before final demo hardening. |
 | 024. [End-to-End Demo and Release Hardening](./024-end-to-end-demo-and-release-hardening.md) | Planned | Not started. |
 | 025. [Marketing Site and Sandbox Onboarding](./025-marketing-site-and-sandbox-onboarding.md) | Planned | Product-led GTM milestone: public site, sandbox CTA, first-run SOC 2 flow, and AI-answer readiness. |
@@ -94,12 +94,14 @@ Product lanes:
 - Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015. Its submission/upload slices already use the
   actor context from story 010 and its upload-accepted scan dispatch uses the
-  outbox/Pub/Sub push path from stories 011-013. The noop scanner boundary is
-  implemented; remaining work should focus on scanner execution, scan-state
+  outbox/Pub/Sub push path from stories 011-013. The noop scanner boundary and
+  concrete-Postgres scan/finalization handlers are implemented; remaining work
+  should focus on real scanner execution, attachment-state
   enforcement, latest-submission reads, and
   audit polish.
 - Story 018 is deferred until customer feedback shows that Proofplane should own approval state.
-- Story 019 depends on the evidence/control/submission model from 015-017, with usability gated by attachment scan state rather than submission approval.
+- Story 019 depends on the evidence/control/submission model from 015-017, with
+  usability gated by attachment upload status rather than submission approval.
 - Story 020 can start its schema/repository design after 008 and 010, but service-level audit calls should be integrated alongside stories 015-019.
 - Story 021 depends on the domain services created by 015-020 and should use the authentication and authorization model introduced in 010.
 - Story 022 hardens dependency-failure behavior before the final release gate.
@@ -111,9 +113,15 @@ Product lanes:
 
 Definition of done for every story:
 
-- Code is implemented behind static dependency injection using traits and generics. Do not introduce dynamic dispatch unless a later story explicitly approves it.
+- Dependencies are passed explicitly. Use traits and static generics for real
+  swappable boundaries such as scanners, object stores, and publishers; depend
+  directly on concrete internal gateways such as `repository::Postgres` instead
+  of introducing mock-only repository traits.
 - Async work uses `tokio`.
 - Errors use `thiserror`.
-- New behavior has unit tests. After story 009 lands, behavior that crosses process or infrastructure boundaries should also have integration coverage in the dedicated integration test target.
+- Pure parsing and domain behavior has focused unit tests. Persistence,
+  transactions, worker coordination, and other infrastructure behavior belongs
+  in the dedicated integration test target with concrete dependencies wherever
+  practical.
 - Seed data is updated whenever a story introduces user-visible or queryable data.
 - The QA guide in the story can be followed from a clean checkout with local Docker dependencies.

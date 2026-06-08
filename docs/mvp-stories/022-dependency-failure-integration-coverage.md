@@ -1,5 +1,13 @@
 # 022 - Dependency Failure Integration Coverage
 
+## Status
+
+Partially implemented. Attachment scan and finalization handler integration
+tests now use concrete Postgres and inject database failures to verify atomic
+rollback and retry behavior. They also cover scanner and object-store failures
+at those adapter boundaries. API readiness, SpiceDB interruption, Pub/Sub
+interruption, and public attachment API storage-failure coverage remain open.
+
 ## Goal
 
 Harden Proofplane's runtime boundaries by proving that dependency failures are
@@ -64,6 +72,8 @@ coverage or split implementation into slices:
 - outbox retry behavior is observable after transient Pub/Sub failures
 - object storage write/read failures map to stable API errors once attachment
   endpoints exist
+- attachment scan/finalization database failures leave attachment state and
+  finalization outbox work consistent and retryable
 
 ## Acceptance Criteria
 
@@ -88,6 +98,7 @@ coverage or split implementation into slices:
 - `cargo test --test integration evidence_request_authz_fails_closed_when_spicedb_is_unavailable`
 - `cargo test --test integration authentication_still_precedes_dependency_authorization_failures`
 - Worker/Pub/Sub/object-storage integration tests when those stories land.
+- `cargo test --test integration worker_handlers`
 
 ## QA Guide
 

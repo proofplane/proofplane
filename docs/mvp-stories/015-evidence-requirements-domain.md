@@ -67,7 +67,8 @@ API endpoints should support create, list by workspace, get, full replace update
 - Evidence Request table is migrated.
 - Repository supports create, get, list by workspace, full replace update, and list due.
 - Domain model enforces Evidence Request invariants.
-- Service validates Evidence Request input and delegates persistence through the repository trait.
+- Service validates Evidence Request input and delegates persistence through the
+  concrete Postgres repository gateway.
 - API exposes Evidence Request endpoints.
 - Seed data includes realistic demo Evidence Requests.
 - No auth behavior, stale query, owner/team, source-system, or uploaded-evidence semantics are introduced in story 015.
@@ -76,9 +77,10 @@ API endpoints should support create, list by workspace, get, full replace update
 
 - Domain unit tests cover parsing and invariants.
 - Validation tests cover accumulated field errors.
-- Repository code is compile-checked.
-- API and service code are compile-checked.
-- Database-backed repository tests remain deferred until story 009 introduces the integration harness.
+- Domain and service code are compile-checked and covered by unit tests where
+  logic is local.
+- Database-backed repository and API behavior is covered by the integration
+  harness introduced in story 009.
 
 ## QA Guide
 
