@@ -81,7 +81,12 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
     let final_key = finalized["object_key"]
         .as_str()
         .expect("final object key is a string");
-    assert_ne!(final_key, quarantine_key);
+    assert_eq!(
+        final_key,
+        format!(
+            "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/artifact.txt"
+        )
+    );
     assert!(app
         .object_storage_root()
         .join("objects")
@@ -111,7 +116,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     let clean = upload_attachment(&app, workspace_id, submission_id, "clean.txt").await;
     let request_id = Uuid::new_v4();
     let clean_handler = AttachmentScanHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeScanner::outcome(MalwareScanOutcome::Clean)),
         5,
     );
@@ -137,7 +142,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
 
     let malicious = upload_attachment(&app, workspace_id, submission_id, "malicious.txt").await;
     AttachmentScanHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeScanner::outcome(MalwareScanOutcome::Malicious {
             reason: "EICAR".to_owned(),
         })),
@@ -158,7 +163,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
 
     let failed = upload_attachment(&app, workspace_id, submission_id, "failed.txt").await;
     AttachmentScanHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeScanner::outcome(MalwareScanOutcome::Failed {
             reason: "scanner refused".to_owned(),
         })),
@@ -171,7 +176,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
 
     let retry = upload_attachment(&app, workspace_id, submission_id, "retry.txt").await;
     let retry_handler =
-        AttachmentScanHandler::new(app.postgres_arc(), Arc::new(FakeScanner::error()), 5);
+        AttachmentScanHandler::new(app.postgres.clone(), Arc::new(FakeScanner::error()), 5);
     assert!(retry_handler
         .handle_scan_requested(scan_worker_message(&retry, submission_id, None, Some(4)))
         .await
@@ -190,7 +195,7 @@ async fn attachment_scan_handler_rolls_back_update_and_outbox_failures() {
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
     let handler = AttachmentScanHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeScanner::outcome(MalwareScanOutcome::Clean)),
         5,
     );
@@ -253,7 +258,7 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
     let scanner = AttachmentScanHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeScanner::outcome(MalwareScanOutcome::Clean)),
         5,
     );
@@ -269,11 +274,11 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         .await
         .expect("scan prepares finalization");
     let store = Arc::new(FakeObjectStore::default());
-    AttachmentFinalizationHandler::new(app.postgres_arc(), store.clone())
+    AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
         .handle_finalization_requested(finalization_worker_message(&successful, submission_id))
         .await
         .expect("finalization succeeds");
-    AttachmentFinalizationHandler::new(app.postgres_arc(), store.clone())
+    AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
         .handle_finalization_requested(finalization_worker_message(&successful, submission_id))
         .await
         .expect("duplicate finalization is acknowledged");
@@ -295,7 +300,7 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         .await
         .expect("scan prepares delete failure");
     AttachmentFinalizationHandler::new(
-        app.postgres_arc(),
+        app.postgres.clone(),
         Arc::new(FakeObjectStore::delete_failure()),
     )
     .handle_finalization_requested(finalization_worker_message(&delete_failure, submission_id))
@@ -316,7 +321,7 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         .expect("scan prepares copy failure");
     let failing_store = Arc::new(FakeObjectStore::copy_failure());
     assert!(
-        AttachmentFinalizationHandler::new(app.postgres_arc(), failing_store)
+        AttachmentFinalizationHandler::new(app.postgres.clone(), failing_store)
             .handle_finalization_requested(finalization_worker_message(
                 &copy_failure,
                 submission_id,
@@ -347,7 +352,7 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
     .await;
     let database_store = Arc::new(FakeObjectStore::default());
     assert!(
-        AttachmentFinalizationHandler::new(app.postgres_arc(), database_store.clone())
+        AttachmentFinalizationHandler::new(app.postgres.clone(), database_store.clone())
             .handle_finalization_requested(finalization_worker_message(
                 &database_failure,
                 submission_id,
@@ -552,6 +557,7 @@ async fn attachment_status(app: &TestApp, attachment_id: Uuid) -> String {
         .get("upload_status")
 }
 
+// Each TestApp owns a dedicated Postgres container, so these triggers are test-local.
 async fn install_failure_trigger(
     app: &TestApp,
     table: &str,

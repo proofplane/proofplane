@@ -42,7 +42,7 @@ pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
-    postgres: Arc<Postgres>,
+    pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
@@ -173,10 +173,6 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
-    }
-
-    pub fn postgres_arc(&self) -> Arc<Postgres> {
-        self.postgres.clone()
     }
 
     pub async fn worker_server(&self) -> TestServer {
