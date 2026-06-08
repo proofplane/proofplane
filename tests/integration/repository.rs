@@ -735,11 +735,11 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let failed_key = failed.object_key.clone();
 
     assert!(postgres
-        .mark_attachment_contains_virus(malicious.id, &malicious_key, "EICAR-Test-File",)
+        .mark_attachment_contains_virus(malicious.id, &malicious_key)
         .await
         .expect("malicious scan marks"));
     assert!(postgres
-        .mark_attachment_upload_failed(failed.id, &failed_key, "scanner refused object",)
+        .mark_attachment_upload_failed(failed.id, &failed_key)
         .await
         .expect("failed scan marks"));
 
@@ -774,7 +774,7 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     );
 
     assert!(!postgres
-        .mark_attachment_upload_failed(failed.id, &failed_key, "duplicate")
+        .mark_attachment_upload_failed(failed.id, &failed_key)
         .await
         .expect("duplicate failed scan resolves"));
 }

@@ -139,13 +139,11 @@ WHERE a.id = $1
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        reason: &str,
     ) -> Result<bool, Error> {
         self.mark_attachment_terminal_upload_status(
             evidence_attachment_id,
             quarantine_object_key,
             AttachmentUploadStatus::ContainsVirus,
-            reason,
         )
         .await
     }
@@ -154,13 +152,11 @@ WHERE a.id = $1
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        reason: &str,
     ) -> Result<bool, Error> {
         self.mark_attachment_terminal_upload_status(
             evidence_attachment_id,
             quarantine_object_key,
             AttachmentUploadStatus::FailedUpload,
-            reason,
         )
         .await
     }
@@ -170,7 +166,6 @@ WHERE a.id = $1
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
         status: AttachmentUploadStatus,
-        _reason: &str,
     ) -> Result<bool, Error> {
         let client = self.get().await?;
         let rows = client

@@ -18,7 +18,6 @@ use crate::{
 };
 
 const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
-const SAFE_REASON_MAX_CHARS: usize = 512;
 
 pub struct AttachmentScanHandler<C> {
     repository: Arc<Postgres>,
@@ -155,11 +154,17 @@ where
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
     ) -> Result<(), RetryableWorkerError> {
-        let reason = safe_failure_reason(reason.as_ref());
+        let reason = reason.as_ref();
         self.repository
-            .mark_attachment_contains_virus(work.evidence_attachment_id, &work.object_key, &reason)
+            .mark_attachment_contains_virus(work.evidence_attachment_id, &work.object_key)
             .await
             .map_err(retryable)?;
+        tracing::warn!(
+            evidence_attachment_id = %work.evidence_attachment_id,
+            object_key = %work.object_key,
+            scanner_reason = reason,
+            "attachment scan detected malicious content"
+        );
 
         Ok(())
     }
@@ -169,11 +174,17 @@ where
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
     ) -> Result<(), RetryableWorkerError> {
-        let reason = safe_failure_reason(reason.as_ref());
+        let reason = reason.as_ref();
         self.repository
-            .mark_attachment_upload_failed(work.evidence_attachment_id, &work.object_key, &reason)
+            .mark_attachment_upload_failed(work.evidence_attachment_id, &work.object_key)
             .await
             .map_err(retryable)?;
+        tracing::warn!(
+            evidence_attachment_id = %work.evidence_attachment_id,
+            object_key = %work.object_key,
+            scanner_reason = reason,
+            "attachment scan failed terminally"
+        );
         Ok(())
     }
 }
@@ -287,10 +298,6 @@ fn scan_content_length(work: &PendingAttachmentUploadWork) -> Result<u64, Retrya
         .map_err(|_| RetryableWorkerError("pending attachment has negative length".to_owned()))
 }
 
-fn safe_failure_reason(reason: &str) -> String {
-    reason.trim().chars().take(SAFE_REASON_MAX_CHARS).collect()
-}
-
 fn scan_error(error: MalwareScanError) -> RetryableWorkerError {
     RetryableWorkerError(format!("malware scanner adapter failed: {error}"))
 }
@@ -361,15 +368,6 @@ mod tests {
                 PermanentScanMessageError::InvalidKey,
             ])
         );
-    }
-
-    #[test]
-    fn failure_reason_is_trimmed_and_bounded() {
-        let reason = format!("  {}  ", "x".repeat(SAFE_REASON_MAX_CHARS + 10));
-        let sanitized = safe_failure_reason(&reason);
-
-        assert_eq!(sanitized.chars().count(), SAFE_REASON_MAX_CHARS);
-        assert!(!sanitized.starts_with(char::is_whitespace));
     }
 
     fn message(attachment_id: Uuid, submission_id: Uuid, object_key: &str) -> WorkerMessage {
