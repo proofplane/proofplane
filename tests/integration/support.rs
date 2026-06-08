@@ -175,6 +175,10 @@ impl TestApp {
         &self.postgres
     }
 
+    pub fn postgres_arc(&self) -> Arc<Postgres> {
+        self.postgres.clone()
+    }
+
     pub async fn worker_server(&self) -> TestServer {
         let object_store = Arc::new(
             proofplane::object_storage::FilesystemObjectStore::new(&self.object_storage_root)

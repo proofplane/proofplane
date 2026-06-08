@@ -90,8 +90,8 @@ pub struct WorkerAppDependencies {
 
 #[derive(Clone)]
 pub struct WorkerState {
-    attachment_scan_handler: AttachmentScanHandler<Postgres, NoopMalwareScanner>,
-    attachment_finalization_handler: AttachmentFinalizationHandler<Postgres, FilesystemObjectStore>,
+    attachment_scan_handler: AttachmentScanHandler<NoopMalwareScanner>,
+    attachment_finalization_handler: AttachmentFinalizationHandler<FilesystemObjectStore>,
 }
 
 impl WorkerState {

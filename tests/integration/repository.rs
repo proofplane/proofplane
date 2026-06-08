@@ -626,26 +626,22 @@ async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_upl
     let first_work = work.clone();
     let first_message = message.clone();
     assert!(postgres
-        .in_transaction(move |context| {
-            Box::pin(async move {
-                let updated = context.request_attachment_finalization(&first_work).await?;
-                if updated {
-                    context.append_outbox_message(&first_message).await?;
-                }
-                Ok(updated)
-            })
+        .in_transaction(async move |context| {
+            let updated = context.request_attachment_finalization(&first_work).await?;
+            if updated {
+                context.append_outbox_message(&first_message).await?;
+            }
+            Ok(updated)
         })
         .await
         .expect("clean scan hands off"));
     assert!(!postgres
-        .in_transaction(move |context| {
-            Box::pin(async move {
-                let updated = context.request_attachment_finalization(&work).await?;
-                if updated {
-                    context.append_outbox_message(&message).await?;
-                }
-                Ok(updated)
-            })
+        .in_transaction(async move |context| {
+            let updated = context.request_attachment_finalization(&work).await?;
+            if updated {
+                context.append_outbox_message(&message).await?;
+            }
+            Ok(updated)
         })
         .await
         .expect("duplicate clean scan resolves"));

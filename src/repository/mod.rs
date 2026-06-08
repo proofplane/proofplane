@@ -1,5 +1,3 @@
-use std::{future::Future, pin::Pin};
-
 use deadpool_postgres::{Object, Pool};
 
 use crate::{
@@ -9,7 +7,6 @@ use crate::{
 
 mod actors;
 mod api_credentials;
-mod attachment_scan;
 mod controls;
 pub mod error;
 mod evidence_requests;
@@ -17,8 +14,6 @@ mod evidence_submissions;
 mod outbox;
 mod workspaces;
 
-pub use attachment_scan::AttachmentScanTransaction;
-pub use attachment_scan::{AttachmentFinalizationRepository, AttachmentScanRepository};
 pub use error::Error;
 pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
@@ -43,11 +38,10 @@ impl Postgres {
     pub async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context, 'transaction> FnOnce(
+        F: for<'context, 'transaction> AsyncFnOnce(
                 &'context mut TransactionContext<'transaction>,
-            ) -> Pin<
-                Box<dyn Future<Output = Result<T, Error>> + Send + 'context>,
-            > + Send,
+            ) -> Result<T, Error>
+            + Send,
     {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
