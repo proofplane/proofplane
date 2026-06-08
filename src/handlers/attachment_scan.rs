@@ -7,13 +7,17 @@ use uuid::Uuid;
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
     object_storage::ObjectKey,
-    repository::{AttachmentScanRepository, PendingAttachmentUploadWork},
+    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
+    repository::{
+        AttachmentScanRepository, AttachmentScanTransaction, NewOutboxMessage,
+        PendingAttachmentUploadWork,
+    },
     scanner::{
         MalwareScanError, MalwareScanOutcome, MalwareScanResult, MalwareScanner, ScanObjectRequest,
     },
     validate,
     validation::Validation,
-    worker::{RetryableWorkerError, WorkerMessage},
+    worker::{RetryableWorkerError, WorkerMessage, ATTACHMENT_FINALIZATION_REQUESTED},
 };
 
 const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
@@ -134,7 +138,21 @@ where
         match scan_result.outcome {
             MalwareScanOutcome::Clean => {
                 self.repository
-                    .request_attachment_finalization(&work, request_id)
+                    .in_transaction(|transaction| {
+                        Box::pin(async move {
+                            if transaction.request_attachment_finalization(&work).await? {
+                                transaction
+                                    .append_outbox_message(
+                                        &attachment_finalization_requested_message(
+                                            &work, request_id,
+                                        ),
+                                    )
+                                    .await?;
+                            }
+
+                            Ok(())
+                        })
+                    })
                     .await
                     .map_err(retryable)?;
                 Ok(())
@@ -175,6 +193,23 @@ where
             .await
             .map_err(retryable)?;
         Ok(())
+    }
+}
+
+fn attachment_finalization_requested_message(
+    work: &PendingAttachmentUploadWork,
+    request_id: Option<Uuid>,
+) -> NewOutboxMessage {
+    NewOutboxMessage {
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
+        event_type: ATTACHMENT_FINALIZATION_REQUESTED.to_owned(),
+        aggregate_type: "evidence_attachment".to_owned(),
+        aggregate_id: Uuid::from(work.evidence_attachment_id).to_string(),
+        payload: serde_json::json!({
+            "evidence_submission_id": Uuid::from(work.evidence_submission_id).to_string(),
+            "object_key": work.object_key,
+        }),
+        request_id,
     }
 }
 
@@ -284,11 +319,11 @@ fn retryable(error: impl ToString) -> RetryableWorkerError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{future::Future, pin::Pin, sync::Mutex};
 
     use crate::{
         domain::{AttachmentUploadStatus, WorkspaceId},
-        repository::Error as RepositoryError,
+        repository::{Error as RepositoryError, OutboxMessage},
         scanner::{MalwareScanOutcome, MalwareScanResult},
     };
     use async_trait::async_trait;
@@ -367,11 +402,71 @@ mod tests {
 
         let repo = fixture.repository.state.lock().unwrap();
         assert_eq!(repo.finalization_requests.len(), 1);
+        assert_eq!(repo.finalization_requests[0], fixture.attachment_id.into());
+        assert_eq!(repo.outbox_messages.len(), 1);
         assert_eq!(
-            repo.finalization_requests[0].0,
-            fixture.attachment_id.into()
+            repo.outbox_messages[0],
+            NewOutboxMessage {
+                topic: TopicName::new(MESSAGE_BUS_TOPIC),
+                event_type: ATTACHMENT_FINALIZATION_REQUESTED.to_owned(),
+                aggregate_type: "evidence_attachment".to_owned(),
+                aggregate_id: fixture.attachment_id.to_string(),
+                payload: serde_json::json!({
+                    "evidence_submission_id": fixture.submission_id.to_string(),
+                    "object_key": fixture.object_key,
+                }),
+                request_id: Some(Uuid::from_u128(1)),
+            }
         );
-        assert_eq!(repo.finalization_requests[0].1, Some(Uuid::from_u128(1)));
+        assert_eq!(repo.commits, 1);
+    }
+
+    #[tokio::test]
+    async fn stale_finalization_transition_does_not_append_another_message() {
+        let fixture = Fixture::stale_transition();
+
+        fixture
+            .handler()
+            .handle_scan_requested(fixture.message())
+            .await
+            .expect("handler succeeds");
+
+        let repo = fixture.repository.state.lock().unwrap();
+        assert!(repo.finalization_requests.is_empty());
+        assert!(repo.outbox_messages.is_empty());
+        assert_eq!(repo.commits, 1);
+    }
+
+    #[tokio::test]
+    async fn finalization_update_failure_is_retryable_and_rolls_back() {
+        let fixture = Fixture::update_failure();
+
+        let result = fixture
+            .handler()
+            .handle_scan_requested(fixture.message())
+            .await;
+
+        assert!(result.is_err());
+        let repo = fixture.repository.state.lock().unwrap();
+        assert!(repo.finalization_requests.is_empty());
+        assert!(repo.outbox_messages.is_empty());
+        assert_eq!(repo.commits, 0);
+    }
+
+    #[tokio::test]
+    async fn outbox_failure_is_retryable_and_rolls_back_transition() {
+        let fixture = Fixture::outbox_failure();
+
+        let result = fixture
+            .handler()
+            .handle_scan_requested(fixture.message())
+            .await;
+
+        assert!(result.is_err());
+        let repo = fixture.repository.state.lock().unwrap();
+        assert!(repo.finalization_requests.is_empty());
+        assert!(repo.outbox_messages.is_empty());
+        assert_eq!(repo.commits, 0);
     }
 
     #[tokio::test]
@@ -553,6 +648,24 @@ mod tests {
             fixture
         }
 
+        fn stale_transition() -> Self {
+            let fixture = Self::new(MalwareScanOutcome::Clean);
+            fixture.repository.state.lock().unwrap().transition_succeeds = false;
+            fixture
+        }
+
+        fn update_failure() -> Self {
+            let fixture = Self::new(MalwareScanOutcome::Clean);
+            fixture.repository.state.lock().unwrap().fail_update = true;
+            fixture
+        }
+
+        fn outbox_failure() -> Self {
+            let fixture = Self::new(MalwareScanOutcome::Clean);
+            fixture.repository.state.lock().unwrap().fail_outbox = true;
+            fixture
+        }
+
         fn handler(&self) -> AttachmentScanHandler<FakeRepository, FakeScanner> {
             AttachmentScanHandler::new(
                 self.repository.clone(),
@@ -574,7 +687,12 @@ mod tests {
     #[derive(Default)]
     struct FakeRepositoryState {
         work: Option<PendingAttachmentUploadWork>,
-        finalization_requests: Vec<(EvidenceAttachmentId, Option<Uuid>)>,
+        transition_succeeds: bool,
+        fail_update: bool,
+        fail_outbox: bool,
+        finalization_requests: Vec<EvidenceAttachmentId>,
+        outbox_messages: Vec<NewOutboxMessage>,
+        commits: usize,
         malicious: Vec<(EvidenceAttachmentId, String, String)>,
         failed: Vec<(EvidenceAttachmentId, String, String)>,
     }
@@ -584,6 +702,7 @@ mod tests {
             Self {
                 state: Mutex::new(FakeRepositoryState {
                     work: Some(work),
+                    transition_succeeds: true,
                     ..FakeRepositoryState::default()
                 }),
             }
@@ -594,27 +713,97 @@ mod tests {
         }
     }
 
+    struct FakeTransaction {
+        transition_succeeds: bool,
+        fail_update: bool,
+        fail_outbox: bool,
+        finalization_requests: Vec<EvidenceAttachmentId>,
+        outbox_messages: Vec<NewOutboxMessage>,
+    }
+
+    #[async_trait]
+    impl AttachmentScanTransaction for FakeTransaction {
+        async fn request_attachment_finalization(
+            &mut self,
+            work: &PendingAttachmentUploadWork,
+        ) -> Result<bool, RepositoryError> {
+            if self.fail_update {
+                return Err(RepositoryError::Conflict("fake update failure"));
+            }
+            if self.transition_succeeds {
+                self.finalization_requests.push(work.evidence_attachment_id);
+            }
+            Ok(self.transition_succeeds)
+        }
+
+        async fn append_outbox_message(
+            &mut self,
+            message: &NewOutboxMessage,
+        ) -> Result<OutboxMessage, RepositoryError> {
+            if self.fail_outbox {
+                return Err(RepositoryError::Conflict("fake outbox failure"));
+            }
+            self.outbox_messages.push(message.clone());
+            Ok(OutboxMessage {
+                id: 1,
+                topic: message.topic.clone(),
+                event_type: message.event_type.clone(),
+                aggregate_type: message.aggregate_type.clone(),
+                aggregate_id: message.aggregate_id.clone(),
+                payload: message.payload.clone(),
+                request_id: message.request_id,
+                attempt_count: 0,
+                next_available_at: chrono::Utc::now(),
+                created_at: chrono::Utc::now(),
+            })
+        }
+    }
+
     #[async_trait]
     impl AttachmentScanRepository for FakeRepository {
+        type Transaction<'a> = FakeTransaction;
+
+        async fn in_transaction<T, F>(&self, operation: F) -> Result<T, RepositoryError>
+        where
+            T: Send,
+            F: for<'context, 'transaction> FnOnce(
+                    &'context mut Self::Transaction<'transaction>,
+                ) -> Pin<
+                    Box<dyn Future<Output = Result<T, RepositoryError>> + Send + 'context>,
+                > + Send,
+        {
+            let (transition_succeeds, fail_update, fail_outbox) = {
+                let state = self.state.lock().unwrap();
+                (
+                    state.transition_succeeds,
+                    state.fail_update,
+                    state.fail_outbox,
+                )
+            };
+            let mut transaction = FakeTransaction {
+                transition_succeeds,
+                fail_update,
+                fail_outbox,
+                finalization_requests: Vec::new(),
+                outbox_messages: Vec::new(),
+            };
+
+            let result = operation(&mut transaction).await?;
+            let mut state = self.state.lock().unwrap();
+            state
+                .finalization_requests
+                .extend(transaction.finalization_requests);
+            state.outbox_messages.extend(transaction.outbox_messages);
+            state.commits += 1;
+            Ok(result)
+        }
+
         async fn load_pending_attachment_upload_work(
             &self,
             _evidence_attachment_id: EvidenceAttachmentId,
             _quarantine_object_key: &str,
         ) -> Result<Option<PendingAttachmentUploadWork>, RepositoryError> {
             Ok(self.state.lock().unwrap().work.clone())
-        }
-
-        async fn request_attachment_finalization(
-            &self,
-            work: &PendingAttachmentUploadWork,
-            request_id: Option<Uuid>,
-        ) -> Result<bool, RepositoryError> {
-            self.state
-                .lock()
-                .unwrap()
-                .finalization_requests
-                .push((work.evidence_attachment_id, request_id));
-            Ok(true)
         }
 
         async fn mark_attachment_contains_virus(

@@ -20,7 +20,9 @@ use proofplane::{
     },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
+    scanner::NoopMalwareScanner,
     store,
+    worker::{create_worker_app, WorkerAppDependencies},
 };
 use secrecy::SecretString;
 use serde_json::Value;
@@ -171,6 +173,26 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
+    }
+
+    pub async fn worker_server(&self) -> TestServer {
+        let object_store = Arc::new(
+            proofplane::object_storage::FilesystemObjectStore::new(&self.object_storage_root)
+                .await
+                .expect("worker filesystem object store initializes"),
+        );
+        let recorder = PrometheusBuilder::new().build_recorder();
+
+        TestServer::new(create_worker_app(WorkerAppDependencies {
+            postgres: self.postgres.clone(),
+            object_store,
+            scanner: Arc::new(NoopMalwareScanner),
+            worker_max_delivery_attempts: 5,
+            metrics: recorder.handle(),
+            live_path: "/livez".to_owned(),
+            ready_path: "/readyz".to_owned(),
+            dependency_timeout_ms: 1000,
+        }))
     }
 
     pub fn object_storage_root(&self) -> &std::path::Path {

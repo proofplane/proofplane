@@ -611,12 +611,42 @@ async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_upl
         .expect("pending work exists");
     let request_id = Uuid::new_v4();
 
+    let message = NewOutboxMessage {
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
+        event_type: "attachment.finalization_requested".to_owned(),
+        aggregate_type: "evidence_attachment".to_owned(),
+        aggregate_id: Uuid::from(attachment.id).to_string(),
+        payload: serde_json::json!({
+            "evidence_submission_id": Uuid::from(submission.id).to_string(),
+            "object_key": quarantine_key,
+        }),
+        request_id: Some(request_id),
+    };
+
+    let first_work = work.clone();
+    let first_message = message.clone();
     assert!(postgres
-        .request_attachment_finalization(&work, Some(request_id))
+        .in_transaction(move |context| {
+            Box::pin(async move {
+                let updated = context.request_attachment_finalization(&first_work).await?;
+                if updated {
+                    context.append_outbox_message(&first_message).await?;
+                }
+                Ok(updated)
+            })
+        })
         .await
         .expect("clean scan hands off"));
     assert!(!postgres
-        .request_attachment_finalization(&work, Some(request_id))
+        .in_transaction(move |context| {
+            Box::pin(async move {
+                let updated = context.request_attachment_finalization(&work).await?;
+                if updated {
+                    context.append_outbox_message(&message).await?;
+                }
+                Ok(updated)
+            })
+        })
         .await
         .expect("duplicate clean scan resolves"));
 

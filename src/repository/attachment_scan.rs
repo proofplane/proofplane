@@ -1,24 +1,35 @@
+use std::{future::Future, pin::Pin};
+
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
-    repository::{Error, FinalizingAttachmentUploadWork, PendingAttachmentUploadWork, Postgres},
+    repository::{
+        Error, FinalizingAttachmentUploadWork, NewOutboxMessage, OutboxMessage,
+        PendingAttachmentUploadWork, Postgres, TransactionContext,
+    },
 };
 
 #[async_trait]
 pub trait AttachmentScanRepository: Send + Sync {
+    type Transaction<'a>: AttachmentScanTransaction + Send
+    where
+        Self: 'a;
+
+    async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
+    where
+        T: Send,
+        F: for<'context, 'transaction> FnOnce(
+                &'context mut Self::Transaction<'transaction>,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<T, Error>> + Send + 'context>,
+            > + Send;
+
     async fn load_pending_attachment_upload_work(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
     ) -> Result<Option<PendingAttachmentUploadWork>, Error>;
-
-    async fn request_attachment_finalization(
-        &self,
-        work: &PendingAttachmentUploadWork,
-        request_id: Option<Uuid>,
-    ) -> Result<bool, Error>;
 
     async fn mark_attachment_contains_virus(
         &self,
@@ -36,7 +47,51 @@ pub trait AttachmentScanRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait AttachmentScanTransaction {
+    async fn request_attachment_finalization(
+        &mut self,
+        work: &PendingAttachmentUploadWork,
+    ) -> Result<bool, Error>;
+
+    async fn append_outbox_message(
+        &mut self,
+        message: &NewOutboxMessage,
+    ) -> Result<OutboxMessage, Error>;
+}
+
+#[async_trait]
+impl AttachmentScanTransaction for TransactionContext<'_> {
+    async fn request_attachment_finalization(
+        &mut self,
+        work: &PendingAttachmentUploadWork,
+    ) -> Result<bool, Error> {
+        TransactionContext::request_attachment_finalization(self, work).await
+    }
+
+    async fn append_outbox_message(
+        &mut self,
+        message: &NewOutboxMessage,
+    ) -> Result<OutboxMessage, Error> {
+        TransactionContext::append_outbox_message(self, message).await
+    }
+}
+
+#[async_trait]
 impl AttachmentScanRepository for Postgres {
+    type Transaction<'a> = TransactionContext<'a>;
+
+    async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
+    where
+        T: Send,
+        F: for<'context, 'transaction> FnOnce(
+                &'context mut Self::Transaction<'transaction>,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<T, Error>> + Send + 'context>,
+            > + Send,
+    {
+        Postgres::in_transaction(self, operation).await
+    }
+
     async fn load_pending_attachment_upload_work(
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
@@ -48,14 +103,6 @@ impl AttachmentScanRepository for Postgres {
             quarantine_object_key,
         )
         .await
-    }
-
-    async fn request_attachment_finalization(
-        &self,
-        work: &PendingAttachmentUploadWork,
-        request_id: Option<Uuid>,
-    ) -> Result<bool, Error> {
-        Postgres::request_attachment_finalization(self, work, request_id).await
     }
 
     async fn mark_attachment_contains_virus(

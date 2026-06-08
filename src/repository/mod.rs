@@ -1,4 +1,4 @@
-use std::ops::AsyncFnOnce;
+use std::{future::Future, pin::Pin};
 
 use deadpool_postgres::{Object, Pool};
 
@@ -17,6 +17,7 @@ mod evidence_submissions;
 mod outbox;
 mod workspaces;
 
+pub use attachment_scan::AttachmentScanTransaction;
 pub use attachment_scan::{AttachmentFinalizationRepository, AttachmentScanRepository};
 pub use error::Error;
 pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
@@ -26,6 +27,10 @@ pub struct Postgres {
     pool: Pool,
 }
 
+pub struct TransactionContext<'transaction> {
+    transaction: deadpool_postgres::Transaction<'transaction>,
+}
+
 impl Postgres {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
@@ -33,6 +38,25 @@ impl Postgres {
 
     pub async fn get(&self) -> Result<Object, deadpool_postgres::PoolError> {
         self.pool.get().await
+    }
+
+    pub async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
+    where
+        T: Send,
+        F: for<'context, 'transaction> FnOnce(
+                &'context mut TransactionContext<'transaction>,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<T, Error>> + Send + 'context>,
+            > + Send,
+    {
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let mut context = TransactionContext { transaction };
+        let result = operation(&mut context).await?;
+
+        context.transaction.commit().await?;
+
+        Ok(result)
     }
 
     pub async fn in_actor_context<T, F>(
