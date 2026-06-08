@@ -63,7 +63,7 @@ where
                 tracing::warn!(
                     message_id = %message.message_id,
                     error = %error,
-                    "acknowledging invalid attachment scan message"
+                    "skipping invalid attachment scan message"
                 );
                 return Ok(());
             }
@@ -81,7 +81,7 @@ where
             tracing::info!(
                 evidence_attachment_id = %payload.evidence_attachment_id,
                 object_key = %payload.object_key,
-                "acknowledging duplicate or stale attachment scan message"
+                "skipping duplicate or stale attachment scan message"
             );
             return Ok(());
         };
@@ -91,7 +91,7 @@ where
                 evidence_attachment_id = %payload.evidence_attachment_id,
                 payload_submission_id = %payload.evidence_submission_id,
                 work_submission_id = %work.evidence_submission_id,
-                "acknowledging attachment scan message with mismatched submission id"
+                "skipping attachment scan message with mismatched submission id"
             );
             return Ok(());
         }

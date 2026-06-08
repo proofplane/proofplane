@@ -46,7 +46,7 @@ where
             None => {
                 tracing::warn!(
                     message_id = %message.message_id,
-                    "acknowledging invalid attachment finalization message"
+                    "skipping invalid attachment finalization message"
                 );
                 return Ok(());
             }
@@ -64,7 +64,7 @@ where
         else {
             tracing::info!(
                 evidence_attachment_id = %payload.evidence_attachment_id,
-                "acknowledging duplicate or stale attachment finalization message"
+                "skipping duplicate or stale attachment finalization message"
             );
             return Ok(());
         };
