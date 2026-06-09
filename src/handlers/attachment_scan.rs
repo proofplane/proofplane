@@ -115,6 +115,7 @@ where
             }
             Err(error) if final_delivery => {
                 self.mark_failed(&work, error.to_string()).await?;
+                // TODO: don't ack here, let the message fail so it can be dead-lettered
                 return Ok(());
             }
             Err(error) => return Err(scan_error(error)),
