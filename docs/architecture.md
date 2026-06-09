@@ -36,6 +36,14 @@ worker push subscription, builds a `GoogleCloudPublisher`, and polls due
 When publishing fails, it records the failure, increments the attempt count, and
 schedules the next retry using bounded backoff.
 
+Current dequeuer publishing support is intentionally limited to local Pub/Sub
+through the `PUBSUB_EMULATOR_HOST` environment variable. Dequeuer startup fails
+when that variable is absent; production Google Pub/Sub publishing remains a
+future runtime capability. `PUBSUB_EMULATOR_HOST` is the sole source of the
+emulator endpoint; it is not duplicated in typed or YAML configuration. See MVP
+stories [011](./mvp-stories/011-pubsub-client-and-subscription-runtime.md) and
+[012](./mvp-stories/012-transactional-outbox.md).
+
 The worker is a separate HTTP runtime for Pub/Sub push delivery. It loads config,
 initializes tracing, runs migrations, builds its own Postgres pool, installs
 metrics, binds `server.worker_bind`, and serves `/pubsub/messages` plus health
@@ -161,6 +169,20 @@ The current transaction context types are defined in `services` and used by the
 repository gateway. This is an existing layering compromise documented here as
 current runtime behavior, not a claim that dependency direction is fully clean.
 
+### Runtime Adapters
+
+The current API and worker runtimes use `FilesystemObjectStore`. Although object
+storage configuration accepts GCS settings and the `ObjectStore` trait defines
+the adapter contract, selecting GCS currently returns `UnsupportedBackend`.
+Production GCS support is planned in MVP story
+[014](./mvp-stories/014-gcs-object-storage-adapter.md).
+
+The worker currently uses `NoopMalwareScanner`. The scanner boundary and
+attachment scan lifecycle are implemented, but ClamAV, cloud-provider-native,
+and commercial scanner adapters are future capabilities. The next planned
+scanner adapter work is tracked in MVP story
+[017](./mvp-stories/017-evidence-submissions-and-attachments.md).
+
 ### `src/authentication` and `src/routes/authentication.rs`
 
 API keys authenticate actors against credential records stored in Postgres.
@@ -268,6 +290,23 @@ spreading host, port, database, username, and password fields through the app.
 
 The connection string may be exposed only at infrastructure boundaries that need
 to pass it into database libraries.
+
+Some configuration fields are reserved for staged runtime capabilities:
+
+- `server.mcp_bind` is validated but not currently used. The MCP binary runs
+  migrations, logs its scaffold startup message, and exits without binding a
+  server. The planned MCP runtime is described in MVP story
+  [021](./mvp-stories/021-mcp-server.md).
+- `worker.concurrency` and `worker.shutdown_grace_seconds` are validated but are
+  not currently consumed by the worker runtime. Request concurrency comes from
+  Axum's HTTP serving model and the deployment platform; for live Cloud Run
+  delivery, this direction is recorded in MVP story
+  [013](./mvp-stories/013-worker-runtime-and-outbox-dequeuer.md). Worker
+  shutdown currently waits for Axum's graceful shutdown without applying the
+  configured grace duration.
+
+Configured-but-unused fields should not be described as affecting runtime
+behavior until their owning binaries consume them.
 
 ## Observability
 

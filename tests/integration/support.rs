@@ -10,9 +10,8 @@ use proofplane::{
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
-        AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
-        WorkerConfig,
+        AppConfig, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
+        PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -564,10 +563,6 @@ fn config(
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {
             project_id: "integration-test".to_owned(),
-            emulator_host: HostPort {
-                host: "127.0.0.1".to_owned(),
-                port: 1,
-            },
             subscriptions: PubSubSubscriptionsConfig {
                 worker: "integration-worker".to_owned(),
                 worker_push_endpoint: url::Url::parse("http://127.0.0.1:0/pubsub/messages")
