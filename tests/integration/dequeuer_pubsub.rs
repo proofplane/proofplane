@@ -15,7 +15,6 @@ use proofplane::{
         PUBSUB_EMULATOR_HOST, WORKER_DEAD_LETTER_TOPIC,
     },
     repository::{NewOutboxMessage, OutboxMessage, Postgres},
-    routes::authentication::ActorContext,
     store,
 };
 use serde_json::json;
@@ -233,16 +232,17 @@ async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
         request_id: None,
     };
 
+    let (workspace_id, actor_id) = actor_context();
     postgres
-        .in_actor_context(actor_context(), async move |context| {
+        .in_actor_context(workspace_id, actor_id, async move |context| {
             context.append_outbox_message(&message).await
         })
         .await
         .expect("outbox message appends")
 }
 
-fn actor_context() -> ActorContext {
-    ActorContext::new(
+fn actor_context() -> (WorkspaceId, ActorId) {
+    (
         WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000101").unwrap()),
         ActorId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000102").unwrap()),
     )

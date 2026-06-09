@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use crate::{
+    authentication::ActorContext,
     domain::{
         Control, ControlId, CreateControlPayload, CreateEvidenceRequestControlMappingPayload,
         EvidenceRequestControlMapping, EvidenceRequestId, Framework, FrameworkId,
         FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
     },
     repository::Postgres,
-    routes::authentication::ActorContext,
     services::Error,
 };
 
@@ -45,7 +45,7 @@ impl ControlService {
 
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context.create_control(&payload).await
             })
             .await?)
@@ -54,7 +54,9 @@ impl ControlService {
     pub async fn list_controls(&self, actor: ActorContext) -> Result<Vec<Control>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async |context| context.list_controls().await)
+            .in_actor_context_read(actor.workspace_id, actor.id, async |context| {
+                context.list_controls().await
+            })
             .await?)
     }
 
@@ -65,7 +67,7 @@ impl ControlService {
     ) -> Result<Option<Control>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context.get_control(control_id).await
             })
             .await?)
@@ -82,7 +84,7 @@ impl ControlService {
 
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context.replace_control(control_id, &payload).await
             })
             .await?)
@@ -95,7 +97,7 @@ impl ControlService {
     ) -> Result<Option<EvidenceRequestControlMapping>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context
                     .create_evidence_request_control_mapping(&payload)
                     .await
@@ -110,7 +112,7 @@ impl ControlService {
     ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context
                     .list_evidence_request_control_mappings(evidence_request_id)
                     .await
@@ -126,7 +128,7 @@ impl ControlService {
     ) -> Result<bool, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context
                     .delete_evidence_request_control_mapping(evidence_request_id, control_id)
                     .await

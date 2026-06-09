@@ -15,6 +15,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
+    authentication::ActorContext,
     authentication::ApiKeyAuthenticator,
     authorization::workspaces::WorkspaceAuthorizer,
     domain::{
@@ -24,7 +25,7 @@ use crate::{
         UpdateControlPayload,
     },
     routes::{
-        authentication::{authorize_workspace_route, ActorContext},
+        authentication::authorize_workspace_route,
         error::{domain_errors, ApiError},
     },
     services::controls::ControlService,

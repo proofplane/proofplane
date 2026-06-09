@@ -10,9 +10,8 @@ use proofplane::{
     authentication::{ApiKeyAuthenticator, ApiKeyManager},
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
-        AppConfig, HealthConfig, HostPort, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
-        WorkerConfig,
+        AppConfig, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
+        PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -20,7 +19,9 @@ use proofplane::{
     },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
+    scanner::NoopMalwareScanner,
     store,
+    worker::{create_worker_app, WorkerAppDependencies},
 };
 use secrecy::SecretString;
 use serde_json::Value;
@@ -40,7 +41,7 @@ pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
-    postgres: Arc<Postgres>,
+    pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
@@ -171,6 +172,26 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
+    }
+
+    pub async fn worker_server(&self) -> TestServer {
+        let object_store = Arc::new(
+            proofplane::object_storage::FilesystemObjectStore::new(&self.object_storage_root)
+                .await
+                .expect("worker filesystem object store initializes"),
+        );
+        let recorder = PrometheusBuilder::new().build_recorder();
+
+        TestServer::new(create_worker_app(WorkerAppDependencies {
+            postgres: self.postgres.clone(),
+            object_store,
+            scanner: Arc::new(NoopMalwareScanner),
+            worker_max_delivery_attempts: 5,
+            metrics: recorder.handle(),
+            live_path: "/livez".to_owned(),
+            ready_path: "/readyz".to_owned(),
+            dependency_timeout_ms: 1000,
+        }))
     }
 
     pub fn object_storage_root(&self) -> &std::path::Path {
@@ -542,10 +563,6 @@ fn config(
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {
             project_id: "integration-test".to_owned(),
-            emulator_host: HostPort {
-                host: "127.0.0.1".to_owned(),
-                port: 1,
-            },
             subscriptions: PubSubSubscriptionsConfig {
                 worker: "integration-worker".to_owned(),
                 worker_push_endpoint: url::Url::parse("http://127.0.0.1:0/pubsub/messages")

@@ -6,10 +6,22 @@ use chrono::Utc;
 use crate::{
     domain::{ActorId, ActorWithApiCredential, WorkspaceId},
     repository,
-    routes::authentication::ActorContext,
 };
 
 const API_KEY_PREFIX: &str = "proof";
+
+/// An authenticated actor acting within a workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorContext {
+    pub workspace_id: WorkspaceId,
+    pub id: ActorId,
+}
+
+impl ActorContext {
+    pub fn new(workspace_id: WorkspaceId, id: ActorId) -> Self {
+        Self { workspace_id, id }
+    }
+}
 
 #[derive(Clone)]
 pub struct ApiKeyManager {

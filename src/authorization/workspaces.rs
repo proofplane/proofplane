@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
+    authentication::ActorContext,
     authorization::spicedb::{ClientError, SpiceDbClient, WorkspacePermission},
-    routes::authentication::ActorContext,
 };
 
 #[derive(Clone)]

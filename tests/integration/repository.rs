@@ -9,11 +9,16 @@ use proofplane::domain::{
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
-use proofplane::routes::authentication::ActorContext;
 use serde_json::json;
 use uuid::Uuid;
 
 use super::support::{cc61_id, cc71_id, TestApp, INTEGRATION_ACTOR_ID};
+
+#[derive(Clone, Copy)]
+struct RepositoryActor {
+    workspace_id: proofplane::domain::WorkspaceId,
+    actor_id: ActorId,
+}
 
 #[tokio::test]
 async fn actor_repository_crud_uses_typed_rows() {
@@ -297,7 +302,7 @@ async fn control_repository_create_returns_created_control_and_replace_masks_mis
     let other_actor = repository_actor_context(&app).await;
 
     let created = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_control(&control_payload_with_requirements(
                     "PP-CTRL-01",
@@ -316,7 +321,7 @@ async fn control_repository_create_returns_created_control_and_replace_masks_mis
     );
 
     let updated = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .replace_control(
                     created.id,
@@ -336,7 +341,7 @@ async fn control_repository_create_returns_created_control_and_replace_masks_mis
     );
 
     let missing = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .replace_control(Uuid::new_v4().into(), &update_control_payload("PP-MISSING"))
                 .await
@@ -348,11 +353,15 @@ async fn control_repository_create_returns_created_control_and_replace_masks_mis
     // Ensure that replacing a control with an ID that the actor doesn't have access to
     // doesn't leak information about the workspace.
     let cross_workspace = postgres
-        .in_actor_context(other_actor, async move |context| {
-            context
-                .replace_control(created.id, &update_control_payload("PP-CROSS"))
-                .await
-        })
+        .in_actor_context(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| {
+                context
+                    .replace_control(created.id, &update_control_payload("PP-CROSS"))
+                    .await
+            },
+        )
         .await
         .expect("cross-workspace control replace resolves");
     assert!(cross_workspace.is_none());
@@ -366,20 +375,22 @@ async fn mapping_repository_create_returns_mapping_and_masks_guarded_absence() {
     let other_actor = repository_actor_context(&app).await;
     let request = create_repository_evidence_request(postgres, actor.clone()).await;
     let control = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context.create_control(&control_payload("PP-MAP-01")).await
         })
         .await
         .expect("control creates");
     let other_control = postgres
-        .in_actor_context(other_actor.clone(), async move |context| {
-            context.create_control(&control_payload("PP-MAP-02")).await
-        })
+        .in_actor_context(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| context.create_control(&control_payload("PP-MAP-02")).await,
+        )
         .await
         .expect("other control creates");
 
     let created = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_request_control_mapping(&mapping_payload(
                     request.id,
@@ -397,7 +408,7 @@ async fn mapping_repository_create_returns_mapping_and_masks_guarded_absence() {
     assert_eq!(created.rationale, "Repository mapping rationale.");
 
     let missing_request = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_request_control_mapping(&mapping_payload(
                     Uuid::new_v4().into(),
@@ -413,7 +424,7 @@ async fn mapping_repository_create_returns_mapping_and_masks_guarded_absence() {
     // Ensure that creating mappings in a workspace the actor doesn't have access to
     // doesn't leak information.
     let cross_workspace_control = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_request_control_mapping(&mapping_payload(
                     request.id,
@@ -436,7 +447,7 @@ async fn evidence_submission_create_scopes_to_workspace_and_records_context_acto
     let request = create_repository_evidence_request(postgres, actor.clone()).await;
 
     let submission = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_submission(&submission_payload(request.id))
                 .await
@@ -446,11 +457,11 @@ async fn evidence_submission_create_scopes_to_workspace_and_records_context_acto
         .expect("submission creates");
 
     assert_eq!(submission.evidence_request_id, request.id);
-    assert_eq!(submission.submitted_by, actor.id);
+    assert_eq!(submission.submitted_by, actor.actor_id);
     assert_eq!(submission.source_system, "github");
 
     let missing = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_submission(&submission_payload(Uuid::new_v4().into()))
                 .await
@@ -460,11 +471,15 @@ async fn evidence_submission_create_scopes_to_workspace_and_records_context_acto
     assert!(missing.is_none());
 
     let cross_workspace = postgres
-        .in_actor_context(other_actor, async move |context| {
-            context
-                .create_evidence_submission(&submission_payload(request.id))
-                .await
-        })
+        .in_actor_context(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| {
+                context
+                    .create_evidence_submission(&submission_payload(request.id))
+                    .await
+            },
+        )
         .await
         .expect("cross-workspace request create resolves");
     assert!(cross_workspace.is_none());
@@ -479,7 +494,7 @@ async fn evidence_submission_detail_starts_with_empty_attachment_list() {
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
 
     let detail = postgres
-        .in_actor_context_read(actor, async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -500,7 +515,7 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_uplo
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
 
     let attachment = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_attachment(&attachment_payload(submission.id, "first"))
                 .await
@@ -515,7 +530,7 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_uplo
     );
 
     let missing = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_attachment(&attachment_payload(Uuid::new_v4().into(), "missing"))
                 .await
@@ -529,11 +544,18 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_uplo
     ));
 
     let cross_workspace = postgres
-        .in_actor_context(other_actor, async move |context| {
-            context
-                .create_evidence_attachment(&attachment_payload(submission.id, "cross-workspace"))
-                .await
-        })
+        .in_actor_context(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| {
+                context
+                    .create_evidence_attachment(&attachment_payload(
+                        submission.id,
+                        "cross-workspace",
+                    ))
+                    .await
+            },
+        )
         .await;
     assert!(matches!(
         cross_workspace,
@@ -553,7 +575,7 @@ async fn evidence_submission_detail_includes_attachments_with_upload_status() {
     let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
 
     let detail = postgres
-        .in_actor_context_read(actor, async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -611,12 +633,38 @@ async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_upl
         .expect("pending work exists");
     let request_id = Uuid::new_v4();
 
+    let message = NewOutboxMessage {
+        topic: TopicName::new(MESSAGE_BUS_TOPIC),
+        event_type: "attachment.finalization_requested".to_owned(),
+        aggregate_type: "evidence_attachment".to_owned(),
+        aggregate_id: Uuid::from(attachment.id).to_string(),
+        payload: serde_json::json!({
+            "evidence_submission_id": Uuid::from(submission.id).to_string(),
+            "object_key": quarantine_key,
+        }),
+        request_id: Some(request_id),
+    };
+
+    let first_work = work.clone();
+    let first_message = message.clone();
     assert!(postgres
-        .request_attachment_finalization(&work, Some(request_id))
+        .in_transaction(async move |context| {
+            let updated = context.request_attachment_finalization(&first_work).await?;
+            if updated {
+                context.append_outbox_message(&first_message).await?;
+            }
+            Ok(updated)
+        })
         .await
         .expect("clean scan hands off"));
     assert!(!postgres
-        .request_attachment_finalization(&work, Some(request_id))
+        .in_transaction(async move |context| {
+            let updated = context.request_attachment_finalization(&work).await?;
+            if updated {
+                context.append_outbox_message(&message).await?;
+            }
+            Ok(updated)
+        })
         .await
         .expect("duplicate clean scan resolves"));
 
@@ -668,7 +716,7 @@ WHERE event_type = 'attachment.finalization_requested'
         .expect("finalization marks uploaded"));
 
     let detail = postgres
-        .in_actor_context_read(actor, async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -698,7 +746,7 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
     let malicious = create_repository_attachment(postgres, actor.clone(), submission.id).await;
     let failed = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_attachment(&attachment_payload(submission.id, "failed-scan"))
                 .await
@@ -709,16 +757,16 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let failed_key = failed.object_key.clone();
 
     assert!(postgres
-        .mark_attachment_contains_virus(malicious.id, &malicious_key, "EICAR-Test-File",)
+        .mark_attachment_contains_virus(malicious.id, &malicious_key)
         .await
         .expect("malicious scan marks"));
     assert!(postgres
-        .mark_attachment_upload_failed(failed.id, &failed_key, "scanner refused object",)
+        .mark_attachment_upload_failed(failed.id, &failed_key)
         .await
         .expect("failed scan marks"));
 
     let detail = postgres
-        .in_actor_context_read(actor, async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -748,7 +796,7 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     );
 
     assert!(!postgres
-        .mark_attachment_upload_failed(failed.id, &failed_key, "duplicate")
+        .mark_attachment_upload_failed(failed.id, &failed_key)
         .await
         .expect("duplicate failed scan resolves"));
 }
@@ -767,7 +815,7 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     set_submission_received_at(postgres, latest.id, Utc::now()).await;
 
     let detail = postgres
-        .in_actor_context_read(actor.clone(), async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .latest_evidence_submission_for_request(request.id)
                 .await
@@ -778,7 +826,7 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     assert_eq!(detail.submission.id, latest.id);
 
     let missing = postgres
-        .in_actor_context_read(actor.clone(), async move |context| {
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .latest_evidence_submission_for_request(Uuid::new_v4().into())
                 .await
@@ -788,11 +836,15 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     assert!(missing.is_none());
 
     let cross_workspace = postgres
-        .in_actor_context_read(other_actor, async move |context| {
-            context
-                .latest_evidence_submission_for_request(request.id)
-                .await
-        })
+        .in_actor_context_read(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| {
+                context
+                    .latest_evidence_submission_for_request(request.id)
+                    .await
+            },
+        )
         .await
         .expect("cross-workspace latest resolves");
     assert!(cross_workspace.is_none());
@@ -805,7 +857,7 @@ async fn outbox_append_commits_atomically_with_domain_write() {
     let actor = repository_actor_context(&app).await;
 
     let request = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             let request = context
                 .create_evidence_request(&CreateEvidenceRequestPayload {
                     title: "Outbox Atomic Request".to_owned(),
@@ -847,7 +899,7 @@ async fn outbox_append_rolls_back_with_domain_write() {
     let actor = repository_actor_context(&app).await;
 
     let result = postgres
-        .in_actor_context(actor.clone(), async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_request(&CreateEvidenceRequestPayload {
                     title: "Rolled Back Outbox Request".to_owned(),
@@ -952,7 +1004,7 @@ async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failur
     );
 }
 
-async fn repository_actor_context(app: &TestApp) -> ActorContext {
+async fn repository_actor_context(app: &TestApp) -> RepositoryActor {
     let workspace = app
         .postgres()
         .create_workspace(&CreateWorkspacePayload {
@@ -964,15 +1016,18 @@ async fn repository_actor_context(app: &TestApp) -> ActorContext {
         .expect("workspace creates");
     let actor_id = ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).unwrap());
 
-    ActorContext::new(workspace.id, actor_id)
+    RepositoryActor {
+        workspace_id: workspace.id,
+        actor_id,
+    }
 }
 
 async fn create_repository_evidence_request(
     postgres: &proofplane::repository::Postgres,
-    actor: ActorContext,
+    actor: RepositoryActor,
 ) -> proofplane::domain::EvidenceRequest {
     postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_request(&CreateEvidenceRequestPayload {
                     title: "Repository Evidence Request".to_owned(),
@@ -992,11 +1047,11 @@ async fn create_repository_evidence_request(
 
 async fn create_repository_submission(
     postgres: &proofplane::repository::Postgres,
-    actor: ActorContext,
+    actor: RepositoryActor,
     evidence_request_id: proofplane::domain::EvidenceRequestId,
 ) -> proofplane::domain::EvidenceSubmission {
     postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_submission(&submission_payload(evidence_request_id))
                 .await
@@ -1008,11 +1063,11 @@ async fn create_repository_submission(
 
 async fn create_repository_attachment(
     postgres: &proofplane::repository::Postgres,
-    actor: ActorContext,
+    actor: RepositoryActor,
     submission_id: EvidenceSubmissionId,
 ) -> proofplane::domain::EvidenceAttachment {
     postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .create_evidence_attachment(&attachment_payload(submission_id, "detail"))
                 .await
@@ -1038,12 +1093,12 @@ async fn set_submission_received_at(
 
 async fn append_outbox(
     postgres: &proofplane::repository::Postgres,
-    actor: ActorContext,
+    actor: RepositoryActor,
     aggregate_id: &str,
 ) -> proofplane::repository::OutboxMessage {
     let aggregate_id = aggregate_id.to_owned();
     postgres
-        .in_actor_context(actor, async move |context| {
+        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
                 .append_outbox_message(&outbox_payload(
                     "attachment.scan_requested",

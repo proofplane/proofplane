@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    authentication::ActorContext,
     domain::{
         CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
         EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
@@ -10,7 +11,6 @@ use crate::{
     },
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{NewOutboxMessage, Postgres},
-    routes::authentication::ActorContext,
     services::Error,
     worker::ATTACHMENT_SCAN_REQUESTED,
 };
@@ -61,7 +61,7 @@ impl EvidenceSubmissionService {
 
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context.create_evidence_submission(&payload).await
             })
             .await?)
@@ -74,7 +74,7 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context.get_evidence_submission(id).await
             })
             .await?)
@@ -87,7 +87,7 @@ impl EvidenceSubmissionService {
     ) -> Result<bool, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context.evidence_submission_exists(id).await
             })
             .await?)
@@ -164,7 +164,7 @@ impl EvidenceSubmissionService {
 
         let result = self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 let attachment = context.create_evidence_attachment(&create_payload).await?;
                 context
                     .append_outbox_message(&attachment_scan_requested_message(

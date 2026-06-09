@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::validation::Validation;
 
-use super::{ConfigFieldError, GcsCredentialsMode, HostPort, LogFormat};
+use super::{ConfigFieldError, GcsCredentialsMode, LogFormat};
 
 pub(super) fn string_value(value: String) -> Result<String, String> {
     trim_required(value)
@@ -65,53 +65,6 @@ pub(super) fn socket_addr(value: String) -> Result<SocketAddr, String> {
         .to_owned()
         .parse::<SocketAddr>()
         .map_err(|_| "must be a socket address".into())
-}
-
-pub(super) fn host_port(value: String) -> Result<HostPort, String> {
-    let value = trim_required(value)?;
-    let (host, port) = value
-        .rsplit_once(':')
-        .ok_or_else(|| "must be a host and port like 127.0.0.1:8085".to_owned())?;
-
-    validate_hostname(host)?;
-
-    let port = port
-        .parse::<u16>()
-        .map_err(|_| "port must be a number between 1 and 65535".to_owned())?;
-
-    if port == 0 {
-        return Err("port must be greater than zero".into());
-    }
-
-    Ok(HostPort {
-        host: host.to_owned(),
-        port,
-    })
-}
-
-pub(super) fn validate_hostname(host: &str) -> Result<(), String> {
-    if host.is_empty() {
-        return Err("host must not be empty".into());
-    }
-
-    for label in host.split('.') {
-        if label.is_empty() {
-            return Err("host labels must not be empty".into());
-        }
-
-        if label.starts_with('-') || label.ends_with('-') {
-            return Err("host labels must not start or end with `-`".into());
-        }
-
-        if !label
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
-        {
-            return Err("host must contain only ASCII letters, digits, hyphens, or dots".into());
-        }
-    }
-
-    Ok(())
 }
 
 pub(super) fn optional_url(value: Option<String>) -> Result<Option<Url>, String> {
