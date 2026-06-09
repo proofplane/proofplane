@@ -3,12 +3,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
+    authentication::ActorContext,
     domain::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestId,
         UpdateEvidenceRequestPayload,
     },
     repository::Postgres,
-    routes::authentication::ActorContext,
     services::Error,
 };
 
@@ -36,7 +36,7 @@ impl EvidenceRequestService {
     ) -> Result<EvidenceRequest, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context.create_evidence_request(&request).await
             })
             .await?)
@@ -49,7 +49,7 @@ impl EvidenceRequestService {
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context.get_evidence_request(id).await
             })
             .await?)
@@ -61,7 +61,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)
@@ -75,7 +75,7 @@ impl EvidenceRequestService {
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor, async move |context| {
+            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
                 context.replace_evidence_request(id, &update).await
             })
             .await?)
@@ -88,7 +88,7 @@ impl EvidenceRequestService {
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor, async move |context| {
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
                 context.list_due_evidence_requests(now).await
             })
             .await?)

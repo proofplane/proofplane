@@ -8,8 +8,7 @@ use crate::{
         EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
         UpdateControlPayload, WorkspaceId,
     },
-    repository::Postgres,
-    services::{ReadServiceContext, ServiceContext},
+    repository::{ActorReadContext, ActorTransactionContext, Postgres},
 };
 
 use super::Error;
@@ -79,7 +78,7 @@ ORDER BY code
     }
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn create_control(&self, payload: &CreateControlPayload) -> Result<Control, Error> {
         let row = self
             .transaction
@@ -336,7 +335,7 @@ ON CONFLICT DO NOTHING
     }
 }
 
-impl ReadServiceContext {
+impl ActorReadContext {
     pub async fn list_controls(&self) -> Result<Vec<Control>, Error> {
         let rows = self
             .client

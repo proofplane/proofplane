@@ -108,6 +108,10 @@ The `Postgres` gateway owns a `deadpool_postgres::Pool` internally. It exposes:
 - `in_actor_context()` for workspace- and actor-scoped transactional work;
 - `in_actor_context_read()` for workspace- and actor-scoped reads.
 
+Actor-scoped operations receive `WorkspaceId` and `ActorId` values at the
+repository boundary. Their queries run through repository-owned
+`ActorTransactionContext` and `ActorReadContext` types.
+
 Product queries and persistence primitives live in repository submodules for
 actors, API credentials, controls, evidence requests, evidence submissions,
 outbox messages, and workspaces. Route and service code should avoid reaching
@@ -187,8 +191,11 @@ scanner adapter work is tracked in MVP story
 
 API keys authenticate actors against credential records stored in Postgres.
 Workspace route middleware reads the actor ID and API key headers, authenticates
-the credential for the workspace in the route path, builds an `ActorContext`,
-and attaches it to the request before the route handler runs.
+the credential for the workspace in the route path, and attaches the resulting
+`authentication::ActorContext` to the request before the route handler runs.
+This authentication result carries the actor and workspace identity shared with
+routes, authorization, and services. Persistence receives the contained domain
+IDs rather than depending on the authentication type.
 
 ### `src/authorization`
 
@@ -255,11 +262,10 @@ src/bin/api.rs
   -> store
 ```
 
-This diagram describes runtime composition. The current code also has reverse
-type dependencies from `repository`, `services`, and authorization code to the
-route-owned `ActorContext`, plus repository use of service-owned context types.
-Those existing dependencies do not match the preferred lower-layer direction
-stated below.
+This diagram describes runtime composition. `ActorContext` belongs to
+authentication and is consumed by routes, authorization, and services.
+Repository code remains independent of those layers and accepts domain identity
+types at its actor-scoped operation boundary.
 
 The asynchronous worker dependency direction should remain:
 

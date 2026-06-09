@@ -4,9 +4,9 @@ use serde_json::Value;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::{pubsub::TopicName, services::ServiceContext};
+use crate::pubsub::TopicName;
 
-use super::{Error, Postgres, TransactionContext};
+use super::{ActorTransactionContext, Error, Postgres, TransactionContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewOutboxMessage {
@@ -32,7 +32,7 @@ pub struct OutboxMessage {
     pub created_at: DateTime<Utc>,
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn append_outbox_message(
         &self,
         message: &NewOutboxMessage,

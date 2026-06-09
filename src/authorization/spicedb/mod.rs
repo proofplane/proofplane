@@ -7,7 +7,7 @@ use tonic::{
 };
 use url::Url;
 
-use crate::{config::SpiceDbConfig, domain::WorkspaceId, routes::authentication::ActorContext};
+use crate::{authentication::ActorContext, config::SpiceDbConfig, domain::WorkspaceId};
 
 // The generated rust code for the protos fails these lints. This is generated
 // code so we don't care.

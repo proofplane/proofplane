@@ -1,9 +1,6 @@
 use deadpool_postgres::{Object, Pool};
 
-use crate::{
-    routes::authentication::ActorContext,
-    services::{ReadServiceContext, ServiceContext},
-};
+use crate::domain::{ActorId, WorkspaceId};
 
 mod actors;
 mod api_credentials;
@@ -24,6 +21,50 @@ pub struct Postgres {
 
 pub struct TransactionContext<'transaction> {
     transaction: deadpool_postgres::Transaction<'transaction>,
+}
+
+pub struct ActorTransactionContext<'transaction> {
+    pub workspace_id: WorkspaceId,
+    pub actor_id: ActorId,
+    transaction: deadpool_postgres::Transaction<'transaction>,
+}
+
+impl<'transaction> ActorTransactionContext<'transaction> {
+    fn new(
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
+        transaction: deadpool_postgres::Transaction<'transaction>,
+    ) -> Self {
+        Self {
+            workspace_id,
+            actor_id,
+            transaction,
+        }
+    }
+
+    async fn commit(self) -> Result<(), tokio_postgres::Error> {
+        self.transaction.commit().await
+    }
+}
+
+pub struct ActorReadContext {
+    pub workspace_id: WorkspaceId,
+    pub actor_id: ActorId,
+    client: deadpool_postgres::Object,
+}
+
+impl ActorReadContext {
+    fn new(
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
+        client: deadpool_postgres::Object,
+    ) -> Self {
+        Self {
+            workspace_id,
+            actor_id,
+            client,
+        }
+    }
 }
 
 impl Postgres {
@@ -55,19 +96,20 @@ impl Postgres {
 
     pub async fn in_actor_context<T, F>(
         &self,
-        actor: ActorContext,
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
         operation: F,
     ) -> Result<T, Error>
     where
         T: Send,
         F: for<'context, 'transaction> AsyncFnOnce(
-                &'context mut ServiceContext<'transaction>,
+                &'context mut ActorTransactionContext<'transaction>,
             ) -> Result<T, Error>
             + Send,
     {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
-        let mut context = ServiceContext::new(actor.workspace_id, actor.id, transaction);
+        let mut context = ActorTransactionContext::new(workspace_id, actor_id, transaction);
         let result = operation(&mut context).await?;
 
         context.commit().await?;
@@ -77,15 +119,16 @@ impl Postgres {
 
     pub async fn in_actor_context_read<T, F>(
         &self,
-        actor: ActorContext,
+        workspace_id: WorkspaceId,
+        actor_id: ActorId,
         operation: F,
     ) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context> AsyncFnOnce(&'context ReadServiceContext) -> Result<T, Error> + Send,
+        F: for<'context> AsyncFnOnce(&'context ActorReadContext) -> Result<T, Error> + Send,
     {
         let client = self.get().await?;
-        let context = ReadServiceContext::new(actor.workspace_id, actor.id, client);
+        let context = ActorReadContext::new(workspace_id, actor_id, client);
 
         operation(&context).await
     }

@@ -8,7 +8,7 @@ use crate::{
         EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
         WorkspaceId,
     },
-    services::{ReadServiceContext, ServiceContext},
+    repository::{ActorReadContext, ActorTransactionContext},
 };
 
 use super::{Error, Postgres, TransactionContext};
@@ -217,7 +217,7 @@ WHERE id = $1
     }
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn create_evidence_submission(
         &self,
         payload: &CreateEvidenceSubmissionPayload,
@@ -267,7 +267,7 @@ RETURNING
     }
 }
 
-impl ReadServiceContext {
+impl ActorReadContext {
     pub async fn evidence_submission_exists(
         &self,
         id: EvidenceSubmissionId,
@@ -381,7 +381,7 @@ ORDER BY a.filename, a.id
     }
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,
