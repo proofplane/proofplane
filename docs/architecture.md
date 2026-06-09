@@ -36,13 +36,23 @@ worker push subscription, builds a `GoogleCloudPublisher`, and polls due
 When publishing fails, it records the failure, increments the attempt count, and
 schedules the next retry using bounded backoff.
 
+Current dequeuer publishing support is intentionally limited to local Pub/Sub
+through the `PUBSUB_EMULATOR_HOST` environment variable. Dequeuer startup fails
+when that variable is absent; production Google Pub/Sub publishing remains a
+future runtime capability. `PUBSUB_EMULATOR_HOST` is the sole source of the
+emulator endpoint; it is not duplicated in typed or YAML configuration. See MVP
+stories [011](./mvp-stories/011-pubsub-client-and-subscription-runtime.md) and
+[012](./mvp-stories/012-transactional-outbox.md).
+
 The worker is a separate HTTP runtime for Pub/Sub push delivery. It loads config,
 initializes tracing, runs migrations, builds its own Postgres pool, installs
 metrics, binds `server.worker_bind`, and serves `/pubsub/messages` plus health
 and metrics routes. Pub/Sub push messages are acknowledged with `204 No Content`
-for malformed or unknown events so they do not retry forever. Known retryable
-handler failures return `500` so Pub/Sub can redeliver according to the
-subscription policy.
+when they are malformed, unknown, invalid, stale, duplicate, mismatched,
+terminal, or successfully processed. Retryable handler failures return `500`
+so Pub/Sub can redeliver according to the subscription policy. On the final
+delivery attempt, scanner failures are persisted as terminal attachment
+failures and acknowledged with `204` instead of being retried again.
 
 ## General Notes on Binaries
 
@@ -90,16 +100,21 @@ migration runners. Higher layers should not duplicate this setup logic.
 `repository` is the application-facing database gateway. It wraps lower-level
 pool types and provides methods that route and service code can depend on.
 
-The current Postgres repository owns a `deadpool_postgres::Pool` internally.
-It exposes:
+The `Postgres` gateway owns a `deadpool_postgres::Pool` internally. It exposes:
 
-- `get()` for direct pool access needed by infrastructure checks like
-  readiness;
-- `get_client()` for future repository operations that should use a wrapped
-  repository client.
+- `get()` for direct pooled connection access, including infrastructure checks
+  and repository operations that do not need a transaction;
+- `in_transaction()` for general transactional work;
+- `in_actor_context()` for workspace- and actor-scoped transactional work;
+- `in_actor_context_read()` for workspace- and actor-scoped reads.
 
-As product behavior grows, query methods and transaction helpers should live
-here or in submodules below this boundary. Route handlers should avoid reaching
+Actor-scoped operations receive `WorkspaceId` and `ActorId` values at the
+repository boundary. Their queries run through repository-owned
+`ActorTransactionContext` and `ActorReadContext` types.
+
+Product queries and persistence primitives live in repository submodules for
+actors, API credentials, controls, evidence requests, evidence submissions,
+outbox messages, and workspaces. Route and service code should avoid reaching
 through to `store` for normal application data access.
 
 Repository methods are persistence primitives, not authorization boundaries.
@@ -126,16 +141,69 @@ The app layer owns:
 It should not create infrastructure dependencies. Those are built by the binary
 and passed in.
 
+For product routes, `app` constructs the concrete services and supplies each
+router with its service, API-key authenticator, and workspace authorizer.
+
 ### `src/routes`
 
 `routes` owns HTTP endpoint behavior. Each route module should expose a router
 constructor and define the state required by that router.
 
 Routes may depend on already-constructed application dependencies, such as
-`Arc<repository::Postgres>` or a metrics handle. They should not load config,
-run migrations, construct pools, or initialize global process state.
+services, authenticators, authorizers, or a metrics handle. They should not load
+config, run migrations, construct pools, or initialize global process state.
 
 Route errors should map to stable HTTP responses in `routes::error`.
+
+### `src/services`
+
+`services` owns business orchestration between HTTP routes, persistence, and
+external adapters. Product route handlers call `ControlService`,
+`EvidenceRequestService`, or `EvidenceSubmissionService` rather than
+coordinating repository work directly.
+
+Services are responsible for:
+
+- coordinating workspace- and actor-scoped reads and transactions;
+- composing multiple persistence primitives into one business operation;
+- using object storage for attachment upload and cleanup behavior;
+- mediating between route payloads and repository operations.
+
+The current transaction context types are defined in `services` and used by the
+repository gateway. This is an existing layering compromise documented here as
+current runtime behavior, not a claim that dependency direction is fully clean.
+
+### Runtime Adapters
+
+The current API and worker runtimes use `FilesystemObjectStore`. Although object
+storage configuration accepts GCS settings and the `ObjectStore` trait defines
+the adapter contract, selecting GCS currently returns `UnsupportedBackend`.
+Production GCS support is planned in MVP story
+[014](./mvp-stories/014-gcs-object-storage-adapter.md).
+
+The worker currently uses `NoopMalwareScanner`. The scanner boundary and
+attachment scan lifecycle are implemented, but ClamAV, cloud-provider-native,
+and commercial scanner adapters are future capabilities. The next planned
+scanner adapter work is tracked in MVP story
+[017](./mvp-stories/017-evidence-submissions-and-attachments.md).
+
+### `src/authentication` and `src/routes/authentication.rs`
+
+API keys authenticate actors against credential records stored in Postgres.
+Workspace route middleware reads the actor ID and API key headers, authenticates
+the credential for the workspace in the route path, and attaches the resulting
+`authentication::ActorContext` to the request before the route handler runs.
+This authentication result carries the actor and workspace identity shared with
+routes, authorization, and services. Persistence receives the contained domain
+IDs rather than depending on the authentication type.
+
+### `src/authorization`
+
+`WorkspaceAuthorizer` checks workspace read or write permissions through
+SpiceDB. Product route middleware selects the required permission from the HTTP
+method and resource type. Authentication and authorization both complete before
+the middleware invokes the route handler, so service methods receive an
+authenticated and authorized `ActorContext`.
 
 ### `src/dequeuer`
 
@@ -158,13 +226,16 @@ after Pub/Sub delivers the message to the worker.
 
 `worker.rs` owns the Pub/Sub push HTTP surface and event dispatch. It builds the
 worker router, decodes Pub/Sub push envelopes, validates message
-data, maps malformed or unknown events to acknowledgements, and maps retryable
+data, maps non-retryable outcomes to acknowledgements, and maps retryable
 handler failures to `500`.
 
 Domain-specific worker behavior belongs under `src/handlers`. The worker
-dispatch layer should multiplex by event type and call the appropriate handler,
-not use dynamically injected handler traits for the current single-process
-runtime.
+dispatch layer should multiplex by event type and call the appropriate handler.
+Handlers acknowledge invalid, stale, duplicate, mismatched, and already-terminal
+work by returning success. Successful processing also returns success. Scanner
+errors remain retryable until the configured final delivery attempt; on that
+attempt the scan handler persists a terminal attachment failure and returns
+success so the worker acknowledges the message.
 
 ### `src/pubsub`
 
@@ -181,10 +252,20 @@ The API dependency direction should remain:
 ```text
 src/bin/api.rs
   -> app::create_app(AppDependencies)
-  -> routes::{health, metrics, version, error}
+  -> routes
+     -> authentication::ApiKeyAuthenticator -> repository
+     -> authorization::WorkspaceAuthorizer -> SpiceDB
+     -> services
+        -> repository
+        -> object_storage
   -> repository
   -> store
 ```
+
+This diagram describes runtime composition. `ActorContext` belongs to
+authentication and is consumed by routes, authorization, and services.
+Repository code remains independent of those layers and accepts domain identity
+types at its actor-scoped operation boundary.
 
 The asynchronous worker dependency direction should remain:
 
@@ -215,6 +296,23 @@ spreading host, port, database, username, and password fields through the app.
 
 The connection string may be exposed only at infrastructure boundaries that need
 to pass it into database libraries.
+
+Some configuration fields are reserved for staged runtime capabilities:
+
+- `server.mcp_bind` is validated but not currently used. The MCP binary runs
+  migrations, logs its scaffold startup message, and exits without binding a
+  server. The planned MCP runtime is described in MVP story
+  [021](./mvp-stories/021-mcp-server.md).
+- `worker.concurrency` and `worker.shutdown_grace_seconds` are validated but are
+  not currently consumed by the worker runtime. Request concurrency comes from
+  Axum's HTTP serving model and the deployment platform; for live Cloud Run
+  delivery, this direction is recorded in MVP story
+  [013](./mvp-stories/013-worker-runtime-and-outbox-dequeuer.md). Worker
+  shutdown currently waits for Axum's graceful shutdown without applying the
+  configured grace duration.
+
+Configured-but-unused fields should not be described as affecting runtime
+behavior until their owning binaries consume them.
 
 ## Observability
 

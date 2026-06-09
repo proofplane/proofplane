@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::{pubsub::TopicName, services::ServiceContext};
+use crate::pubsub::TopicName;
 
-use super::{Error, Postgres};
+use super::{ActorTransactionContext, Error, Postgres, TransactionContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewOutboxMessage {
@@ -31,15 +32,31 @@ pub struct OutboxMessage {
     pub created_at: DateTime<Utc>,
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn append_outbox_message(
         &self,
         message: &NewOutboxMessage,
     ) -> Result<OutboxMessage, Error> {
-        let row = self
-            .transaction
-            .query_one(
-                r#"
+        append_outbox_message(&self.transaction, message).await
+    }
+}
+
+impl TransactionContext<'_> {
+    pub async fn append_outbox_message(
+        &self,
+        message: &NewOutboxMessage,
+    ) -> Result<OutboxMessage, Error> {
+        append_outbox_message(&self.transaction, message).await
+    }
+}
+
+async fn append_outbox_message(
+    client: &(impl GenericClient + Sync),
+    message: &NewOutboxMessage,
+) -> Result<OutboxMessage, Error> {
+    let row = client
+        .query_one(
+            r#"
 INSERT INTO outbox_messages (
     topic,
     event_type,
@@ -61,19 +78,18 @@ RETURNING
     next_available_at,
     created_at
 "#,
-                &[
-                    &message.topic.as_str(),
-                    &message.event_type,
-                    &message.aggregate_type,
-                    &message.aggregate_id,
-                    &message.payload,
-                    &message.request_id,
-                ],
-            )
-            .await?;
+            &[
+                &message.topic.as_str(),
+                &message.event_type,
+                &message.aggregate_type,
+                &message.aggregate_id,
+                &message.payload,
+                &message.request_id,
+            ],
+        )
+        .await?;
 
-        outbox_message_from_row(row)
-    }
+    outbox_message_from_row(row)
 }
 
 impl Postgres {

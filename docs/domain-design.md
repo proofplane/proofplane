@@ -43,21 +43,19 @@ Evidence Attachments are the files or objects supplied with a submission. They
 belong to a single Evidence Submission and carry object-storage location,
 filename, content type, content length, SHA-256, and CRC32C checksums. Attachment
 bytes are first stored in quarantine object storage, then the attachment record
-and a pending scan record are created together. Clean scans atomically move the
-attachment to `finalizing` and enqueue a finalization message; finalization
-copies the object to its stable path before marking it `uploaded`.
-
-Evidence Attachment Scans track the malware-scan state for each attachment. The
-scan status starts as `pending` and can move to `clean`, `malicious`, or
-`failed`, with scanner metadata and failure details recorded when available. A
-scan request is emitted through the transactional outbox so the attachment
-record, scan record, and worker message are committed atomically.
+is created with `pending` upload status in the same transaction as its scan
+request outbox message. Clean scans atomically move the attachment to
+`finalizing` and enqueue a finalization message; finalization copies the object
+to its stable path before updating its key and marking it `uploaded`. Malicious
+and terminally failed scans leave the quarantine key in place and set
+`contains_virus` or `failed`. Scanner reasons are structured operational logs,
+not durable domain data.
 
 These relationships form a graph:
 
 - `control <-> framework_requirement`
 - `evidence_request <-> control`
-- `evidence_request -> evidence_submission -> evidence_attachment -> evidence_attachment_scan`
+- `evidence_request -> evidence_submission -> evidence_attachment`
 
 They are first-class mappings rather than nested ownership. Nesting Evidence
 Requests under frameworks or controls would imply a single parent and would make

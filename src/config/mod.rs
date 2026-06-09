@@ -39,7 +39,6 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubSubConfig {
     pub project_id: String,
-    pub emulator_host: HostPort,
     pub subscriptions: PubSubSubscriptionsConfig,
 }
 
@@ -113,12 +112,6 @@ pub struct HealthConfig {
     pub live_path: String,
     pub ready_path: String,
     pub dependency_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostPort {
-    pub host: String,
-    pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -328,7 +321,6 @@ server:
 postgres: ""
 pubsub:
   project_id: "proofplane-local"
-  emulator_host: "127.0.0.1:0"
   subscriptions:
     worker: "proofplane-worker"
     worker_push_endpoint: "not-a-url"
@@ -374,7 +366,6 @@ health:
 
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"postgres"));
-                assert!(paths.contains(&"pubsub.emulator_host"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
                 assert!(paths.contains(&"spicedb.endpoint"));

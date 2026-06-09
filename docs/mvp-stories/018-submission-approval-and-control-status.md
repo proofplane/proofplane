@@ -12,10 +12,10 @@ accepts it. Customers that need human or agent review can perform that review in
 their own workflow before uploading evidence.
 
 Control and source-material reads should treat submitted evidence as candidate
-evidence, with file usability gated by attachment malware scan state. Uploaded
-file attachments are usable only when their scan status is `clean`; pending,
-malicious, or failed scans remain auditable but are blocked from normal download
-and source-material use.
+evidence, with file usability gated by attachment upload status. File
+attachments are usable only when their status is `uploaded`; `pending`,
+`finalizing`, `contains_virus`, and `failed` attachments remain blocked from
+normal download and source-material use.
 
 If customer feedback shows that Proofplane needs native approval, a future story
 can introduce approval and rejection. That future design would likely derive
@@ -34,9 +34,12 @@ performance requires projection later.
 
 - No approval or rejection API is required for the MVP.
 - Evidence submission records do not need a persisted approval status.
-- Control/source-material usability derives from Evidence Request mappings, submission freshness, and attachment scan state.
-- Pending, malicious, or failed file scans block normal download and source-material use.
-- Native approval/rejection can be added later without changing the story 017 attachment scan model.
+- Control/source-material usability derives from Evidence Request mappings,
+  submission freshness, and attachment upload status.
+- `pending`, `finalizing`, `contains_virus`, or `failed` attachments block
+  normal download and source-material use.
+- Native approval/rejection can be added later without changing the story 017
+  attachment lifecycle model.
 
 ## Tests
 

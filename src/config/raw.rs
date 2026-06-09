@@ -8,7 +8,7 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        gcs_credentials_mode, host_port, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
+        gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
         parse_log_format, path_string, postgres_connection_string, secret_value, string_url,
         string_value, ConfigValidationExt,
     },
@@ -107,7 +107,6 @@ impl RawServerConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct RawPubSubConfig {
     project_id: String,
-    emulator_host: String,
     subscriptions: RawPubSubSubscriptionsConfig,
 }
 
@@ -115,11 +114,9 @@ impl RawPubSubConfig {
     pub(super) fn validate(self) -> Validation<PubSubConfig, ConfigFieldError> {
         validate! {
             project_id <- string_value(self.project_id).at("pubsub.project_id"),
-            emulator_host <- host_port(self.emulator_host).at("pubsub.emulator_host"),
             subscriptions <- self.subscriptions.validate(),
             => PubSubConfig {
                 project_id,
-                emulator_host,
                 subscriptions,
             },
         }

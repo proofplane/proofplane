@@ -8,12 +8,10 @@ use crate::{
         EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
         WorkspaceId,
     },
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    services::{ReadServiceContext, ServiceContext},
-    worker::ATTACHMENT_FINALIZATION_REQUESTED,
+    repository::{ActorReadContext, ActorTransactionContext},
 };
 
-use super::{Error, NewOutboxMessage, Postgres};
+use super::{Error, Postgres, TransactionContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAttachmentUploadWork {
@@ -65,70 +63,6 @@ WHERE a.id = $1
             .next()
             .map(|row| pending_attachment_upload_work_from_row(&row))
             .transpose()
-    }
-
-    pub async fn request_attachment_finalization(
-        &self,
-        work: &PendingAttachmentUploadWork,
-        request_id: Option<Uuid>,
-    ) -> Result<bool, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let updated = transaction
-            .execute(
-                r#"
-UPDATE evidence_attachments
-SET upload_status = 'finalizing'
-WHERE id = $1
-  AND evidence_submission_id = $2
-  AND object_key = $3
-  AND upload_status = 'pending'
-"#,
-                &[
-                    &Uuid::from(work.evidence_attachment_id),
-                    &Uuid::from(work.evidence_submission_id),
-                    &work.object_key,
-                ],
-            )
-            .await?;
-
-        if updated == 0 {
-            transaction.rollback().await?;
-            return Ok(false);
-        }
-
-        let message = NewOutboxMessage {
-            topic: TopicName::new(MESSAGE_BUS_TOPIC),
-            event_type: ATTACHMENT_FINALIZATION_REQUESTED.to_owned(),
-            aggregate_type: "evidence_attachment".to_owned(),
-            aggregate_id: Uuid::from(work.evidence_attachment_id).to_string(),
-            payload: serde_json::json!({
-                "evidence_submission_id": Uuid::from(work.evidence_submission_id).to_string(),
-                "object_key": work.object_key,
-            }),
-            request_id,
-        };
-        transaction
-            .execute(
-                r#"
-INSERT INTO outbox_messages (
-    topic, event_type, aggregate_type, aggregate_id, payload, request_id
-)
-VALUES ($1, $2, $3, $4, $5, $6)
-"#,
-                &[
-                    &message.topic.as_str(),
-                    &message.event_type,
-                    &message.aggregate_type,
-                    &message.aggregate_id,
-                    &message.payload,
-                    &message.request_id,
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
-
-        Ok(true)
     }
 
     pub async fn load_finalizing_attachment_upload_work(
@@ -205,13 +139,11 @@ WHERE a.id = $1
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        reason: &str,
     ) -> Result<bool, Error> {
         self.mark_attachment_terminal_upload_status(
             evidence_attachment_id,
             quarantine_object_key,
             AttachmentUploadStatus::ContainsVirus,
-            reason,
         )
         .await
     }
@@ -220,13 +152,11 @@ WHERE a.id = $1
         &self,
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
-        reason: &str,
     ) -> Result<bool, Error> {
         self.mark_attachment_terminal_upload_status(
             evidence_attachment_id,
             quarantine_object_key,
             AttachmentUploadStatus::FailedUpload,
-            reason,
         )
         .await
     }
@@ -236,7 +166,6 @@ WHERE a.id = $1
         evidence_attachment_id: EvidenceAttachmentId,
         quarantine_object_key: &str,
         status: AttachmentUploadStatus,
-        _reason: &str,
     ) -> Result<bool, Error> {
         let client = self.get().await?;
         let rows = client
@@ -260,7 +189,35 @@ WHERE a.id = $1
     }
 }
 
-impl ServiceContext<'_> {
+impl TransactionContext<'_> {
+    pub async fn request_attachment_finalization(
+        &self,
+        work: &PendingAttachmentUploadWork,
+    ) -> Result<bool, Error> {
+        let updated = self
+            .transaction
+            .execute(
+                r#"
+UPDATE evidence_attachments
+SET upload_status = 'finalizing'
+WHERE id = $1
+  AND evidence_submission_id = $2
+  AND object_key = $3
+  AND upload_status = 'pending'
+"#,
+                &[
+                    &Uuid::from(work.evidence_attachment_id),
+                    &Uuid::from(work.evidence_submission_id),
+                    &work.object_key,
+                ],
+            )
+            .await?;
+
+        Ok(updated > 0)
+    }
+}
+
+impl ActorTransactionContext<'_> {
     pub async fn create_evidence_submission(
         &self,
         payload: &CreateEvidenceSubmissionPayload,
@@ -310,7 +267,7 @@ RETURNING
     }
 }
 
-impl ReadServiceContext {
+impl ActorReadContext {
     pub async fn evidence_submission_exists(
         &self,
         id: EvidenceSubmissionId,
@@ -424,7 +381,7 @@ ORDER BY a.filename, a.id
     }
 }
 
-impl ServiceContext<'_> {
+impl ActorTransactionContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,
