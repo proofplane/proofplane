@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub pubsub: PubSubConfig,
     pub spicedb: SpiceDbConfig,
     pub object_storage: ObjectStorageConfig,
+    pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
     pub observability: ObservabilityConfig,
     pub worker: WorkerConfig,
@@ -72,6 +73,13 @@ pub struct GcsObjectStorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadsConfig {
     pub max_attachment_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannerConfig {
+    pub clamd_address: SocketAddr,
+    pub connection_timeout_ms: u64,
+    pub scan_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +191,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         pubsub <- raw.pubsub.validate(),
         spicedb <- raw.spicedb.validate(),
         object_storage <- raw.object_storage.validate(),
+        scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
         observability <- raw.observability.validate(),
         worker <- raw.worker.validate(),
@@ -193,6 +202,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             pubsub,
             spicedb,
             object_storage,
+            scanner,
             uploads,
             observability,
             worker,
@@ -241,6 +251,9 @@ mod tests {
             ObjectStorageConfig::Filesystem { .. }
         ));
         assert_eq!(config.uploads.max_attachment_bytes, 25 * 1024 * 1024);
+        assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
+        assert_eq!(config.scanner.connection_timeout_ms, 1000);
+        assert_eq!(config.scanner.scan_timeout_ms, 30000);
     }
 
     #[test]
@@ -286,6 +299,7 @@ postgres: {}
 pubsub: {}
 spicedb: {}
 object_storage: {}
+scanner: {}
 observability: {}
 worker: {}
 health: {}
@@ -325,6 +339,10 @@ object_storage:
   endpoint_override: "not-a-url"
   credentials_mode: "unknown"
   object_key_prefix: "evidence"
+scanner:
+  clamd_address: "not-a-socket"
+  connection_timeout_ms: 0
+  scan_timeout_ms: 0
 uploads:
   max_attachment_bytes: 0
 observability:
@@ -359,6 +377,9 @@ health:
                 assert!(paths.contains(&"spicedb.schema_path"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
+                assert!(paths.contains(&"scanner.clamd_address"));
+                assert!(paths.contains(&"scanner.connection_timeout_ms"));
+                assert!(paths.contains(&"scanner.scan_timeout_ms"));
                 assert!(paths.contains(&"uploads.max_attachment_bytes"));
                 assert!(paths.contains(&"observability.log_format"));
                 assert!(paths.contains(&"worker.concurrency"));

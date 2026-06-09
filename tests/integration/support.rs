@@ -11,7 +11,8 @@ use proofplane::{
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
-        PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
+        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -19,7 +20,7 @@ use proofplane::{
     },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
-    scanner::NoopMalwareScanner,
+    scanner::ClamAvMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
 };
@@ -31,11 +32,14 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 use testcontainers_modules::postgres;
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
+const CLAMAV_IMAGE_TAG: &str = "1.4.3";
 pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
+static CLAMAV_ADDRESS: OnceCell<std::net::SocketAddr> = OnceCell::const_new();
 
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
@@ -184,8 +188,13 @@ impl TestApp {
 
         TestServer::new(create_worker_app(WorkerAppDependencies {
             postgres: self.postgres.clone(),
-            object_store,
-            scanner: Arc::new(NoopMalwareScanner),
+            object_store: object_store.clone(),
+            scanner: Arc::new(ClamAvMalwareScanner::new(
+                object_store.clone(),
+                clamav_address().await,
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(30),
+            )),
             worker_max_delivery_attempts: 5,
             metrics: recorder.handle(),
             live_path: "/livez".to_owned(),
@@ -533,6 +542,44 @@ async fn start_spicedb() -> ContainerAsync<GenericImage> {
         .expect("SpiceDB test server starts")
 }
 
+pub async fn clamav_address() -> std::net::SocketAddr {
+    *CLAMAV_ADDRESS
+        .get_or_init(|| async {
+            let container = GenericImage::new("clamav/clamav", CLAMAV_IMAGE_TAG)
+                .with_exposed_port(3310.tcp())
+                .with_wait_for(WaitFor::healthcheck())
+                .with_env_var("CLAMAV_NO_FRESHCLAMD", "true")
+                .start()
+                .await
+                .expect("ClamAV test container starts");
+            let host = container
+                .get_host()
+                .await
+                .expect("ClamAV test container has a host");
+            let port = container
+                .get_host_port_ipv4(3310)
+                .await
+                .expect("ClamAV test container exposes clamd");
+            let addresses = tokio::net::lookup_host(format!("{host}:{port}"))
+                .await
+                .expect("ClamAV test address resolves")
+                .collect::<Vec<_>>();
+            let address = addresses
+                .iter()
+                .copied()
+                .find(std::net::SocketAddr::is_ipv4)
+                .or_else(|| addresses.first().copied())
+                .expect("ClamAV test address has a socket address");
+
+            // Keep one signature-loaded clamd alive for the entire integration test process.
+            // Without leaking the reference here, it would be cleaned up which would kill the
+            // container that the tests then need to run.
+            Box::leak(Box::new(container));
+            address
+        })
+        .await
+}
+
 async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
     let host = spicedb
         .get_host()
@@ -576,6 +623,11 @@ fn config(
             schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        scanner: ScannerConfig {
+            clamd_address: socket_addr("127.0.0.1:3310"),
+            connection_timeout_ms: 1000,
+            scan_timeout_ms: 30000,
+        },
         uploads: UploadsConfig {
             max_attachment_bytes,
         },

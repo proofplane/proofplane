@@ -44,6 +44,7 @@ The local Docker services listen on:
 - Postgres: `127.0.0.1:5432`
 - Pub/Sub emulator: `127.0.0.1:8085`
 - SpiceDB gRPC: `127.0.0.1:50051`
+- ClamAV clamd: `127.0.0.1:3310`
 
 SpiceDB stores its local state in the `proofplane_spicedb` database on the
 local Postgres service. `make up` runs the idempotent database create step and

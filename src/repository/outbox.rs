@@ -51,7 +51,7 @@ impl TransactionContext<'_> {
 }
 
 async fn append_outbox_message(
-    client: &(impl GenericClient + Sync),
+    client: &impl GenericClient,
     message: &NewOutboxMessage,
 ) -> Result<OutboxMessage, Error> {
     let row = client

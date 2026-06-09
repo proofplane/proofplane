@@ -29,6 +29,19 @@ services:
       retries: 12
       start_period: 5s
 
+  clamav:
+    image: clamav/clamav:1.4.3
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "true"
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   spicedb-db-init:
     image: postgres:16-alpine
     depends_on:
