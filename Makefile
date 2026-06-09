@@ -69,13 +69,13 @@ seed:
 	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin seed
 
 api:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api
+	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin api
 
 worker:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin worker
+	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin worker
 
 dequeuer:
-	PUBSUB_EMULATOR_HOST=127.0.0.1:8085 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
+	RUST_LOG='info,proofplane=debug' PUBSUB_EMULATOR_HOST=127.0.0.1:8085 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
 
 mcp:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp
+	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp

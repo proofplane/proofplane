@@ -14,6 +14,7 @@ Configuration should cover:
 - Postgres connection settings
 - Pub/Sub project, endpoint, topics, subscriptions, and dead-letter topics
 - GCS bucket, endpoint override, credentials mode, and object key prefix
+- required clamd address, connection timeout, and scan timeout
 - logging format and default filters
 - auth settings
 - worker concurrency and retry settings

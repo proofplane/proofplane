@@ -90,12 +90,12 @@ async fn authorize_evidence_submission_route(
     next: Next,
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let authorizer = state.authorizer.clone();
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
     let workspace_id = actor.workspace_id;
 
     let allowed = match method {
-        Method::GET => authorizer
+        Method::GET => state
+            .authorizer
             .can_read_evidence_submissions(&actor)
             .await
             .map_err(|e| {
@@ -108,7 +108,8 @@ async fn authorize_evidence_submission_route(
                 );
                 ApiError::Internal
             }),
-        Method::POST => authorizer
+        Method::POST => state
+            .authorizer
             .can_write_evidence_submissions(&actor)
             .await
             .map_err(|e| {
@@ -305,7 +306,7 @@ async fn upload_evidence_attachment(
     let submission_id = EvidenceSubmissionId::from(path.submission_id);
     if !state
         .service
-        .evidence_submission_exists(actor.clone(), submission_id)
+        .evidence_submission_exists(&actor, submission_id)
         .await?
     {
         return Err(ApiError::NotFound);
@@ -316,11 +317,10 @@ async fn upload_evidence_attachment(
     // automatically cleaned up with object storage retention settings since it's in a quarantine
     // bucket and that will probably have a cleanup policy.
     let payload =
-        attachment_upload_from_multipart(&state.service, actor.clone(), submission_id, multipart)
-            .await?;
+        attachment_upload_from_multipart(&state.service, &actor, submission_id, multipart).await?;
     let attachment = state
         .service
-        .create_attachment(actor, request_id.0, submission_id, payload)
+        .create_attachment(&actor, request_id.0, submission_id, payload)
         .await?;
 
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))
@@ -328,7 +328,7 @@ async fn upload_evidence_attachment(
 
 async fn attachment_upload_from_multipart(
     service: &EvidenceSubmissionService,
-    actor: ActorContext,
+    actor: &ActorContext,
     evidence_submission_id: EvidenceSubmissionId,
     mut multipart: Multipart,
 ) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
@@ -370,7 +370,7 @@ async fn attachment_upload_from_multipart(
     let chunks = file_chunks(field, Arc::clone(&crc32c));
     let mut uploaded_file = service
         .upload_attachment(
-            actor.clone(),
+            actor,
             evidence_submission_id,
             filename,
             content_type,

@@ -94,10 +94,9 @@ Product lanes:
 - Story 016 is complete and depends on 010 and 015.
 - Story 017 depends on 014 and 015. Its submission/upload slices already use the
   actor context from story 010 and its upload-accepted scan dispatch uses the
-  outbox/Pub/Sub push path from stories 011-013. The noop scanner boundary and
+  outbox/Pub/Sub push path from stories 011-013. Concrete ClamAV scanning and
   concrete-Postgres scan/finalization handlers are implemented; remaining work
-  should focus on real scanner execution, attachment-state
-  enforcement, latest-submission reads, and
+  should focus on attachment-state enforcement, latest-submission reads, and
   audit polish.
 - Story 018 is deferred until customer feedback shows that Proofplane should own approval state.
 - Story 019 depends on the evidence/control/submission model from 015-017, with
@@ -114,7 +113,7 @@ Product lanes:
 Definition of done for every story:
 
 - Dependencies are passed explicitly. Use traits and static generics for real
-  swappable boundaries such as scanners, object stores, and publishers; depend
+  swappable boundaries such as object stores and publishers; depend
   directly on concrete internal gateways such as `repository::Postgres` instead
   of introducing mock-only repository traits.
 - Async work uses `tokio`.

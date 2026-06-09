@@ -248,6 +248,33 @@ ATTACH_JSON=$(curl --fail-with-body \
 echo "$ATTACH_JSON" | jq .
 ```
 
+### Malicious Scan Fixture
+
+`fixtures/api/evidence-submissions/eicar.com.txt` contains the standard EICAR
+anti-malware test signature. It is harmless text, not executable malware, but
+ClamAV and other antivirus products intentionally detect it as malicious. Host
+antivirus software may quarantine the fixture.
+
+With `SUBMISSION_ID` set as above, upload it using the same attachment flow:
+
+```bash
+EICAR_FIXTURE=fixtures/api/evidence-submissions/eicar.com.txt
+DIGEST=$(scripts/content-digest-crc32c.py "$EICAR_FIXTURE")
+printf 'Content-Digest: %s\n' "$DIGEST" > /tmp/proofplane-part-headers.txt
+
+curl --fail-with-body \
+  --request POST \
+  --header "x-request-id: $(uuidgen)" \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  --form "file=@$EICAR_FIXTURE;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments" |
+  jq .
+```
+
+After the dequeuer and worker process the scan request, submission details
+should report the attachment's `upload_status` as `contains_virus`.
+
 ## Authorization Checks
 
 Confirm cross-workspace authorization denial. This should return `404` for a

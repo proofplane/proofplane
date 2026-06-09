@@ -218,9 +218,9 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
             .update_api_credential(
                 id,
                 &UpdateApiCredentialPayload {
-                    name: name.clone(),
-                    key_id: issued.key_id.clone(),
-                    credential_hash: issued.credential_hash.clone(),
+                    name,
+                    key_id: issued.key_id,
+                    credential_hash: issued.credential_hash,
                     expires_at: None,
                     revoked_at: None,
                 },
@@ -232,8 +232,8 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
                 id: id.to_owned(),
                 actor_id,
                 name,
-                key_id: issued.key_id.clone(),
-                credential_hash: issued.credential_hash.clone(),
+                key_id: issued.key_id,
+                credential_hash: issued.credential_hash,
                 expires_at: None,
                 revoked_at: None,
             })
@@ -301,7 +301,7 @@ async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
                 if let Some(existing_request) =
                     existing.iter().find(|request| request.title == seed.title)
                 {
-                    let update = seed.clone().into_update();
+                    let update = seed.into_update();
                     context
                         .replace_evidence_request(existing_request.id, &update)
                         .await?;
@@ -406,7 +406,6 @@ ON CONFLICT DO NOTHING
     Ok(())
 }
 
-#[derive(Clone)]
 struct SeedEvidenceRequest {
     title: String,
     description: String,

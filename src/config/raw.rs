@@ -13,7 +13,8 @@ use super::{
         string_value, ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PubSubConfig, PubSubSubscriptionsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, SpiceDbConfig, UploadsConfig,
+    WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,10 +25,35 @@ pub(super) struct RawAppConfig {
     pub(super) spicedb: RawSpiceDbConfig,
     pub(super) auth0: RawAuth0Config,
     pub(super) object_storage: RawObjectStorageConfig,
+    pub(super) scanner: RawScannerConfig,
     pub(super) uploads: RawUploadsConfig,
     pub(super) observability: RawObservabilityConfig,
     pub(super) worker: RawWorkerConfig,
     pub(super) health: RawHealthConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawScannerConfig {
+    clamd_address: String,
+    connection_timeout_ms: u64,
+    scan_timeout_ms: u64,
+}
+
+impl RawScannerConfig {
+    pub(super) fn validate(self) -> Validation<ScannerConfig, ConfigFieldError> {
+        validate! {
+            clamd_address <- socket_addr(self.clamd_address).at("scanner.clamd_address"),
+            connection_timeout_ms <- nonzero_u64(self.connection_timeout_ms)
+                .at("scanner.connection_timeout_ms"),
+            scan_timeout_ms <- nonzero_u64(self.scan_timeout_ms)
+                .at("scanner.scan_timeout_ms"),
+            => ScannerConfig {
+                clamd_address,
+                connection_timeout_ms,
+                scan_timeout_ms,
+            },
+        }
+    }
 }
 
 impl RawAppConfig {}

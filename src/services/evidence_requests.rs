@@ -12,16 +12,9 @@ use crate::{
     services::Error,
 };
 
+#[derive(Clone)]
 pub struct EvidenceRequestService {
     repository: Arc<Postgres>,
-}
-
-impl Clone for EvidenceRequestService {
-    fn clone(&self) -> Self {
-        Self {
-            repository: self.repository.clone(),
-        }
-    }
 }
 
 impl EvidenceRequestService {

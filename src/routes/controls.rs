@@ -84,23 +84,29 @@ async fn authorize_control_route(
     next: Next,
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let authorizer = state.authorizer.clone();
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
     let workspace_id = actor.workspace_id;
 
     let allowed = match method {
-        Method::GET => authorizer.can_read_controls(&actor).await.map_err(|e| {
-            error!(
-                method = %method,
-                actor = %actor.id,
-                workspace = %workspace_id,
-                error = %e,
-                "unable to check read permissions for controls"
-            );
-            ApiError::Internal
-        }),
-        Method::POST | Method::PUT | Method::DELETE => {
-            authorizer.can_write_controls(&actor).await.map_err(|e| {
+        Method::GET => state
+            .authorizer
+            .can_read_controls(&actor)
+            .await
+            .map_err(|e| {
+                error!(
+                    method = %method,
+                    actor = %actor.id,
+                    workspace = %workspace_id,
+                    error = %e,
+                    "unable to check read permissions for controls"
+                );
+                ApiError::Internal
+            }),
+        Method::POST | Method::PUT | Method::DELETE => state
+            .authorizer
+            .can_write_controls(&actor)
+            .await
+            .map_err(|e| {
                 error!(
                     method = %method,
                     actor = %actor.id,
@@ -109,8 +115,7 @@ async fn authorize_control_route(
                     "unable to check write permissions for controls"
                 );
                 ApiError::Internal
-            })
-        }
+            }),
         _ => Err(ApiError::MethodNotAllowed),
     }?;
 

@@ -29,7 +29,7 @@ use crate::{
         health::{self, ReadyState},
         metrics::{self, MetricsState},
     },
-    scanner::NoopMalwareScanner,
+    scanner::ClamAvMalwareScanner,
     validate,
     validation::Validation,
 };
@@ -80,7 +80,7 @@ pub struct RetryableWorkerError(pub String);
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
-    pub scanner: Arc<NoopMalwareScanner>,
+    pub scanner: Arc<ClamAvMalwareScanner>,
     pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
     pub live_path: String,
@@ -90,7 +90,7 @@ pub struct WorkerAppDependencies {
 
 #[derive(Clone)]
 pub struct WorkerState {
-    attachment_scan_handler: AttachmentScanHandler<NoopMalwareScanner>,
+    attachment_scan_handler: AttachmentScanHandler,
     attachment_finalization_handler: AttachmentFinalizationHandler<FilesystemObjectStore>,
 }
 
@@ -98,7 +98,7 @@ impl WorkerState {
     pub fn new(
         postgres: Arc<Postgres>,
         object_store: Arc<FilesystemObjectStore>,
-        scanner: Arc<NoopMalwareScanner>,
+        scanner: Arc<ClamAvMalwareScanner>,
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {

@@ -88,6 +88,8 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
+        let code = self.code();
+        let message = self.message();
         match &self {
             Self::Internal => tracing::error!("internal API error"),
             Self::BadRequest(_) => {}
@@ -100,14 +102,14 @@ impl IntoResponse for ApiError {
             | Self::ReadinessTimeout
             | Self::Unauthorized => {}
         }
-        let details = match &self {
-            Self::BadRequest(details) => details.clone(),
+        let details = match self {
+            Self::BadRequest(details) => details,
             _ => Vec::new(),
         };
         let body = ErrorResponse {
             error: ErrorBody {
-                code: self.code(),
-                message: self.message(),
+                code,
+                message,
                 details,
             },
         };

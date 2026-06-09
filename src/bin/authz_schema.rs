@@ -41,11 +41,11 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let schema_path = config.spicedb.schema_path.clone();
-    let schema = fs::read_to_string(schema_path.clone()).map_err(|source| Error::ReadSchema {
-        path: schema_path,
-        source,
-    })?;
+    let schema =
+        fs::read_to_string(&config.spicedb.schema_path).map_err(|source| Error::ReadSchema {
+            path: config.spicedb.schema_path.clone(),
+            source,
+        })?;
 
     let client = SpiceDbClient::from_config(&config.spicedb).await?;
     client.write_schema(schema).await?;
