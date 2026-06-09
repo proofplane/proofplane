@@ -4,6 +4,7 @@ pub mod error;
 pub mod evidence_requests;
 pub mod evidence_submissions;
 pub mod health;
+pub mod me;
 pub mod metrics;
 pub mod request_context;
 pub mod version;

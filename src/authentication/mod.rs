@@ -4,10 +4,13 @@ use api_keys_simplified::{ApiKeyManagerV0, Environment, KeyStatus, SecureString}
 use chrono::Utc;
 
 use crate::{
-    domain::{ActorId, ActorWithApiCredential, WorkspaceId},
+    authentication::auth0::{TokenVerifier, VerifyError},
+    domain::{ActorId, ActorWithApiCredential, ProvisionUserPayload, WorkspaceId},
     repository,
-    routes::authentication::ActorContext,
+    routes::authentication::{ActorContext, UserContext},
 };
+
+pub mod auth0;
 
 const API_KEY_PREFIX: &str = "proof";
 
@@ -102,6 +105,53 @@ impl ApiKeyAuthenticator {
 
         Ok(Some(ActorContext::new(workspace_id, actor.id)))
     }
+}
+
+#[derive(Clone)]
+pub struct UserAuthenticator {
+    verifier: Arc<dyn TokenVerifier>,
+    repository: Arc<repository::Postgres>,
+}
+
+impl UserAuthenticator {
+    pub fn new(verifier: Arc<dyn TokenVerifier>, repository: Arc<repository::Postgres>) -> Self {
+        Self {
+            verifier,
+            repository,
+        }
+    }
+
+    pub async fn authenticate(&self, token: &str) -> Result<UserContext, AuthError> {
+        let claims = self.verifier.verify(token).await.map_err(|error| {
+            if error.is_token_rejection() {
+                AuthError::Unauthorized(error)
+            } else {
+                AuthError::VerifierUnavailable(error)
+            }
+        })?;
+
+        let user = self
+            .repository
+            .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+                auth0_sub: claims.sub,
+                email: claims.email,
+                name: claims.name,
+            })
+            .await
+            .map_err(AuthError::Repository)?;
+
+        Ok(UserContext::new(user.id, user.auth0_sub))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("token rejected")]
+    Unauthorized(#[source] VerifyError),
+    #[error("token verifier unavailable")]
+    VerifierUnavailable(#[source] VerifyError),
+    #[error("user provisioning failed")]
+    Repository(#[source] repository::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

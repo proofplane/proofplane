@@ -5,8 +5,8 @@ use tracing::Span;
 use uuid::Uuid;
 
 use crate::{
-    authentication::ApiKeyAuthenticator,
-    domain::{ActorId, WorkspaceId},
+    authentication::{ApiKeyAuthenticator, AuthError, UserAuthenticator},
+    domain::{ActorId, UserId, WorkspaceId},
     routes::error::ApiError,
 };
 
@@ -27,6 +27,22 @@ impl ActorContext {
 
 pub const ACTOR_ID_HEADER: &str = "x-proofplane-actor-id";
 pub const API_KEY_HEADER: &str = "x-proofplane-api-key";
+pub const AUTHORIZATION_HEADER: &str = "authorization";
+
+/**
+ * UserContext represents an authenticated human management-plane identity.
+ */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserContext {
+    pub user_id: UserId,
+    pub auth0_sub: String,
+}
+
+impl UserContext {
+    pub fn new(user_id: UserId, auth0_sub: String) -> Self {
+        Self { user_id, auth0_sub }
+    }
+}
 
 pub(in crate::routes) async fn authorize_workspace_route(
     authenticator: &ApiKeyAuthenticator,
@@ -51,6 +67,38 @@ pub(in crate::routes) async fn authorize_workspace_route(
     attach_actor_context(request, actor.clone());
 
     Ok(actor)
+}
+
+pub(in crate::routes) async fn authenticate_user(
+    authenticator: &UserAuthenticator,
+    request: &mut Request,
+) -> Result<UserContext, ApiError> {
+    let token = bearer_token_from_request(request).ok_or(ApiError::Unauthorized)?;
+    let user = authenticator.authenticate(&token).await.map_err(|error| {
+        if let AuthError::Unauthorized(_) = error {
+            ApiError::Unauthorized
+        } else {
+            tracing::error!(%error, "user authentication failed");
+            ApiError::Internal
+        }
+    })?;
+
+    attach_user_context(request, user.clone());
+
+    Ok(user)
+}
+
+fn bearer_token_from_request(request: &Request) -> Option<String> {
+    header_value(request, AUTHORIZATION_HEADER)?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+}
+
+fn attach_user_context(request: &mut Request, user: UserContext) {
+    Span::current().record("user_id", user.user_id.to_string());
+    request.extensions_mut().insert(user);
 }
 
 fn credentials_from_request(request: &Request) -> Result<(ActorId, String), ApiError> {

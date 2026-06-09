@@ -4,8 +4,8 @@ use proofplane::domain::{
     CreateControlPayload, CreateEvidenceAttachmentPayload,
     CreateEvidenceRequestControlMappingPayload, CreateEvidenceRequestPayload,
     CreateEvidenceSubmissionPayload, CreateWorkspacePayload, EvidenceRequestCadence,
-    EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, UpdateActorPayload,
-    UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
+    EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, ProvisionUserPayload,
+    UpdateActorPayload, UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
@@ -14,6 +14,47 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::support::{cc61_id, cc71_id, TestApp, INTEGRATION_ACTOR_ID};
+
+#[tokio::test]
+async fn user_repository_upsert_provisions_once_and_preserves_profile() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+
+    let created = postgres
+        .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+            auth0_sub: "auth0|repo-user".to_owned(),
+            email: Some("repo@example.com".to_owned()),
+            name: Some("Repo User".to_owned()),
+        })
+        .await
+        .expect("user provisions");
+
+    assert_eq!(created.auth0_sub, "auth0|repo-user");
+    assert_eq!(created.email.as_deref(), Some("repo@example.com"));
+    assert_eq!(created.name.as_deref(), Some("Repo User"));
+
+    let reprovisioned = postgres
+        .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+            auth0_sub: "auth0|repo-user".to_owned(),
+            email: None,
+            name: None,
+        })
+        .await
+        .expect("user re-provisions");
+
+    assert_eq!(reprovisioned.id, created.id);
+    assert_eq!(reprovisioned.email.as_deref(), Some("repo@example.com"));
+    assert_eq!(reprovisioned.name.as_deref(), Some("Repo User"));
+
+    assert_eq!(
+        postgres
+            .get_user(created.id)
+            .await
+            .expect("user reads")
+            .expect("user exists"),
+        reprovisioned
+    );
+}
 
 #[tokio::test]
 async fn actor_repository_crud_uses_typed_rows() {

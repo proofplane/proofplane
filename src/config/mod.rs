@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub postgres: SecretString,
     pub pubsub: PubSubConfig,
     pub spicedb: SpiceDbConfig,
+    pub auth0: Auth0Config,
     pub object_storage: ObjectStorageConfig,
     pub uploads: UploadsConfig,
     pub observability: ObservabilityConfig,
@@ -54,6 +55,13 @@ pub struct SpiceDbConfig {
     pub endpoint: Url,
     pub preshared_key: SecretString,
     pub schema_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth0Config {
+    pub issuer: Url,
+    pub audience: String,
+    pub jwks_url: Url,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +197,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         postgres <- raw::validate_postgres_connection_string(raw.postgres),
         pubsub <- raw.pubsub.validate(),
         spicedb <- raw.spicedb.validate(),
+        auth0 <- raw.auth0.validate(),
         object_storage <- raw.object_storage.validate(),
         uploads <- raw.uploads.validate(),
         observability <- raw.observability.validate(),
@@ -199,6 +208,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             postgres,
             pubsub,
             spicedb,
+            auth0,
             object_storage,
             uploads,
             observability,
@@ -327,6 +337,10 @@ spicedb:
   endpoint: ""
   preshared_key: ""
   schema_path: ""
+auth0:
+  issuer: ""
+  audience: ""
+  jwks_url: "not-a-url"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -366,6 +380,9 @@ health:
                 assert!(paths.contains(&"spicedb.endpoint"));
                 assert!(paths.contains(&"spicedb.preshared_key"));
                 assert!(paths.contains(&"spicedb.schema_path"));
+                assert!(paths.contains(&"auth0.issuer"));
+                assert!(paths.contains(&"auth0.audience"));
+                assert!(paths.contains(&"auth0.jwks_url"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"uploads.max_attachment_bytes"));

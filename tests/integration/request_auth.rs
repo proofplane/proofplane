@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::http::StatusCode;
-use proofplane::routes::authentication::ACTOR_ID_HEADER;
+use proofplane::routes::authentication::{ACTOR_ID_HEADER, AUTHORIZATION_HEADER};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -413,12 +413,26 @@ async fn authenticated_request_logs_context_without_api_key() {
         .await
         .assert_status_bad_request();
 
+    let bearer_token = "auth0|log-user";
+    let me = app
+        .server()
+        .get("/me")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {bearer_token}"))
+        .await;
+    me.assert_status_ok();
+    let user_id = me.json::<Value>()["id"]
+        .as_str()
+        .expect("user id is a string")
+        .to_owned();
+
     let logs = String::from_utf8(log_bytes.lock().expect("log buffer locks").clone())
         .expect("logs are UTF-8");
     assert!(logs.contains(&request_id), "captured logs: {logs}");
     assert!(logs.contains(INTEGRATION_ACTOR_ID), "captured logs: {logs}");
     assert!(logs.contains(invalid_request_path), "captured logs: {logs}");
     assert!(!logs.contains(app.api_key()), "captured logs: {logs}");
+    assert!(logs.contains(&user_id), "captured logs: {logs}");
+    assert!(!logs.contains(bearer_token), "captured logs: {logs}");
 }
 
 fn assert_unauthorized(body: &Value, status: StatusCode) {

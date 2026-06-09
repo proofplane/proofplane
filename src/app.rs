@@ -6,7 +6,7 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::ApiKeyAuthenticator,
+    authentication::{ApiKeyAuthenticator, UserAuthenticator},
     authorization::workspaces::WorkspaceAuthorizer,
     config::AppConfig,
     object_storage::FilesystemObjectStore,
@@ -17,6 +17,7 @@ use crate::{
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
         evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
+        me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
         version,
@@ -33,6 +34,7 @@ pub struct AppDependencies {
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
+    pub user_authenticator: UserAuthenticator,
     pub workspace_authorizer: WorkspaceAuthorizer,
 }
 
@@ -80,6 +82,12 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
                 authorizer: dependencies.workspace_authorizer,
             },
         }))
+        .merge(me::router(MeState {
+            repository: dependencies.postgres.clone(),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator,
+            },
+        }))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))
@@ -98,7 +106,8 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        actor_id = tracing::field::Empty
+                        actor_id = tracing::field::Empty,
+                        user_id = tracing::field::Empty
                     )
                 })
                 .on_response(|response: &Response, latency: Duration, span: &Span| {
