@@ -1,8 +1,59 @@
 use chrono::{DateTime, Utc};
 
 use super::ids::uuid_id;
+use super::UserId;
 
 uuid_id!(WorkspaceId);
+
+/// Human management-plane role within a workspace. Owners can do everything an
+/// admin can plus delete or transfer the workspace; admins manage members,
+/// actors, and keys. Maps one-to-one to the `workspace_memberships.role` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceRole {
+    Owner,
+    Admin,
+}
+
+impl WorkspaceRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+        }
+    }
+}
+
+impl std::str::FromStr for WorkspaceRole {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "admin" => Ok(Self::Admin),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMembership {
+    pub user_id: UserId,
+    pub workspace_id: WorkspaceId,
+    pub role: WorkspaceRole,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceWithRole {
+    pub workspace: Workspace,
+    pub role: WorkspaceRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddMemberPayload {
+    pub user_id: UserId,
+    pub role: WorkspaceRole,
+}
 
 /**
  * Workspace is the tenant boundary. Most things are basically scoped

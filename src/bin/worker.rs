@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
+    authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config, object_storage, observability, repository,
     scanner::NoopMalwareScanner,
     store,
@@ -36,6 +37,9 @@ enum Error {
 
     #[error("object storage initialization error")]
     ObjectStorage(#[from] object_storage::StorageError),
+
+    #[error("SpiceDB client error")]
+    SpiceDb(#[from] proofplane::authorization::spicedb::ClientError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -63,6 +67,8 @@ async fn run() -> Result<(), Error> {
     let postgres = Arc::new(repository::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let scanner = Arc::new(NoopMalwareScanner);
+    let workspace_authorizer =
+        WorkspaceAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
     let listener = TcpListener::bind(config.server.worker_bind)
@@ -79,6 +85,7 @@ async fn run() -> Result<(), Error> {
         postgres,
         object_store,
         scanner,
+        workspace_authorizer,
         worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,
         live_path: config.health.live_path.clone(),

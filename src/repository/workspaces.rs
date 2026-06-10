@@ -3,7 +3,33 @@ use uuid::Uuid;
 
 use crate::domain::{CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId};
 
-use super::{Error, Postgres};
+use super::{Error, Postgres, TransactionContext};
+
+impl TransactionContext<'_> {
+    pub async fn create_workspace(
+        &self,
+        workspace: &CreateWorkspacePayload,
+    ) -> Result<Workspace, Error> {
+        let id = workspace.id.map(Uuid::from);
+        let row = self
+            .transaction
+            .query_one(
+                r#"
+INSERT INTO workspaces (id, slug, name)
+VALUES (COALESCE($1, gen_random_uuid()), $2, $3)
+RETURNING
+    id,
+    slug,
+    name,
+    created_at
+"#,
+                &[&id, &workspace.slug, &workspace.name],
+            )
+            .await?;
+
+        workspace_from_row(row)
+    }
+}
 
 // TODO: add cursor-based pagination to repository list behavior.
 impl Postgres {

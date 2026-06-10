@@ -23,7 +23,7 @@ use proofplane::{
         WorkspaceId,
     },
     repository::Postgres,
-    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
+    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
     scanner::NoopMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
@@ -75,6 +75,7 @@ pub struct TestApp {
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
     pub(super) postgres: Arc<Postgres>,
+    spicedb: SpiceDbClient,
     object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
@@ -181,6 +182,7 @@ impl TestApp {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
             postgres,
+            spicedb,
             object_storage_root,
             server,
             api_key,
@@ -210,6 +212,39 @@ impl TestApp {
         &self.postgres
     }
 
+    pub fn spicedb(&self) -> &SpiceDbClient {
+        &self.spicedb
+    }
+
+    /// Authenticates as `sub` through `GET /me`, which JIT-provisions the user,
+    /// and returns the resulting user id.
+    pub async fn login(&self, sub: &str) -> Uuid {
+        let response = self
+            .server
+            .get("/me")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .await;
+        response.assert_status_ok();
+
+        Uuid::parse_str(
+            response.json::<Value>()["id"]
+                .as_str()
+                .expect("user id is a string"),
+        )
+        .expect("user id is a UUID")
+    }
+
+    pub async fn create_workspace_as(&self, sub: &str, name: &str) -> Value {
+        let response = self
+            .server
+            .post("/workspaces")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .json(&serde_json::json!({ "name": name }))
+            .await;
+        response.assert_status_ok();
+        response.json()
+    }
+
     pub async fn worker_server(&self) -> TestServer {
         let object_store = Arc::new(
             proofplane::object_storage::FilesystemObjectStore::new(&self.object_storage_root)
@@ -222,6 +257,7 @@ impl TestApp {
             postgres: self.postgres.clone(),
             object_store,
             scanner: Arc::new(NoopMalwareScanner),
+            workspace_authorizer: WorkspaceAuthorizer::new(self.spicedb.clone()),
             worker_max_delivery_attempts: 5,
             metrics: recorder.handle(),
             live_path: "/livez".to_owned(),

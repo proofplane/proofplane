@@ -21,10 +21,12 @@ use crate::{
         metrics::{self, MetricsState},
         request_context::attach_request_id,
         version,
+        workspaces::{self, WorkspacesState},
     },
     services::{
         controls::ControlService, evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService, user::UserService,
+        workspaces::WorkspaceService,
     },
 };
 
@@ -81,11 +83,20 @@ pub fn create_app<V: TokenVerifier + 'static>(
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
                 authenticator: dependencies.authenticator,
-                authorizer: dependencies.workspace_authorizer,
+                authorizer: dependencies.workspace_authorizer.clone(),
             },
         }))
         .merge(me::router(MeState {
             service: UserService::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator.clone(),
+            },
+        }))
+        .merge(workspaces::router(WorkspacesState {
+            service: WorkspaceService::new(
+                dependencies.postgres.clone(),
+                dependencies.workspace_authorizer.clone(),
+            ),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator,
             },

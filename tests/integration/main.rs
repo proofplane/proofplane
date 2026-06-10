@@ -7,3 +7,4 @@ mod repository;
 mod request_auth;
 mod support;
 mod worker_handlers;
+mod workspaces;

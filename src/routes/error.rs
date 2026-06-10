@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::{
     domain::DomainError, object_storage::StorageError, repository::Error as RepositoryError,
-    services::Error as ServiceError,
+    services::workspaces::MemberError, services::Error as ServiceError,
 };
 
 #[derive(Debug, Serialize)]
@@ -124,6 +124,19 @@ impl From<ServiceError> for ApiError {
             ServiceError::InvalidFrameworkRequirementReferences => ApiError::BadRequest(vec![
                 "framework_requirement_ids contains unknown ids".to_owned(),
             ]),
+        }
+    }
+}
+
+impl From<MemberError> for ApiError {
+    fn from(error: MemberError) -> Self {
+        match error {
+            MemberError::NotFound => ApiError::NotFound,
+            MemberError::TargetUserNotFound => {
+                ApiError::BadRequest(vec!["user_id does not reference a known user".to_owned()])
+            }
+            MemberError::LastOwner => ApiError::Conflict,
+            MemberError::Repository(error) => repository_error(error),
         }
     }
 }

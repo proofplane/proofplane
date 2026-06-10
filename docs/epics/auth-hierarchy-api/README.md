@@ -16,7 +16,7 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
 | Ticket                                                                                                   | Status | Notes                                                                                                                                    |
 | -------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 001. [Auth0 User Identity & JIT Provisioning](./tickets/001-auth0-user-identity-and-jit-provisioning.md) | Done   | `users` table, `TokenVerifier` (jwtk/RS256+JWKS), `authenticate_user`, JIT provisioning, `GET /me`.                                      |
-| 002. [Workspace Self-Onboarding & Membership](./tickets/002-workspace-self-onboarding-and-membership.md) | Todo   | `workspace_memberships`, SpiceDB human-management model (+ dormant `platform`), `POST`/`GET /workspaces`, member add/remove, dual-write. |
+| 002. [Workspace Self-Onboarding & Membership](./tickets/002-workspace-self-onboarding-and-membership.md) | Done   | `workspace_memberships`, SpiceDB human-management model (`owner`/`admin`, `manage_*`), `POST`/`GET /workspaces`, member add/remove, dual-write + worker reconciliation. Dormant `platform` tier descoped. |
 | 003. [Actor & API Key Management](./tickets/003-actor-and-api-key-management.md)                         | Todo   | Workspace-scoped actors, multi-credential rotation, `manage_actors`, create/list actors, issue/revoke keys.                              |
 | 004. [Auth & Identity Audit Events](./tickets/004-auth-and-identity-audit-events.md)                     | Todo   | `audit_events.user_id`, in-transaction audit writer, emit identity events.                                                               |
 
@@ -24,8 +24,9 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
 
 - **001** is foundational: every management route consumes its `UserContext`.
 - **002** depends on 001 and introduces the SpiceDB human-management schema
-  (`owner`/`admin`, `manage_*`) plus dormant platform-superadmin scaffolding;
-  land it before 003.
+  (`owner`/`admin`, `manage_*`); land it before 003. The dormant
+  platform-superadmin scaffolding was descoped to avoid dead code — add it when a
+  platform tier is actually needed.
 - **003** depends on 002 and changes data-plane auth to support multiple
   credentials per actor.
 - **004** depends on 001–003 for the operations it instruments; its writer/schema
