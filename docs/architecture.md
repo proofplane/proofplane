@@ -153,7 +153,17 @@ Routes may depend on already-constructed application dependencies, such as
 services, authenticators, authorizers, or a metrics handle. They should not load
 config, run migrations, construct pools, or initialize global process state.
 
-Route errors should map to stable HTTP responses in `routes::error`.
+Route **handlers must stay thin**: parse and validate the request, call the
+service, and return the result. A handler must not contain authorization
+branching — it never decides "is this caller allowed?" by reading a boolean
+predicate and choosing a status. That decision belongs to route middleware (the
+data-plane permission gate, see `src/authorization`) or to the service layer
+(management-plane role decisions). Handlers translate service problem types into
+HTTP via `routes::error`; they do not re-implement policy.
+
+Route errors should map to stable HTTP responses in `routes::error`. This is the
+single place where service problem types (such as `MemberError`) become
+`ApiError` HTTP statuses.
 
 ### `src/services`
 
@@ -167,7 +177,14 @@ Services are responsible for:
 - coordinating workspace- and actor-scoped reads and transactions;
 - composing multiple persistence primitives into one business operation;
 - using object storage for attachment upload and cleanup behavior;
-- mediating between route payloads and repository operations.
+- mediating between route payloads and repository operations;
+- owning **management-plane authorization decisions**. Human management-plane
+  operations (for example workspace membership management) authorize the acting
+  user from Postgres `workspace_memberships` — checking the owner/admin role —
+  inside the service method itself, before the operation runs. The acting
+  user's `UserId` is passed in by the route. Authorization outcomes are surfaced
+  as **problem types** (domain error enums such as `MemberError`) returned to
+  the route, never as raw HTTP statuses. Services do not branch on HTTP concerns.
 
 The current transaction context types are defined in `services` and used by the
 repository gateway. This is an existing layering compromise documented here as
@@ -199,11 +216,25 @@ IDs rather than depending on the authentication type.
 
 ### `src/authorization`
 
-`WorkspaceAuthorizer` checks workspace read or write permissions through
-SpiceDB. Product route middleware selects the required permission from the HTTP
-method and resource type. Authentication and authorization both complete before
-the middleware invokes the route handler, so service methods receive an
-authenticated and authorized `ActorContext`.
+Proofplane has two authorization planes, enforced in two different places. When
+adding an API, pick the matching pattern:
+
+**Actor data plane — route middleware.** `WorkspaceAuthorizer` checks workspace
+read or write permissions through SpiceDB for actor (API-credential) traffic on
+data-plane resources such as controls and evidence requests/submissions. Product
+route middleware selects the required permission from the HTTP method and
+resource type. Authentication and authorization both complete before the
+middleware invokes the route handler, so those service methods receive an
+already-authorized `ActorContext` and do not re-check permissions.
+
+**Human management plane — service layer.** Management-plane operations (for
+example workspace membership) are *not* governed by SpiceDB. They authorize the
+acting user from Postgres `workspace_memberships` (owner/admin role), and that
+check lives **inside the service method**, not in middleware or the handler. The
+service returns a problem type (such as `MemberError::Forbidden`) that
+`routes::error` maps to the appropriate HTTP status — currently `404`, so an
+absent workspace, a non-member, and an under-privileged member are
+indistinguishable and no existence is leaked.
 
 ### `src/dequeuer`
 

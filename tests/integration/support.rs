@@ -23,7 +23,7 @@ use proofplane::{
         WorkspaceId,
     },
     repository::Postgres,
-    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER},
+    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
     scanner::NoopMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
@@ -208,6 +208,35 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
+    }
+
+    /// Authenticates as `sub` through `GET /me`, which JIT-provisions the user,
+    /// and returns the resulting user id.
+    pub async fn login(&self, sub: &str) -> Uuid {
+        let response = self
+            .server
+            .get("/me")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .await;
+        response.assert_status_ok();
+
+        Uuid::parse_str(
+            response.json::<Value>()["id"]
+                .as_str()
+                .expect("user id is a string"),
+        )
+        .expect("user id is a UUID")
+    }
+
+    pub async fn create_workspace_as(&self, sub: &str, name: &str) -> Value {
+        let response = self
+            .server
+            .post("/workspaces")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .json(&serde_json::json!({ "name": name }))
+            .await;
+        response.assert_status_ok();
+        response.json()
     }
 
     pub async fn worker_server(&self) -> TestServer {

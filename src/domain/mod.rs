@@ -30,4 +30,7 @@ pub use evidence_submission::{
 };
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{required_text, validate_freshness_window_days};
-pub use workspace::{CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId};
+pub use workspace::{
+    AddMemberPayload, CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId,
+    WorkspaceMembership, WorkspaceRole, WorkspaceWithRole,
+};

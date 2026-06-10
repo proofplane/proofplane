@@ -10,11 +10,13 @@ mod evidence_requests;
 mod evidence_submissions;
 mod outbox;
 mod users;
+mod workspace_memberships;
 mod workspaces;
 
 pub use error::Error;
 pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
+pub use workspace_memberships::NewWorkspaceMembership;
 
 pub struct Postgres {
     pool: Pool,

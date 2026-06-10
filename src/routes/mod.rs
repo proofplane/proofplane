@@ -8,3 +8,4 @@ pub mod me;
 pub mod metrics;
 pub mod request_context;
 pub mod version;
+pub mod workspaces;

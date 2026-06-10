@@ -7,11 +7,12 @@ use proofplane::{
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload,
         CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
-        EvidenceRequestStatus, UpdateActorPayload, UpdateApiCredentialPayload,
-        UpdateEvidenceRequestPayload, UpdateWorkspacePayload, WorkspaceId,
+        EvidenceRequestStatus, ProvisionUserPayload, UpdateActorPayload,
+        UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
+        WorkspaceId, WorkspaceRole,
     },
     observability,
-    repository::Postgres,
+    repository::{NewWorkspaceMembership, Postgres},
     store, VERSION,
 };
 use thiserror::Error;
@@ -59,6 +60,7 @@ const LOCAL_SERVICE_ACCOUNT_ACTOR_ID: &str = "00000000-0000-4000-8000-0000000001
 const LOCAL_INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000104";
 const LOCAL_POLICY_AUTOMATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000105";
 const SYSTEM_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000106";
+const LOCAL_OWNER_AUTH0_SUB: &str = "auth0|local-owner";
 
 async fn run() -> Result<(), Error> {
     let config = match load_from_env() {
@@ -86,6 +88,7 @@ async fn run() -> Result<(), Error> {
     debug!("seeding local data");
     let api_key = seed_local_data(&postgres).await?;
     seed_local_membership(&config.spicedb).await?;
+    seed_local_owner(&postgres).await?;
     debug!("done seeding local data");
 
     println!("Proofplane {VERSION} local seed complete");
@@ -245,6 +248,39 @@ async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
     client
         .write_workspace_membership(local_authorized_workspace_id(), SYSTEM_ACTOR_ID)
         .await?;
+
+    Ok(())
+}
+
+async fn seed_local_owner(repository: &Postgres) -> Result<(), Error> {
+    let user = repository
+        .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+            auth0_sub: LOCAL_OWNER_AUTH0_SUB.to_owned(),
+            email: Some("owner@proofplane.local".to_owned()),
+            name: Some("Local Owner".to_owned()),
+        })
+        .await?;
+    let workspace_id = local_authorized_workspace_id();
+
+    if repository
+        .get_membership_role(workspace_id, user.id)
+        .await?
+        .is_none()
+    {
+        repository
+            .in_transaction(async move |context| {
+                context
+                    .insert_workspace_membership(&NewWorkspaceMembership {
+                        user_id: user.id,
+                        workspace_id,
+                        role: WorkspaceRole::Owner,
+                    })
+                    .await?;
+
+                Ok(())
+            })
+            .await?;
+    }
 
     Ok(())
 }

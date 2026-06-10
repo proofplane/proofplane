@@ -4,6 +4,7 @@ pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;
 pub mod user;
+pub mod workspaces;
 
 #[derive(Debug, Error)]
 pub enum Error {

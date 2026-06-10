@@ -43,6 +43,17 @@ spec section instead.
   epics have `spec.md` + `ux.md`. The two words never overlap.
 - If an epic ever needs several reference docs, promote to a `spec/` folder — a
   later concern, not a rule to apply pre-emptively.
+- **The spec is a living document — reconcile it when implementation deviates.**
+  The spec is the source of truth, so it must describe what was *actually built*,
+  not an approach the code abandoned mid-flight. When a ticket changes a design
+  decision during the work (a different store, a dropped component, a simpler
+  mechanism), update `spec.md` in the same change: correct the affected sections
+  so nothing contradicts, and record the deviation **with its rationale** (the
+  depth belongs in the spec). Mark it visibly — e.g. a short "Decision revision"
+  note or an inline _(Revised during ticket NNN — …)_ aside — rather than silently
+  rewriting history, so the reasoning survives. Leave a one-line pointer in the
+  ticket's Notes. Contradictory docs are worse than none: never let the spec keep
+  advertising a path the implementation no longer follows.
 
 ## Naming and numbering
 
@@ -122,6 +133,9 @@ A ticket is a living document — keep it current *as* you work, not only at the
 4. **When the work is done:** set `Done` once all acceptance criteria are checked.
 5. **Keep in sync:** whenever a ticket's status changes, update the epic README's
    Status column to match — the README is the at-a-glance view.
+6. **Reconcile the spec:** if the implementation deviated from the spec, update
+   `spec.md` to match what shipped (with the deviation's rationale) before calling
+   the ticket Done — see "The spec is a living document" above.
 
 Reflect reality, not aspiration: a ticket with a half-checked task list is
 `Doing`, not `Done`.
@@ -137,6 +151,8 @@ Reflect reality, not aspiration: a ticket with a half-checked task list is
 
 - All acceptance criteria are met and checked.
 - New behavior is covered by tests.
+- The spec reflects what was actually built — any mid-flight deviation from it has
+  been reconciled into `spec.md` (with rationale), so no doc contradicts another.
 
 ## Epic README
 
@@ -171,3 +187,4 @@ Use `templates/epic-readme.md`:
 - [ ] Technical depth is in the spec and linked, not duplicated.
 - [ ] Header has Status, Depends on, and Spec link.
 - [ ] README table updated with correct status and one-line note.
+- [ ] Spec reconciled with what shipped — no section contradicts the built code.
