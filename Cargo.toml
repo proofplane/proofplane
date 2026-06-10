@@ -45,6 +45,7 @@ deadpool-postgres = "0.14.1"
 futures-core = "0.3"
 futures-util = "0.3"
 hex = "0.4"
+jwtk = "0.5"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 prost = "0.14"
@@ -77,5 +78,6 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 axum-test = "20"
+jwtk = { version = "0.5", features = ["openssl"] }
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }

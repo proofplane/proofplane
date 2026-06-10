@@ -19,6 +19,11 @@ spicedb:
   preshared_key: "proofplane-local-spicedb-key"
   schema_path: "authz/spicedb/proofplane.zed"
 
+auth0:
+  issuer: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/"
+  audience: "https://api.proofplane.com"
+  jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
+
 object_storage:
   backend: "filesystem"
   root: ".local/storage"

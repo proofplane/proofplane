@@ -84,8 +84,10 @@ pub struct GoogleCloudPublisher {
 
 impl GoogleCloudPublisher {
     pub async fn new(project_id: impl Into<String>) -> Result<Self, PubSubError> {
-        let mut config = ClientConfig::default();
-        config.project_id = Some(project_id.into());
+        let config = ClientConfig {
+            project_id: Some(project_id.into()),
+            ..Default::default()
+        };
         let client = Client::new(config)
             .await
             .map_err(|error| PubSubError::Publish(error.to_string()))?;
@@ -120,8 +122,10 @@ impl Publisher for GoogleCloudPublisher {
 }
 
 pub async fn ensure_topic(project_id: &str, topic: &TopicName) -> Result<(), PubSubError> {
-    let mut config = ClientConfig::default();
-    config.project_id = Some(project_id.to_owned());
+    let config = ClientConfig {
+        project_id: Some(project_id.to_owned()),
+        ..Default::default()
+    };
     let client = Client::new(config)
         .await
         .map_err(|error| PubSubError::Publish(error.to_string()))?;
@@ -157,8 +161,10 @@ pub async fn ensure_worker_subscription(
     project_id: &str,
     subscriptions: &PubSubSubscriptionsConfig,
 ) -> Result<(), PubSubError> {
-    let mut client_config = ClientConfig::default();
-    client_config.project_id = Some(project_id.to_owned());
+    let client_config = ClientConfig {
+        project_id: Some(project_id.to_owned()),
+        ..Default::default()
+    };
     let client = Client::new(client_config)
         .await
         .map_err(|error| PubSubError::Provision(error.to_string()))?;

@@ -4,9 +4,12 @@ use api_keys_simplified::{ApiKeyManagerV0, Environment, KeyStatus, SecureString}
 use chrono::Utc;
 
 use crate::{
-    domain::{ActorId, ActorWithApiCredential, WorkspaceId},
+    authentication::auth0::{TokenVerifier, VerifyError},
+    domain::{ActorId, ActorWithApiCredential, ProvisionUserPayload, UserId, WorkspaceId},
     repository,
 };
+
+pub mod auth0;
 
 const API_KEY_PREFIX: &str = "proof";
 
@@ -20,6 +23,19 @@ pub struct ActorContext {
 impl ActorContext {
     pub fn new(workspace_id: WorkspaceId, id: ActorId) -> Self {
         Self { workspace_id, id }
+    }
+}
+
+/// An authenticated human management-plane identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserContext {
+    pub user_id: UserId,
+    pub auth0_sub: String,
+}
+
+impl UserContext {
+    pub fn new(user_id: UserId, auth0_sub: String) -> Self {
+        Self { user_id, auth0_sub }
     }
 }
 
@@ -113,6 +129,69 @@ impl ApiKeyAuthenticator {
         }
 
         Ok(Some(ActorContext::new(workspace_id, actor.id)))
+    }
+}
+
+pub struct UserAuthenticator<V: TokenVerifier> {
+    verifier: Arc<V>,
+    repository: Arc<repository::Postgres>,
+}
+
+impl<V: TokenVerifier> Clone for UserAuthenticator<V> {
+    fn clone(&self) -> Self {
+        Self {
+            verifier: self.verifier.clone(),
+            repository: self.repository.clone(),
+        }
+    }
+}
+
+impl<V: TokenVerifier> UserAuthenticator<V> {
+    pub fn new(verifier: Arc<V>, repository: Arc<repository::Postgres>) -> Self {
+        Self {
+            verifier,
+            repository,
+        }
+    }
+
+    pub async fn authenticate(&self, token: &str) -> Result<UserContext, AuthError> {
+        let claims = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(AuthError::from_verify)?;
+
+        let user = self
+            .repository
+            .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+                auth0_sub: claims.sub,
+                email: claims.email,
+                name: claims.name,
+            })
+            .await
+            .map_err(AuthError::Repository)?;
+
+        Ok(UserContext::new(user.id, user.auth0_sub))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("token rejected")]
+    Unauthorized(#[source] VerifyError),
+    #[error("token verifier unavailable")]
+    VerifierUnavailable(#[source] VerifyError),
+    #[error("user provisioning failed")]
+    Repository(#[source] repository::Error),
+}
+
+impl AuthError {
+    fn from_verify(error: VerifyError) -> Self {
+        if error.is_token_rejection() {
+            return Self::Unauthorized(error);
+        }
+
+        Self::VerifierUnavailable(error)
     }
 }
 

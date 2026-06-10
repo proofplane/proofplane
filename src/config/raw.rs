@@ -12,8 +12,8 @@ use super::{
         parse_log_format, path_string, postgres_connection_string, secret_value, string_url,
         string_value, ConfigValidationExt,
     },
-    GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
-    PubSubSubscriptionsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
+    Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
+    PubSubConfig, PubSubSubscriptionsConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +22,7 @@ pub(super) struct RawAppConfig {
     pub(super) postgres: SecretString,
     pub(super) pubsub: RawPubSubConfig,
     pub(super) spicedb: RawSpiceDbConfig,
+    pub(super) auth0: RawAuth0Config,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) uploads: RawUploadsConfig,
     pub(super) observability: RawObservabilityConfig,
@@ -54,6 +55,28 @@ impl RawSpiceDbConfig {
                 endpoint,
                 preshared_key,
                 schema_path: PathBuf::from(schema_path),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawAuth0Config {
+    issuer: String,
+    audience: String,
+    jwks_url: String,
+}
+
+impl RawAuth0Config {
+    pub(super) fn validate(self) -> Validation<Auth0Config, ConfigFieldError> {
+        validate! {
+            issuer <- string_url(self.issuer).at("auth0.issuer"),
+            audience <- string_value(self.audience).at("auth0.audience"),
+            jwks_url <- string_url(self.jwks_url).at("auth0.jwks_url"),
+            => Auth0Config {
+                issuer,
+                audience,
+                jwks_url,
             },
         }
     }

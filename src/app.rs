@@ -6,7 +6,7 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::ApiKeyAuthenticator,
+    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, UserAuthenticator},
     authorization::workspaces::WorkspaceAuthorizer,
     config::AppConfig,
     object_storage::FilesystemObjectStore,
@@ -17,26 +17,30 @@ use crate::{
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
         evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
+        me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
         version,
     },
     services::{
         controls::ControlService, evidence_requests::EvidenceRequestService,
-        evidence_submissions::EvidenceSubmissionService,
+        evidence_submissions::EvidenceSubmissionService, user::UserService,
     },
 };
 
-pub struct AppDependencies {
+pub struct AppDependencies<V: TokenVerifier> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
+    pub user_authenticator: UserAuthenticator<V>,
     pub workspace_authorizer: WorkspaceAuthorizer,
 }
 
-pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authentication::Error> {
+pub fn create_app<V: TokenVerifier + 'static>(
+    dependencies: AppDependencies<V>,
+) -> Result<Router, crate::authentication::Error> {
     let live_path = dependencies.config.health.live_path.clone();
     let ready_path = dependencies.config.health.ready_path.clone();
 
@@ -80,6 +84,12 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
                 authorizer: dependencies.workspace_authorizer,
             },
         }))
+        .merge(me::router(MeState {
+            service: UserService::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator,
+            },
+        }))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))
@@ -98,7 +108,8 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        actor_id = tracing::field::Empty
+                        actor_id = tracing::field::Empty,
+                        user_id = tracing::field::Empty
                     )
                 })
                 .on_response(|response: &Response, latency: Duration, span: &Span| {

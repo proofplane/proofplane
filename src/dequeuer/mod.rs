@@ -182,7 +182,7 @@ fn outbound_message(row: &OutboxMessage) -> OutboundMessage {
 }
 
 fn retry_delay(attempt_count: i32, initial: Duration, max: Duration) -> Duration {
-    let exponent = attempt_count.max(0).min(30) as u32;
+    let exponent = attempt_count.clamp(0, 30) as u32;
     let factor = 2_i32.pow(exponent);
     (initial * factor).min(max)
 }

@@ -196,8 +196,10 @@ async fn postgres_url(container: &ContainerAsync<postgres::Postgres>) -> String 
 }
 
 async fn pubsub_client(project_id: &str) -> Client {
-    let mut config = ClientConfig::default();
-    config.project_id = Some(project_id.to_owned());
+    let config = ClientConfig {
+        project_id: Some(project_id.to_owned()),
+        ..Default::default()
+    };
     Client::new(config).await.expect("Pub/Sub client builds")
 }
 

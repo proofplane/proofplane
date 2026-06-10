@@ -1,17 +1,22 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
+use async_trait::async_trait;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
-    authentication::{ApiKeyAuthenticator, ApiKeyManager},
+    authentication::{
+        auth0::{TokenVerifier, VerifiedClaims, VerifyError},
+        ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
+    },
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
-        AppConfig, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig, PubSubConfig,
-        PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -36,6 +41,34 @@ use uuid::Uuid;
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
 pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
+
+/// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,
+/// except for the reserved values below. Tokens prefixed with `noprofile:` omit the
+/// `email`/`name` claims so JIT provisioning can be exercised without a profile.
+pub struct FakeTokenVerifier;
+
+#[async_trait]
+impl TokenVerifier for FakeTokenVerifier {
+    async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
+        if token.is_empty() || token == "invalid" {
+            return Err(VerifyError::InvalidToken);
+        }
+
+        if let Some(sub) = token.strip_prefix("noprofile:") {
+            return Ok(VerifiedClaims {
+                sub: sub.to_owned(),
+                email: None,
+                name: None,
+            });
+        }
+
+        Ok(VerifiedClaims {
+            sub: token.to_owned(),
+            email: Some(format!("{token}@example.com")),
+            name: Some("Integration Human".to_owned()),
+        })
+    }
+}
 
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
@@ -117,6 +150,8 @@ impl TestApp {
         // we're in a test and it really shouldn't panic anyways.
         let authenticator =
             ApiKeyAuthenticator::new(ApiKeyManager::new().unwrap(), postgres.clone());
+        let user_authenticator =
+            UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone());
 
         let dependencies = AppDependencies {
             config: app_config,
@@ -124,6 +159,7 @@ impl TestApp {
             object_store,
             metrics: recorder.handle(),
             authenticator,
+            user_authenticator,
             workspace_authorizer: WorkspaceAuthorizer::new(spicedb.clone()),
         };
 
@@ -574,6 +610,15 @@ fn config(
             endpoint: spicedb_endpoint,
             preshared_key: SecretString::from(SPICEDB_PRESHARED_KEY),
             schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
+        },
+        auth0: Auth0Config {
+            issuer: url::Url::parse("https://proofplane-integration.us.auth0.com/")
+                .expect("auth0 issuer parses"),
+            audience: "https://api.proofplane.test".to_owned(),
+            jwks_url: url::Url::parse(
+                "https://proofplane-integration.us.auth0.com/.well-known/jwks.json",
+            )
+            .expect("auth0 jwks url parses"),
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         uploads: UploadsConfig {

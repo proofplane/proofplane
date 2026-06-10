@@ -283,10 +283,11 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         .await
         .expect("duplicate finalization is acknowledged");
     assert_eq!(attachment_status(&app, successful.id).await, "uploaded");
-    let state = store.state.lock().unwrap();
-    assert_eq!(state.copied.len(), 1);
-    assert_eq!(state.deleted, vec![successful.object_key.clone()]);
-    drop(state);
+    {
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.copied.len(), 1);
+        assert_eq!(state.deleted, vec![successful.object_key.clone()]);
+    }
 
     let delete_failure =
         upload_attachment(&app, workspace_id, submission_id, "delete-failure.txt").await;

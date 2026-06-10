@@ -4,7 +4,9 @@ use tokio::net::TcpListener;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies},
-    authentication::{ApiKeyAuthenticator, ApiKeyManager},
+    authentication::{
+        auth0::Auth0TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
+    },
     authorization::{
         spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
         workspaces::WorkspaceAuthorizer,
@@ -75,6 +77,10 @@ async fn run() -> Result<(), Error> {
     info!("listening on {}", config.server.api_bind);
 
     let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
+    let user_authenticator = UserAuthenticator::new(
+        Arc::new(Auth0TokenVerifier::new(&config.auth0)),
+        postgres.clone(),
+    );
     let workspace_authorizer =
         WorkspaceAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
 
@@ -84,6 +90,7 @@ async fn run() -> Result<(), Error> {
         object_store,
         metrics,
         authenticator,
+        user_authenticator,
         workspace_authorizer,
     };
 

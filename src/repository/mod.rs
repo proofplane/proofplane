@@ -9,6 +9,7 @@ pub mod error;
 mod evidence_requests;
 mod evidence_submissions;
 mod outbox;
+mod users;
 mod workspaces;
 
 pub use error::Error;

@@ -277,6 +277,7 @@ struct ScanRequestedPayloadDTO {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 enum PermanentScanMessageError {
     #[error("invalid aggregate type")]
     InvalidAggregateType,
