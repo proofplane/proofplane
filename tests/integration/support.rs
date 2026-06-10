@@ -75,7 +75,6 @@ pub struct TestApp {
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
     pub(super) postgres: Arc<Postgres>,
-    spicedb: SpiceDbClient,
     object_storage_root: PathBuf,
     server: TestServer,
     api_key: String,
@@ -182,7 +181,6 @@ impl TestApp {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
             postgres,
-            spicedb,
             object_storage_root,
             server,
             api_key,
@@ -210,10 +208,6 @@ impl TestApp {
 
     pub fn postgres(&self) -> &Postgres {
         &self.postgres
-    }
-
-    pub fn spicedb(&self) -> &SpiceDbClient {
-        &self.spicedb
     }
 
     /// Authenticates as `sub` through `GET /me`, which JIT-provisions the user,
@@ -257,7 +251,6 @@ impl TestApp {
             postgres: self.postgres.clone(),
             object_store,
             scanner: Arc::new(NoopMalwareScanner),
-            workspace_authorizer: WorkspaceAuthorizer::new(self.spicedb.clone()),
             worker_max_delivery_attempts: 5,
             metrics: recorder.handle(),
             live_path: "/livez".to_owned(),

@@ -266,9 +266,22 @@ mod tests {
     async fn tampered_signature_is_rejected() {
         let fixture = fixture();
         let token = sign_with(&fixture, claims(ISSUER, AUDIENCE, "auth0|abc"));
-        let mut tampered = token.clone();
-        let last = tampered.pop().unwrap();
-        tampered.push(if last == 'A' { 'B' } else { 'A' });
+
+        // Flip the first character of the signature segment. The leading base64url
+        // character carries the full top six bits of the signature's first byte, so
+        // changing it always alters the decoded bytes — unlike the trailing
+        // character, whose padding bits can decode identically and leave the
+        // signature valid.
+        let (head, signature) = token
+            .rsplit_once('.')
+            .expect("token has a signature segment");
+        let mut signature_chars = signature.chars();
+        let first = signature_chars.next().expect("signature is non-empty");
+        let tampered = format!(
+            "{head}.{}{}",
+            if first == 'A' { 'B' } else { 'A' },
+            signature_chars.as_str()
+        );
 
         let error = fixture
             .verifier

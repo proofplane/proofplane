@@ -1,25 +1,23 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::{
-    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         AddMemberPayload, CreateWorkspacePayload, UserId, WorkspaceId, WorkspaceMembership,
         WorkspaceRole, WorkspaceWithRole,
     },
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{NewOutboxMessage, NewWorkspaceMembership, Postgres},
+    repository::{NewWorkspaceMembership, Postgres},
     services::Error as ServiceError,
-    worker::{WORKSPACE_MEMBER_ADDED, WORKSPACE_MEMBER_REMOVED},
 };
 
+/// Human management-plane operations on workspaces. Authorization for the human
+/// plane is answered from Postgres (`workspace_memberships`), which is the
+/// transactional source of truth — no SpiceDB projection is involved. SpiceDB
+/// stays the engine for the actor data plane only.
 #[derive(Clone)]
 pub struct WorkspaceService {
     repository: Arc<Postgres>,
-    authorizer: WorkspaceAuthorizer,
 }
 
 #[derive(Debug, Error)]
@@ -37,41 +35,20 @@ pub enum MemberError {
     Repository(#[from] crate::repository::Error),
 }
 
-/// Self-describing outbox payload identifying a SpiceDB membership tuple. The
-/// outbox `event_type` (`workspace.member_added` / `workspace.member_removed`)
-/// says whether to write or delete it; this payload says which tuple. The worker
-/// rebuilds the exact relationship from these fields without any database
-/// lookups, so producers and the reconciliation handler stay in lockstep.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceMembershipTuple {
-    pub workspace_id: Uuid,
-    pub subject_type: String,
-    pub subject_id: String,
-    pub relation: String,
-}
-
 enum RemoveOutcome {
-    Removed(WorkspaceRole),
+    Removed,
     NotFound,
     LastOwner,
 }
 
 impl WorkspaceService {
-    pub fn new(repository: Arc<Postgres>, authorizer: WorkspaceAuthorizer) -> Self {
-        Self {
-            repository,
-            authorizer,
-        }
-    }
-
-    pub fn authorizer(&self) -> &WorkspaceAuthorizer {
-        &self.authorizer
+    pub fn new(repository: Arc<Postgres>) -> Self {
+        Self { repository }
     }
 
     pub async fn create_owned(
         &self,
         user_id: UserId,
-        request_id: Uuid,
         payload: CreateWorkspacePayload,
     ) -> Result<WorkspaceWithRole, ServiceError> {
         let workspace = self
@@ -85,22 +62,10 @@ impl WorkspaceService {
                         role: WorkspaceRole::Owner,
                     })
                     .await?;
-                context
-                    .append_outbox_message(&member_event_message(
-                        WORKSPACE_MEMBER_ADDED,
-                        workspace.id,
-                        Uuid::from(user_id),
-                        WorkspaceRole::Owner,
-                        request_id,
-                    ))
-                    .await?;
 
                 Ok(workspace)
             })
             .await?;
-
-        self.write_role_best_effort(workspace.id, user_id, WorkspaceRole::Owner)
-            .await;
 
         Ok(WorkspaceWithRole {
             workspace,
@@ -118,10 +83,25 @@ impl WorkspaceService {
             .await?)
     }
 
+    /// A caller may manage members when they are an `owner` or `admin` of the
+    /// workspace. Returns `false` for non-members and unknown workspaces alike,
+    /// which the route maps to 404 so neither is distinguishable.
+    pub async fn can_manage_members(
+        &self,
+        workspace_id: WorkspaceId,
+        user_id: UserId,
+    ) -> Result<bool, ServiceError> {
+        Ok(matches!(
+            self.repository
+                .get_membership_role(workspace_id, user_id)
+                .await?,
+            Some(WorkspaceRole::Owner | WorkspaceRole::Admin)
+        ))
+    }
+
     pub async fn add_member(
         &self,
         workspace_id: WorkspaceId,
-        request_id: Uuid,
         payload: AddMemberPayload,
     ) -> Result<WorkspaceMembership, MemberError> {
         if !self.repository.user_exists(payload.user_id).await? {
@@ -129,41 +109,24 @@ impl WorkspaceService {
         }
 
         let AddMemberPayload { user_id, role } = payload;
-        let membership = self
+        Ok(self
             .repository
             .in_transaction(async move |context| {
-                let membership = context
+                context
                     .insert_workspace_membership(&NewWorkspaceMembership {
                         user_id,
                         workspace_id,
                         role,
                     })
-                    .await?;
-                context
-                    .append_outbox_message(&member_event_message(
-                        WORKSPACE_MEMBER_ADDED,
-                        workspace_id,
-                        Uuid::from(user_id),
-                        role,
-                        request_id,
-                    ))
-                    .await?;
-
-                Ok(membership)
+                    .await
             })
-            .await?;
-
-        self.write_role_best_effort(workspace_id, user_id, role)
-            .await;
-
-        Ok(membership)
+            .await?)
     }
 
     pub async fn remove_member(
         &self,
         workspace_id: WorkspaceId,
         target_user_id: UserId,
-        request_id: Uuid,
     ) -> Result<(), MemberError> {
         let outcome = self
             .repository
@@ -182,88 +145,15 @@ impl WorkspaceService {
                 context
                     .delete_workspace_membership(workspace_id, target_user_id)
                     .await?;
-                context
-                    .append_outbox_message(&member_event_message(
-                        WORKSPACE_MEMBER_REMOVED,
-                        workspace_id,
-                        Uuid::from(target_user_id),
-                        membership.role,
-                        request_id,
-                    ))
-                    .await?;
 
-                Ok(RemoveOutcome::Removed(membership.role))
+                Ok(RemoveOutcome::Removed)
             })
             .await?;
 
         match outcome {
             RemoveOutcome::NotFound => Err(MemberError::NotFound),
             RemoveOutcome::LastOwner => Err(MemberError::LastOwner),
-            RemoveOutcome::Removed(role) => {
-                self.delete_role_best_effort(workspace_id, target_user_id, role)
-                    .await;
-                Ok(())
-            }
+            RemoveOutcome::Removed => Ok(()),
         }
-    }
-
-    async fn write_role_best_effort(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: UserId,
-        role: WorkspaceRole,
-    ) {
-        if let Err(error) = self
-            .authorizer
-            .write_user_role(workspace_id, &Uuid::from(user_id).to_string(), role)
-            .await
-        {
-            tracing::warn!(
-                %error,
-                "synchronous SpiceDB membership write failed; the outbox worker will reconcile"
-            );
-        }
-    }
-
-    async fn delete_role_best_effort(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: UserId,
-        role: WorkspaceRole,
-    ) {
-        if let Err(error) = self
-            .authorizer
-            .delete_user_role(workspace_id, &Uuid::from(user_id).to_string(), role)
-            .await
-        {
-            tracing::warn!(
-                %error,
-                "synchronous SpiceDB membership delete failed; the outbox worker will reconcile"
-            );
-        }
-    }
-}
-
-fn member_event_message(
-    event_type: &str,
-    workspace_id: WorkspaceId,
-    subject_id: Uuid,
-    role: WorkspaceRole,
-    request_id: Uuid,
-) -> NewOutboxMessage {
-    let payload = WorkspaceMembershipTuple {
-        workspace_id: Uuid::from(workspace_id),
-        subject_type: "user".to_owned(),
-        subject_id: subject_id.to_string(),
-        relation: role.as_str().to_owned(),
-    };
-
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: event_type.to_owned(),
-        aggregate_type: "workspace_membership".to_owned(),
-        aggregate_id: Uuid::from(workspace_id).to_string(),
-        payload: serde_json::to_value(payload).expect("membership tuple payload serializes"),
-        request_id: Some(request_id),
     }
 }

@@ -7,11 +7,7 @@ use tonic::{
 };
 use url::Url;
 
-use crate::{
-    authentication::ActorContext,
-    config::SpiceDbConfig,
-    domain::{WorkspaceId, WorkspaceRole},
-};
+use crate::{authentication::ActorContext, config::SpiceDbConfig, domain::WorkspaceId};
 
 // The generated rust code for the protos fails these lints. This is generated
 // code so we don't care.
@@ -109,99 +105,6 @@ impl SpiceDbClient {
         Ok(())
     }
 
-    pub async fn write_workspace_user_role(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-        role: WorkspaceRole,
-    ) -> Result<(), ClientError> {
-        use protos::authzed::api::v1::{
-            permissions_service_client::PermissionsServiceClient, relationship_update::Operation,
-            WriteRelationshipsRequest,
-        };
-
-        let mut client = PermissionsServiceClient::new(self.channel.clone());
-        client
-            .write_relationships(self.authenticated(WriteRelationshipsRequest {
-                updates: vec![workspace_user_role_update(
-                    workspace_id,
-                    user_id,
-                    role,
-                    Operation::Touch,
-                )],
-                optional_preconditions: vec![],
-                optional_transaction_metadata: None,
-            })?)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn delete_workspace_user_role(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-        role: WorkspaceRole,
-    ) -> Result<(), ClientError> {
-        use protos::authzed::api::v1::{
-            permissions_service_client::PermissionsServiceClient, subject_filter,
-            DeleteRelationshipsRequest, RelationshipFilter, SubjectFilter,
-        };
-
-        let mut client = PermissionsServiceClient::new(self.channel.clone());
-        client
-            .delete_relationships(self.authenticated(DeleteRelationshipsRequest {
-                relationship_filter: Some(RelationshipFilter {
-                    resource_type: "workspace".to_owned(),
-                    optional_resource_id: workspace_id.to_string(),
-                    optional_resource_id_prefix: String::new(),
-                    optional_relation: role.as_str().to_owned(),
-                    optional_subject_filter: Some(SubjectFilter {
-                        subject_type: "user".to_owned(),
-                        optional_subject_id: user_id.to_owned(),
-                        optional_relation: None::<subject_filter::RelationFilter>,
-                    }),
-                }),
-                optional_preconditions: vec![],
-                optional_limit: 0,
-                optional_allow_partial_deletions: false,
-                optional_transaction_metadata: None,
-            })?)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn check_user_workspace_permission(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-        permission: UserWorkspacePermission,
-    ) -> Result<bool, ClientError> {
-        use protos::authzed::api::v1::{
-            check_permission_response::Permissionship, consistency::Requirement,
-            permissions_service_client::PermissionsServiceClient, CheckPermissionRequest,
-            Consistency,
-        };
-
-        let mut client = PermissionsServiceClient::new(self.channel.clone());
-        let response = client
-            .check_permission(self.authenticated(CheckPermissionRequest {
-                consistency: Some(Consistency {
-                    requirement: Some(Requirement::FullyConsistent(true)),
-                }),
-                resource: Some(object_reference("workspace", workspace_id.to_string())),
-                permission: permission.as_str().to_owned(),
-                subject: Some(user_subject(user_id)),
-                context: None,
-                with_tracing: false,
-            })?)
-            .await?
-            .into_inner();
-
-        Ok(response.permissionship == Permissionship::HasPermission as i32)
-    }
-
     pub async fn check_workspace_permission(
         &self,
         actor: &ActorContext,
@@ -263,50 +166,6 @@ impl WorkspacePermission {
             Self::ReadControls => "read_controls",
             Self::WriteControls => "write_controls",
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UserWorkspacePermission {
-    ManageWorkspace,
-    ManageMembers,
-    ManageActors,
-}
-
-impl UserWorkspacePermission {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ManageWorkspace => "manage_workspace",
-            Self::ManageMembers => "manage_members",
-            Self::ManageActors => "manage_actors",
-        }
-    }
-}
-
-fn workspace_user_role_update(
-    workspace_id: WorkspaceId,
-    user_id: &str,
-    role: WorkspaceRole,
-    operation: protos::authzed::api::v1::relationship_update::Operation,
-) -> protos::authzed::api::v1::RelationshipUpdate {
-    use protos::authzed::api::v1::{Relationship, RelationshipUpdate};
-
-    RelationshipUpdate {
-        operation: operation as i32,
-        relationship: Some(Relationship {
-            resource: Some(object_reference("workspace", workspace_id.to_string())),
-            relation: role.as_str().to_owned(),
-            subject: Some(user_subject(user_id)),
-            optional_caveat: None,
-            optional_expires_at: None,
-        }),
-    }
-}
-
-fn user_subject(user_id: &str) -> protos::authzed::api::v1::SubjectReference {
-    protos::authzed::api::v1::SubjectReference {
-        object: Some(object_reference("user", user_id.to_owned())),
-        optional_relation: String::new(),
     }
 }
 
@@ -379,66 +238,5 @@ mod tests {
         assert_eq!(actor.object_type, "actor");
         assert_eq!(actor.object_id, "00000000-0000-4000-8000-000000000106");
         assert!(subject.optional_relation.is_empty());
-    }
-
-    #[test]
-    fn maps_owner_role_as_a_touch_update_to_a_user_subject() {
-        use protos::authzed::api::v1::relationship_update::Operation;
-        use uuid::Uuid;
-
-        let workspace_id =
-            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
-        let update = workspace_user_role_update(
-            workspace_id,
-            "00000000-0000-4000-8000-000000000301",
-            WorkspaceRole::Owner,
-            Operation::Touch,
-        );
-        let relationship = update.relationship.expect("relationship is present");
-        let resource = relationship.resource.expect("resource is present");
-        let subject = relationship.subject.expect("subject is present");
-        let user = subject.object.expect("user is present");
-
-        assert_eq!(update.operation, Operation::Touch as i32);
-        assert_eq!(resource.object_type, "workspace");
-        assert_eq!(resource.object_id, "00000000-0000-4000-8000-000000000001");
-        assert_eq!(relationship.relation, "owner");
-        assert_eq!(user.object_type, "user");
-        assert_eq!(user.object_id, "00000000-0000-4000-8000-000000000301");
-    }
-
-    #[test]
-    fn maps_admin_role_relation_name() {
-        use protos::authzed::api::v1::relationship_update::Operation;
-        use uuid::Uuid;
-
-        let workspace_id =
-            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
-        let update = workspace_user_role_update(
-            workspace_id,
-            "00000000-0000-4000-8000-000000000302",
-            WorkspaceRole::Admin,
-            Operation::Delete,
-        );
-        let relationship = update.relationship.expect("relationship is present");
-
-        assert_eq!(update.operation, Operation::Delete as i32);
-        assert_eq!(relationship.relation, "admin");
-    }
-
-    #[test]
-    fn maps_user_workspace_permissions_to_schema_names() {
-        assert_eq!(
-            UserWorkspacePermission::ManageWorkspace.as_str(),
-            "manage_workspace"
-        );
-        assert_eq!(
-            UserWorkspacePermission::ManageMembers.as_str(),
-            "manage_members"
-        );
-        assert_eq!(
-            UserWorkspacePermission::ManageActors.as_str(),
-            "manage_actors"
-        );
     }
 }

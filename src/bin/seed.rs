@@ -88,7 +88,7 @@ async fn run() -> Result<(), Error> {
     debug!("seeding local data");
     let api_key = seed_local_data(&postgres).await?;
     seed_local_membership(&config.spicedb).await?;
-    seed_local_owner(&postgres, &config.spicedb).await?;
+    seed_local_owner(&postgres).await?;
     debug!("done seeding local data");
 
     println!("Proofplane {VERSION} local seed complete");
@@ -252,7 +252,7 @@ async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
     Ok(())
 }
 
-async fn seed_local_owner(repository: &Postgres, config: &SpiceDbConfig) -> Result<(), Error> {
+async fn seed_local_owner(repository: &Postgres) -> Result<(), Error> {
     let user = repository
         .upsert_user_by_auth0_sub(&ProvisionUserPayload {
             auth0_sub: LOCAL_OWNER_AUTH0_SUB.to_owned(),
@@ -281,15 +281,6 @@ async fn seed_local_owner(repository: &Postgres, config: &SpiceDbConfig) -> Resu
             })
             .await?;
     }
-
-    let client = SpiceDbClient::from_config(config).await?;
-    client
-        .write_workspace_user_role(
-            workspace_id,
-            &Uuid::from(user.id).to_string(),
-            WorkspaceRole::Owner,
-        )
-        .await?;
 
     Ok(())
 }

@@ -19,7 +19,6 @@ use crate::{
         authentication::authenticate_user,
         error::{domain_errors, ApiError},
         me::UserRouteAuthState,
-        request_context::RequestId,
     },
     services::workspaces::WorkspaceService,
 };
@@ -71,7 +70,6 @@ async fn authenticate_user_route<V: TokenVerifier>(
 async fn create_workspace<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
-    Extension(RequestId(request_id)): Extension<RequestId>,
     Json(body): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<WorkspaceWithRoleResponse>, ApiError> {
     let name = required_text("name", body.name)
@@ -83,10 +81,7 @@ async fn create_workspace<V: TokenVerifier>(
         name,
     };
 
-    let created = state
-        .service
-        .create_owned(user.user_id, request_id, payload)
-        .await?;
+    let created = state.service.create_owned(user.user_id, payload).await?;
 
     Ok(Json(created.into()))
 }
@@ -103,7 +98,6 @@ async fn list_workspaces<V: TokenVerifier>(
 async fn add_member<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
-    Extension(RequestId(request_id)): Extension<RequestId>,
     Path(path): Path<MemberCollectionPath>,
     Json(body): Json<AddMemberRequest>,
 ) -> Result<Json<WorkspaceMembershipResponse>, ApiError> {
@@ -119,10 +113,7 @@ async fn add_member<V: TokenVerifier>(
         role,
     };
 
-    let membership = state
-        .service
-        .add_member(workspace_id, request_id, payload)
-        .await?;
+    let membership = state.service.add_member(workspace_id, payload).await?;
 
     Ok(Json(membership.into()))
 }
@@ -130,7 +121,6 @@ async fn add_member<V: TokenVerifier>(
 async fn remove_member<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
-    Extension(RequestId(request_id)): Extension<RequestId>,
     Path(path): Path<MemberPath>,
 ) -> Result<Response, ApiError> {
     let workspace_id = WorkspaceId::from(path.workspace_id);
@@ -138,7 +128,7 @@ async fn remove_member<V: TokenVerifier>(
 
     state
         .service
-        .remove_member(workspace_id, UserId::from(path.user_id), request_id)
+        .remove_member(workspace_id, UserId::from(path.user_id))
         .await?;
 
     Ok(Response::new(axum::body::Body::empty()))
@@ -146,28 +136,22 @@ async fn remove_member<V: TokenVerifier>(
 
 /// Returns `NotFound` (404) when the caller cannot manage members so that an
 /// absent workspace, a non-member caller, and a member without management
-/// rights are indistinguishable — no existence is leaked. A SpiceDB error
+/// rights are indistinguishable — no existence is leaked. A repository error
 /// surfaces as 500, never 404.
 async fn ensure_can_manage_members<V: TokenVerifier>(
     state: &WorkspacesState<V>,
     workspace_id: WorkspaceId,
     user_id: UserId,
 ) -> Result<(), ApiError> {
-    let allowed = state
+    if state
         .service
-        .authorizer()
-        .can_manage_members(workspace_id, &user_id.to_string())
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "unable to check manage_members permission");
-            ApiError::Internal
-        })?;
-
-    if !allowed {
-        return Err(ApiError::NotFound);
+        .can_manage_members(workspace_id, user_id)
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
     }
-
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

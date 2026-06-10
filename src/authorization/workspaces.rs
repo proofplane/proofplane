@@ -2,10 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     authentication::ActorContext,
-    authorization::spicedb::{
-        ClientError, SpiceDbClient, UserWorkspacePermission, WorkspacePermission,
-    },
-    domain::{WorkspaceId, WorkspaceRole},
+    authorization::spicedb::{ClientError, SpiceDbClient, WorkspacePermission},
 };
 
 #[derive(Clone)]
@@ -71,60 +68,6 @@ impl WorkspaceAuthorizer {
         let spicedb = self.spicedb();
         spicedb
             .check_workspace_permission(actor, WorkspacePermission::WriteControls)
-            .await
-    }
-
-    pub async fn write_user_role(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-        role: WorkspaceRole,
-    ) -> Result<(), ClientError> {
-        let spicedb = self.spicedb();
-        spicedb
-            .write_workspace_user_role(workspace_id, user_id, role)
-            .await
-    }
-
-    pub async fn delete_user_role(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-        role: WorkspaceRole,
-    ) -> Result<(), ClientError> {
-        let spicedb = self.spicedb();
-        spicedb
-            .delete_workspace_user_role(workspace_id, user_id, role)
-            .await
-    }
-
-    pub async fn can_manage_members(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-    ) -> Result<bool, ClientError> {
-        let spicedb = self.spicedb();
-        spicedb
-            .check_user_workspace_permission(
-                workspace_id,
-                user_id,
-                UserWorkspacePermission::ManageMembers,
-            )
-            .await
-    }
-
-    pub async fn can_manage_workspace(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: &str,
-    ) -> Result<bool, ClientError> {
-        let spicedb = self.spicedb();
-        spicedb
-            .check_user_workspace_permission(
-                workspace_id,
-                user_id,
-                UserWorkspacePermission::ManageWorkspace,
-            )
             .await
     }
 

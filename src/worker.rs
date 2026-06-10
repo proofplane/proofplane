@@ -18,10 +18,9 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::{
-    authorization::workspaces::WorkspaceAuthorizer,
     handlers::{
         attachment_finalization::AttachmentFinalizationHandler,
-        attachment_scan::AttachmentScanHandler, workspace_membership::WorkspaceMembershipHandler,
+        attachment_scan::AttachmentScanHandler,
     },
     object_storage::FilesystemObjectStore,
     repository::Postgres,
@@ -39,8 +38,6 @@ use crate::{
 // one place
 pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
 pub const ATTACHMENT_FINALIZATION_REQUESTED: &str = "attachment.finalization_requested";
-pub const WORKSPACE_MEMBER_ADDED: &str = "workspace.member_added";
-pub const WORKSPACE_MEMBER_REMOVED: &str = "workspace.member_removed";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMessage {
@@ -84,7 +81,6 @@ pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub scanner: Arc<NoopMalwareScanner>,
-    pub workspace_authorizer: WorkspaceAuthorizer,
     pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
     pub live_path: String,
@@ -96,7 +92,6 @@ pub struct WorkerAppDependencies {
 pub struct WorkerState {
     attachment_scan_handler: AttachmentScanHandler<NoopMalwareScanner>,
     attachment_finalization_handler: AttachmentFinalizationHandler<FilesystemObjectStore>,
-    workspace_membership_handler: WorkspaceMembershipHandler,
 }
 
 impl WorkerState {
@@ -104,7 +99,6 @@ impl WorkerState {
         postgres: Arc<Postgres>,
         object_store: Arc<FilesystemObjectStore>,
         scanner: Arc<NoopMalwareScanner>,
-        workspace_authorizer: WorkspaceAuthorizer,
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {
@@ -117,7 +111,6 @@ impl WorkerState {
                 postgres,
                 object_store,
             ),
-            workspace_membership_handler: WorkspaceMembershipHandler::new(workspace_authorizer),
         }
     }
 }
@@ -127,7 +120,6 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
         dependencies.postgres.clone(),
         dependencies.object_store,
         dependencies.scanner,
-        dependencies.workspace_authorizer,
         dependencies.worker_max_delivery_attempts,
     );
 
@@ -239,34 +231,6 @@ pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode 
             let result = state
                 .attachment_finalization_handler
                 .handle_finalization_requested(message)
-                .await;
-
-            match result {
-                Ok(()) => StatusCode::NO_CONTENT,
-                Err(error) => {
-                    tracing::error!(%error, "retryable worker handler failure");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }
-        }
-        WORKSPACE_MEMBER_ADDED => {
-            let result = state
-                .workspace_membership_handler
-                .handle_member_added(message)
-                .await;
-
-            match result {
-                Ok(()) => StatusCode::NO_CONTENT,
-                Err(error) => {
-                    tracing::error!(%error, "retryable worker handler failure");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }
-        }
-        WORKSPACE_MEMBER_REMOVED => {
-            let result = state
-                .workspace_membership_handler
-                .handle_member_removed(message)
                 .await;
 
             match result {

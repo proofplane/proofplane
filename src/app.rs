@@ -83,7 +83,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
                 authenticator: dependencies.authenticator,
-                authorizer: dependencies.workspace_authorizer.clone(),
+                authorizer: dependencies.workspace_authorizer,
             },
         }))
         .merge(me::router(MeState {
@@ -93,10 +93,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             },
         }))
         .merge(workspaces::router(WorkspacesState {
-            service: WorkspaceService::new(
-                dependencies.postgres.clone(),
-                dependencies.workspace_authorizer.clone(),
-            ),
+            service: WorkspaceService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator,
             },

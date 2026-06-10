@@ -20,8 +20,15 @@ Humans **manage**; actors **do work**. The two never cross.
 - **Clean separation of planes.** Humans authenticate via Auth0 and operate only
   the management plane. Actors authenticate via API keys and operate only the
   data plane. Humans do not call data APIs; actors do not manage anything.
-- **No platform-superadmin tier now**, but the SpiceDB schema is wired so it can
-  be activated later with no breaking change (see below).
+- **Two authorization stores, by plane.** The **human management plane**
+  authorizes from **Postgres** (`workspace_memberships.role`), the transactional
+  source of truth for human roles. **SpiceDB is the actor data plane only**
+  (`workspace#member@actor` → evidence/controls). _(Revised during ticket 002 —
+  see [Decision revision](#decision-revision-human-plane-authorizes-from-postgres)
+  below. The original draft modelled human `owner`/`admin`/`manage_*` in SpiceDB
+  with an outbox dual-write; that was dropped as redundant.)_
+- **No platform-superadmin tier.** Reserved for a future platform plane; not
+  built and not scaffolded (avoids dead code until it is actually needed).
 - **Human roles at launch: Owner + Admin.** Owner can delete/transfer the
   workspace and do everything; Admin can manage members, actors, and keys but
   cannot delete the workspace.
@@ -86,27 +93,16 @@ CREATE INDEX idx_api_credentials_actor_id ON api_credentials (actor_id);
 
 ## SpiceDB schema (`authz/spicedb/proofplane.zed`)
 
-```
-definition user {}
+SpiceDB models the **actor data plane only**. Human management roles are not in
+SpiceDB — they are authorized from Postgres (see the decision revision below).
 
-definition platform {
-    relation super_admin: user
-}
+```
+definition actor {}
 
 definition workspace {
-    relation platform: platform     // wired now, no tuples written yet
-    relation owner: user
-    relation admin: user
     relation member: actor
 
-    // Management plane (humans). platform->super_admin is dormant until the
-    // platform-superadmin tier is activated later; including it now is a no-op,
-    // not a breaking change.
-    permission manage_workspace = owner + platform->super_admin
-    permission manage_members   = owner + admin + platform->super_admin
-    permission manage_actors    = owner + admin + platform->super_admin
-
-    // Data plane (actors) — unchanged behavior
+    // Data plane (actors)
     permission read_evidence_requests     = member
     permission write_evidence_requests    = member
     permission read_evidence_submissions  = member
@@ -116,10 +112,29 @@ definition workspace {
 }
 ```
 
-The `platform` definition and the `platform->super_admin` arrows are inert until
-a single `platform:proofplane#super_admin@user:X` tuple is created someday. That
-is the entire "flexibility for later" — no schema rework when the tier is
-activated.
+### Decision revision: human plane authorizes from Postgres
+
+The original draft of this spec put human `owner`/`admin` relations and
+`manage_workspace`/`manage_members`/`manage_actors` permissions in SpiceDB (plus
+a dormant `platform` superadmin tier), kept in sync with Postgres via an outbox
+dual-write and a worker backstop. **Ticket 002 dropped that.** Reasons:
+
+- Human membership's source of truth already *is* `workspace_memberships` in
+  Postgres, written transactionally. A SpiceDB projection of it added a second
+  store that has to be reconciled and a read-your-writes gap (create a workspace,
+  then immediately manage it → 404 until the projection catches up).
+- The `manage_*` permissions were flat unions (`owner`, `owner + admin`) — nothing
+  SpiceDB's relationship graph was needed for. They are a Postgres role check.
+- Removing it deleted the synchronous write-through, the membership outbox events,
+  and the worker reconciliation handler — two places calling SpiceDB to do the
+  same thing collapsed to one transactional Postgres write.
+
+So `manage_members` / `manage_workspace` / `manage_actors` are answered by reading
+`workspace_memberships.role` (`owner` or `admin`). SpiceDB stays the data-plane
+engine, where fine-grained, relational, reverse-queryable actor access is actually
+heading. **Revisit** if the human plane ever needs relational authorization (team
+hierarchies, org→workspace inheritance, the platform tier) — then modelling humans
+in SpiceDB earns its keep.
 
 ## Two auth middleware paths
 
@@ -128,7 +143,10 @@ activated.
 - **New** `authenticate_user` — validates the Auth0 Bearer JWT (RS256, verified
   against a cached JWKS, with `iss` / `aud` / `exp` checks), JIT-provisions the
   `users` row from `sub`, and produces a `UserContext { user_id, auth0_sub }`.
-  Management routes then check SpiceDB `manage_*` permissions.
+  Management routes then check the caller's role in `workspace_memberships`
+  (Postgres) — `owner`/`admin` grant `manage_*`. A caller without the required
+  role gets **404** (indistinguishable from an absent workspace, so existence is
+  not leaked).
 
 Do not hand-roll JWKS fetching, key rotation, or signature verification. Use a
 focused, framework-agnostic JWKS+JWT crate (recommended: `jwtk`, which fetches and
@@ -163,14 +181,21 @@ workspace in the path.
 
 ## Dual-write consistency (Postgres ↔ SpiceDB)
 
-Reuses the existing `outbox_messages` table and its dequeuer/worker. For every
-operation that writes both Postgres and SpiceDB (create workspace + owner, add
-member, create actor):
+This applies **only to operations that write a SpiceDB tuple** — i.e. the actor
+data plane: granting an actor `workspace#member` (ticket 003, *Actor & API Key
+Management*). It does **not** apply to workspace creation or human membership:
+those write only Postgres (`workspaces` + `workspace_memberships` in one
+transaction) and authorize from Postgres, so there is no second store to keep in
+sync.
+
+For an operation that does write both Postgres and SpiceDB (create actor +
+membership tuple), reuse the existing `outbox_messages` table and its
+dequeuer/worker:
 
 1. In **one PG transaction**, write the row(s) **and** an `outbox_messages` row
    describing the SpiceDB tuple.
-2. After commit, make a best-effort **synchronous** SpiceDB write (idempotent
-   `touch`) so the owner can use the workspace immediately.
+2. After commit, optionally make a best-effort **synchronous** SpiceDB write
+   (idempotent `touch`) so the actor can be used immediately.
 3. The existing **worker** drains the outbox and retries the SpiceDB write if the
    synchronous attempt failed.
 
@@ -181,25 +206,26 @@ infrastructure that already exists.
 
 1. **User identity + Auth0 middleware** — `users` table, JWKS validation,
    `UserContext`, JIT provisioning.
-2. **Workspace self-onboarding** — `workspace_memberships` table, SpiceDB
-   `user` / `owner` / `admin` relations, `POST` / `GET /workspaces`, outbox
-   dual-write.
-3. **Actor management** — `actors.workspace_id`, create actor, issue/revoke
-   keys, multi-credential auth change.
-4. **Management permission wiring** + platform-superadmin scaffolding in the
-   `.zed` schema.
-5. **Audit events** — start populating the currently dormant `audit_events`
+2. **Workspace self-onboarding** — `workspace_memberships` table, `POST` /
+   `GET /workspaces` (workspace + owner membership committed in one Postgres
+   transaction), member add/remove. Human `manage_*` authorized from Postgres.
+3. **Actor management** — `actors.workspace_id`, create actor (with SpiceDB
+   `member` tuple via the outbox dual-write), issue/revoke keys, multi-credential
+   auth change.
+4. **Audit events** — start populating the currently dormant `audit_events`
    table for login / workspace / member / key events.
 
 ## Concerns addressed
 
 - **"Root" naming** — the customer-facing concept is a workspace **owner**, not a
   cross-tenant superuser. "Root"/superadmin is reserved for a future platform
-  tier (scaffolded, dormant).
+  tier (deferred; not built or scaffolded).
 - **Tenant isolation in DB** — actors gain a real `workspace_id` so isolation is
   defense-in-depth, not SpiceDB-only.
 - **Bootstrap gap** — solved by the account-level `POST /workspaces`.
-- **Two identity types** — clean separation of management vs data planes.
+- **Two identity types** — clean separation of management vs data planes, with a
+  store per plane: human roles in Postgres, actor membership in SpiceDB.
 - **Cardinality** — many-to-many from day one.
-- **Dual-write** — outbox + synchronous write-through.
+- **Dual-write** — outbox + synchronous write-through, for actor data-plane tuples
+  only (human membership is a single transactional Postgres write).
 - **Key rotation** — one-key-per-actor constraint relaxed.

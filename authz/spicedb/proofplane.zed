@@ -1,15 +1,7 @@
 definition actor {}
 
-definition user {}
-
 definition workspace {
-    relation owner: user
-    relation admin: user
     relation member: actor
-
-    permission manage_workspace = owner
-    permission manage_members = owner + admin
-    permission manage_actors = owner + admin
 
     permission read_evidence_requests = member
     permission write_evidence_requests = member

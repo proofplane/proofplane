@@ -1,20 +1,12 @@
 use axum::http::StatusCode;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{Duration, Utc};
-use proofplane::{
-    authorization::spicedb::UserWorkspacePermission,
-    domain::{WorkspaceId, WorkspaceRole},
-    repository::OutboxMessage,
-    routes::authentication::AUTHORIZATION_HEADER,
-    worker::WORKSPACE_MEMBER_ADDED,
-};
+use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::support::TestApp;
 
 #[tokio::test]
-async fn create_workspace_makes_caller_the_owner_in_postgres_and_spicedb() {
+async fn create_workspace_makes_caller_the_owner() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-create";
     let alice_id = app.login(alice).await;
@@ -22,14 +14,22 @@ async fn create_workspace_makes_caller_the_owner_in_postgres_and_spicedb() {
     let created = app.create_workspace_as(alice, "Alice Workspace").await;
 
     assert_eq!(created["role"], "owner");
-    let workspace_id = Uuid::parse_str(created["id"].as_str().expect("workspace id is a string"))
-        .expect("workspace id is a UUID");
-
+    let workspace_id = workspace_uuid(&created);
     assert_eq!(
         membership_role(&app, workspace_id, alice_id).await,
         Some("owner".to_owned())
     );
-    assert!(can_manage_workspace(&app, workspace_id, alice_id).await);
+
+    // The owner can immediately manage the workspace they just created.
+    add_member(
+        &app,
+        alice,
+        workspace_id,
+        app.login("auth0|create-target").await,
+        "admin",
+    )
+    .await
+    .assert_status_ok();
 }
 
 #[tokio::test]
@@ -78,22 +78,28 @@ async fn list_workspaces_returns_only_the_callers_workspaces_with_roles() {
 }
 
 #[tokio::test]
-async fn owner_can_add_a_member_who_has_logged_in() {
+async fn owner_can_add_a_member_who_can_then_manage() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-add";
     let bob = "auth0|bob-add";
+    let carol = "auth0|carol-add";
     app.login(alice).await;
     let bob_id = app.login(bob).await;
-
+    let carol_id = app.login(carol).await;
     let workspace_id = workspace_uuid(&app.create_workspace_as(alice, "Shared Workspace").await);
 
-    let response = add_member(&app, alice, workspace_id, bob_id, "admin").await;
-    response.assert_status_ok();
+    add_member(&app, alice, workspace_id, bob_id, "admin")
+        .await
+        .assert_status_ok();
 
     let bob_list = list_workspaces(&app, bob).await;
     assert_eq!(bob_list.len(), 1);
     assert_eq!(bob_list[0]["role"], "admin");
-    assert!(can_manage_members(&app, workspace_id, bob_id).await);
+
+    // Bob, now an admin, can manage members too.
+    add_member(&app, bob, workspace_id, carol_id, "admin")
+        .await
+        .assert_status_ok();
 }
 
 #[tokio::test]
@@ -155,36 +161,6 @@ async fn adding_a_member_who_never_logged_in_is_rejected() {
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 }
 
-#[tokio::test]
-async fn failed_synchronous_spicedb_write_is_reconciled_by_the_worker() {
-    let app = TestApp::start_without_default_auth().await;
-    let alice = "auth0|alice-reconcile";
-    let alice_id = app.login(alice).await;
-    let workspace_id =
-        workspace_uuid(&app.create_workspace_as(alice, "Reconciled Workspace").await);
-
-    // Simulate the best-effort synchronous SpiceDB write never landing: remove the
-    // tuple the route wrote so only Postgres + the outbox row reflect the owner.
-    app.spicedb()
-        .delete_workspace_user_role(
-            WorkspaceId::from(workspace_id),
-            &alice_id.to_string(),
-            WorkspaceRole::Owner,
-        )
-        .await
-        .expect("owner tuple deletes");
-    assert!(!can_manage_workspace(&app, workspace_id, alice_id).await);
-
-    let worker = app.worker_server().await;
-    let message = membership_outbox_message(&app, workspace_id).await;
-    deliver_twice(&worker, &message).await;
-
-    assert!(
-        can_manage_workspace(&app, workspace_id, alice_id).await,
-        "worker reconciles the owner tuple from the outbox"
-    );
-}
-
 async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
     let response = app
         .server()
@@ -234,74 +210,6 @@ async fn membership_role(app: &TestApp, workspace_id: Uuid, user_id: Uuid) -> Op
     rows.into_iter()
         .next()
         .map(|row| row.get::<_, String>("role"))
-}
-
-async fn can_manage_workspace(app: &TestApp, workspace_id: Uuid, user_id: Uuid) -> bool {
-    app.spicedb()
-        .check_user_workspace_permission(
-            WorkspaceId::from(workspace_id),
-            &user_id.to_string(),
-            UserWorkspacePermission::ManageWorkspace,
-        )
-        .await
-        .expect("manage_workspace check runs")
-}
-
-async fn can_manage_members(app: &TestApp, workspace_id: Uuid, user_id: Uuid) -> bool {
-    app.spicedb()
-        .check_user_workspace_permission(
-            WorkspaceId::from(workspace_id),
-            &user_id.to_string(),
-            UserWorkspacePermission::ManageMembers,
-        )
-        .await
-        .expect("manage_members check runs")
-}
-
-async fn membership_outbox_message(app: &TestApp, workspace_id: Uuid) -> OutboxMessage {
-    let messages = app
-        .postgres()
-        .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 50)
-        .await
-        .expect("outbox messages list");
-
-    messages
-        .into_iter()
-        .find(|message| {
-            message.event_type == WORKSPACE_MEMBER_ADDED
-                && message.aggregate_id == workspace_id.to_string()
-        })
-        .expect("membership outbox message exists")
-}
-
-async fn deliver_twice(worker: &axum_test::TestServer, message: &OutboxMessage) {
-    let envelope = pubsub_envelope(message);
-
-    for _ in 0..2 {
-        worker
-            .post("/pubsub/messages")
-            .json(&envelope)
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    }
-}
-
-fn pubsub_envelope(message: &OutboxMessage) -> Value {
-    let data = json!({
-        "event_type": message.event_type,
-        "aggregate_type": message.aggregate_type,
-        "aggregate_id": message.aggregate_id,
-        "request_id": message.request_id,
-        "payload": message.payload,
-    });
-
-    json!({
-        "message": {
-            "messageId": format!("outbox-{}", message.id),
-            "data": STANDARD.encode(data.to_string()),
-        },
-        "deliveryAttempt": 1,
-    })
 }
 
 fn workspace_uuid(created: &Value) -> Uuid {
