@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 
 use super::ids::uuid_id;
@@ -23,7 +25,7 @@ impl WorkspaceRole {
     }
 }
 
-impl std::str::FromStr for WorkspaceRole {
+impl FromStr for WorkspaceRole {
     type Err = ();
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {

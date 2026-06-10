@@ -13,7 +13,7 @@ use crate::{
     authentication::{auth0::TokenVerifier, UserContext},
     domain::{
         required_text, AddMemberPayload, CreateWorkspacePayload, UserId, Workspace, WorkspaceId,
-        WorkspaceRole, WorkspaceWithRole,
+        WorkspaceMembership, WorkspaceRole, WorkspaceWithRole,
     },
     routes::{
         authentication::authenticate_user,
@@ -195,8 +195,8 @@ struct WorkspaceMembershipResponse {
     created_at: DateTime<Utc>,
 }
 
-impl From<crate::domain::WorkspaceMembership> for WorkspaceMembershipResponse {
-    fn from(membership: crate::domain::WorkspaceMembership) -> Self {
+impl From<WorkspaceMembership> for WorkspaceMembershipResponse {
+    fn from(membership: WorkspaceMembership) -> Self {
         Self {
             user_id: Uuid::from(membership.user_id),
             workspace_id: Uuid::from(membership.workspace_id),

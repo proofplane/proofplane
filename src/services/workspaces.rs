@@ -86,22 +86,24 @@ impl WorkspaceService {
             .await?)
     }
 
-    /// An actor may manage members when they are an `owner` or `admin` of the
-    /// workspace. A non-member, an unknown workspace, and an under-privileged
-    /// member all yield `Forbidden`, which the API layer maps to 404 so none is
+    /// Reads the actor's role and defers the decision to `WorkspaceMemberPolicy`.
+    /// A non-member, an unknown workspace, and an under-privileged member all
+    /// yield `Forbidden`, which the API layer maps to 404 so none is
     /// distinguishable — no existence is leaked.
     async fn authorize_member_management(
         &self,
         workspace_id: WorkspaceId,
         actor_user_id: UserId,
     ) -> Result<(), MemberError> {
-        match self
+        let role = self
             .repository
             .get_membership_role(workspace_id, actor_user_id)
-            .await?
-        {
-            Some(WorkspaceRole::Owner | WorkspaceRole::Admin) => Ok(()),
-            _ => Err(MemberError::Forbidden),
+            .await?;
+
+        if WorkspaceMemberPolicy::can_manage_members(role) {
+            Ok(())
+        } else {
+            Err(MemberError::Forbidden)
         }
     }
 
@@ -169,5 +171,39 @@ impl WorkspaceService {
             RemoveOutcome::LastOwner => Err(MemberError::LastOwner),
             RemoveOutcome::Removed => Ok(()),
         }
+    }
+}
+
+/// Authorization decisions for workspace member management, expressed as pure
+/// functions over the actor's role. Keeping the rules here gives membership
+/// policy one home as more checks are added, rather than scattering role
+/// matching across routes and services.
+pub struct WorkspaceMemberPolicy;
+
+impl WorkspaceMemberPolicy {
+    /// Owners and admins may add and remove members. A non-member (no role) may
+    /// not.
+    pub fn can_manage_members(role: Option<WorkspaceRole>) -> bool {
+        matches!(role, Some(WorkspaceRole::Owner | WorkspaceRole::Admin))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owners_and_admins_can_manage_members() {
+        assert!(WorkspaceMemberPolicy::can_manage_members(Some(
+            WorkspaceRole::Owner
+        )));
+        assert!(WorkspaceMemberPolicy::can_manage_members(Some(
+            WorkspaceRole::Admin
+        )));
+    }
+
+    #[test]
+    fn non_members_cannot_manage_members() {
+        assert!(!WorkspaceMemberPolicy::can_manage_members(None));
     }
 }
