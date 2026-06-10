@@ -131,6 +131,7 @@ impl From<ServiceError> for ApiError {
 impl From<MemberError> for ApiError {
     fn from(error: MemberError) -> Self {
         match error {
+            MemberError::Forbidden => ApiError::NotFound,
             MemberError::NotFound => ApiError::NotFound,
             MemberError::TargetUserNotFound => {
                 ApiError::BadRequest(vec!["user_id does not reference a known user".to_owned()])

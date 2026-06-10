@@ -102,7 +102,6 @@ async fn add_member<V: TokenVerifier>(
     Json(body): Json<AddMemberRequest>,
 ) -> Result<Json<WorkspaceMembershipResponse>, ApiError> {
     let workspace_id = WorkspaceId::from(path.workspace_id);
-    ensure_can_manage_members(&state, workspace_id, user.user_id).await?;
 
     let role = body
         .role
@@ -113,7 +112,10 @@ async fn add_member<V: TokenVerifier>(
         role,
     };
 
-    let membership = state.service.add_member(workspace_id, payload).await?;
+    let membership = state
+        .service
+        .add_member(workspace_id, user.user_id, payload)
+        .await?;
 
     Ok(Json(membership.into()))
 }
@@ -124,34 +126,13 @@ async fn remove_member<V: TokenVerifier>(
     Path(path): Path<MemberPath>,
 ) -> Result<Response, ApiError> {
     let workspace_id = WorkspaceId::from(path.workspace_id);
-    ensure_can_manage_members(&state, workspace_id, user.user_id).await?;
 
     state
         .service
-        .remove_member(workspace_id, UserId::from(path.user_id))
+        .remove_member(workspace_id, user.user_id, UserId::from(path.user_id))
         .await?;
 
     Ok(Response::new(axum::body::Body::empty()))
-}
-
-/// Returns `NotFound` (404) when the caller cannot manage members so that an
-/// absent workspace, a non-member caller, and a member without management
-/// rights are indistinguishable — no existence is leaked. A repository error
-/// surfaces as 500, never 404.
-async fn ensure_can_manage_members<V: TokenVerifier>(
-    state: &WorkspacesState<V>,
-    workspace_id: WorkspaceId,
-    user_id: UserId,
-) -> Result<(), ApiError> {
-    if state
-        .service
-        .can_manage_members(workspace_id, user_id)
-        .await?
-    {
-        Ok(())
-    } else {
-        Err(ApiError::NotFound)
-    }
 }
 
 #[derive(Debug, Deserialize)]

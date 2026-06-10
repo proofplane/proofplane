@@ -22,6 +22,9 @@ pub struct WorkspaceService {
 
 #[derive(Debug, Error)]
 pub enum MemberError {
+    #[error("the actor may not manage workspace members")]
+    Forbidden,
+
     #[error("workspace membership not found")]
     NotFound,
 
@@ -83,27 +86,34 @@ impl WorkspaceService {
             .await?)
     }
 
-    /// A caller may manage members when they are an `owner` or `admin` of the
-    /// workspace. Returns `false` for non-members and unknown workspaces alike,
-    /// which the route maps to 404 so neither is distinguishable.
-    pub async fn can_manage_members(
+    /// An actor may manage members when they are an `owner` or `admin` of the
+    /// workspace. A non-member, an unknown workspace, and an under-privileged
+    /// member all yield `Forbidden`, which the API layer maps to 404 so none is
+    /// distinguishable — no existence is leaked.
+    async fn authorize_member_management(
         &self,
         workspace_id: WorkspaceId,
-        user_id: UserId,
-    ) -> Result<bool, ServiceError> {
-        Ok(matches!(
-            self.repository
-                .get_membership_role(workspace_id, user_id)
-                .await?,
-            Some(WorkspaceRole::Owner | WorkspaceRole::Admin)
-        ))
+        actor_user_id: UserId,
+    ) -> Result<(), MemberError> {
+        match self
+            .repository
+            .get_membership_role(workspace_id, actor_user_id)
+            .await?
+        {
+            Some(WorkspaceRole::Owner | WorkspaceRole::Admin) => Ok(()),
+            _ => Err(MemberError::Forbidden),
+        }
     }
 
     pub async fn add_member(
         &self,
         workspace_id: WorkspaceId,
+        actor_user_id: UserId,
         payload: AddMemberPayload,
     ) -> Result<WorkspaceMembership, MemberError> {
+        self.authorize_member_management(workspace_id, actor_user_id)
+            .await?;
+
         if !self.repository.user_exists(payload.user_id).await? {
             return Err(MemberError::TargetUserNotFound);
         }
@@ -126,8 +136,12 @@ impl WorkspaceService {
     pub async fn remove_member(
         &self,
         workspace_id: WorkspaceId,
+        actor_user_id: UserId,
         target_user_id: UserId,
     ) -> Result<(), MemberError> {
+        self.authorize_member_management(workspace_id, actor_user_id)
+            .await?;
+
         let outcome = self
             .repository
             .in_transaction(async move |context| {
