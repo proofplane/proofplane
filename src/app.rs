@@ -6,7 +6,7 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::{ApiKeyAuthenticator, UserAuthenticator},
+    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, UserAuthenticator},
     authorization::workspaces::WorkspaceAuthorizer,
     config::AppConfig,
     object_storage::FilesystemObjectStore,
@@ -24,21 +24,23 @@ use crate::{
     },
     services::{
         controls::ControlService, evidence_requests::EvidenceRequestService,
-        evidence_submissions::EvidenceSubmissionService,
+        evidence_submissions::EvidenceSubmissionService, user::UserService,
     },
 };
 
-pub struct AppDependencies {
+pub struct AppDependencies<V: TokenVerifier> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
-    pub user_authenticator: UserAuthenticator,
+    pub user_authenticator: UserAuthenticator<V>,
     pub workspace_authorizer: WorkspaceAuthorizer,
 }
 
-pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authentication::Error> {
+pub fn create_app<V: TokenVerifier + 'static>(
+    dependencies: AppDependencies<V>,
+) -> Result<Router, crate::authentication::Error> {
     let live_path = dependencies.config.health.live_path.clone();
     let ready_path = dependencies.config.health.ready_path.clone();
 
@@ -83,7 +85,7 @@ pub fn create_app(dependencies: AppDependencies) -> Result<Router, crate::authen
             },
         }))
         .merge(me::router(MeState {
-            repository: dependencies.postgres.clone(),
+            service: UserService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator,
             },

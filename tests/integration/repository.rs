@@ -414,7 +414,7 @@ async fn mapping_repository_create_returns_mapping_and_masks_guarded_absence() {
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
     let other_actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
     let control = postgres
         .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context.create_control(&control_payload("PP-MAP-01")).await
@@ -485,7 +485,7 @@ async fn evidence_submission_create_scopes_to_workspace_and_records_context_acto
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
     let other_actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
 
     let submission = postgres
         .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
@@ -531,8 +531,8 @@ async fn evidence_submission_detail_starts_with_empty_attachment_list() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
 
     let detail = postgres
         .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
@@ -552,8 +552,8 @@ async fn evidence_attachment_create_scopes_to_workspace_and_creates_pending_uplo
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
     let other_actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
 
     let attachment = postgres
         .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
@@ -611,9 +611,9 @@ async fn evidence_submission_detail_includes_attachments_with_upload_status() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
-    let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
 
     let detail = postgres
         .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
@@ -632,8 +632,8 @@ async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_ke
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
     let attachment = create_repository_attachment(postgres, actor, submission.id).await;
 
     let work = postgres
@@ -663,9 +663,9 @@ async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_upl
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
-    let attachment = create_repository_attachment(postgres, actor.clone(), submission.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
     let quarantine_key = attachment.object_key.clone();
     let work = postgres
         .load_pending_attachment_upload_work(attachment.id, &quarantine_key)
@@ -783,9 +783,9 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let submission = create_repository_submission(postgres, actor.clone(), request.id).await;
-    let malicious = create_repository_attachment(postgres, actor.clone(), submission.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let malicious = create_repository_attachment(postgres, actor, submission.id).await;
     let failed = postgres
         .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
@@ -848,9 +848,9 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
     let other_actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor.clone()).await;
-    let first = create_repository_submission(postgres, actor.clone(), request.id).await;
-    let latest = create_repository_submission(postgres, actor.clone(), request.id).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let first = create_repository_submission(postgres, actor, request.id).await;
+    let latest = create_repository_submission(postgres, actor, request.id).await;
 
     set_submission_received_at(postgres, first.id, Utc::now() - Duration::days(1)).await;
     set_submission_received_at(postgres, latest.id, Utc::now()).await;
@@ -984,8 +984,8 @@ async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failur
     let postgres = app.postgres();
     let actor = repository_actor_context(&app).await;
 
-    let first = append_outbox(postgres, actor.clone(), "first").await;
-    let second = append_outbox(postgres, actor.clone(), "second").await;
+    let first = append_outbox(postgres, actor, "first").await;
+    let second = append_outbox(postgres, actor, "second").await;
     let future = append_outbox(postgres, actor, "future").await;
 
     set_outbox_next_available_at(postgres, first.id, Utc::now() - Duration::minutes(5)).await;

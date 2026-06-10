@@ -5,29 +5,17 @@ use tracing::Span;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{ActorContext, ApiKeyAuthenticator, AuthError, UserAuthenticator},
-    domain::{ActorId, UserId, WorkspaceId},
+    authentication::{
+        auth0::TokenVerifier, ActorContext, ApiKeyAuthenticator, AuthError, UserAuthenticator,
+        UserContext,
+    },
+    domain::{ActorId, WorkspaceId},
     routes::error::ApiError,
 };
 
 pub const ACTOR_ID_HEADER: &str = "x-proofplane-actor-id";
 pub const API_KEY_HEADER: &str = "x-proofplane-api-key";
 pub const AUTHORIZATION_HEADER: &str = "authorization";
-
-/**
- * UserContext represents an authenticated human management-plane identity.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserContext {
-    pub user_id: UserId,
-    pub auth0_sub: String,
-}
-
-impl UserContext {
-    pub fn new(user_id: UserId, auth0_sub: String) -> Self {
-        Self { user_id, auth0_sub }
-    }
-}
 
 pub(in crate::routes) async fn authorize_workspace_route(
     authenticator: &ApiKeyAuthenticator,
@@ -54,18 +42,18 @@ pub(in crate::routes) async fn authorize_workspace_route(
     Ok(actor)
 }
 
-pub(in crate::routes) async fn authenticate_user(
-    authenticator: &UserAuthenticator,
+pub(in crate::routes) async fn authenticate_user<V: TokenVerifier>(
+    authenticator: &UserAuthenticator<V>,
     request: &mut Request,
 ) -> Result<UserContext, ApiError> {
     let token = bearer_token_from_request(request).ok_or(ApiError::Unauthorized)?;
     let user = authenticator.authenticate(&token).await.map_err(|error| {
         if let AuthError::Unauthorized(_) = error {
-            ApiError::Unauthorized
-        } else {
-            tracing::error!(%error, "user authentication failed");
-            ApiError::Internal
+            return ApiError::Unauthorized;
         }
+
+        tracing::error!(%error, "user authentication failed");
+        ApiError::Internal
     })?;
 
     attach_user_context(request, user.clone());

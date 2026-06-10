@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     extract::{Request, State},
     middleware::{self, Next},
@@ -12,40 +10,52 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    authentication::UserAuthenticator,
+    authentication::{auth0::TokenVerifier, UserAuthenticator, UserContext},
     domain::User,
-    repository::Postgres,
-    routes::{
-        authentication::{authenticate_user, UserContext},
-        error::ApiError,
-    },
+    routes::{authentication::authenticate_user, error::ApiError},
+    services::user::UserService,
 };
 
-#[derive(Clone)]
-pub struct MeState {
-    pub repository: Arc<Postgres>,
-    pub route_auth: UserRouteAuthState,
+pub struct MeState<V: TokenVerifier> {
+    pub service: UserService,
+    pub route_auth: UserRouteAuthState<V>,
 }
 
-#[derive(Clone)]
-pub struct UserRouteAuthState {
-    pub authenticator: UserAuthenticator,
+impl<V: TokenVerifier> Clone for MeState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+            route_auth: self.route_auth.clone(),
+        }
+    }
 }
 
-pub fn router(state: MeState) -> Router {
+pub struct UserRouteAuthState<V: TokenVerifier> {
+    pub authenticator: UserAuthenticator<V>,
+}
+
+impl<V: TokenVerifier> Clone for UserRouteAuthState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            authenticator: self.authenticator.clone(),
+        }
+    }
+}
+
+pub fn router<V: TokenVerifier + 'static>(state: MeState<V>) -> Router {
     let route_auth = state.route_auth.clone();
 
     Router::new()
-        .route("/me", get(get_me))
+        .route("/me", get(get_me::<V>))
         .route_layer(middleware::from_fn_with_state(
             route_auth,
-            authenticate_user_route,
+            authenticate_user_route::<V>,
         ))
         .with_state(state)
 }
 
-async fn authenticate_user_route(
-    State(state): State<UserRouteAuthState>,
+async fn authenticate_user_route<V: TokenVerifier>(
+    State(state): State<UserRouteAuthState<V>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
@@ -54,18 +64,14 @@ async fn authenticate_user_route(
     Ok(next.run(request).await)
 }
 
-async fn get_me(
-    State(state): State<MeState>,
+async fn get_me<V: TokenVerifier>(
+    State(state): State<MeState<V>>,
     Extension(user): Extension<UserContext>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let user = state
-        .repository
+        .service
         .get_user(user.user_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to load authenticated user");
-            ApiError::Internal
-        })?
+        .await?
         .ok_or(ApiError::NotFound)?;
 
     Ok(Json(user.into()))

@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
-    domain::{ActorId, ActorWithApiCredential, ProvisionUserPayload, WorkspaceId},
+    domain::{ActorId, ActorWithApiCredential, ProvisionUserPayload, UserId, WorkspaceId},
     repository,
 };
 
@@ -23,6 +23,19 @@ pub struct ActorContext {
 impl ActorContext {
     pub fn new(workspace_id: WorkspaceId, id: ActorId) -> Self {
         Self { workspace_id, id }
+    }
+}
+
+/// An authenticated human management-plane identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserContext {
+    pub user_id: UserId,
+    pub auth0_sub: String,
+}
+
+impl UserContext {
+    pub fn new(user_id: UserId, auth0_sub: String) -> Self {
+        Self { user_id, auth0_sub }
     }
 }
 
@@ -119,14 +132,22 @@ impl ApiKeyAuthenticator {
     }
 }
 
-#[derive(Clone)]
-pub struct UserAuthenticator {
-    verifier: Arc<dyn TokenVerifier>,
+pub struct UserAuthenticator<V: TokenVerifier> {
+    verifier: Arc<V>,
     repository: Arc<repository::Postgres>,
 }
 
-impl UserAuthenticator {
-    pub fn new(verifier: Arc<dyn TokenVerifier>, repository: Arc<repository::Postgres>) -> Self {
+impl<V: TokenVerifier> Clone for UserAuthenticator<V> {
+    fn clone(&self) -> Self {
+        Self {
+            verifier: self.verifier.clone(),
+            repository: self.repository.clone(),
+        }
+    }
+}
+
+impl<V: TokenVerifier> UserAuthenticator<V> {
+    pub fn new(verifier: Arc<V>, repository: Arc<repository::Postgres>) -> Self {
         Self {
             verifier,
             repository,
@@ -134,13 +155,11 @@ impl UserAuthenticator {
     }
 
     pub async fn authenticate(&self, token: &str) -> Result<UserContext, AuthError> {
-        let claims = self.verifier.verify(token).await.map_err(|error| {
-            if error.is_token_rejection() {
-                AuthError::Unauthorized(error)
-            } else {
-                AuthError::VerifierUnavailable(error)
-            }
-        })?;
+        let claims = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(AuthError::from_verify)?;
 
         let user = self
             .repository
@@ -164,6 +183,16 @@ pub enum AuthError {
     VerifierUnavailable(#[source] VerifyError),
     #[error("user provisioning failed")]
     Repository(#[source] repository::Error),
+}
+
+impl AuthError {
+    fn from_verify(error: VerifyError) -> Self {
+        if error.is_token_rejection() {
+            return Self::Unauthorized(error);
+        }
+
+        Self::VerifierUnavailable(error)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

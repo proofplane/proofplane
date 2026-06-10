@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use api_keys_simplified::{Environment, ExposeSecret};
+use async_trait::async_trait;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -13,9 +14,9 @@ use proofplane::{
     },
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
-        AppConfig, Auth0Config, HealthConfig, HostPort, LogFormat, ObjectStorageConfig,
-        ObservabilityConfig, PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig,
-        UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -46,7 +47,7 @@ pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
 /// `email`/`name` claims so JIT provisioning can be exercised without a profile.
 pub struct FakeTokenVerifier;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl TokenVerifier for FakeTokenVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
         if token.is_empty() || token == "invalid" {

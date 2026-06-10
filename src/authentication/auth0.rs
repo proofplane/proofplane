@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use jwtk::jwk::RemoteJwksVerifier;
 use jwtk::Claims;
 use serde::{Deserialize, Serialize};
@@ -40,7 +41,7 @@ impl VerifyError {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 pub trait TokenVerifier: Send + Sync {
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError>;
 }
@@ -81,7 +82,7 @@ impl Auth0TokenVerifier {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl TokenVerifier for Auth0TokenVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
         let verified = match &self.backend {

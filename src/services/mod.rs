@@ -3,6 +3,7 @@ use thiserror::Error;
 pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;
+pub mod user;
 
 #[derive(Debug, Error)]
 pub enum Error {
