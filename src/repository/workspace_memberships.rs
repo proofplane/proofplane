@@ -163,15 +163,6 @@ ORDER BY w.created_at, w.id
 
         rows.into_iter().map(workspace_with_role_from_row).collect()
     }
-
-    pub async fn user_exists(&self, user_id: UserId) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query("SELECT 1 FROM users WHERE id = $1", &[&Uuid::from(user_id)])
-            .await?;
-
-        Ok(!rows.is_empty())
-    }
 }
 
 fn membership_from_row(row: Row) -> Result<WorkspaceMembership, Error> {

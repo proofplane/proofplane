@@ -3,10 +3,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    domain::{
-        AddMemberPayload, CreateWorkspacePayload, UserId, WorkspaceId, WorkspaceMembership,
-        WorkspaceRole, WorkspaceWithRole,
-    },
+    domain::{CreateWorkspacePayload, UserId, WorkspaceId, WorkspaceRole, WorkspaceWithRole},
     repository::{NewWorkspaceMembership, Postgres},
     services::Error as ServiceError,
 };
@@ -27,9 +24,6 @@ pub enum MemberError {
 
     #[error("workspace membership not found")]
     NotFound,
-
-    #[error("the target user has never authenticated")]
-    TargetUserNotFound,
 
     #[error("the workspace must retain at least one owner")]
     LastOwner,
@@ -105,34 +99,6 @@ impl WorkspaceService {
         } else {
             Err(MemberError::Forbidden)
         }
-    }
-
-    pub async fn add_member(
-        &self,
-        workspace_id: WorkspaceId,
-        actor_user_id: UserId,
-        payload: AddMemberPayload,
-    ) -> Result<WorkspaceMembership, MemberError> {
-        self.authorize_member_management(workspace_id, actor_user_id)
-            .await?;
-
-        if !self.repository.user_exists(payload.user_id).await? {
-            return Err(MemberError::TargetUserNotFound);
-        }
-
-        let AddMemberPayload { user_id, role } = payload;
-        Ok(self
-            .repository
-            .in_transaction(async move |context| {
-                context
-                    .insert_workspace_membership(&NewWorkspaceMembership {
-                        user_id,
-                        workspace_id,
-                        role,
-                    })
-                    .await
-            })
-            .await?)
     }
 
     pub async fn remove_member(

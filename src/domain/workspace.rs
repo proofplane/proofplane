@@ -51,12 +51,6 @@ pub struct WorkspaceWithRole {
     pub role: WorkspaceRole,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddMemberPayload {
-    pub user_id: UserId,
-    pub role: WorkspaceRole,
-}
-
 /**
  * Workspace is the tenant boundary. Most things are basically scoped
  * to workspaces, excepting global things like frameworks which are universal.

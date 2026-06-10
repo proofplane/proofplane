@@ -166,13 +166,19 @@ boundary also lets tests inject a fake verifier instead of calling live Auth0. N
 ```
 POST   /workspaces                                              create + auto-own (self-onboard)
 GET    /workspaces                                              list mine
-POST   /workspaces/{id}/members                                 manage_members
 DELETE /workspaces/{id}/members/{user_id}                       manage_members
 POST   /workspaces/{id}/actors                                  manage_actors
 GET    /workspaces/{id}/actors                                  manage_actors
 POST   /workspaces/{id}/actors/{actor_id}/credentials          issue key (raw key shown ONCE)
 DELETE /workspaces/{id}/actors/{actor_id}/credentials/{cred_id} revoke
 ```
+
+_(Revised after ticket 002 — `POST /workspaces/{id}/members` was dropped. It added
+a member by internal `user_id`, which no caller can obtain and which cannot
+onboard anyone who has not already logged in — an unusable flow. A realistic
+invite-by-email onboarding flow is the intended replacement but is not yet scoped;
+`DELETE .../members/{user_id}` (remove-member) stays. The membership-insert
+capability the endpoint wrapped is retained for that future flow.)_
 
 `POST /workspaces` is the bootstrap: it is authenticated by user identity but is
 **not** workspace-scoped, and it atomically makes the creator the `owner`. This
