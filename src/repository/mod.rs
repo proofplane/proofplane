@@ -4,6 +4,7 @@ use crate::domain::{ActorId, WorkspaceId};
 
 mod actors;
 mod api_credentials;
+pub mod constraints;
 mod controls;
 pub mod error;
 mod evidence_requests;
@@ -13,6 +14,7 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
+pub use constraints::ConflictKind;
 pub use error::Error;
 pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
 pub use outbox::{NewOutboxMessage, OutboxMessage};

@@ -13,7 +13,4 @@ pub enum Error {
 
     #[error("object storage error")]
     Storage(#[from] crate::object_storage::StorageError),
-
-    #[error("invalid framework requirement references")]
-    InvalidFrameworkRequirementReferences,
 }

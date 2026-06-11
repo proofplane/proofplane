@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::{CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId};
 
-use super::{Error, Postgres, TransactionContext};
+use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
 
 impl TransactionContext<'_> {
     pub async fn create_workspace(
@@ -25,7 +25,8 @@ RETURNING
 "#,
                 &[&id, &workspace.slug, &workspace.name],
             )
-            .await?;
+            .await
+            .map_err(classify_db_error)?;
 
         workspace_from_row(row)
     }
@@ -52,7 +53,8 @@ RETURNING
 "#,
                 &[&id, &workspace.slug, &workspace.name],
             )
-            .await?;
+            .await
+            .map_err(classify_db_error)?;
 
         workspace_from_row(row)
     }
@@ -119,7 +121,8 @@ RETURNING
 "#,
                 &[&Uuid::from(id), &update.slug, &update.name],
             )
-            .await?;
+            .await
+            .map_err(classify_db_error)?;
 
         rows.into_iter().next().map(workspace_from_row).transpose()
     }

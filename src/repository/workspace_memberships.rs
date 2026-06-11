@@ -1,12 +1,12 @@
 use deadpool_postgres::GenericClient;
-use tokio_postgres::{error::SqlState, Row};
+use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
     UserId, Workspace, WorkspaceId, WorkspaceMembership, WorkspaceRole, WorkspaceWithRole,
 };
 
-use super::{Error, Postgres, TransactionContext};
+use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewWorkspaceMembership {
@@ -35,7 +35,7 @@ RETURNING user_id, workspace_id, role, created_at
                 ],
             )
             .await
-            .map_err(membership_insert_error)?;
+            .map_err(classify_db_error)?;
 
         membership_from_row(row)
     }
@@ -194,15 +194,4 @@ fn role_from_value(value: String) -> Result<WorkspaceRole, Error> {
     value
         .parse()
         .map_err(|_| Error::InvariantViolation("unknown workspace membership role"))
-}
-
-fn membership_insert_error(error: tokio_postgres::Error) -> Error {
-    if error
-        .as_db_error()
-        .is_some_and(|db_error| db_error.code() == &SqlState::UNIQUE_VIOLATION)
-    {
-        return Error::Conflict("user is already a member of this workspace");
-    }
-
-    Error::Database(error)
 }

@@ -1,4 +1,4 @@
-use tokio_postgres::{error::SqlState, Row};
+use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     repository::{ActorReadContext, ActorTransactionContext, Postgres},
 };
 
-use super::Error;
+use super::{constraints::classify_db_error, Error};
 
 impl Postgres {
     pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
@@ -96,7 +96,7 @@ RETURNING id
                 ],
             )
             .await
-            .map_err(control_insert_error)?;
+            .map_err(classify_db_error)?;
         let control_id = ControlId::from(row.try_get::<_, Uuid>("id")?);
 
         self.replace_control_framework_requirement_mappings(
@@ -138,7 +138,7 @@ RETURNING id
                 ],
             )
             .await
-            .map_err(control_insert_error)?;
+            .map_err(classify_db_error)?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -178,7 +178,7 @@ RETURNING evidence_request_id, control_id
                 ],
             )
             .await
-            .map_err(mapping_insert_error)?;
+            .map_err(classify_db_error)?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -537,26 +537,4 @@ fn evidence_request_control_mapping_from_joined_row(
         Ok(None) => None,
         Err(error) => Some(Err(Error::Database(error))),
     }
-}
-
-fn control_insert_error(error: tokio_postgres::Error) -> Error {
-    if error
-        .as_db_error()
-        .is_some_and(|db_error| db_error.code() == &SqlState::UNIQUE_VIOLATION)
-    {
-        return Error::Conflict("duplicate control code");
-    }
-
-    Error::Database(error)
-}
-
-fn mapping_insert_error(error: tokio_postgres::Error) -> Error {
-    if error
-        .as_db_error()
-        .is_some_and(|db_error| db_error.code() == &SqlState::UNIQUE_VIOLATION)
-    {
-        return Error::Conflict("duplicate Evidence Request-control mapping");
-    }
-
-    Error::Database(error)
 }

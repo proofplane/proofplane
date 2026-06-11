@@ -107,6 +107,40 @@ async fn cannot_remove_the_last_owner() {
     assert_eq!(membership_role(&app, workspace_id, alice_id).await, None);
 }
 
+#[tokio::test]
+async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
+    let app = TestApp::start_without_default_auth().await;
+    let alice = "auth0|alice-slug";
+    app.login(alice).await;
+
+    create_workspace_with_slug(&app, alice, "First Workspace", "acme")
+        .await
+        .assert_status_ok();
+
+    let conflict = create_workspace_with_slug(&app, alice, "Second Workspace", "acme").await;
+    assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
+
+    let body = conflict.json::<Value>();
+    assert_eq!(body["error"]["code"], "slug_taken");
+    assert_eq!(
+        body["error"]["message"],
+        "a workspace with this slug already exists"
+    );
+}
+
+async fn create_workspace_with_slug(
+    app: &TestApp,
+    sub: &str,
+    name: &str,
+    slug: &str,
+) -> axum_test::TestResponse {
+    app.server()
+        .post("/workspaces")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+        .json(&json!({ "name": name, "slug": slug }))
+        .await
+}
+
 async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
     let response = app
         .server()

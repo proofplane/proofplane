@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     domain::{CreateWorkspacePayload, UserId, WorkspaceId, WorkspaceRole, WorkspaceWithRole},
-    repository::{NewWorkspaceMembership, Postgres},
+    repository::{ConflictKind, Error as RepositoryError, NewWorkspaceMembership, Postgres},
     services::Error as ServiceError,
 };
 
@@ -32,6 +32,24 @@ pub enum MemberError {
     Repository(#[from] crate::repository::Error),
 }
 
+#[derive(Debug, Error)]
+pub enum CreateWorkspaceError {
+    #[error("a workspace with this slug already exists")]
+    SlugTaken,
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for CreateWorkspaceError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::Conflict(ConflictKind::WorkspaceSlugTaken) => Self::SlugTaken,
+            other => Self::Repository(other),
+        }
+    }
+}
+
 enum RemoveOutcome {
     Removed,
     NotFound,
@@ -47,7 +65,7 @@ impl WorkspaceService {
         &self,
         user_id: UserId,
         payload: CreateWorkspacePayload,
-    ) -> Result<WorkspaceWithRole, ServiceError> {
+    ) -> Result<WorkspaceWithRole, CreateWorkspaceError> {
         let workspace = self
             .repository
             .in_transaction(async move |context| {
