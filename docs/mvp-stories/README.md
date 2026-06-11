@@ -1,5 +1,10 @@
 # Proofplane MVP Story Backlog
 
+> Historical plan. Remaining MVP work is now planned and tracked in
+> [docs/epics](../epics/README.md). Keep these stories as implementation history
+> and original intent; update active status, sequencing, and scope in the epic
+> specs and tickets.
+
 This directory is an ordered, file-based execution plan for the Proofplane MVP. Treat each markdown file as a story inside one long-running epic.
 
 The sequence intentionally front-loads platform scaffolding before product features:
@@ -22,7 +27,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 014. [GCS Object Storage Adapter](./014-gcs-object-storage-adapter.md) | Partial | Filesystem-backed local/test object storage is implemented and used by attachment uploads; the production GCS adapter remains open. |
 | 015. [Evidence Requests Domain](./015-evidence-requirements-domain.md) | Done | Evidence Request domain, migration, seed data, service, REST endpoints, and integration tests are in place. |
 | 016. [Controls and Requirement Mappings](./016-controls-and-requirement-mappings.md) | Done | Control registry, SOC 2 reference data, durable Evidence Request-control mappings, authz, seed data, and integration coverage are in place. Event emission remains deferred until specific product event contracts are added. |
-| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment lifecycle status, scan-request outbox dispatch, scanner boundary, and idempotent scan/finalization workers are in place; download enforcement, latest-submission API, audit polish, and seed data remain open. |
+| 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment lifecycle status, scan-request outbox dispatch, scanner boundary, and idempotent scan/finalization workers are in place; remaining product work moved to the [Evidence Lifecycle Completion epic](../epics/evidence-lifecycle-completion/README.md), with audit owned separately. |
 | 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
 | 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |

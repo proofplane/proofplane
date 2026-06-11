@@ -16,8 +16,9 @@ deletes the quarantine copy. Scan and finalization handlers use the concrete
 Postgres repository. Their database transitions, retry behavior, idempotency,
 and failure rollback are covered by integration tests rather than repository
 fakes in handler unit tests.
-Download enforcement, malware scanner adapters, latest-submission API, audit
-polish, and seed data remain open.
+Download enforcement, latest-submission API, and seed data remain open. Audit
+emission is now planned in the
+[Audit Trail epic](../epics/audit-trail/README.md).
 
 ## Goal
 
