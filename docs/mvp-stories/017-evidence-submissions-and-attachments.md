@@ -61,10 +61,11 @@ attachment usable. Workspaces should be organized by dedicated object key
 prefixes rather than separate buckets in the MVP.
 
 Document uploads must pass through ClamAV before they can be treated as usable
-evidence. The worker depends directly on `ClamAvMalwareScanner`, which loads the
-filesystem-backed quarantined object into memory and sends it to clamd using
-bounded `INSTREAM` protocol chunks. ClamAV is required in every worker
-environment; there is no noop or disabled scanner mode.
+evidence. The worker depends directly on `ClamAvMalwareScanner`. The scan handler
+streams the filesystem-backed quarantined object to clamd after validating its
+stored metadata, and the scanner sends bounded `INSTREAM` protocol frames.
+ClamAV is required in every worker environment; there is no noop or disabled
+scanner mode.
 
 The current MVP stores the attachment lifecycle directly in
 `evidence_attachments.upload_status`:

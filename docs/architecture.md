@@ -203,9 +203,11 @@ Production GCS support is planned in MVP story
 
 The worker uses the concrete `ClamAvMalwareScanner`. Its required configuration
 contains the clamd TCP address plus connection and scan timeouts. There is no
-disabled mode or runtime scanner selection. The concrete scanner owns the
-filesystem object store, buffers the existing `ObjectStore::get_object` result,
-and sends bounded chunks with clamd's `INSTREAM` protocol.
+disabled mode or runtime scanner selection. The scan handler opens the
+quarantined object, validates its stored metadata against the attachment record,
+and streams bounded storage chunks to the scanner. The scanner only owns clamd
+connection, timeout, protocol, and response handling and subdivides input into
+bounded `INSTREAM` frames.
 
 ### `src/authentication` and `src/routes/authentication.rs`
 
