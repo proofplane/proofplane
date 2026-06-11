@@ -15,6 +15,7 @@ Initial tools:
 - `list_due_evidence_requests`
 - `submit_evidence_for_requirement`
 - `get_submission_status`
+- `create_attachment_download_grant`
 - `get_latest_approved_submission`
 - `approve_evidence_submission`
 - `reject_evidence_submission`

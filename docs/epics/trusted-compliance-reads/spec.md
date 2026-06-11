@@ -58,12 +58,14 @@ A packet is generated for one workspace and one or more controls. It contains:
 - control and framework-requirement mappings;
 - mapped Evidence Requests and schedule/freshness state;
 - latest submission metadata and attachment inventory;
-- downloadable links only for uploaded attachments;
+- grant-creation actions only for uploaded attachments;
 - linked curated source material with freshness and provenance;
 - actor and provenance fields carried by the underlying records;
 - generation timestamp and requested-by actor.
 
-The first API returns JSON suitable for product preview. Export produces a ZIP
+The first API returns JSON suitable for product preview. It does not contain
+persistent or pre-generated download URLs; a caller requests a fresh grant for
+an eligible attachment when a human chooses to inspect it. Export produces a ZIP
 containing a JSON manifest, a Markdown summary, and uploaded attachment bytes.
 Quarantined or failed objects are never included. Packet generation is a read;
 the ZIP may stream directly and need not be persisted in the MVP.
@@ -80,7 +82,8 @@ POST /workspaces/{workspace_id}/auditor-packets/export
 ```
 
 Source-material writes require a new `write_source_material` permission; reads
-and packet generation require corresponding read/export permissions.
+and packet generation require corresponding read/export permissions. Attachment
+grant issuance reuses the evidence-submission read permission.
 
 ## Audit Logging
 

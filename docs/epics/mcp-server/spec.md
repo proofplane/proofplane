@@ -34,6 +34,7 @@ Read tools:
 - `list_due_evidence_requests`
 - `get_evidence_submission`
 - `get_latest_evidence_submission`
+- `create_attachment_download_grant`
 - `list_controls`
 - `list_evidence_request_control_mappings`
 - `find_source_material`
@@ -46,10 +47,16 @@ Write tools:
 - `remove_evidence_request_control_mapping`
 - `create_or_update_source_material`
 
-Binary attachment upload/download and packet ZIP transfer remain REST URLs. MCP
-returns the relevant attachment content endpoint or packet preview and tells the
-agent which REST operation carries bytes. Native approve/reject and derived
-control-status tools are not part of the MVP.
+`create_attachment_download_grant` is a read-classified tool because it does not
+change compliance data. It authorizes the current actor, verifies the attachment
+is finalized, and returns a short-lived Proofplane HTTPS URL for human
+inspection. The URL expires after five minutes and may be fetched more than once
+before expiry. The URL is a bearer secret; the tool result must tell the agent
+not to fetch, summarize, log, or persist it, only present it to the user. The
+attachment bytes do not pass through MCP or model context.
+
+Binary attachment upload and packet ZIP transfer remain HTTP operations. Native
+approve/reject and derived control-status tools are not part of the MVP.
 
 ## Errors And Equivalence
 
@@ -74,3 +81,5 @@ MVP.
   legacy story because those behaviors are not in the MVP domain model.
 - 2026-06-11: Removed database audit-history and agent-log tools in favor of
   structured application audit logs routed to Cloud Logging.
+- 2026-06-11: Added attachment download-grant issuance for human inspection;
+  attachment bytes do not pass through the MCP connection.

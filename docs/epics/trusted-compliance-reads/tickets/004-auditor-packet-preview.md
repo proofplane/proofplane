@@ -10,7 +10,8 @@ map to requests, latest evidence, curated material, and audit provenance.
 - [ ] Given selected workspace controls, when preview is requested, then the
   complete mapped evidence graph and freshness state are returned.
 - [ ] Given a control with missing or unusable evidence, when preview is
-  requested, then the gap is explicit and no quarantined link is exposed.
+  requested, then the gap is explicit and no quarantined or persistent download
+  link is exposed.
 - [ ] Given a missing, cross-workspace, or unauthorized control, when preview is
   requested, then `404` is returned.
 - [ ] Given a successful preview, when structured logs are inspected, then

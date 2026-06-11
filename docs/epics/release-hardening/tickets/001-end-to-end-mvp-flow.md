@@ -9,7 +9,8 @@ audit logging.
 **Acceptance criteria**
 
 - [ ] Given clean local dependencies, when the flow runs, then a finalized
-  attachment is downloadable and included in an auditor packet.
+  attachment receives a grant, downloads before expiry, fails after expiry, and
+  is included in an auditor packet.
 - [ ] Given the same records, when REST and MCP reads run, then they return
   equivalent domain outcomes.
 - [ ] Given the completed flow, when structured logs and metrics are inspected,

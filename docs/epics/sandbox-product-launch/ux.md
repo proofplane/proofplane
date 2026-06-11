@@ -36,7 +36,7 @@ Show:
 - mapped Evidence Requests;
 - latest evidence/freshness state or an explicit missing-evidence gap;
 - source-material provenance;
-- attachment inventory without exposing unusable download links;
+- attachment inventory with on-demand grants only for usable attachments;
 - actor and timestamps from record provenance.
 
 The preview should remain useful before a file is uploaded by clearly showing

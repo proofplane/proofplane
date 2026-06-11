@@ -183,7 +183,9 @@ Submissions must distinguish system receipt time from the evidence effective or 
 8. Concrete ClamAV scanning: require clamd, add connection and scan timeout
    settings, use buffered `INSTREAM` scans, and cover clean, malicious, failed,
    unavailable, and timeout outcomes. Implemented.
-9. Download and retrieval API: expose normal attachment download paths that  refuse pending, malicious, failed, and unfinalized attachments.
+9. Download grants: issue short-lived Proofplane URLs for finalized
+   attachments and refuse pending, malicious, failed, and unfinalized
+   attachments.
 10. Latest submission query/API, seed data, and audit polish: complete the
 latest-submission API surface, add audit records, and seed sample submission
 plus uploaded attachment metadata.

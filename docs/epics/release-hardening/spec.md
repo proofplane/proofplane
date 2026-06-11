@@ -15,7 +15,7 @@ The scripted flow:
 3. list due Evidence Requests and mapped controls;
 4. create a submission and upload an attachment;
 5. run dequeuer, worker, ClamAV scan, and finalization;
-6. retrieve latest submission and attachment content;
+6. retrieve the latest submission, issue a download grant, and download it;
 7. create/search trusted source material;
 8. preview and export an auditor packet;
 9. perform representative MCP reads/writes;

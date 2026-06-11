@@ -1,7 +1,7 @@
 # Evidence Lifecycle Completion Epic
 
 Finish the user-visible evidence lifecycle while preserving one rule: only a
-malware-scanned, finalized attachment is normal downloadable evidence.
+malware-scanned, finalized attachment can receive a human download grant.
 
 Full rationale and contracts live in [spec.md](./spec.md), the source of
 technical depth. Tickets below are lean handoff units that link into it.
@@ -11,14 +11,14 @@ technical depth. Tickets below are lean handoff units that link into it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Latest Submission API](./tickets/001-latest-submission-api.md) | Todo | Expose the repository query already implemented. |
-| 002. [Finalized Attachment Download](./tickets/002-finalized-attachment-download.md) | Todo | Stream only eligible finalized attachment content. |
+| 002. [Attachment Download Grants](./tickets/002-attachment-download-grants.md) | Todo | Issue short-lived human download URLs with direct GET. |
 | 003. [Evidence Demo Seed](./tickets/003-evidence-demo-seed.md) | Todo | Seed a deterministic submission and filesystem object. |
 | 004. [Evidence Audit Logs](./tickets/004-evidence-audit-logs.md) | Todo | Emit structured logs for submission and attachment lifecycle actions. |
 
 ## Sequencing
 
 - **001** and **002** can proceed in parallel on the existing evidence model.
-- **003** follows 002 so the seeded object is verifiable through the public
-  download contract.
+- **003** follows 002 so the seeded object is verifiable through the grant and
+  direct-download contract.
 - **004** depends on the shared Reliability and Observability audit-log contract
   and can instrument the existing operations independently of 001-003.

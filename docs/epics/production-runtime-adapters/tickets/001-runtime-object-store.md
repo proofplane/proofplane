@@ -8,7 +8,7 @@ and worker composition away from filesystem-only dependency types.
 **Acceptance criteria**
 
 - [ ] Given filesystem configuration, when API and worker start, then upload,
-  scan, finalization, and download behavior is unchanged.
+  scan, finalization, and download-grant redemption behavior is unchanged.
 - [ ] Given an unknown or invalid storage configuration, when startup occurs,
   then it fails before serving traffic with a clear error.
 - [ ] Given service and handler code, when this ships, then it contains no
