@@ -1,23 +1,18 @@
-use async_trait::async_trait;
+use std::{net::SocketAddr, pin::pin, time::Duration};
+
+use bytes::Bytes;
+use futures_core::Stream;
+use futures_util::StreamExt;
 use thiserror::Error;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    time::timeout,
+};
 
-use crate::object_storage::ObjectKey;
-
-#[async_trait]
-pub trait MalwareScanner {
-    async fn scan_object(
-        &self,
-        request: ScanObjectRequest,
-    ) -> Result<MalwareScanResult, MalwareScanError>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScanObjectRequest {
-    pub object_key: ObjectKey,
-    pub content_type: String,
-    pub content_length: u64,
-    pub sha256: String,
-}
+const INSTREAM_COMMAND: &[u8] = b"zINSTREAM\0";
+const INSTREAM_CHUNK_SIZE: usize = 1024 * 1024;
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MalwareScanResult {
@@ -33,161 +28,261 @@ pub enum MalwareScanOutcome {
     Failed { reason: String },
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum MalwareScanError {
-    #[error("object was not found in storage")]
-    ObjectNotFound,
-
     #[error("malware scanner is unavailable: {reason}")]
     Unavailable { reason: String },
 
     #[error("malware scanner timed out: {reason}")]
     Timeout { reason: String },
 
-    #[error("invalid malware scan request: {reason}")]
-    InvalidRequest { reason: String },
-
     #[error("internal malware scanner error: {reason}")]
     Internal { reason: String },
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoopMalwareScanner;
+#[derive(Debug)]
+pub struct ClamAvMalwareScanner {
+    address: SocketAddr,
+    connection_timeout: Duration,
+    scan_timeout: Duration,
+}
 
-#[async_trait]
-impl MalwareScanner for NoopMalwareScanner {
-    async fn scan_object(
-        &self,
-        _request: ScanObjectRequest,
-    ) -> Result<MalwareScanResult, MalwareScanError> {
-        Ok(MalwareScanResult {
-            scanner_name: "noop".to_owned(),
-            scanner_version: None,
-            outcome: MalwareScanOutcome::Clean,
-        })
+impl ClamAvMalwareScanner {
+    pub fn new(address: SocketAddr, connection_timeout: Duration, scan_timeout: Duration) -> Self {
+        Self {
+            address,
+            connection_timeout,
+            scan_timeout,
+        }
     }
+
+    pub async fn scan<S>(&self, chunks: S) -> Result<MalwareScanResult, MalwareScanError>
+    where
+        S: Stream<Item = Result<Bytes, MalwareScanError>> + Send,
+    {
+        let connection_attempt =
+            timeout(self.connection_timeout, TcpStream::connect(self.address)).await;
+        let connection = connection_attempt.map_err(|_| MalwareScanError::Timeout {
+            reason: format!(
+                "connection to clamd at {} exceeded {:?}",
+                self.address, self.connection_timeout
+            ),
+        })?;
+        let mut stream = connection.map_err(|error| MalwareScanError::Unavailable {
+            reason: format!("failed to connect to clamd at {}: {error}", self.address),
+        })?;
+
+        let scan_attempt = timeout(self.scan_timeout, scan_chunks(&mut stream, chunks)).await;
+        let scan_result = scan_attempt.map_err(|_| MalwareScanError::Timeout {
+            reason: format!("clamd scan exceeded {:?}", self.scan_timeout),
+        })?;
+        let response = scan_result?;
+
+        parse_response(&response)
+    }
+}
+
+async fn scan_chunks<S>(stream: &mut TcpStream, chunks: S) -> Result<Vec<u8>, MalwareScanError>
+where
+    S: Stream<Item = Result<Bytes, MalwareScanError>>,
+{
+    stream
+        .write_all(INSTREAM_COMMAND)
+        .await
+        .map_err(protocol_error)?;
+    let mut chunks = pin!(chunks);
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk?;
+        for frame in chunk.chunks(INSTREAM_CHUNK_SIZE) {
+            let frame_length =
+                u32::try_from(frame.len()).map_err(|_| MalwareScanError::Internal {
+                    reason: "INSTREAM frame length exceeds the protocol limit".to_owned(),
+                })?;
+            stream
+                .write_all(&frame_length.to_be_bytes())
+                .await
+                .map_err(protocol_error)?;
+            stream.write_all(frame).await.map_err(protocol_error)?;
+        }
+    }
+    stream
+        .write_all(&0_u32.to_be_bytes())
+        .await
+        .map_err(protocol_error)?;
+    stream.flush().await.map_err(protocol_error)?;
+
+    let mut response = Vec::new();
+    loop {
+        if response.len() >= MAX_RESPONSE_BYTES {
+            return Err(MalwareScanError::Internal {
+                reason: "clamd response exceeded maximum length".to_owned(),
+            });
+        }
+
+        let mut buffer = [0_u8; 1024];
+        let read = stream.read(&mut buffer).await.map_err(protocol_error)?;
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if response.contains(&0) {
+            break;
+        }
+    }
+
+    Ok(response)
+}
+
+fn protocol_error(error: std::io::Error) -> MalwareScanError {
+    MalwareScanError::Unavailable {
+        reason: format!("clamd protocol I/O failed: {error}"),
+    }
+}
+
+fn parse_response(response: &[u8]) -> Result<MalwareScanResult, MalwareScanError> {
+    let response = response
+        .split(|byte| *byte == 0)
+        .next()
+        .and_then(|response| std::str::from_utf8(response).ok())
+        .map(str::trim)
+        .filter(|response| !response.is_empty())
+        .ok_or_else(|| MalwareScanError::Internal {
+            reason: "clamd returned an empty or invalid response".to_owned(),
+        })?;
+
+    let outcome = if response.ends_with(" OK") {
+        MalwareScanOutcome::Clean
+    } else if let Some(reason) = response.strip_suffix(" FOUND") {
+        MalwareScanOutcome::Malicious {
+            reason: response_reason(reason),
+        }
+    } else if let Some(reason) = response.strip_suffix(" ERROR") {
+        MalwareScanOutcome::Failed {
+            reason: response_reason(reason),
+        }
+    } else {
+        return Err(MalwareScanError::Internal {
+            reason: format!("unexpected clamd response: {response}"),
+        });
+    };
+
+    Ok(MalwareScanResult {
+        scanner_name: "clamav".to_owned(),
+        scanner_version: None,
+        outcome,
+    })
+}
+
+fn response_reason(response: &str) -> String {
+    response
+        .split_once(": ")
+        .map(|(_, reason)| reason)
+        .unwrap_or(response)
+        .to_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MalwareScanError, MalwareScanOutcome, MalwareScanResult, MalwareScanner,
-        NoopMalwareScanner, ScanObjectRequest,
-    };
-    use uuid::Uuid;
-
-    use crate::{domain::WorkspaceId, object_storage::ObjectKey};
-
-    #[tokio::test]
-    async fn noop_scan_object_returns_clean_with_scanner_metadata() {
-        let request = scan_request();
-
-        let result = NoopMalwareScanner
-            .scan_object(request)
-            .await
-            .expect("noop scan succeeds");
-
-        assert_eq!(
-            result,
-            MalwareScanResult {
-                scanner_name: "noop".to_owned(),
-                scanner_version: None,
-                outcome: MalwareScanOutcome::Clean,
-            }
-        );
-    }
+    use super::*;
+    use futures_util::stream;
+    use tokio::net::TcpListener;
 
     #[test]
-    fn scan_object_request_accepts_object_key_and_known_metadata() {
-        let object_key = ObjectKey::new(
-            WorkspaceId::from(Uuid::new_v4()),
-            "quarantine/evidence-submissions/submission/attachments/upload",
-            "manual-qa.txt",
-        )
-        .expect("valid object key");
-
-        let request = ScanObjectRequest {
-            object_key: object_key.clone(),
-            content_type: "text/plain".to_owned(),
-            content_length: 42,
-            sha256: "6d1b9f787dd2607c4a83d9c024f9fe1a0e95d1d5d45f100d4dfad4fda8f8720d".to_owned(),
-        };
-
-        assert_eq!(request.object_key, object_key);
-        assert_eq!(request.content_type, "text/plain");
-        assert_eq!(request.content_length, 42);
+    fn parses_clean_malicious_and_failed_responses() {
         assert_eq!(
-            request.sha256,
-            "6d1b9f787dd2607c4a83d9c024f9fe1a0e95d1d5d45f100d4dfad4fda8f8720d"
-        );
-    }
-
-    #[test]
-    fn malware_scan_outcome_supports_equality() {
-        assert_eq!(MalwareScanOutcome::Clean, MalwareScanOutcome::Clean);
-        assert_eq!(
-            MalwareScanOutcome::Malicious {
-                reason: "EICAR-Test-File".to_owned()
-            },
-            MalwareScanOutcome::Malicious {
-                reason: "EICAR-Test-File".to_owned()
-            }
-        );
-        assert_ne!(
-            MalwareScanOutcome::Failed {
-                reason: "scanner refused object".to_owned()
-            },
+            parse_response(b"stream: OK\0").unwrap().outcome,
             MalwareScanOutcome::Clean
         );
+        assert_eq!(
+            parse_response(b"stream: Win.Test.EICAR_HDB-1 FOUND\0")
+                .unwrap()
+                .outcome,
+            MalwareScanOutcome::Malicious {
+                reason: "Win.Test.EICAR_HDB-1".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_response(b"stream: INSTREAM size limit exceeded. ERROR\0")
+                .unwrap()
+                .outcome,
+            MalwareScanOutcome::Failed {
+                reason: "INSTREAM size limit exceeded.".to_owned(),
+            }
+        );
     }
 
     #[test]
-    fn malware_scan_error_formats_basic_adapter_failures() {
-        assert_eq!(
-            MalwareScanError::ObjectNotFound.to_string(),
-            "object was not found in storage"
-        );
-        assert_eq!(
-            MalwareScanError::Unavailable {
-                reason: "clamd connection refused".to_owned()
-            }
-            .to_string(),
-            "malware scanner is unavailable: clamd connection refused"
-        );
-        assert_eq!(
-            MalwareScanError::Timeout {
-                reason: "scan exceeded 30s".to_owned()
-            }
-            .to_string(),
-            "malware scanner timed out: scan exceeded 30s"
-        );
-        assert_eq!(
-            MalwareScanError::InvalidRequest {
-                reason: "missing object hash".to_owned()
-            }
-            .to_string(),
-            "invalid malware scan request: missing object hash"
-        );
-        assert_eq!(
-            MalwareScanError::Internal {
-                reason: "adapter panic boundary".to_owned()
-            }
-            .to_string(),
-            "internal malware scanner error: adapter panic boundary"
-        );
+    fn rejects_unexpected_responses() {
+        assert!(matches!(
+            parse_response(b"stream: UNKNOWN\0"),
+            Err(MalwareScanError::Internal { .. })
+        ));
+        assert!(matches!(
+            parse_response(b""),
+            Err(MalwareScanError::Internal { .. })
+        ));
     }
 
-    fn scan_request() -> ScanObjectRequest {
-        ScanObjectRequest {
-            object_key: ObjectKey::new(
-                WorkspaceId::from(Uuid::new_v4()),
-                "quarantine/evidence-submissions/submission/attachments/upload",
-                "manual-qa.txt",
-            )
-            .expect("valid object key"),
-            content_type: "text/plain".to_owned(),
-            content_length: 42,
-            sha256: "6d1b9f787dd2607c4a83d9c024f9fe1a0e95d1d5d45f100d4dfad4fda8f8720d".to_owned(),
-        }
+    #[tokio::test]
+    async fn splits_oversized_input_chunks_into_protocol_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut command = [0_u8; INSTREAM_COMMAND.len()];
+            stream.read_exact(&mut command).await.unwrap();
+            assert_eq!(&command, INSTREAM_COMMAND);
+
+            let mut frame_lengths = Vec::new();
+            loop {
+                let length = stream.read_u32().await.unwrap() as usize;
+                if length == 0 {
+                    break;
+                }
+                frame_lengths.push(length);
+                let mut frame = vec![0_u8; length];
+                stream.read_exact(&mut frame).await.unwrap();
+            }
+            stream.write_all(b"stream: OK\0").await.unwrap();
+            frame_lengths
+        });
+        let scanner =
+            ClamAvMalwareScanner::new(address, Duration::from_secs(1), Duration::from_secs(1));
+
+        let result = scanner
+            .scan(stream::iter([Ok(Bytes::from(vec![
+                0_u8;
+                INSTREAM_CHUNK_SIZE + 3
+            ]))]))
+            .await
+            .unwrap();
+
+        assert_eq!(result.outcome, MalwareScanOutcome::Clean);
+        assert_eq!(server.await.unwrap(), vec![INSTREAM_CHUNK_SIZE, 3]);
+    }
+
+    #[tokio::test]
+    async fn propagates_input_stream_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut command = [0_u8; INSTREAM_COMMAND.len()];
+            stream.read_exact(&mut command).await.unwrap();
+        });
+        let scanner =
+            ClamAvMalwareScanner::new(address, Duration::from_secs(1), Duration::from_secs(1));
+        let input_error = MalwareScanError::Internal {
+            reason: "injected storage read failure".to_owned(),
+        };
+
+        let result = scanner.scan(stream::iter([Err(input_error)])).await;
+
+        assert!(matches!(
+            result,
+            Err(MalwareScanError::Internal { reason })
+                if reason == "injected storage read failure"
+        ));
+        server.await.unwrap();
     }
 }

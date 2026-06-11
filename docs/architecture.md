@@ -53,6 +53,9 @@ terminal, or successfully processed. Retryable handler failures return `500`
 so Pub/Sub can redeliver according to the subscription policy. On the final
 delivery attempt, scanner failures are persisted as terminal attachment
 failures and acknowledged with `204` instead of being retried again.
+ClamAV is a required worker dependency. The worker loads each quarantined
+filesystem object through the buffered object-store contract and scans it with
+clamd's `INSTREAM` protocol before requesting finalization.
 
 ## General Notes on Binaries
 
@@ -198,11 +201,13 @@ the adapter contract, selecting GCS currently returns `UnsupportedBackend`.
 Production GCS support is planned in MVP story
 [014](./mvp-stories/014-gcs-object-storage-adapter.md).
 
-The worker currently uses `NoopMalwareScanner`. The scanner boundary and
-attachment scan lifecycle are implemented, but ClamAV, cloud-provider-native,
-and commercial scanner adapters are future capabilities. The next planned
-scanner adapter work is tracked in MVP story
-[017](./mvp-stories/017-evidence-submissions-and-attachments.md).
+The worker uses the concrete `ClamAvMalwareScanner`. Its required configuration
+contains the clamd TCP address plus connection and scan timeouts. There is no
+disabled mode or runtime scanner selection. The scan handler opens the
+quarantined object, validates its stored metadata against the attachment record,
+and streams bounded storage chunks to the scanner. The scanner only owns clamd
+connection, timeout, protocol, and response handling and subdivides input into
+bounded `INSTREAM` frames.
 
 ### `src/authentication` and `src/routes/authentication.rs`
 

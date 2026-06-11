@@ -69,11 +69,15 @@ where
             return Ok(());
         };
 
+        tracing::debug!("finalizing attachment");
+
         let final_key = final_attachment_object_key(&work).map_err(retryable)?;
         self.object_store
-            .copy_object(payload.object_key.clone(), final_key.clone())
+            .copy_object(&payload.object_key, &final_key)
             .await
             .map_err(retryable)?;
+
+        tracing::debug!("object copied");
 
         let updated = self
             .repository
@@ -85,9 +89,11 @@ where
             .await
             .map_err(retryable)?;
 
+        tracing::debug!("attaachment marked as uploaded in repository");
+
         if updated {
             self.object_store
-                .delete_object(payload.object_key)
+                .delete_object(&payload.object_key)
                 .await
                 .inspect_err(|error| {
                     tracing::warn!(
@@ -114,9 +120,7 @@ impl FinalizationRequestedPayload {
             return None;
         }
 
-        let dto =
-            serde_json::from_value::<FinalizationRequestedPayloadDto>(message.payload.clone())
-                .ok()?;
+        let dto = FinalizationRequestedPayloadDto::deserialize(&message.payload).ok()?;
 
         Some(Self {
             evidence_attachment_id: Uuid::parse_str(&message.aggregate_id).ok()?.into(),

@@ -82,7 +82,7 @@ impl EvidenceSubmissionService {
 
     pub async fn evidence_submission_exists(
         &self,
-        actor: ActorContext,
+        actor: &ActorContext,
         id: EvidenceSubmissionId,
     ) -> Result<bool, Error> {
         Ok(self
@@ -95,7 +95,7 @@ impl EvidenceSubmissionService {
 
     pub async fn upload_attachment<S>(
         &self,
-        actor: ActorContext,
+        actor: &ActorContext,
         submission_id: EvidenceSubmissionId,
         filename: String,
         content_type: String,
@@ -112,8 +112,8 @@ impl EvidenceSubmissionService {
         let metadata = self
             .object_store
             .put_object(PutObjectRequest {
-                key: key.clone(),
-                content_type: content_type.clone(),
+                key,
+                content_type,
                 chunks,
             })
             .await?;
@@ -125,12 +125,13 @@ impl EvidenceSubmissionService {
             })
         })?;
 
+        let object_key = metadata.key.to_string();
         Ok(UploadEvidenceAttachmentPayload {
             evidence_submission_id: submission_id,
             filename,
-            content_type,
+            content_type: metadata.content_type,
             content_length,
-            object_key: key.to_string(),
+            object_key,
             checksum_sha256: metadata.sha256,
             checksum_crc32c: String::new(),
         })
@@ -138,14 +139,14 @@ impl EvidenceSubmissionService {
 
     pub async fn delete_uploaded_attachment_object(&self, object_key: &str) -> Result<(), Error> {
         self.object_store
-            .delete_object(ObjectKey::parse(object_key.to_owned())?)
+            .delete_object(&ObjectKey::parse(object_key.to_owned())?)
             .await?;
         Ok(())
     }
 
     pub async fn create_attachment(
         &self,
-        actor: ActorContext,
+        actor: &ActorContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
         mut payload: UploadEvidenceAttachmentPayload,

@@ -72,7 +72,7 @@ async fn run() -> Result<(), Error> {
 
     ensure_worker_subscription(&config.pubsub.project_id, &config.pubsub.subscriptions).await?;
 
-    let publisher = GoogleCloudPublisher::new(config.pubsub.project_id.clone()).await?;
+    let publisher = GoogleCloudPublisher::new(config.pubsub.project_id).await?;
     let dequeuer_config = OutboxDequeuerConfig {
         max_attempts: config.worker.retry_attempts.into(),
         poll_interval: StdDuration::from_secs(1),

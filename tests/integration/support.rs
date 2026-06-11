@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, Weak},
+};
 
 use api_keys_simplified::{Environment, ExposeSecret};
 use async_trait::async_trait;
@@ -15,8 +20,8 @@ use proofplane::{
     authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, ServerConfig, SpiceDbConfig, UploadsConfig,
-        WorkerConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, SpiceDbConfig,
+        UploadsConfig, WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -24,7 +29,7 @@ use proofplane::{
     },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
-    scanner::NoopMalwareScanner,
+    scanner::ClamAvMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
 };
@@ -36,11 +41,17 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 use testcontainers_modules::postgres;
+use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
 const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
+const CLAMAV_IMAGE_TAG: &str = "1.4.3";
 pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
+// OnceCell provides one process-wide coordination slot; Mutex prevents concurrent
+// starts; Weak permits reuse without keeping the container alive. Each TestApp holds
+// a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
+static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
 
 /// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,
 /// except for the reserved values below. Tokens prefixed with `noprofile:` omit the
@@ -74,6 +85,7 @@ pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _spicedb_container: ContainerAsync<GenericImage>,
+    _clamav: Option<Arc<TestClamAv>>,
     pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
     server: TestServer,
@@ -96,6 +108,12 @@ impl TestApp {
     }
 
     async fn start_with_builder(builder: TestAppBuilder) -> Self {
+        let clamav = if builder.clamav {
+            Some(shared_clamav().await)
+        } else {
+            None
+        };
+
         // TODO(low priority): allow dependency containers to be toggled for health tests.
         let postgres_container = postgres::Postgres::default()
             .start()
@@ -180,6 +198,7 @@ impl TestApp {
         Self {
             _postgres_container: postgres_container,
             _spicedb_container: spicedb_container,
+            _clamav: clamav,
             postgres,
             object_storage_root,
             server,
@@ -249,8 +268,12 @@ impl TestApp {
 
         TestServer::new(create_worker_app(WorkerAppDependencies {
             postgres: self.postgres.clone(),
-            object_store,
-            scanner: Arc::new(NoopMalwareScanner),
+            object_store: object_store.clone(),
+            scanner: Arc::new(ClamAvMalwareScanner::new(
+                self.clamav_address(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(30),
+            )),
             worker_max_delivery_attempts: 5,
             metrics: recorder.handle(),
             live_path: "/livez".to_owned(),
@@ -261,6 +284,13 @@ impl TestApp {
 
     pub fn object_storage_root(&self) -> &std::path::Path {
         &self.object_storage_root
+    }
+
+    pub fn clamav_address(&self) -> std::net::SocketAddr {
+        self._clamav
+            .as_ref()
+            .expect("test app was built with ClamAV")
+            .address
     }
 
     pub fn api_key(&self) -> &str {
@@ -320,6 +350,7 @@ impl TestApp {
 
 pub struct TestAppBuilder {
     default_auth: bool,
+    clamav: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
     max_attachment_bytes: usize,
@@ -333,6 +364,11 @@ impl TestAppBuilder {
 
     pub fn with_soc2_reference_data(mut self) -> Self {
         self.soc2_reference_data = true;
+        self
+    }
+
+    pub fn with_clamav(mut self) -> Self {
+        self.clamav = true;
         self
     }
 
@@ -362,6 +398,7 @@ impl Default for TestAppBuilder {
     fn default() -> Self {
         Self {
             default_auth: true,
+            clamav: false,
             soc2_reference_data: false,
             workspaces: Vec::new(),
             max_attachment_bytes: 25 * 1024 * 1024,
@@ -598,6 +635,55 @@ async fn start_spicedb() -> ContainerAsync<GenericImage> {
         .expect("SpiceDB test server starts")
 }
 
+struct TestClamAv {
+    _container: ContainerAsync<GenericImage>,
+    address: std::net::SocketAddr,
+}
+
+async fn shared_clamav() -> Arc<TestClamAv> {
+    let shared = CLAMAV
+        .get_or_init(|| async { Mutex::new(Weak::new()) })
+        .await;
+    let mut shared = shared.lock().await;
+
+    if let Some(clamav) = shared.upgrade() {
+        return clamav;
+    }
+
+    let container = GenericImage::new("clamav/clamav-debian", CLAMAV_IMAGE_TAG)
+        .with_exposed_port(3310.tcp())
+        .with_wait_for(WaitFor::healthcheck())
+        .with_env_var("CLAMAV_NO_FRESHCLAMD", "true")
+        .start()
+        .await
+        .expect("ClamAV test container starts");
+    let host = container
+        .get_host()
+        .await
+        .expect("ClamAV test container has a host");
+    let port = container
+        .get_host_port_ipv4(3310)
+        .await
+        .expect("ClamAV test container exposes clamd");
+    let addresses = tokio::net::lookup_host(format!("{host}:{port}"))
+        .await
+        .expect("ClamAV test address resolves")
+        .collect::<Vec<_>>();
+    let address = addresses
+        .iter()
+        .copied()
+        .find(std::net::SocketAddr::is_ipv4)
+        .or_else(|| addresses.first().copied())
+        .expect("ClamAV test address has a socket address");
+    let clamav = Arc::new(TestClamAv {
+        _container: container,
+        address,
+    });
+
+    *shared = Arc::downgrade(&clamav);
+    clamav
+}
+
 async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
     let host = spicedb
         .get_host()
@@ -650,6 +736,11 @@ fn config(
             .expect("auth0 jwks url parses"),
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        scanner: ScannerConfig {
+            clamd_address: socket_addr("127.0.0.1:3310"),
+            connection_timeout_ms: 1000,
+            scan_timeout_ms: 30000,
+        },
         uploads: UploadsConfig {
             max_attachment_bytes,
         },

@@ -74,13 +74,13 @@ async fn authorize_evidence_request_route(
     next: Next,
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let authorizer = state.authorizer.clone();
 
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
     let workspace_id = actor.workspace_id;
 
     let allowed = match method {
-        Method::GET => authorizer
+        Method::GET => state
+            .authorizer
             .can_read_evidence_requests(&actor)
             .await
             .map_err(|e| {
@@ -93,7 +93,8 @@ async fn authorize_evidence_request_route(
                 );
                 ApiError::Internal
             }),
-        Method::POST | Method::PUT => authorizer
+        Method::POST | Method::PUT => state
+            .authorizer
             .can_write_evidence_requests(&actor)
             .await
             .map_err(|e| {

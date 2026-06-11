@@ -142,10 +142,9 @@ async fn publish_outbox_row<P>(
 where
     P: Publisher + Sync,
 {
-    let topic = row.topic.clone();
     let message = outbound_message(row);
 
-    match publisher.publish(&topic, message).await {
+    match publisher.publish(&row.topic, message).await {
         Ok(_) => PublishOutcome::Published,
         Err(error) => {
             let exhausted = row.attempt_count + 1 >= config.max_attempts;

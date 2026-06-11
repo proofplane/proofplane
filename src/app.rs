@@ -43,13 +43,13 @@ pub struct AppDependencies<V: TokenVerifier> {
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
-    let live_path = dependencies.config.health.live_path.clone();
-    let ready_path = dependencies.config.health.ready_path.clone();
-
     Ok(Router::new()
-        .nest(&live_path, health::livez_router())
         .nest(
-            &ready_path,
+            &dependencies.config.health.live_path,
+            health::livez_router(),
+        )
+        .nest(
+            &dependencies.config.health.ready_path,
             health::readyz_router(ReadyState {
                 postgres: dependencies.postgres.clone(),
                 dependency_timeout_ms: dependencies.config.health.dependency_timeout_ms,

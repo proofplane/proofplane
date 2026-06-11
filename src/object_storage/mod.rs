@@ -1,7 +1,7 @@
 use std::{
     fmt, io,
     path::{Path, PathBuf},
-    pin::pin,
+    pin::{pin, Pin},
 };
 
 use async_trait::async_trait;
@@ -11,7 +11,10 @@ use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+};
 
 use crate::{config::ObjectStorageConfig, domain::WorkspaceId};
 
@@ -24,17 +27,17 @@ pub trait ObjectStore {
     where
         S: Stream<Item = Result<Bytes, StorageError>> + Send;
 
-    async fn get_object(&self, key: ObjectKey) -> Result<ObjectStream, StorageError>;
+    async fn get_object(&self, key: &ObjectKey) -> Result<ObjectStream, StorageError>;
 
-    async fn head_object(&self, key: ObjectKey) -> Result<ObjectMetadata, StorageError>;
+    async fn head_object(&self, key: &ObjectKey) -> Result<ObjectMetadata, StorageError>;
 
     async fn copy_object(
         &self,
-        source: ObjectKey,
-        destination: ObjectKey,
+        source: &ObjectKey,
+        destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError>;
 
-    async fn delete_object(&self, key: ObjectKey) -> Result<(), StorageError>;
+    async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -108,10 +111,11 @@ pub struct ObjectMetadata {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub type ObjectByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>;
+
 pub struct ObjectStream {
     pub metadata: ObjectMetadata,
-    pub bytes: Vec<u8>,
+    pub chunks: ObjectByteStream,
 }
 
 #[derive(Debug, Error)]
@@ -213,7 +217,8 @@ impl ObjectStore for FilesystemObjectStore {
         let (content_length, sha256) = match write_result {
             Ok(result) => result,
             Err(error) => {
-                let _ = remove_file_if_exists(object_path.clone()).await;
+                // On error, best-effort remove the file.
+                let _ = remove_file_if_exists(&object_path).await;
                 return Err(error);
             }
         };
@@ -236,17 +241,17 @@ impl ObjectStore for FilesystemObjectStore {
                 source,
             })
         {
-            let _ = remove_file_if_exists(object_path).await;
+            let _ = remove_file_if_exists(&object_path).await;
             return Err(error);
         }
 
         Ok(metadata)
     }
 
-    async fn get_object(&self, key: ObjectKey) -> Result<ObjectStream, StorageError> {
-        let metadata = self.head_object(key.clone()).await?;
-        let object_path = self.object_path(&key);
-        let bytes = fs::read(&object_path)
+    async fn get_object(&self, key: &ObjectKey) -> Result<ObjectStream, StorageError> {
+        let metadata = self.head_object(key).await?;
+        let object_path = self.object_path(key);
+        let file = fs::File::open(&object_path)
             .await
             .map_err(|source| match source.kind() {
                 io::ErrorKind::NotFound => StorageError::NotFound,
@@ -255,18 +260,19 @@ impl ObjectStore for FilesystemObjectStore {
                     source,
                 },
             })?;
+        let chunks: ObjectByteStream = object_chunks(file, object_path);
 
-        Ok(ObjectStream { metadata, bytes })
+        Ok(ObjectStream { metadata, chunks })
     }
 
-    async fn head_object(&self, key: ObjectKey) -> Result<ObjectMetadata, StorageError> {
-        let metadata_path = self.metadata_path(&key);
+    async fn head_object(&self, key: &ObjectKey) -> Result<ObjectMetadata, StorageError> {
+        let metadata_path = self.metadata_path(key);
         let bytes = fs::read(&metadata_path)
             .await
             .map_err(|source| match source.kind() {
                 io::ErrorKind::NotFound => StorageError::NotFound,
                 _ => StorageError::Filesystem {
-                    path: metadata_path.clone(),
+                    path: metadata_path,
                     source,
                 },
             })?;
@@ -277,22 +283,22 @@ impl ObjectStore for FilesystemObjectStore {
 
     async fn copy_object(
         &self,
-        source: ObjectKey,
-        destination: ObjectKey,
+        source: &ObjectKey,
+        destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError> {
-        let object = self.get_object(source).await?;
+        let ObjectStream { metadata, chunks } = self.get_object(source).await?;
 
         self.put_object(PutObjectRequest {
-            key: destination,
-            content_type: object.metadata.content_type,
-            chunks: stream::once(async move { Ok(Bytes::from(object.bytes)) }),
+            key: destination.to_owned(),
+            content_type: metadata.content_type,
+            chunks,
         })
         .await
     }
 
-    async fn delete_object(&self, key: ObjectKey) -> Result<(), StorageError> {
-        remove_file_if_exists(self.object_path(&key)).await?;
-        remove_file_if_exists(self.metadata_path(&key)).await
+    async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError> {
+        remove_file_if_exists(&self.object_path(key)).await?;
+        remove_file_if_exists(&self.metadata_path(key)).await
     }
 }
 
@@ -378,13 +384,38 @@ async fn write_object_stream(
     Ok((content_length, hex::encode(sha256.finalize())))
 }
 
-async fn remove_file_if_exists(path: PathBuf) -> Result<(), StorageError> {
-    fs::remove_file(&path)
+fn object_chunks<R>(reader: R, path: PathBuf) -> ObjectByteStream
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    Box::pin(stream::try_unfold(
+        (reader, path),
+        |(mut reader, path)| async move {
+            let mut buffer = vec![0_u8; 64 * 1024];
+            let read =
+                reader
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|source| StorageError::Filesystem {
+                        path: path.clone(),
+                        source,
+                    })?;
+            if read == 0 {
+                return Ok(None);
+            }
+            buffer.truncate(read);
+            Ok(Some((Bytes::from(buffer), (reader, path))))
+        },
+    ))
+}
+
+async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
+    fs::remove_file(path)
         .await
         .map_err(|source| match source.kind() {
             io::ErrorKind::NotFound => StorageError::NotFound,
             _ => StorageError::Filesystem {
-                path: path.clone(),
+                path: path.to_path_buf(),
                 source,
             },
         })
@@ -402,8 +433,11 @@ mod tests {
     use futures_util::stream;
     use std::{
         fs as std_fs,
+        pin::Pin,
         sync::atomic::{AtomicU64, Ordering},
+        task::{Context, Poll},
     };
+    use tokio::io::{AsyncRead, ReadBuf};
     use url::Url;
     use uuid::Uuid;
 
@@ -502,7 +536,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let read = store.head_object(key).await.unwrap();
+        let read = store.head_object(&key).await.unwrap();
 
         assert_eq!(read, written);
         assert_eq!(read.content_type, "text/plain");
@@ -528,17 +562,20 @@ mod tests {
             .await
             .unwrap();
 
-        let copied = store
-            .copy_object(source.clone(), destination.clone())
-            .await
-            .unwrap();
+        let copied = store.copy_object(&source, &destination).await.unwrap();
 
         assert_eq!(copied.key, destination);
         assert_eq!(copied.content_type, source_metadata.content_type);
         assert_eq!(copied.content_length, source_metadata.content_length);
         assert_eq!(copied.sha256, source_metadata.sha256);
-        assert_eq!(store.get_object(source).await.unwrap().bytes, b"hello");
-        assert_eq!(store.get_object(copied.key).await.unwrap().bytes, b"hello");
+        assert_eq!(
+            object_bytes(store.get_object(&source).await.unwrap()).await,
+            b"hello"
+        );
+        assert_eq!(
+            object_bytes(store.get_object(&copied.key).await.unwrap()).await,
+            b"hello"
+        );
     }
 
     #[tokio::test]
@@ -556,15 +593,15 @@ mod tests {
             .await
             .unwrap();
 
-        store.delete_object(key.clone()).await.unwrap();
-        store.delete_object(key.clone()).await.unwrap();
+        store.delete_object(&key).await.unwrap();
+        store.delete_object(&key).await.unwrap();
 
         assert!(matches!(
-            store.head_object(key.clone()).await,
+            store.head_object(&key).await,
             Err(StorageError::NotFound)
         ));
         assert!(matches!(
-            store.get_object(key).await,
+            store.get_object(&key).await,
             Err(StorageError::NotFound)
         ));
     }
@@ -589,20 +626,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ObjectStore::head_object(store_ref, key.clone())
-                .await
-                .unwrap(),
+            ObjectStore::head_object(store_ref, &key).await.unwrap(),
             metadata
         );
-        assert_eq!(
-            ObjectStore::get_object(store_ref, key.clone())
-                .await
-                .unwrap(),
-            ObjectStream {
-                metadata,
-                bytes: vec![1, 2, 3, 4],
-            }
-        );
+        let object = ObjectStore::get_object(store_ref, &key).await.unwrap();
+        assert_eq!(object.metadata, metadata);
+        assert_eq!(object_bytes(object).await, vec![1, 2, 3, 4]);
         assert!(root
             .join("objects")
             .join(key.as_str())
@@ -617,11 +646,9 @@ mod tests {
             .try_exists()
             .unwrap());
 
-        ObjectStore::delete_object(store_ref, key.clone())
-            .await
-            .unwrap();
+        ObjectStore::delete_object(store_ref, &key).await.unwrap();
         assert!(matches!(
-            ObjectStore::get_object(store_ref, key).await,
+            ObjectStore::get_object(store_ref, &key).await,
             Err(StorageError::NotFound)
         ));
     }
@@ -663,9 +690,26 @@ mod tests {
             "f5cc4171a2e81eaba9b21e188e0d087d2dd3a190512fcc37b356c6da77adad93"
         );
         assert_eq!(
-            store.get_object(key).await.unwrap().bytes,
+            object_bytes(store.get_object(&key).await.unwrap()).await,
             b"hello object storage"
         );
+    }
+
+    #[tokio::test]
+    async fn object_stream_surfaces_read_failures_after_emitting_bytes() {
+        let mut chunks = object_chunks(
+            FailingReader { emitted: false },
+            PathBuf::from("injected-object"),
+        );
+
+        assert_eq!(
+            chunks.next().await.unwrap().unwrap(),
+            Bytes::from_static(b"partial")
+        );
+        assert!(matches!(
+            chunks.next().await.unwrap(),
+            Err(StorageError::Filesystem { .. })
+        ));
     }
 
     #[tokio::test]
@@ -730,5 +774,35 @@ mod tests {
         chunks: [Vec<u8>; N],
     ) -> impl Stream<Item = Result<Bytes, StorageError>> {
         stream::iter(chunks.into_iter().map(|chunk| Ok(Bytes::from(chunk))))
+    }
+
+    async fn object_bytes(object: ObjectStream) -> Vec<u8> {
+        object
+            .chunks
+            .map(|chunk| chunk.expect("object chunk reads"))
+            .fold(Vec::new(), |mut bytes, chunk| async move {
+                bytes.extend_from_slice(&chunk);
+                bytes
+            })
+            .await
+    }
+
+    struct FailingReader {
+        emitted: bool,
+    }
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.emitted {
+                return Poll::Ready(Err(io::Error::other("injected read failure")));
+            }
+            self.emitted = true;
+            buffer.put_slice(b"partial");
+            Poll::Ready(Ok(()))
+        }
     }
 }

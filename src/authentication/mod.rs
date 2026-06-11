@@ -14,7 +14,7 @@ pub mod auth0;
 const API_KEY_PREFIX: &str = "proof";
 
 /// An authenticated actor acting within a workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActorContext {
     pub workspace_id: WorkspaceId,
     pub id: ActorId,

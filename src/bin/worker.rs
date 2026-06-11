@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     config, object_storage, observability, repository,
-    scanner::NoopMalwareScanner,
+    scanner::ClamAvMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
@@ -62,7 +62,11 @@ async fn run() -> Result<(), Error> {
     let pool = store::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
     let postgres = Arc::new(repository::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
-    let scanner = Arc::new(NoopMalwareScanner);
+    let scanner = Arc::new(ClamAvMalwareScanner::new(
+        config.scanner.clamd_address,
+        Duration::from_millis(config.scanner.connection_timeout_ms),
+        Duration::from_millis(config.scanner.scan_timeout_ms),
+    ));
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
     let listener = TcpListener::bind(config.server.worker_bind)
@@ -81,8 +85,8 @@ async fn run() -> Result<(), Error> {
         scanner,
         worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,
-        live_path: config.health.live_path.clone(),
-        ready_path: config.health.ready_path.clone(),
+        live_path: config.health.live_path,
+        ready_path: config.health.ready_path,
         dependency_timeout_ms: config.health.dependency_timeout_ms,
     });
 

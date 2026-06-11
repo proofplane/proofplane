@@ -6,7 +6,7 @@ Partially complete. Submission creation, submission detail retrieval, multipart
 attachment upload, CRC32C validation, filesystem object writes, attachment
 metadata with pending upload status, scanner dispatch through the transactional
 outbox and Pub/Sub push worker path, and the object-based malware scanner
-boundary with noop implementation are implemented. The worker now handles
+implementation is complete. The worker now handles
 `attachment.scan_requested` messages by scanning quarantined objects and
 persisting terminal attachment upload status for malicious or failed outcomes.
 Clean scans atomically transition attachments to `finalizing` and enqueue
@@ -60,15 +60,12 @@ to the final workspace-scoped object path in the same bucket and marks the
 attachment usable. Workspaces should be organized by dedicated object key
 prefixes rather than separate buckets in the MVP.
 
-Document uploads must pass through a pluggable malware scanning boundary before
-they can be treated as usable evidence. Model scanning as an adapter, not as a
-ClamAV-specific domain concept:
-
-```rust
-pub trait MalwareScanner {
-    async fn scan_object(&self, request: ScanObjectRequest) -> Result<MalwareScanResult, MalwareScanError>;
-}
-```
+Document uploads must pass through ClamAV before they can be treated as usable
+evidence. The worker depends directly on `ClamAvMalwareScanner`. The scan handler
+streams the filesystem-backed quarantined object to clamd after validating its
+stored metadata, and the scanner sends bounded `INSTREAM` protocol frames.
+ClamAV is required in every worker environment; there is no noop or disabled
+scanner mode.
 
 The current MVP stores the attachment lifecycle directly in
 `evidence_attachments.upload_status`:
@@ -86,14 +83,10 @@ are emitted in structured handler logs with the attachment ID and quarantine
 key, but are not persisted in Postgres or exposed in the API. Scanner
 name/version and attempt history are likewise not durable MVP data.
 
-The remaining scanner work should include:
-
-- the existing `NoopMalwareScanner` for local/runtime flows that do not use a
-  real scanner
-- a ClamAV-backed scanner for local/self-hosted deployments
-- configuration that can select scanner implementation and scanner timeouts
-- enough adapter shape to support cloud-provider native scanning or commercial
-  scanning APIs later without changing the attachment lifecycle contract
+Scanner configuration requires the clamd TCP address, connection timeout, and
+scan timeout. Scanner selection is intentionally absent. The current 25 MiB
+upload limit makes buffered filesystem reads acceptable; remote object
+streaming belongs with the future GCS adapter.
 
 Uploaded file attachments must not be downloaded or used as source material
 until their upload status is `uploaded`. Malicious uploads must remain
@@ -125,10 +118,10 @@ Submissions must distinguish system receipt time from the evidence effective or 
   `contains_virus`, and `failed` lifecycle states.
 - Scanner failure and malicious-detection reasons are logged as structured
   operational diagnostics and are not persisted in the attachment model.
-- File attachments enter a non-usable pending state until the configured
-  malware scanner returns clean and finalization marks them `uploaded`.
+- File attachments enter a non-usable pending state until ClamAV returns clean
+  and finalization marks them `uploaded`.
 - Malicious or failed scans block normal download and source-material use.
-- The scanner boundary supports ClamAV for local/self-hosted operation and does not make ClamAV part of the domain model.
+- Every worker environment provides a reachable clamd service.
 - Accepted uploads emit scan-request outbox events.
 - Submission creation and upload acceptance audit events remain deferred to the
   audit story.
@@ -143,8 +136,9 @@ Submissions must distinguish system receipt time from the evidence effective or 
   status updates, and atomic/idempotent finalization handoff.
 - Worker-handler integration tests use concrete Postgres to cover clean,
   malicious, failed, retryable, final-delivery, duplicate-delivery, and database
-  rollback behavior. Scanner and object-store fakes remain at those external
-  adapter boundaries; there are no generic attachment repository fakes.
+  rollback behavior. The scan paths use a process-wide pinned ClamAV
+  Testcontainer; object-store fakes remain only for finalization-specific
+  storage failures.
 - Storage integration tests cover quarantined attachment upload, clean-file
   finalization, and retrieval from the finalized object path.
 - Scanner adapter tests cover clean, malicious, failed, and timeout outcomes.
@@ -158,7 +152,7 @@ Submissions must distinguish system receipt time from the evidence effective or 
 
 1. Start API with filesystem-backed object storage config.
 2. Submit evidence against a seeded Evidence Request.
-3. Start the configured malware scanner, such as local ClamAV.
+3. Start the required local ClamAV service.
 4. Upload an attachment with multipart/form-data.
 5. Confirm the attachment moves from `pending` through `finalizing` to
    `uploaded`, with its object key changed from quarantine to the stable path.
@@ -180,19 +174,22 @@ Submissions must distinguish system receipt time from the evidence effective or 
    mismatches, write the file to quarantine object storage, create attachment
    metadata with `pending` status, and return `202 Accepted`.
 5. Scan dispatch through transactional outbox: enqueue attachment-scan work when a quarantined upload is accepted, publish it through the existing outbox to Pub/Sub flow, and keep scanner message payloads based on attachment IDs and quarantine object keys. Implemented.
-6. Malware scanner boundary and noop implementation: add scanner request, result, and error types plus `NoopMalwareScanner` for tests and flows that do not exercise scanning behavior. Implemented.
+6. Initial scanner request, result, and error types. Implemented; the temporary
+   noop implementation was removed by slice 8.
 7. Scan worker finalization: consume scan messages, scan quarantined objects,
    persist terminal attachment status, and use a separate finalization message
    to copy clean files to final workspace-scoped object paths; leave malicious
    or failed files quarantined and unusable. Implemented.
-8. Scan state enforcement: block normal download and source-material use unless
-   file attachments have `uploaded` status and a finalized object reference.
-   Next active slice.
-9. ClamAV adapter and scanner configuration: add the local/self-hosted scanner implementation, timeout settings, scanner selection, and adapter tests for clean, malicious, failed, and timeout outcomes.
-10. Download and retrieval API: expose normal attachment download paths that  refuse pending, malicious, failed, and unfinalized attachments.
-11. Latest submission query/API, seed data, and audit polish: complete the
+8. Concrete ClamAV scanning: require clamd, add connection and scan timeout
+   settings, use buffered `INSTREAM` scans, and cover clean, malicious, failed,
+   unavailable, and timeout outcomes. Implemented.
+9. Download and retrieval API: expose normal attachment download paths that  refuse pending, malicious, failed, and unfinalized attachments.
+10. Latest submission query/API, seed data, and audit polish: complete the
 latest-submission API surface, add audit records, and seed sample submission
 plus uploaded attachment metadata.
+11. Scan state enforcement: block normal download and source-material use unless
+   file attachments have `uploaded` status and a finalized object reference.
+   Next active slice.
 
 Recommended implementation order:
 
@@ -201,9 +198,9 @@ Recommended implementation order:
 3. Submission API without file uploads.
 4. Multipart attachment upload API and CRC32C validation.
 5. Scan dispatch through transactional outbox. Implemented.
-6. Malware scanner boundary and noop implementation. Implemented.
+6. Initial scanner request, result, and error types. Implemented.
 7. Scan worker finalization. Implemented.
-8. Scan state enforcement. Next active slice.
-9. ClamAV adapter and scanner configuration.
+8. Concrete ClamAV scanning. Implemented.
+9. Scan state enforcement. Next active slice.
 10. Download and retrieval API.
 11. Latest submission query/API, seed data, and audit polish.

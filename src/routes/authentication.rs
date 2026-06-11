@@ -37,7 +37,7 @@ pub(in crate::routes) async fn authorize_workspace_route(
         })?
         .ok_or(ApiError::Unauthorized)?;
 
-    attach_actor_context(request, actor.clone());
+    attach_actor_context(request, actor);
 
     Ok(actor)
 }
@@ -45,7 +45,7 @@ pub(in crate::routes) async fn authorize_workspace_route(
 pub(in crate::routes) async fn authenticate_user<V: TokenVerifier>(
     authenticator: &UserAuthenticator<V>,
     request: &mut Request,
-) -> Result<UserContext, ApiError> {
+) -> Result<(), ApiError> {
     let token = bearer_token_from_request(request).ok_or(ApiError::Unauthorized)?;
     let user = authenticator.authenticate(&token).await.map_err(|error| {
         if let AuthError::Unauthorized(_) = error {
@@ -56,9 +56,9 @@ pub(in crate::routes) async fn authenticate_user<V: TokenVerifier>(
         ApiError::Internal
     })?;
 
-    attach_user_context(request, user.clone());
+    attach_user_context(request, user);
 
-    Ok(user)
+    Ok(())
 }
 
 fn bearer_token_from_request(request: &Request) -> Option<String> {

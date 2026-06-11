@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
+use futures_util::StreamExt;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
-    object_storage::ObjectKey,
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{NewOutboxMessage, PendingAttachmentUploadWork, Postgres},
-    scanner::{
-        MalwareScanError, MalwareScanOutcome, MalwareScanResult, MalwareScanner, ScanObjectRequest,
-    },
+    scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
     validate,
     validation::Validation,
     worker::{RetryableWorkerError, WorkerMessage, ATTACHMENT_FINALIZATION_REQUESTED},
@@ -19,36 +18,41 @@ use crate::{
 
 const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
 
-pub struct AttachmentScanHandler<C> {
+pub struct AttachmentScanHandler {
     repository: Arc<Postgres>,
-    scanner: Arc<C>,
+    object_store: Arc<FilesystemObjectStore>,
+    scanner: Arc<ClamAvMalwareScanner>,
     max_delivery_attempts: u16,
 }
 
-impl<C> Clone for AttachmentScanHandler<C> {
+impl Clone for AttachmentScanHandler {
     fn clone(&self) -> Self {
         Self {
             repository: self.repository.clone(),
+            object_store: self.object_store.clone(),
             scanner: self.scanner.clone(),
             max_delivery_attempts: self.max_delivery_attempts,
         }
     }
 }
 
-impl<C> AttachmentScanHandler<C> {
-    pub fn new(repository: Arc<Postgres>, scanner: Arc<C>, max_delivery_attempts: u16) -> Self {
+impl AttachmentScanHandler {
+    pub fn new(
+        repository: Arc<Postgres>,
+        object_store: Arc<FilesystemObjectStore>,
+        scanner: Arc<ClamAvMalwareScanner>,
+        max_delivery_attempts: u16,
+    ) -> Self {
         Self {
             repository,
+            object_store,
             scanner,
             max_delivery_attempts,
         }
     }
 }
 
-impl<C> AttachmentScanHandler<C>
-where
-    C: MalwareScanner + Send + Sync,
-{
+impl AttachmentScanHandler {
     pub async fn handle_scan_requested(
         &self,
         message: WorkerMessage,
@@ -95,24 +99,47 @@ where
             return Ok(());
         }
 
-        let quarantine_key = ObjectKey::parse(work.object_key.clone()).map_err(retryable)?;
-        let scan_result = self
-            .scanner
-            .scan_object(ScanObjectRequest {
-                object_key: quarantine_key.clone(),
-                content_type: work.content_type.clone(),
-                content_length: scan_content_length(&work)?,
-                sha256: work.checksum_sha256.clone(),
-            })
-            .await;
+        tracing::debug!("initiating scan");
 
-        let scan_result = match scan_result {
-            Ok(scan_result) => scan_result,
-            Err(MalwareScanError::ObjectNotFound) => {
+        let quarantine_key = ObjectKey::parse(work.object_key.clone()).map_err(retryable)?;
+        let object = match self.object_store.get_object(&quarantine_key).await {
+            Ok(object) => object,
+            Err(StorageError::NotFound) => {
                 self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
                     .await?;
                 return Ok(());
             }
+            Err(error) if final_delivery => {
+                self.mark_failed(&work, error.to_string()).await?;
+                return Ok(());
+            }
+            Err(error) => return Err(retryable(error)),
+        };
+        let content_length = scan_content_length(&work)?;
+        if object.metadata.content_type != work.content_type
+            || object.metadata.content_length != content_length
+            || object.metadata.sha256 != work.checksum_sha256
+        {
+            let error = MalwareScanError::Internal {
+                reason: "stored object metadata does not match attachment metadata".to_owned(),
+            };
+            if final_delivery {
+                self.mark_failed(&work, error.to_string()).await?;
+                return Ok(());
+            }
+            return Err(scan_error(error));
+        }
+        let chunks = object.chunks.map(|chunk| {
+            chunk.map_err(|error| MalwareScanError::Internal {
+                reason: format!("failed to read object from storage: {error}"),
+            })
+        });
+        let scan_result = self.scanner.scan(chunks).await;
+
+        tracing::debug!("scan completed");
+
+        let scan_result = match scan_result {
+            Ok(scan_result) => scan_result,
             Err(error) if final_delivery => {
                 self.mark_failed(&work, error.to_string()).await?;
                 // TODO: don't ack here, let the message fail so it can be dead-lettered
@@ -133,6 +160,7 @@ where
     ) -> Result<(), RetryableWorkerError> {
         match scan_result.outcome {
             MalwareScanOutcome::Clean => {
+                tracing::debug!("got clean scan, requesting finalization");
                 let message = attachment_finalization_requested_message(&work, request_id);
                 self.repository
                     .in_transaction(async move |transaction| {
@@ -145,8 +173,14 @@ where
                     .map_err(retryable)?;
                 Ok(())
             }
-            MalwareScanOutcome::Malicious { reason } => self.mark_malicious(&work, reason).await,
-            MalwareScanOutcome::Failed { reason } => self.mark_failed(&work, reason).await,
+            MalwareScanOutcome::Malicious { reason } => {
+                tracing::debug!("scan found a virus, marking attachment as malicious");
+                self.mark_malicious(&work, reason).await
+            }
+            MalwareScanOutcome::Failed { reason } => {
+                tracing::debug!("scan failed");
+                self.mark_failed(&work, reason).await
+            }
         }
     }
 
@@ -216,14 +250,12 @@ struct ScanRequestedPayload {
 
 impl ScanRequestedPayload {
     fn try_from_message(message: &WorkerMessage) -> Result<Self, PermanentScanMessageErrors> {
-        let dto = serde_json::from_value::<ScanRequestedPayloadDTO>(message.payload.clone())
-            .map_err(|_| {
-                PermanentScanMessageErrors(vec![PermanentScanMessageError::InvalidPayload])
-            })?;
+        let dto = ScanRequestedPayloadDTO::deserialize(&message.payload)
+            .map_err(|_| PermanentScanMessageErrors(vec![PermanentScanMessageError::Payload]))?;
 
         if message.aggregate_type != "evidence_attachment" {
             return Err(PermanentScanMessageErrors(vec![
-                PermanentScanMessageError::InvalidAggregateType,
+                PermanentScanMessageError::AggregateType,
             ]));
         }
 
@@ -252,7 +284,7 @@ fn validate_aggregate_id(
     Uuid::parse_str(value)
         .map(EvidenceAttachmentId::from)
         .map(Validation::valid)
-        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::InvalidAggregateId))
+        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::AggregateId))
 }
 
 fn validate_submission_id(
@@ -261,13 +293,13 @@ fn validate_submission_id(
     Uuid::parse_str(value)
         .map(EvidenceSubmissionId::from)
         .map(Validation::valid)
-        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::InvalidSubmissionId))
+        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::SubmissionId))
 }
 
 fn validate_object_key(value: String) -> Validation<ObjectKey, PermanentScanMessageError> {
     ObjectKey::parse(value)
         .map(Validation::valid)
-        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::InvalidKey))
+        .unwrap_or_else(|_| Validation::invalid(PermanentScanMessageError::Key))
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,15 +312,15 @@ struct ScanRequestedPayloadDTO {
 #[allow(clippy::enum_variant_names)]
 enum PermanentScanMessageError {
     #[error("invalid aggregate type")]
-    InvalidAggregateType,
+    AggregateType,
     #[error("invalid scan-request payload")]
-    InvalidPayload,
+    Payload,
     #[error("invalid evidence submission id")]
-    InvalidSubmissionId,
+    SubmissionId,
     #[error("invalid aggregate id")]
-    InvalidAggregateId,
+    AggregateId,
     #[error("invalid quarantine object key")]
-    InvalidKey,
+    Key,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -343,14 +375,14 @@ mod tests {
         invalid.payload = serde_json::json!({});
         assert_eq!(
             ScanRequestedPayload::try_from_message(&invalid).unwrap_err(),
-            PermanentScanMessageErrors(vec![PermanentScanMessageError::InvalidPayload])
+            PermanentScanMessageErrors(vec![PermanentScanMessageError::Payload])
         );
 
         let mut invalid_aggregate_type = message(attachment_id, submission_id, &key);
         invalid_aggregate_type.aggregate_type = "evidence_submission".to_owned();
         assert_eq!(
             ScanRequestedPayload::try_from_message(&invalid_aggregate_type).unwrap_err(),
-            PermanentScanMessageErrors(vec![PermanentScanMessageError::InvalidAggregateType])
+            PermanentScanMessageErrors(vec![PermanentScanMessageError::AggregateType])
         );
 
         let mut invalid_submission_id = message(attachment_id, submission_id, &key);
@@ -358,7 +390,7 @@ mod tests {
             serde_json::Value::String("not-a-uuid".to_owned());
         assert_eq!(
             ScanRequestedPayload::try_from_message(&invalid_submission_id).unwrap_err(),
-            PermanentScanMessageErrors(vec![PermanentScanMessageError::InvalidSubmissionId])
+            PermanentScanMessageErrors(vec![PermanentScanMessageError::SubmissionId])
         );
 
         let mut invalid_fields = message(attachment_id, submission_id, "not/workspace/key");
@@ -366,8 +398,8 @@ mod tests {
         assert_eq!(
             ScanRequestedPayload::try_from_message(&invalid_fields).unwrap_err(),
             PermanentScanMessageErrors(vec![
-                PermanentScanMessageError::InvalidAggregateId,
-                PermanentScanMessageError::InvalidKey,
+                PermanentScanMessageError::AggregateId,
+                PermanentScanMessageError::Key,
             ])
         );
     }
