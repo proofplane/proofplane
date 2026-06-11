@@ -38,7 +38,6 @@ Read tools:
 - `list_evidence_request_control_mappings`
 - `find_source_material`
 - `preview_auditor_packet`
-- `inspect_audit_history`
 
 Write tools:
 
@@ -46,7 +45,6 @@ Write tools:
 - `map_evidence_request_to_control`
 - `remove_evidence_request_control_mapping`
 - `create_or_update_source_material`
-- `log_agent_action`
 
 Binary attachment upload/download and packet ZIP transfer remain REST URLs. MCP
 returns the relevant attachment content endpoint or packet preview and tells the
@@ -65,12 +63,14 @@ Protocol response shapes may differ.
 
 ## Audit
 
-Meaningful MCP reads and every write include client type `mcp`, actor, workspace,
-tool name, request/session correlation, and affected object. `log_agent_action`
-records a caller-provided action type and rationale under an allowlisted payload
-schema.
+Meaningful MCP reads and every write emit a structured audit log with client
+type `mcp`, actor, workspace, tool name, request/session correlation, and
+affected object. There is no audit-history or arbitrary agent-log tool in the
+MVP.
 
 ## Revisions
 
 - 2026-06-11: Removed approval/rejection and binary-transfer tools from the
   legacy story because those behaviors are not in the MVP domain model.
+- 2026-06-11: Removed database audit-history and agent-log tools in favor of
+  structured application audit logs routed to Cloud Logging.

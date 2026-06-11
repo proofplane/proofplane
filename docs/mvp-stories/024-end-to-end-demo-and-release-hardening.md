@@ -15,7 +15,7 @@ Implement a scripted demo:
 5. Approve the submission.
 6. Verify linked control status updates.
 7. Query approved source material.
-8. Inspect audit history.
+8. Inspect structured audit logs in the configured logging sink.
 9. Show outbox publishing and worker processing.
 
 Add operational hardening:
@@ -42,7 +42,8 @@ Add operational hardening:
 - End-to-end integration test runs the complete evidence lifecycle.
 - End-to-end test verifies outbox event publication.
 - End-to-end test verifies worker handles at least one Pub/Sub message.
-- End-to-end test verifies audit history contains the expected chain.
+- End-to-end test verifies captured structured audit logs contain the expected
+  chain.
 - Smoke tests verify all binaries start and stop cleanly.
 
 ## QA Guide
@@ -53,4 +54,4 @@ Add operational hardening:
 4. Start API, worker, and MCP.
 5. Run the scripted demo.
 6. Run the end-to-end test suite.
-7. Review logs, metrics, audit history, and dead-letter topics for unexpected failures.
+7. Review application/audit logs, metrics, and dead-letter topics for unexpected failures.

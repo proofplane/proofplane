@@ -1,9 +1,9 @@
 # 002 - Compliance Read Tools
 
-**Status:** Todo · **Depends on:** 001, trusted-compliance-reads/004, audit-trail/003 · **Spec:** [spec.md](../spec.md#mvp-tools)
+**Status:** Todo · **Depends on:** 001, trusted-compliance-reads/004 · **Spec:** [spec.md](../spec.md#mvp-tools)
 
 **Summary** - Add the MVP read tools for requests, submissions, controls,
-curated source material, packet previews, and audit history.
+curated source material, and packet previews.
 
 **Acceptance criteria**
 
@@ -19,6 +19,6 @@ curated source material, packet previews, and audit history.
 **Tasks**
 
 - [ ] Add request, submission, control, and mapping read tools.
-- [ ] Add source-material, packet-preview, and audit-history tools.
+- [ ] Add source-material and packet-preview tools.
 - [ ] Map domain problems to stable MCP problem codes.
 - [ ] Add representative integration tests for every read family.

@@ -60,7 +60,7 @@ A packet is generated for one workspace and one or more controls. It contains:
 - latest submission metadata and attachment inventory;
 - downloadable links only for uploaded attachments;
 - linked curated source material with freshness and provenance;
-- relevant audit events;
+- actor and provenance fields carried by the underlying records;
 - generation timestamp and requested-by actor.
 
 The first API returns JSON suitable for product preview. Export produces a ZIP
@@ -82,13 +82,16 @@ POST /workspaces/{workspace_id}/auditor-packets/export
 Source-material writes require a new `write_source_material` permission; reads
 and packet generation require corresponding read/export permissions.
 
-## Audit
+## Audit Logging
 
-Create/update/retrieve source material and packet preview/export emit events
-through the Audit Trail writer. Ordinary search results are audited as one
-search event, not one event per result.
+Create/update/retrieve source material and packet preview/export emit structured
+`type = "audit_log"` records. Ordinary search results emit one search audit log,
+not one record per result. Audit logs are operational Cloud Logging data and are
+not embedded in packet responses.
 
 ## Revisions
 
 - 2026-06-11: Replaced legacy “approved source material” with explicit actor
   curation because native submission approval is deferred for the MVP.
+- 2026-06-11: Replaced database audit events and packet audit-history reads with
+  structured application audit logs.

@@ -25,8 +25,6 @@ Initial tools:
 - `get_control_evidence_gaps`
 - `find_approved_answer_material`
 - `create_or_update_approved_answer_material`
-- `inspect_audit_history`
-- `log_agent_action`
 
 ## Acceptance Criteria
 
@@ -35,7 +33,8 @@ Initial tools:
 - Tool input validation uses the applicative validation framework.
 - Tool errors are structured for agent consumption.
 - Authentication or client identity is captured as actor context.
-- MCP emits audit events for meaningful reads and writes.
+- MCP emits structured `type = "audit_log"` records for meaningful reads and
+  writes.
 
 ## Tests
 

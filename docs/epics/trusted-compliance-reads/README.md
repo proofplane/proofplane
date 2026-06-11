@@ -2,7 +2,7 @@
 
 Turn controls and evidence into concise, provenance-bearing reads for agents and
 auditors. Trust comes from explicit curation, finalized attachments, freshness,
-and audit history rather than a hidden approval flag.
+and record provenance rather than a hidden approval flag.
 
 Full schema, freshness, packet, and export decisions live in
 [spec.md](./spec.md).

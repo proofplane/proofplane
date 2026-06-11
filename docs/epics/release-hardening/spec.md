@@ -19,7 +19,7 @@ The scripted flow:
 7. create/search trusted source material;
 8. preview and export an auditor packet;
 9. perform representative MCP reads/writes;
-10. inspect the audit chain and runtime metrics.
+10. inspect structured audit logs and runtime metrics.
 
 No approval, rejection, or derived control-status transition is expected.
 
@@ -44,8 +44,8 @@ Kubernetes deployment examples, probe/scrape paths, and required service
 dependencies.
 
 The runbook covers migrations, Auth0, SpiceDB schema, Pub/Sub topics and push
-subscription, GCS bucket lifecycle, ClamAV, rollback, dead letters, and common
-failure diagnostics.
+subscription, GCS bucket lifecycle, ClamAV, the audit-log sink and retention,
+rollback, dead letters, and common failure diagnostics.
 
 ## Release Gate
 

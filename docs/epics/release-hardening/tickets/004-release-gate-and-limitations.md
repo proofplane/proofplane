@@ -1,6 +1,6 @@
 # 004 - Release Gate And Limitations
 
-**Status:** Todo · **Depends on:** 001, 002, 003, reliability-observability/005 · **Spec:** [spec.md](../spec.md#release-gate)
+**Status:** Todo · **Depends on:** 001, 002, 003, reliability-observability/006 · **Spec:** [spec.md](../spec.md#release-gate)
 
 **Summary** - Define and execute the final backend MVP validation record,
 including explicit limitations and all required commands.

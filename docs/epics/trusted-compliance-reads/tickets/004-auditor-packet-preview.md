@@ -1,6 +1,6 @@
 # 004 - Auditor Packet Preview
 
-**Status:** Todo · **Depends on:** 003, audit-trail/003 · **Spec:** [spec.md](../spec.md#auditor-packet-read-model)
+**Status:** Todo · **Depends on:** 003, reliability-observability/005 · **Spec:** [spec.md](../spec.md#auditor-packet-read-model)
 
 **Summary** - Assemble a JSON packet preview that explains how selected controls
 map to requests, latest evidence, curated material, and audit provenance.
@@ -13,13 +13,13 @@ map to requests, latest evidence, curated material, and audit provenance.
   requested, then the gap is explicit and no quarantined link is exposed.
 - [ ] Given a missing, cross-workspace, or unauthorized control, when preview is
   requested, then `404` is returned.
-- [ ] Given a successful preview, when audit history is queried, then packet
-  generation is attributable to the requesting actor.
+- [ ] Given a successful preview, when structured logs are inspected, then
+  packet generation is attributable to the requesting actor.
 
 **Tasks**
 
 - [ ] Define packet DTOs and deterministic ordering.
 - [ ] Add repository/service read composition.
 - [ ] Add packet preview authorization and route.
-- [ ] Emit packet preview audit events.
+- [ ] Emit a packet preview audit log.
 - [ ] Add integration tests for complete and missing-evidence controls.

@@ -37,7 +37,7 @@ Show:
 - latest evidence/freshness state or an explicit missing-evidence gap;
 - source-material provenance;
 - attachment inventory without exposing unusable download links;
-- actor and timestamps from the audit trail.
+- actor and timestamps from record provenance.
 
 The preview should remain useful before a file is uploaded by clearly showing
 what is missing.

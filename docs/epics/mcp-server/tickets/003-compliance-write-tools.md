@@ -8,11 +8,11 @@ and curated source material while leaving binary file transfer to REST.
 **Acceptance criteria**
 
 - [ ] Given valid authorized input, when a write tool runs, then the same domain
-  state and audit event as the equivalent REST operation are produced.
+  state and structured audit log as the equivalent REST operation are produced.
 - [ ] Given invalid links, duplicate mappings, or validation failures, when a
   write tool runs, then a stable structured problem is returned.
 - [ ] Given an unauthorized actor, when a write tool runs, then no state or
-  audit success event is committed.
+  success audit log is produced.
 - [ ] Given submission creation through MCP, when it succeeds, then the result
   explains the REST attachment upload contract without accepting file bytes.
 

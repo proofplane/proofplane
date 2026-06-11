@@ -30,7 +30,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 017. [Evidence Submissions and Attachments](./017-evidence-submissions-and-attachments.md) | Partial | Submission create/read, multipart attachment upload, CRC32C validation, filesystem object writes, attachment lifecycle status, scan-request outbox dispatch, scanner boundary, and idempotent scan/finalization workers are in place; remaining product work moved to the [Evidence Lifecycle Completion epic](../epics/evidence-lifecycle-completion/README.md), with audit owned separately. |
 | 018. [Deferred Submission Approval and Control Status](./018-submission-approval-and-control-status.md) | Deferred | Native approval is out of MVP; caller workflows own review before upload unless customer feedback changes this. |
 | 019. [Approved Source Material](./019-approved-source-material.md) | Planned | Not started. |
-| 020. [Audit Log](./020-audit-log.md) | Planned | Not started. |
+| 020. [Audit Log](./020-audit-log.md) | Superseded | Database audit history was replaced by structured `type = "audit_log"` application logs routed to Cloud Logging; active work is tracked in Reliability and Observability and owning domain epics. |
 | 021. [MCP Server](./021-mcp-server.md) | Planned | Not started. |
 | 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Partial | Concrete-Postgres attachment worker rollback/retry coverage is in place; readiness, SpiceDB, Pub/Sub, and public API storage-failure coverage remain open. |
 | 023. [Prometheus Metrics Instrumentation](./023-prometheus-metrics-instrumentation.md) | Planned | Add application metrics on top of the existing `/metrics` scaffold before final demo hardening. |

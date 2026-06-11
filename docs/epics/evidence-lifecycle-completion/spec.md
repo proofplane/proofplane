@@ -62,13 +62,16 @@ reuses the deterministic records without duplicate submissions or attachments.
 
 GCS seeding is not required; production data is created through normal APIs.
 
-## Audit Boundary
+## Audit Logging
 
-Submission and upload audit events belong to the Audit Trail epic. This epic
-must expose stable service operations that can later receive an audit writer,
-but it does not add a second ad hoc audit implementation.
+Submission creation and attachment acceptance emit structured
+`type = "audit_log"` records after their database transactions commit. The logs
+include actor, workspace, request, operation, and affected object identifiers,
+but never attachment bytes, API keys, or raw object metadata sidecars.
 
 ## Revisions
 
 - 2026-06-11: Extracted remaining story 017 work after verifying scan and
-  finalization are implemented. Audit emission moved to the Audit Trail epic.
+  finalization are implemented.
+- 2026-06-11: Replaced database-backed audit events with structured application
+  audit logs.

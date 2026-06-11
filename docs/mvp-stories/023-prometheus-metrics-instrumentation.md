@@ -34,7 +34,7 @@ Extend metrics as later boundaries become concrete:
 - outbox claim, publish, retry, failed, and backlog gauges
 - worker handler duration, success, and failure counters
 - object storage put, get, delete, byte, checksum, and failure metrics
-- audit event append counters once audit logging exists
+- structured audit-log emission counters once audit logging exists
 
 Avoid high-cardinality labels. Do not label with workspace ID, actor ID, request
 ID, raw path parameters, object keys, evidence request IDs, control IDs, API key

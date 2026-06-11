@@ -17,8 +17,7 @@ Postgres repository. Their database transitions, retry behavior, idempotency,
 and failure rollback are covered by integration tests rather than repository
 fakes in handler unit tests.
 Download enforcement, latest-submission API, and seed data remain open. Audit
-emission is now planned in the
-[Audit Trail epic](../epics/audit-trail/README.md).
+records will be structured application logs rather than database rows.
 
 ## Goal
 
@@ -124,8 +123,8 @@ Submissions must distinguish system receipt time from the evidence effective or 
 - Malicious or failed scans block normal download and source-material use.
 - Every worker environment provides a reachable clamd service.
 - Accepted uploads emit scan-request outbox events.
-- Submission creation and upload acceptance audit events remain deferred to the
-  audit story.
+- Submission creation and upload acceptance audit logs remain deferred to the
+  completion epic.
 - Seed data includes at least one sample submission and one uploaded attachment
   metadata record.
 

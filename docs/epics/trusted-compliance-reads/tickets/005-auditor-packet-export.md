@@ -14,12 +14,12 @@ manifest, readable summary, and only finalized attachment bytes.
   export fails before serving a corrupt packet.
 - [ ] Given duplicate filenames, when export runs, then archive paths are stable
   and collision-free.
-- [ ] Given a successful export, when audit history is queried, then one packet
-  export event is present without attachment bytes.
+- [ ] Given a successful export, when structured logs are inspected, then one
+  packet export audit log is present without attachment bytes.
 
 **Tasks**
 
 - [ ] Add streaming ZIP assembly and stable archive paths.
 - [ ] Reuse attachment eligibility and metadata verification.
-- [ ] Add export route, headers, and audit event.
+- [ ] Add export route, headers, and audit log.
 - [ ] Add archive-content and failure integration tests.

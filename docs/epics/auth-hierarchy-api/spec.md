@@ -218,8 +218,8 @@ infrastructure that already exists.
 3. **Actor management** — `actors.workspace_id`, create actor (with SpiceDB
    `member` tuple via the outbox dual-write), issue/revoke keys, multi-credential
    auth change.
-4. **Audit events** — start populating the currently dormant `audit_events`
-   table for login / workspace / member / key events.
+4. **Audit logs** — emit structured `type = "audit_log"` application logs for
+   login / workspace / member / key operations after successful commits.
 
 ## Concerns addressed
 
