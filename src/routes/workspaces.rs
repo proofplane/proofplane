@@ -12,8 +12,7 @@ use uuid::Uuid;
 use crate::{
     authentication::{auth0::TokenVerifier, UserContext},
     domain::{
-        required_text, AddMemberPayload, CreateWorkspacePayload, UserId, Workspace, WorkspaceId,
-        WorkspaceMembership, WorkspaceRole, WorkspaceWithRole,
+        required_text, CreateWorkspacePayload, UserId, Workspace, WorkspaceId, WorkspaceWithRole,
     },
     routes::{
         authentication::authenticate_user,
@@ -45,7 +44,6 @@ pub fn router<V: TokenVerifier + 'static>(state: WorkspacesState<V>) -> Router {
             "/workspaces",
             post(create_workspace::<V>).get(list_workspaces::<V>),
         )
-        .route("/workspaces/{workspace_id}/members", post(add_member::<V>))
         .route(
             "/workspaces/{workspace_id}/members/{user_id}",
             delete(remove_member::<V>),
@@ -95,31 +93,6 @@ async fn list_workspaces<V: TokenVerifier>(
     Ok(Json(workspaces.into_iter().map(Into::into).collect()))
 }
 
-async fn add_member<V: TokenVerifier>(
-    State(state): State<WorkspacesState<V>>,
-    Extension(user): Extension<UserContext>,
-    Path(path): Path<MemberCollectionPath>,
-    Json(body): Json<AddMemberRequest>,
-) -> Result<Json<WorkspaceMembershipResponse>, ApiError> {
-    let workspace_id = WorkspaceId::from(path.workspace_id);
-
-    let role = body
-        .role
-        .parse::<WorkspaceRole>()
-        .map_err(|_| ApiError::BadRequest(vec!["role must be 'owner' or 'admin'".to_owned()]))?;
-    let payload = AddMemberPayload {
-        user_id: UserId::from(body.user_id),
-        role,
-    };
-
-    let membership = state
-        .service
-        .add_member(workspace_id, user.user_id, payload)
-        .await?;
-
-    Ok(Json(membership.into()))
-}
-
 async fn remove_member<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
@@ -140,17 +113,6 @@ struct CreateWorkspaceRequest {
     name: String,
     #[serde(default)]
     slug: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AddMemberRequest {
-    user_id: Uuid,
-    role: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct MemberCollectionPath {
-    workspace_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,25 +145,6 @@ impl From<WorkspaceWithRole> for WorkspaceWithRoleResponse {
             name,
             role: value.role.as_str(),
             created_at,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct WorkspaceMembershipResponse {
-    user_id: Uuid,
-    workspace_id: Uuid,
-    role: &'static str,
-    created_at: DateTime<Utc>,
-}
-
-impl From<WorkspaceMembership> for WorkspaceMembershipResponse {
-    fn from(membership: WorkspaceMembership) -> Self {
-        Self {
-            user_id: Uuid::from(membership.user_id),
-            workspace_id: Uuid::from(membership.workspace_id),
-            role: membership.role.as_str(),
-            created_at: membership.created_at,
         }
     }
 }

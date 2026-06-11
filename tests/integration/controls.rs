@@ -80,10 +80,17 @@ async fn create_list_get_and_update_controls_with_requirement_mappings() {
         cc71_id().to_string()
     );
 
-    app.post(&format!("/workspaces/{workspace_id}/controls"))
+    let duplicate = app
+        .post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&control("PP-LOG-02", "Duplicate", vec![cc61_id()]))
-        .await
-        .assert_status(StatusCode::CONFLICT);
+        .await;
+    duplicate.assert_status(StatusCode::CONFLICT);
+    let duplicate_body = duplicate.json::<Value>();
+    assert_eq!(duplicate_body["error"]["code"], "control_code_taken");
+    assert_eq!(
+        duplicate_body["error"]["message"],
+        "a control with this code already exists in the workspace"
+    );
     app.post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&control("PP-MISSING", "Missing", vec![Uuid::new_v4()]))
         .await

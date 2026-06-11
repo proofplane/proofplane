@@ -962,14 +962,16 @@ async fn outbox_append_rolls_back_with_domain_write() {
                 .await?;
 
             Err::<(), proofplane::repository::Error>(proofplane::repository::Error::Conflict(
-                "force rollback",
+                proofplane::repository::ConflictKind::WorkspaceSlugTaken,
             ))
         })
         .await;
 
     assert!(matches!(
         result,
-        Err(proofplane::repository::Error::Conflict("force rollback"))
+        Err(proofplane::repository::Error::Conflict(
+            proofplane::repository::ConflictKind::WorkspaceSlugTaken
+        ))
     ));
     let rows = postgres
         .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 10)

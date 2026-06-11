@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use thiserror::Error as ThisError;
+
 use crate::{
     authentication::ActorContext,
     domain::{
@@ -7,9 +9,30 @@ use crate::{
         EvidenceRequestControlMapping, EvidenceRequestId, Framework, FrameworkId,
         FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
     },
-    repository::Postgres,
+    repository::{ConflictKind, Error as RepositoryError, Postgres},
     services::Error,
 };
+
+#[derive(Debug, ThisError)]
+pub enum ControlMutationError {
+    #[error("a control with this code already exists in the workspace")]
+    CodeTaken,
+
+    #[error("framework_requirement_ids contains unknown ids")]
+    InvalidFrameworkRequirementReferences,
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for ControlMutationError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::Conflict(ConflictKind::ControlCodeTaken) => Self::CodeTaken,
+            other => Self::Repository(other),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ControlService {
@@ -39,7 +62,7 @@ impl ControlService {
         &self,
         actor: ActorContext,
         payload: CreateControlPayload,
-    ) -> Result<Control, Error> {
+    ) -> Result<Control, ControlMutationError> {
         self.validate_framework_requirement_references(&payload.framework_requirement_ids)
             .await?;
 
@@ -78,7 +101,7 @@ impl ControlService {
         actor: ActorContext,
         control_id: ControlId,
         payload: UpdateControlPayload,
-    ) -> Result<Option<Control>, Error> {
+    ) -> Result<Option<Control>, ControlMutationError> {
         self.validate_framework_requirement_references(&payload.framework_requirement_ids)
             .await?;
 
@@ -139,11 +162,11 @@ impl ControlService {
     async fn validate_framework_requirement_references(
         &self,
         ids: &[FrameworkRequirementId],
-    ) -> Result<(), Error> {
+    ) -> Result<(), ControlMutationError> {
         if self.repository.framework_requirements_exist(ids).await? {
             return Ok(());
         }
 
-        Err(Error::InvalidFrameworkRequirementReferences)
+        Err(ControlMutationError::InvalidFrameworkRequirementReferences)
     }
 }

@@ -19,17 +19,6 @@ async fn create_workspace_makes_caller_the_owner() {
         membership_role(&app, workspace_id, alice_id).await,
         Some("owner".to_owned())
     );
-
-    // The owner can immediately manage the workspace they just created.
-    add_member(
-        &app,
-        alice,
-        workspace_id,
-        app.login("auth0|create-target").await,
-        "admin",
-    )
-    .await
-    .assert_status_ok();
 }
 
 #[tokio::test]
@@ -78,31 +67,6 @@ async fn list_workspaces_returns_only_the_callers_workspaces_with_roles() {
 }
 
 #[tokio::test]
-async fn owner_can_add_a_member_who_can_then_manage() {
-    let app = TestApp::start_without_default_auth().await;
-    let alice = "auth0|alice-add";
-    let bob = "auth0|bob-add";
-    let carol = "auth0|carol-add";
-    app.login(alice).await;
-    let bob_id = app.login(bob).await;
-    let carol_id = app.login(carol).await;
-    let workspace_id = workspace_uuid(&app.create_workspace_as(alice, "Shared Workspace").await);
-
-    add_member(&app, alice, workspace_id, bob_id, "admin")
-        .await
-        .assert_status_ok();
-
-    let bob_list = list_workspaces(&app, bob).await;
-    assert_eq!(bob_list.len(), 1);
-    assert_eq!(bob_list[0]["role"], "admin");
-
-    // Bob, now an admin, can manage members too.
-    add_member(&app, bob, workspace_id, carol_id, "admin")
-        .await
-        .assert_status_ok();
-}
-
-#[tokio::test]
 async fn managing_members_without_permission_returns_404() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-deny";
@@ -111,19 +75,14 @@ async fn managing_members_without_permission_returns_404() {
     let carol_id = app.login(carol).await;
     let workspace_id = workspace_uuid(&app.create_workspace_as(alice, "Private Workspace").await);
 
-    let add = add_member(&app, carol, workspace_id, carol_id, "admin").await;
-    assert_eq!(add.status_code(), StatusCode::NOT_FOUND);
-
-    let remove = app
-        .server()
-        .delete(&format!("/workspaces/{workspace_id}/members/{carol_id}"))
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {carol}"))
-        .await;
+    // A non-member cannot manage members.
+    let remove = remove_member(&app, carol, workspace_id, carol_id).await;
     assert_eq!(remove.status_code(), StatusCode::NOT_FOUND);
 
+    // An unknown workspace is indistinguishable from one the caller cannot access.
     let unknown_workspace = Uuid::new_v4();
-    let add_unknown = add_member(&app, alice, unknown_workspace, carol_id, "admin").await;
-    assert_eq!(add_unknown.status_code(), StatusCode::NOT_FOUND);
+    let remove_unknown = remove_member(&app, alice, unknown_workspace, carol_id).await;
+    assert_eq!(remove_unknown.status_code(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -142,23 +101,44 @@ async fn cannot_remove_the_last_owner() {
         Some("owner".to_owned())
     );
 
-    add_member(&app, alice, workspace_id, bob_id, "owner")
-        .await
-        .assert_status_ok();
+    insert_membership(&app, workspace_id, bob_id, "owner").await;
     let removed = remove_member(&app, alice, workspace_id, alice_id).await;
     removed.assert_status_ok();
     assert_eq!(membership_role(&app, workspace_id, alice_id).await, None);
 }
 
 #[tokio::test]
-async fn adding_a_member_who_never_logged_in_is_rejected() {
+async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
     let app = TestApp::start_without_default_auth().await;
-    let alice = "auth0|alice-unknown-target";
+    let alice = "auth0|alice-slug";
     app.login(alice).await;
-    let workspace_id = workspace_uuid(&app.create_workspace_as(alice, "Workspace").await);
 
-    let response = add_member(&app, alice, workspace_id, Uuid::new_v4(), "admin").await;
-    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    create_workspace_with_slug(&app, alice, "First Workspace", "acme")
+        .await
+        .assert_status_ok();
+
+    let conflict = create_workspace_with_slug(&app, alice, "Second Workspace", "acme").await;
+    assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
+
+    let body = conflict.json::<Value>();
+    assert_eq!(body["error"]["code"], "slug_taken");
+    assert_eq!(
+        body["error"]["message"],
+        "a workspace with this slug already exists"
+    );
+}
+
+async fn create_workspace_with_slug(
+    app: &TestApp,
+    sub: &str,
+    name: &str,
+    slug: &str,
+) -> axum_test::TestResponse {
+    app.server()
+        .post("/workspaces")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+        .json(&json!({ "name": name, "slug": slug }))
+        .await
 }
 
 async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
@@ -171,18 +151,15 @@ async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
     response.json::<Vec<Value>>()
 }
 
-async fn add_member(
-    app: &TestApp,
-    sub: &str,
-    workspace_id: Uuid,
-    user_id: Uuid,
-    role: &str,
-) -> axum_test::TestResponse {
-    app.server()
-        .post(&format!("/workspaces/{workspace_id}/members"))
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-        .json(&json!({ "user_id": user_id, "role": role }))
+async fn insert_membership(app: &TestApp, workspace_id: Uuid, user_id: Uuid, role: &str) {
+    let client = app.postgres().get().await.expect("pool client opens");
+    client
+        .execute(
+            "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, $3)",
+            &[&workspace_id, &user_id, &role],
+        )
         .await
+        .expect("membership insert runs");
 }
 
 async fn remove_member(
