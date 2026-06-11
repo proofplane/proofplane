@@ -3,12 +3,13 @@ use std::{sync::Arc, time::Duration as StdDuration};
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{Duration, SecondsFormat, Utc};
+use futures_util::StreamExt;
 use proofplane::{
     handlers::{
         attachment_finalization::AttachmentFinalizationHandler,
         attachment_scan::AttachmentScanHandler,
     },
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, ObjectStream, StorageError},
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     repository::OutboxMessage,
     scanner::ClamAvMalwareScanner,
     worker::{WorkerMessage, ATTACHMENT_FINALIZATION_REQUESTED, ATTACHMENT_SCAN_REQUESTED},
@@ -111,8 +112,12 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
 
     let clean = upload_attachment(&app, workspace_id, submission_id, "clean.txt").await;
     let request_id = Uuid::new_v4();
-    let clean_handler =
-        AttachmentScanHandler::new(app.postgres.clone(), scanner_for(&app).await, 5);
+    let clean_handler = AttachmentScanHandler::new(
+        app.postgres.clone(),
+        filesystem_object_store(&app).await,
+        scanner_for(&app).await,
+        5,
+    );
     let clean_message = scan_worker_message(&clean, submission_id, Some(request_id), Some(1));
     clean_handler
         .handle_scan_requested(clean_message.clone())
@@ -136,15 +141,20 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     let malicious =
         upload_attachment_with_content(&app, workspace_id, submission_id, "malicious.txt", EICAR)
             .await;
-    AttachmentScanHandler::new(app.postgres.clone(), scanner_for(&app).await, 5)
-        .handle_scan_requested(scan_worker_message(
-            &malicious,
-            submission_id,
-            None,
-            Some(1),
-        ))
-        .await
-        .expect("malicious scan succeeds");
+    AttachmentScanHandler::new(
+        app.postgres.clone(),
+        filesystem_object_store(&app).await,
+        scanner_for(&app).await,
+        5,
+    )
+    .handle_scan_requested(scan_worker_message(
+        &malicious,
+        submission_id,
+        None,
+        Some(1),
+    ))
+    .await
+    .expect("malicious scan succeeds");
     assert_eq!(
         attachment_status(&app, malicious.id).await,
         "contains_virus"
@@ -153,6 +163,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     let failed = upload_attachment(&app, workspace_id, submission_id, "failed.txt").await;
     AttachmentScanHandler::new(
         app.postgres.clone(),
+        filesystem_object_store(&app).await,
         scanner_with_address(&app, clamd_error_address().await, StdDuration::from_secs(1)).await,
         5,
     )
@@ -164,6 +175,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     let retry = upload_attachment(&app, workspace_id, submission_id, "retry.txt").await;
     let retry_handler = AttachmentScanHandler::new(
         app.postgres.clone(),
+        filesystem_object_store(&app).await,
         scanner_with_address(
             &app,
             unavailable_address().await,
@@ -186,6 +198,7 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     let timed_out = upload_attachment(&app, workspace_id, submission_id, "timeout.txt").await;
     let timeout_handler = AttachmentScanHandler::new(
         app.postgres.clone(),
+        filesystem_object_store(&app).await,
         scanner_with_address(
             &app,
             hanging_clamd_address().await,
@@ -204,6 +217,62 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
         .await
         .is_err());
     assert_eq!(attachment_status(&app, timed_out.id).await, "pending");
+
+    let missing = upload_attachment(&app, workspace_id, submission_id, "missing.txt").await;
+    let store = filesystem_object_store(&app).await;
+    store
+        .delete_object(&object_key(&missing.object_key))
+        .await
+        .expect("quarantined object is deleted");
+    AttachmentScanHandler::new(
+        app.postgres.clone(),
+        store.clone(),
+        scanner_for(&app).await,
+        5,
+    )
+    .handle_scan_requested(scan_worker_message(&missing, submission_id, None, Some(1)))
+    .await
+    .expect("missing object is a terminal outcome");
+    assert_eq!(attachment_status(&app, missing.id).await, "failed");
+
+    let mismatched =
+        upload_attachment(&app, workspace_id, submission_id, "metadata-mismatch.txt").await;
+    let sidecar = metadata_path(app.object_storage_root(), &mismatched.object_key);
+    let mut metadata: Value = serde_json::from_slice(
+        &tokio::fs::read(&sidecar)
+            .await
+            .expect("object metadata reads"),
+    )
+    .expect("object metadata parses");
+    metadata["content_type"] = Value::String("application/octet-stream".to_owned());
+    tokio::fs::write(
+        &sidecar,
+        serde_json::to_vec_pretty(&metadata).expect("object metadata serializes"),
+    )
+    .await
+    .expect("mismatched object metadata writes");
+    let mismatch_handler =
+        AttachmentScanHandler::new(app.postgres.clone(), store, scanner_for(&app).await, 5);
+    assert!(mismatch_handler
+        .handle_scan_requested(scan_worker_message(
+            &mismatched,
+            submission_id,
+            None,
+            Some(1),
+        ))
+        .await
+        .is_err());
+    assert_eq!(attachment_status(&app, mismatched.id).await, "pending");
+    mismatch_handler
+        .handle_scan_requested(scan_worker_message(
+            &mismatched,
+            submission_id,
+            None,
+            Some(5),
+        ))
+        .await
+        .expect("final metadata mismatch is persisted");
+    assert_eq!(attachment_status(&app, mismatched.id).await, "failed");
 }
 
 #[tokio::test]
@@ -211,7 +280,12 @@ async fn attachment_scan_handler_rolls_back_update_and_outbox_failures() {
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let handler = AttachmentScanHandler::new(app.postgres.clone(), scanner_for(&app).await, 5);
+    let handler = AttachmentScanHandler::new(
+        app.postgres.clone(),
+        filesystem_object_store(&app).await,
+        scanner_for(&app).await,
+        5,
+    );
 
     let update_failure =
         upload_attachment(&app, workspace_id, submission_id, "update-failure.txt").await;
@@ -270,7 +344,12 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let scanner = AttachmentScanHandler::new(app.postgres.clone(), scanner_for(&app).await, 5);
+    let scanner = AttachmentScanHandler::new(
+        app.postgres.clone(),
+        filesystem_object_store(&app).await,
+        scanner_for(&app).await,
+        5,
+    );
 
     let successful = upload_attachment(&app, workspace_id, submission_id, "successful.txt").await;
     scanner
@@ -674,17 +753,11 @@ async fn scanner_for(app: &TestApp) -> Arc<ClamAvMalwareScanner> {
 }
 
 async fn scanner_with_address(
-    app: &TestApp,
+    _app: &TestApp,
     address: std::net::SocketAddr,
     scan_timeout: StdDuration,
 ) -> Arc<ClamAvMalwareScanner> {
-    let object_store = Arc::new(
-        proofplane::object_storage::FilesystemObjectStore::new(app.object_storage_root())
-            .await
-            .expect("filesystem object store initializes"),
-    );
     Arc::new(ClamAvMalwareScanner::new(
-        object_store,
         address,
         StdDuration::from_millis(100),
         scan_timeout,
@@ -774,16 +847,31 @@ fn final_object_key(
     .expect("final object key is valid")
 }
 
-async fn stored_object(store: &FilesystemObjectStore, key: &str) -> ObjectStream {
-    store
+struct StoredObject {
+    metadata: proofplane::object_storage::ObjectMetadata,
+    bytes: Vec<u8>,
+}
+
+async fn stored_object(store: &FilesystemObjectStore, key: &str) -> StoredObject {
+    let object = store
         .get_object(&object_key(key))
         .await
-        .expect("stored object loads")
+        .expect("stored object loads");
+    let metadata = object.metadata;
+    let bytes = object
+        .chunks
+        .map(|chunk| chunk.expect("stored object chunk reads"))
+        .fold(Vec::new(), |mut bytes, chunk| async move {
+            bytes.extend_from_slice(&chunk);
+            bytes
+        })
+        .await;
+    StoredObject { metadata, bytes }
 }
 
 fn assert_stored_object_matches(
-    actual: ObjectStream,
-    expected: &ObjectStream,
+    actual: StoredObject,
+    expected: &StoredObject,
     expected_key: &ObjectKey,
 ) {
     assert_eq!(actual.bytes, expected.bytes);

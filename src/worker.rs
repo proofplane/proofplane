@@ -104,6 +104,7 @@ impl WorkerState {
         Self {
             attachment_scan_handler: AttachmentScanHandler::new(
                 postgres.clone(),
+                object_store.clone(),
                 scanner,
                 worker_max_delivery_attempts,
             ),

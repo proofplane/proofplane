@@ -1,7 +1,7 @@
 use std::{
     fmt, io,
     path::{Path, PathBuf},
-    pin::pin,
+    pin::{pin, Pin},
 };
 
 use async_trait::async_trait;
@@ -11,7 +11,10 @@ use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+};
 
 use crate::{config::ObjectStorageConfig, domain::WorkspaceId};
 
@@ -108,10 +111,11 @@ pub struct ObjectMetadata {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub type ObjectByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>;
+
 pub struct ObjectStream {
     pub metadata: ObjectMetadata,
-    pub bytes: Vec<u8>,
+    pub chunks: ObjectByteStream,
 }
 
 #[derive(Debug, Error)]
@@ -247,17 +251,18 @@ impl ObjectStore for FilesystemObjectStore {
     async fn get_object(&self, key: &ObjectKey) -> Result<ObjectStream, StorageError> {
         let metadata = self.head_object(key).await?;
         let object_path = self.object_path(key);
-        let bytes = fs::read(&object_path)
+        let file = fs::File::open(&object_path)
             .await
             .map_err(|source| match source.kind() {
                 io::ErrorKind::NotFound => StorageError::NotFound,
                 _ => StorageError::Filesystem {
-                    path: object_path,
+                    path: object_path.clone(),
                     source,
                 },
             })?;
+        let chunks: ObjectByteStream = object_chunks(file, object_path);
 
-        Ok(ObjectStream { metadata, bytes })
+        Ok(ObjectStream { metadata, chunks })
     }
 
     async fn head_object(&self, key: &ObjectKey) -> Result<ObjectMetadata, StorageError> {
@@ -281,12 +286,12 @@ impl ObjectStore for FilesystemObjectStore {
         source: &ObjectKey,
         destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError> {
-        let object = self.get_object(source).await?;
+        let ObjectStream { metadata, chunks } = self.get_object(source).await?;
 
         self.put_object(PutObjectRequest {
             key: destination.to_owned(),
-            content_type: object.metadata.content_type,
-            chunks: stream::once(async move { Ok(Bytes::from(object.bytes)) }),
+            content_type: metadata.content_type,
+            chunks,
         })
         .await
     }
@@ -379,6 +384,31 @@ async fn write_object_stream(
     Ok((content_length, hex::encode(sha256.finalize())))
 }
 
+fn object_chunks<R>(reader: R, path: PathBuf) -> ObjectByteStream
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    Box::pin(stream::try_unfold(
+        (reader, path),
+        |(mut reader, path)| async move {
+            let mut buffer = vec![0_u8; 64 * 1024];
+            let read =
+                reader
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|source| StorageError::Filesystem {
+                        path: path.clone(),
+                        source,
+                    })?;
+            if read == 0 {
+                return Ok(None);
+            }
+            buffer.truncate(read);
+            Ok(Some((Bytes::from(buffer), (reader, path))))
+        },
+    ))
+}
+
 async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
     fs::remove_file(path)
         .await
@@ -403,8 +433,11 @@ mod tests {
     use futures_util::stream;
     use std::{
         fs as std_fs,
+        pin::Pin,
         sync::atomic::{AtomicU64, Ordering},
+        task::{Context, Poll},
     };
+    use tokio::io::{AsyncRead, ReadBuf};
     use url::Url;
     use uuid::Uuid;
 
@@ -535,8 +568,14 @@ mod tests {
         assert_eq!(copied.content_type, source_metadata.content_type);
         assert_eq!(copied.content_length, source_metadata.content_length);
         assert_eq!(copied.sha256, source_metadata.sha256);
-        assert_eq!(store.get_object(&source).await.unwrap().bytes, b"hello");
-        assert_eq!(store.get_object(&copied.key).await.unwrap().bytes, b"hello");
+        assert_eq!(
+            object_bytes(store.get_object(&source).await.unwrap()).await,
+            b"hello"
+        );
+        assert_eq!(
+            object_bytes(store.get_object(&copied.key).await.unwrap()).await,
+            b"hello"
+        );
     }
 
     #[tokio::test]
@@ -590,13 +629,9 @@ mod tests {
             ObjectStore::head_object(store_ref, &key).await.unwrap(),
             metadata
         );
-        assert_eq!(
-            ObjectStore::get_object(store_ref, &key).await.unwrap(),
-            ObjectStream {
-                metadata,
-                bytes: vec![1, 2, 3, 4],
-            }
-        );
+        let object = ObjectStore::get_object(store_ref, &key).await.unwrap();
+        assert_eq!(object.metadata, metadata);
+        assert_eq!(object_bytes(object).await, vec![1, 2, 3, 4]);
         assert!(root
             .join("objects")
             .join(key.as_str())
@@ -655,9 +690,26 @@ mod tests {
             "f5cc4171a2e81eaba9b21e188e0d087d2dd3a190512fcc37b356c6da77adad93"
         );
         assert_eq!(
-            store.get_object(&key).await.unwrap().bytes,
+            object_bytes(store.get_object(&key).await.unwrap()).await,
             b"hello object storage"
         );
+    }
+
+    #[tokio::test]
+    async fn object_stream_surfaces_read_failures_after_emitting_bytes() {
+        let mut chunks = object_chunks(
+            FailingReader { emitted: false },
+            PathBuf::from("injected-object"),
+        );
+
+        assert_eq!(
+            chunks.next().await.unwrap().unwrap(),
+            Bytes::from_static(b"partial")
+        );
+        assert!(matches!(
+            chunks.next().await.unwrap(),
+            Err(StorageError::Filesystem { .. })
+        ));
     }
 
     #[tokio::test]
@@ -722,5 +774,35 @@ mod tests {
         chunks: [Vec<u8>; N],
     ) -> impl Stream<Item = Result<Bytes, StorageError>> {
         stream::iter(chunks.into_iter().map(|chunk| Ok(Bytes::from(chunk))))
+    }
+
+    async fn object_bytes(object: ObjectStream) -> Vec<u8> {
+        object
+            .chunks
+            .map(|chunk| chunk.expect("object chunk reads"))
+            .fold(Vec::new(), |mut bytes, chunk| async move {
+                bytes.extend_from_slice(&chunk);
+                bytes
+            })
+            .await
+    }
+
+    struct FailingReader {
+        emitted: bool,
+    }
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.emitted {
+                return Poll::Ready(Err(io::Error::other("injected read failure")));
+            }
+            self.emitted = true;
+            buffer.put_slice(b"partial");
+            Poll::Ready(Ok(()))
+        }
     }
 }

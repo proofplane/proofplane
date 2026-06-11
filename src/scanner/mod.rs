@@ -1,5 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, pin::pin, time::Duration};
 
+use bytes::Bytes;
+use futures_core::Stream;
+use futures_util::StreamExt;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,19 +10,9 @@ use tokio::{
     time::timeout,
 };
 
-use crate::object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError};
-
 const INSTREAM_COMMAND: &[u8] = b"zINSTREAM\0";
 const INSTREAM_CHUNK_SIZE: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScanObjectRequest<'a> {
-    pub object_key: &'a ObjectKey,
-    pub content_type: &'a str,
-    pub content_length: u64,
-    pub sha256: &'a str,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MalwareScanResult {
@@ -37,17 +30,11 @@ pub enum MalwareScanOutcome {
 
 #[derive(Debug, Error)]
 pub enum MalwareScanError {
-    #[error("object was not found in storage")]
-    ObjectNotFound,
-
     #[error("malware scanner is unavailable: {reason}")]
     Unavailable { reason: String },
 
     #[error("malware scanner timed out: {reason}")]
     Timeout { reason: String },
-
-    #[error("invalid malware scan request: {reason}")]
-    InvalidRequest { reason: String },
 
     #[error("internal malware scanner error: {reason}")]
     Internal { reason: String },
@@ -55,97 +42,85 @@ pub enum MalwareScanError {
 
 #[derive(Debug)]
 pub struct ClamAvMalwareScanner {
-    object_store: Arc<FilesystemObjectStore>,
     address: SocketAddr,
     connection_timeout: Duration,
     scan_timeout: Duration,
 }
 
 impl ClamAvMalwareScanner {
-    pub fn new(
-        object_store: Arc<FilesystemObjectStore>,
-        address: SocketAddr,
-        connection_timeout: Duration,
-        scan_timeout: Duration,
-    ) -> Self {
+    pub fn new(address: SocketAddr, connection_timeout: Duration, scan_timeout: Duration) -> Self {
         Self {
-            object_store,
             address,
             connection_timeout,
             scan_timeout,
         }
     }
 
-    pub async fn scan_object(
-        &self,
-        request: ScanObjectRequest<'_>,
-    ) -> Result<MalwareScanResult, MalwareScanError> {
-        let object = self
-            .object_store
-            .get_object(request.object_key)
-            .await
-            .map_err(map_storage_error)?;
+    pub async fn scan<S>(&self, chunks: S) -> Result<MalwareScanResult, MalwareScanError>
+    where
+        S: Stream<Item = Result<Bytes, MalwareScanError>> + Send,
+    {
+        let connection_attempt =
+            timeout(self.connection_timeout, TcpStream::connect(self.address)).await;
+        let connection = connection_attempt.map_err(|_| MalwareScanError::Timeout {
+            reason: format!(
+                "connection to clamd at {} exceeded {:?}",
+                self.address, self.connection_timeout
+            ),
+        })?;
+        let mut stream = connection.map_err(|error| MalwareScanError::Unavailable {
+            reason: format!("failed to connect to clamd at {}: {error}", self.address),
+        })?;
 
-        if object.metadata.content_type != request.content_type
-            || object.metadata.content_length != request.content_length
-            || object.metadata.sha256 != request.sha256
-        {
-            return Err(MalwareScanError::InvalidRequest {
-                reason: "stored object metadata does not match attachment metadata".to_owned(),
-            });
-        }
-
-        let mut stream = timeout(self.connection_timeout, TcpStream::connect(self.address))
-            .await
-            .map_err(|_| MalwareScanError::Timeout {
-                reason: format!(
-                    "connection to clamd at {} exceeded {:?}",
-                    self.address, self.connection_timeout
-                ),
-            })?
-            .map_err(|error| MalwareScanError::Unavailable {
-                reason: format!("failed to connect to clamd at {}: {error}", self.address),
-            })?;
-
-        let response = timeout(self.scan_timeout, scan_bytes(&mut stream, &object.bytes))
-            .await
-            .map_err(|_| MalwareScanError::Timeout {
-                reason: format!("clamd scan exceeded {:?}", self.scan_timeout),
-            })?
-            .map_err(|error| MalwareScanError::Unavailable {
-                reason: format!("clamd protocol I/O failed: {error}"),
-            })?;
+        let scan_attempt = timeout(self.scan_timeout, scan_chunks(&mut stream, chunks)).await;
+        let scan_result = scan_attempt.map_err(|_| MalwareScanError::Timeout {
+            reason: format!("clamd scan exceeded {:?}", self.scan_timeout),
+        })?;
+        let response = scan_result?;
 
         parse_response(&response)
     }
 }
 
-async fn scan_bytes(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<Vec<u8>> {
-    stream.write_all(INSTREAM_COMMAND).await?;
-    for chunk in bytes.chunks(INSTREAM_CHUNK_SIZE) {
-        stream
-            .write_all(
-                &u32::try_from(chunk.len())
-                    .expect("INSTREAM chunks fit in u32")
-                    .to_be_bytes(),
-            )
-            .await?;
-        stream.write_all(chunk).await?;
+async fn scan_chunks<S>(stream: &mut TcpStream, chunks: S) -> Result<Vec<u8>, MalwareScanError>
+where
+    S: Stream<Item = Result<Bytes, MalwareScanError>>,
+{
+    stream
+        .write_all(INSTREAM_COMMAND)
+        .await
+        .map_err(protocol_error)?;
+    let mut chunks = pin!(chunks);
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk?;
+        for frame in chunk.chunks(INSTREAM_CHUNK_SIZE) {
+            let frame_length =
+                u32::try_from(frame.len()).map_err(|_| MalwareScanError::Internal {
+                    reason: "INSTREAM frame length exceeds the protocol limit".to_owned(),
+                })?;
+            stream
+                .write_all(&frame_length.to_be_bytes())
+                .await
+                .map_err(protocol_error)?;
+            stream.write_all(frame).await.map_err(protocol_error)?;
+        }
     }
-    stream.write_all(&0_u32.to_be_bytes()).await?;
-    stream.flush().await?;
+    stream
+        .write_all(&0_u32.to_be_bytes())
+        .await
+        .map_err(protocol_error)?;
+    stream.flush().await.map_err(protocol_error)?;
 
     let mut response = Vec::new();
     loop {
         if response.len() >= MAX_RESPONSE_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "clamd response exceeded maximum length",
-            ));
+            return Err(MalwareScanError::Internal {
+                reason: "clamd response exceeded maximum length".to_owned(),
+            });
         }
 
         let mut buffer = [0_u8; 1024];
-        let read = stream.read(&mut buffer).await?;
+        let read = stream.read(&mut buffer).await.map_err(protocol_error)?;
         if read == 0 {
             break;
         }
@@ -156,6 +131,12 @@ async fn scan_bytes(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<Vec
     }
 
     Ok(response)
+}
+
+fn protocol_error(error: std::io::Error) -> MalwareScanError {
+    MalwareScanError::Unavailable {
+        reason: format!("clamd protocol I/O failed: {error}"),
+    }
 }
 
 fn parse_response(response: &[u8]) -> Result<MalwareScanResult, MalwareScanError> {
@@ -200,18 +181,11 @@ fn response_reason(response: &str) -> String {
         .to_owned()
 }
 
-fn map_storage_error(error: StorageError) -> MalwareScanError {
-    match error {
-        StorageError::NotFound => MalwareScanError::ObjectNotFound,
-        error => MalwareScanError::Internal {
-            reason: format!("failed to load object from storage: {error}"),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::stream;
+    use tokio::net::TcpListener;
 
     #[test]
     fn parses_clean_malicious_and_failed_responses() {
@@ -247,5 +221,68 @@ mod tests {
             parse_response(b""),
             Err(MalwareScanError::Internal { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn splits_oversized_input_chunks_into_protocol_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut command = [0_u8; INSTREAM_COMMAND.len()];
+            stream.read_exact(&mut command).await.unwrap();
+            assert_eq!(&command, INSTREAM_COMMAND);
+
+            let mut frame_lengths = Vec::new();
+            loop {
+                let length = stream.read_u32().await.unwrap() as usize;
+                if length == 0 {
+                    break;
+                }
+                frame_lengths.push(length);
+                let mut frame = vec![0_u8; length];
+                stream.read_exact(&mut frame).await.unwrap();
+            }
+            stream.write_all(b"stream: OK\0").await.unwrap();
+            frame_lengths
+        });
+        let scanner =
+            ClamAvMalwareScanner::new(address, Duration::from_secs(1), Duration::from_secs(1));
+
+        let result = scanner
+            .scan(stream::iter([Ok(Bytes::from(vec![
+                0_u8;
+                INSTREAM_CHUNK_SIZE + 3
+            ]))]))
+            .await
+            .unwrap();
+
+        assert_eq!(result.outcome, MalwareScanOutcome::Clean);
+        assert_eq!(server.await.unwrap(), vec![INSTREAM_CHUNK_SIZE, 3]);
+    }
+
+    #[tokio::test]
+    async fn propagates_input_stream_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut command = [0_u8; INSTREAM_COMMAND.len()];
+            stream.read_exact(&mut command).await.unwrap();
+        });
+        let scanner =
+            ClamAvMalwareScanner::new(address, Duration::from_secs(1), Duration::from_secs(1));
+        let input_error = MalwareScanError::Internal {
+            reason: "injected storage read failure".to_owned(),
+        };
+
+        let result = scanner.scan(stream::iter([Err(input_error)])).await;
+
+        assert!(matches!(
+            result,
+            Err(MalwareScanError::Internal { reason })
+                if reason == "injected storage read failure"
+        ));
+        server.await.unwrap();
     }
 }

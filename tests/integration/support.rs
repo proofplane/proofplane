@@ -48,6 +48,9 @@ const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
 const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
 const CLAMAV_IMAGE_TAG: &str = "1.4.3";
 pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
+// OnceCell provides one process-wide coordination slot; Mutex prevents concurrent
+// starts; Weak permits reuse without keeping the container alive. Each TestApp holds
+// a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
 
 /// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,
@@ -267,7 +270,6 @@ impl TestApp {
             postgres: self.postgres.clone(),
             object_store: object_store.clone(),
             scanner: Arc::new(ClamAvMalwareScanner::new(
-                object_store.clone(),
                 self.clamav_address(),
                 std::time::Duration::from_secs(1),
                 std::time::Duration::from_secs(30),

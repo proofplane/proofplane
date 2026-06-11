@@ -1,18 +1,16 @@
 use std::sync::Arc;
 
+use futures_util::StreamExt;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
-    object_storage::ObjectKey,
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{NewOutboxMessage, PendingAttachmentUploadWork, Postgres},
-    scanner::{
-        ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult,
-        ScanObjectRequest,
-    },
+    scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
     validate,
     validation::Validation,
     worker::{RetryableWorkerError, WorkerMessage, ATTACHMENT_FINALIZATION_REQUESTED},
@@ -22,6 +20,7 @@ const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
 
 pub struct AttachmentScanHandler {
     repository: Arc<Postgres>,
+    object_store: Arc<FilesystemObjectStore>,
     scanner: Arc<ClamAvMalwareScanner>,
     max_delivery_attempts: u16,
 }
@@ -30,6 +29,7 @@ impl Clone for AttachmentScanHandler {
     fn clone(&self) -> Self {
         Self {
             repository: self.repository.clone(),
+            object_store: self.object_store.clone(),
             scanner: self.scanner.clone(),
             max_delivery_attempts: self.max_delivery_attempts,
         }
@@ -39,11 +39,13 @@ impl Clone for AttachmentScanHandler {
 impl AttachmentScanHandler {
     pub fn new(
         repository: Arc<Postgres>,
+        object_store: Arc<FilesystemObjectStore>,
         scanner: Arc<ClamAvMalwareScanner>,
         max_delivery_attempts: u16,
     ) -> Self {
         Self {
             repository,
+            object_store,
             scanner,
             max_delivery_attempts,
         }
@@ -100,25 +102,44 @@ impl AttachmentScanHandler {
         tracing::debug!("initiating scan");
 
         let quarantine_key = ObjectKey::parse(work.object_key.clone()).map_err(retryable)?;
-        let scan_result = self
-            .scanner
-            .scan_object(ScanObjectRequest {
-                object_key: &quarantine_key,
-                content_type: &work.content_type,
-                content_length: scan_content_length(&work)?,
-                sha256: &work.checksum_sha256,
+        let object = match self.object_store.get_object(&quarantine_key).await {
+            Ok(object) => object,
+            Err(StorageError::NotFound) => {
+                self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
+                    .await?;
+                return Ok(());
+            }
+            Err(error) if final_delivery => {
+                self.mark_failed(&work, error.to_string()).await?;
+                return Ok(());
+            }
+            Err(error) => return Err(retryable(error)),
+        };
+        let content_length = scan_content_length(&work)?;
+        if object.metadata.content_type != work.content_type
+            || object.metadata.content_length != content_length
+            || object.metadata.sha256 != work.checksum_sha256
+        {
+            let error = MalwareScanError::Internal {
+                reason: "stored object metadata does not match attachment metadata".to_owned(),
+            };
+            if final_delivery {
+                self.mark_failed(&work, error.to_string()).await?;
+                return Ok(());
+            }
+            return Err(scan_error(error));
+        }
+        let chunks = object.chunks.map(|chunk| {
+            chunk.map_err(|error| MalwareScanError::Internal {
+                reason: format!("failed to read object from storage: {error}"),
             })
-            .await;
+        });
+        let scan_result = self.scanner.scan(chunks).await;
 
         tracing::debug!("scan completed");
 
         let scan_result = match scan_result {
             Ok(scan_result) => scan_result,
-            Err(MalwareScanError::ObjectNotFound) => {
-                self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
-                    .await?;
-                return Ok(());
-            }
             Err(error) if final_delivery => {
                 self.mark_failed(&work, error.to_string()).await?;
                 // TODO: don't ack here, let the message fail so it can be dead-lettered

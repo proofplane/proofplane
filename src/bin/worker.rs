@@ -63,7 +63,6 @@ async fn run() -> Result<(), Error> {
     let postgres = Arc::new(repository::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let scanner = Arc::new(ClamAvMalwareScanner::new(
-        object_store.clone(),
         config.scanner.clamd_address,
         Duration::from_millis(config.scanner.connection_timeout_ms),
         Duration::from_millis(config.scanner.scan_timeout_ms),
