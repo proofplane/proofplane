@@ -10,7 +10,9 @@
 - [ ] Given an actor with two live credentials, when either key is presented, then it authenticates; and when one is revoked, then the other still works.
 - [ ] Given a presented key, when authenticating, then the credential is resolved by `key_id` scoped to the actor; given an unknown/revoked/expired key, then 401.
 - [ ] Given a key issuance, when the response returns, then the raw key appears exactly once and is never persisted in plaintext, re-shown, or logged.
-- [ ] Given a caller without `manage_actors`, when they manage actors/credentials, then 404; given an `actor_id` outside the path workspace, then it is rejected.
+- [ ] Given a caller who is not a workspace owner/admin, when they manage
+  actors/credentials, then 404; given an `actor_id` outside the path workspace,
+  then it is rejected.
 - [ ] Given a seeded system actor with a null `workspace_id`, when it authenticates, then it still succeeds.
 - [ ] Given the `x-proofplane-*` contract, `ActorContext`, and data-plane routes, when this ships, then they are otherwise unchanged.
 
@@ -18,8 +20,9 @@
 
 - [ ] Migration: `actors` columns; drop unique-credential constraint + index `actor_id`.
 - [ ] Change `ApiKeyAuthenticator::authenticate` to resolve by `key_id` (`api_credential_by_actor_and_key_id`).
-- [ ] Add `manage_actors` to `.zed` + `WorkspaceAuthorizer`; deploy.
-- [ ] Actor router (`authenticate_user` + `manage_actors`): create/list actors (member-tuple dual-write).
+- [ ] Authorize actor management from Postgres owner/admin membership.
+- [ ] Actor router (`authenticate_user`): create/list actors and enqueue the
+  actor data-plane member tuple.
 - [ ] Issue (raw key once) + revoke (idempotent) credential endpoints.
 - [ ] Tests (multi-key, sibling survival, cross-actor reject, no secret leakage) + seed data.
 

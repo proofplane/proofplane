@@ -1,0 +1,90 @@
+# Proofplane MVP Epics
+
+This directory is the source of truth for remaining MVP work. The legacy
+[MVP stories](../mvp-stories/README.md) record the original build sequence, but
+new work is planned and tracked as epics with lean tickets and one technical
+spec per epic.
+
+The MVP has two release boundaries:
+
+- **Backend MVP:** an authenticated, auditable compliance backend that accepts
+  evidence, exposes trusted compliance reads through REST and MCP, and runs on
+  production dependencies.
+- **Launch MVP:** the backend MVP plus an auditor-ready packet, self-serve
+  sandbox, first-run product experience, public pricing, and launch operations.
+
+Native submission approval remains deferred. Trust is explicit: attachments
+must be malware-scanned and finalized, source material is curated with
+provenance, and freshness is derived from linked evidence.
+
+## Current Reality
+
+| Area | Implemented | Remaining |
+| --- | --- | --- |
+| Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
+| Identity and authorization | API-key data plane, Auth0 users, workspace self-onboarding and membership | Workspace actors, key rotation, identity audit events |
+| Compliance model | Frameworks, controls, Evidence Requests, mappings | Trusted source material and auditor packet reads |
+| Evidence lifecycle | Submission create/get, upload integrity, quarantine, ClamAV scan, finalization | Latest API, download enforcement, demo submission/object seed |
+| Audit | Dormant `audit_events` table | Transactional writer, business events, query API |
+| Agent interface | MCP binary scaffold | MCP runtime and tools |
+| Launch surface | Product and GTM notes | Release runbook, sandbox/product UI, marketing site |
+
+## Epic Portfolio
+
+| Epic | Status | Legacy source | Outcome |
+| --- | --- | --- | --- |
+| [Auth Hierarchy API](./auth-hierarchy-api/README.md) | Doing | Extends 010 | Humans manage workspace actors and rotating API keys. |
+| [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Todo | 017 | Evidence can be queried, safely downloaded, and demonstrated end to end. |
+| [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | 011, 014 | GCS and production Google Pub/Sub work without emulator-only assumptions. |
+| [Audit Trail](./audit-trail/README.md) | Todo | 020 | Business actions are transactionally recorded and queryable. |
+| [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | 018, 019, 025 | Curated source material and auditor-ready packets expose provenance and freshness. |
+| [MCP Server](./mcp-server/README.md) | Todo | 021 | Agents use the same services and authorization model as REST clients. |
+| [Reliability and Observability](./reliability-observability/README.md) | Todo | 022, 023 | Dependency failures and runtime behavior are visible and tested. |
+| [Release Hardening](./release-hardening/README.md) | Todo | 024 | The backend MVP is reproducible, deployable, and proven by a scripted flow. |
+| [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | 025 | A founder can discover, enter, and use a realistic SOC 2 sandbox. |
+
+## Preferred Sequence
+
+1. Finish `auth-hierarchy-api/003` and the Evidence Lifecycle Completion epic.
+2. Build `audit-trail/001`; then identity and data-plane audit emission can
+   proceed in parallel.
+3. Build production adapters while Trusted Compliance Reads starts on the
+   completed evidence model.
+4. Build MCP after actor management, trusted reads, and the audit query contract
+   are stable.
+5. Add reliability coverage and metrics continuously, completing that epic
+   before release hardening.
+6. Complete Release Hardening for the backend MVP.
+7. Build the Sandbox Product Launch on the stable APIs and packet preview.
+
+## Legacy Story Crosswalk
+
+| Stories | Reconciliation |
+| --- | --- |
+| 001-009 | Implemented foundation; no new epic required. |
+| 010 | Original API-key auth is implemented; customer actor/key management continues in Auth Hierarchy API. |
+| 011-013 | Local Pub/Sub, outbox, dequeuer, and worker are implemented; production Pub/Sub moves to Production Runtime Adapters. |
+| 014 | Filesystem storage is implemented; GCS moves to Production Runtime Adapters. |
+| 015-016 | Evidence Requests, controls, and mappings are implemented. |
+| 017 | Scan/finalization is implemented; remaining work moves to Evidence Lifecycle Completion. |
+| 018 | Native approval remains deferred; usability derives from attachment status and freshness. |
+| 019 | Reframed as curated Trusted Compliance Reads without a submission approval dependency. |
+| 020 | Moves to Audit Trail; identity event emission remains coordinated with Auth Hierarchy API. |
+| 021 | Moves to MCP Server with a reduced, implementable MVP tool set. |
+| 022-023 | Move to Reliability and Observability. Existing worker rollback tests are baseline, not remaining scope. |
+| 024 | Moves to Release Hardening and no longer assumes approval APIs. |
+| 025 | Splits backend packet reads from the UI/marketing work in Sandbox Product Launch. |
+
+## Definition Of MVP Done
+
+- Every ticket in the backend epics is `Done`, with specs reconciled to what
+  shipped.
+- `make check` passes, and Docker-backed integration tests cover the release
+  flow and external dependency failures.
+- Production configuration supports Postgres, SpiceDB, Google Pub/Sub, GCS,
+  Auth0, and ClamAV without local emulator requirements.
+- Actors can submit evidence, retrieve only finalized attachments, query trusted
+  compliance material, inspect audit history, and perform the supported MCP
+  workflows.
+- The launch flow creates a realistic sandbox and reaches an auditor packet
+  preview from the public site without a sales gate.

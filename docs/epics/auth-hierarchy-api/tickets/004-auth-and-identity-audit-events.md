@@ -1,8 +1,10 @@
 # 004 — Auth & Identity Audit Events
 
-**Status:** Todo · **Depends on:** 001, 002, 003 · **Spec:** [spec.md](../spec.md#build-order)
+**Status:** Todo · **Depends on:** 001, 002, 003, audit-trail/001 · **Spec:** [spec.md](../spec.md#build-order)
 
-**Summary** — Record a durable audit trail for identity/access operations by populating the unused `audit_events` table: login, workspace creation, membership change, actor creation, key issue/revoke.
+**Summary** — Emit identity and access events through the shared Audit Trail
+transactional writer: login, workspace creation, membership change, actor
+creation, and key issue/revoke.
 
 **Acceptance criteria**
 
@@ -15,13 +17,15 @@
 
 **Tasks**
 
-- [ ] Migration: `audit_events.user_id` + indexes.
-- [ ] `AuditEventWriter` trait + Postgres impl (insert on caller's transaction); management-plane transactional helper.
+- [ ] Integrate the writer and event model from `audit-trail/001`.
 - [ ] Emit workspace/member events from 002 ops.
 - [ ] Emit actor/credential events from 003 ops + deduped `user.logged_in` from 001 middleware.
 - [ ] Tests (attribution, rollback, no-secrets, dedup).
 
 **Notes**
 
-- Table currently references `actor_id` only; management events need `user_id`. Don't use the outbox — these are local in-txn rows.
+- Shared schema, writer, and query ownership moved to the
+  [Audit Trail epic](../../audit-trail/README.md); this ticket owns only
+  auth-specific emission.
+- Don't use the outbox — these are local in-transaction rows.
 - This is write-only: no audit read/query API, retention/export, or data-plane (evidence/controls) audit here.
