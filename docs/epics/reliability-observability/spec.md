@@ -126,7 +126,7 @@ deterministic alone and in the full integration target.
 
 ## Revisions
 
-- 2026-06-11: Reconciled legacy story 022 with existing concrete worker rollback
+- 2026-06-11: Reconciled the plan with existing concrete worker rollback
   coverage and removed stale claims that all failure work was unimplemented.
 - 2026-06-11: Replaced database-backed audit events and query APIs with
   structured application logs routed to a dedicated Cloud Logging sink.

@@ -40,9 +40,9 @@ Current dequeuer publishing support is intentionally limited to local Pub/Sub
 through the `PUBSUB_EMULATOR_HOST` environment variable. Dequeuer startup fails
 when that variable is absent; production Google Pub/Sub publishing remains a
 future runtime capability. `PUBSUB_EMULATOR_HOST` is the sole source of the
-emulator endpoint; it is not duplicated in typed or YAML configuration. See MVP
-stories [011](./mvp-stories/011-pubsub-client-and-subscription-runtime.md) and
-[012](./mvp-stories/012-transactional-outbox.md).
+emulator endpoint; it is not duplicated in typed or YAML configuration.
+Production work is tracked in the
+[Production Runtime Adapters spec](./epics/production-runtime-adapters/spec.md).
 
 The worker is a separate HTTP runtime for Pub/Sub push delivery. It loads config,
 initializes tracing, runs migrations, builds its own Postgres pool, installs
@@ -198,8 +198,8 @@ current runtime behavior, not a claim that dependency direction is fully clean.
 The current API and worker runtimes use `FilesystemObjectStore`. Although object
 storage configuration accepts GCS settings and the `ObjectStore` trait defines
 the adapter contract, selecting GCS currently returns `UnsupportedBackend`.
-Production GCS support is planned in MVP story
-[014](./mvp-stories/014-gcs-object-storage-adapter.md).
+Production GCS support is planned in the
+[Production Runtime Adapters epic](./epics/production-runtime-adapters/README.md).
 
 The worker uses the concrete `ClamAvMalwareScanner`. Its required configuration
 contains the clamd TCP address plus connection and scan timeouts. There is no
@@ -337,15 +337,15 @@ Some configuration fields are reserved for staged runtime capabilities:
 
 - `server.mcp_bind` is validated but not currently used. The MCP binary runs
   migrations, logs its scaffold startup message, and exits without binding a
-  server. The planned MCP runtime is described in MVP story
-  [021](./mvp-stories/021-mcp-server.md).
+  server. The planned runtime is described in the
+  [MCP Server epic](./epics/mcp-server/README.md).
 - `worker.concurrency` and `worker.shutdown_grace_seconds` are validated but are
   not currently consumed by the worker runtime. Request concurrency comes from
   Axum's HTTP serving model and the deployment platform; for live Cloud Run
-  delivery, this direction is recorded in MVP story
-  [013](./mvp-stories/013-worker-runtime-and-outbox-dequeuer.md). Worker
-  shutdown currently waits for Axum's graceful shutdown without applying the
-  configured grace duration.
+  delivery, this direction is recorded in the
+  [Production Runtime Adapters spec](./epics/production-runtime-adapters/spec.md).
+  Worker shutdown currently waits for Axum's graceful shutdown without applying
+  the configured grace duration.
 
 Configured-but-unused fields should not be described as affecting runtime
 behavior until their owning binaries consume them.

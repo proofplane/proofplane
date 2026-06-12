@@ -113,7 +113,7 @@ keys, or raw object metadata sidecars.
 
 ## Revisions
 
-- 2026-06-11: Extracted remaining story 017 work after verifying scan and
+- 2026-06-11: Extracted remaining evidence lifecycle work after verifying scan and
   finalization are implemented.
 - 2026-06-11: Replaced database-backed audit events with structured application
   audit logs.

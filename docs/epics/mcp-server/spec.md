@@ -78,7 +78,7 @@ MVP.
 ## Revisions
 
 - 2026-06-11: Removed approval/rejection and binary-transfer tools from the
-  legacy story because those behaviors are not in the MVP domain model.
+  original plan because those behaviors are not in the MVP domain model.
 - 2026-06-11: Removed database audit-history and agent-log tools in favor of
   structured application audit logs routed to Cloud Logging.
 - 2026-06-11: Added attachment download-grant issuance for human inspection;

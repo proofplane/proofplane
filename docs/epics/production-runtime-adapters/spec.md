@@ -79,7 +79,7 @@ the configured Pub/Sub mode without a separate deployment smoke test.
 ## Revisions
 
 - 2026-06-11: Added the production Pub/Sub gap discovered while reconciling
-  legacy stories 011-014 with runtime code.
+  the original runtime plan with current code.
 - 2026-06-11: Removed the GCS emulator path. Local tests use filesystem storage;
   CI integration tests exercise the real GCS adapter and clean up isolated
   prefixes.

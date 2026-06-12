@@ -52,7 +52,7 @@ to their risk.
 
 Recent commits use short, imperative summaries such as `Update outdated docs`.
 Keep commits focused. Pull requests should explain behavior changes, identify
-migrations or configuration effects, link the relevant issue or MVP story, and
+migrations or configuration effects, link the relevant issue or epic ticket, and
 list validation commands run. Update `docs/` and fixtures when contracts or
 setup steps change.
 

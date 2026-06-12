@@ -28,4 +28,5 @@
 
 **Notes**
 
-- Evolves story 010: actors become workspace-owned; rotation allows >1 live key (issue-new-then-revoke-old). Detail in spec.
+- Actors become workspace-owned; rotation allows more than one live key
+  (issue-new-then-revoke-old). Detail in spec.
