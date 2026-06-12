@@ -1,373 +1,634 @@
-# Proofplane Architecture Notes
-
-This document captures architectural decisions that should guide future work.
-It is intentionally practical: keep it aligned with the code as the system
-evolves.
-
-## API Runtime
-
-The API binary owns runtime assembly and process lifecycle. It should stay as
-the place where infrastructure dependencies are created, startup tasks run, and
-the HTTP server is launched.
-
-The expected API startup flow is:
-
-1. Load configuration from `PROOFPLANE_CONFIG`.
-2. Initialize structured logging through `observability`.
-3. Open a one-off Postgres connection for startup work.
-4. Run database migrations before serving traffic.
-5. Build the long-lived Postgres connection pool.
-6. Wrap the pool in `repository::Postgres`.
-7. Initialize metrics.
-8. Bind the TCP listener.
-9. Build the Axum app from `app::AppDependencies`.
-10. Serve with graceful shutdown.
-
-The binary should compose dependencies explicitly, then hand them to the app
-layer. HTTP route modules should not load config, initialize tracing, run
-migrations, or construct database pools.
-
-## Worker Runtime
-
-The dequeuer is a standalone outbox publisher. It loads config, initializes tracing,
-runs migrations, builds a small Postgres pool, provisions Pub/Sub topics and the
-worker push subscription, builds a `GoogleCloudPublisher`, and polls due
-`outbox_messages`. When a row publishes successfully, the dequeuer deletes it.
-When publishing fails, it records the failure, increments the attempt count, and
-schedules the next retry using bounded backoff.
-
-Current dequeuer publishing support is intentionally limited to local Pub/Sub
-through the `PUBSUB_EMULATOR_HOST` environment variable. Dequeuer startup fails
-when that variable is absent; production Google Pub/Sub publishing remains a
-future runtime capability. `PUBSUB_EMULATOR_HOST` is the sole source of the
-emulator endpoint; it is not duplicated in typed or YAML configuration.
-Production work is tracked in the
-[Production Runtime Adapters spec](./epics/production-runtime-adapters/spec.md).
-
-The worker is a separate HTTP runtime for Pub/Sub push delivery. It loads config,
-initializes tracing, runs migrations, builds its own Postgres pool, installs
-metrics, binds `server.worker_bind`, and serves `/pubsub/messages` plus health
-and metrics routes. Pub/Sub push messages are acknowledged with `204 No Content`
-when they are malformed, unknown, invalid, stale, duplicate, mismatched,
-terminal, or successfully processed. Retryable handler failures return `500`
-so Pub/Sub can redeliver according to the subscription policy. On the final
-delivery attempt, scanner failures are persisted as terminal attachment
-failures and acknowledged with `204` instead of being retried again.
-ClamAV is a required worker dependency. The worker loads each quarantined
-filesystem object through the buffered object-store contract and scans it with
-clamd's `INSTREAM` protocol before requesting finalization.
-
-## General Notes on Binaries
-
-All binaries should also own their startup orchestration: load config,
-initialize tracing, run required startup database work, then enter their runtime
-or command behavior.
-
-Shared database startup utilities belong in `store`, including direct
-connections, connection pools, and migrations. Seed data is different: it is
-owned by the `seed` binary because seeding is a maintenance command, not shared
-infrastructure for application code.
-
-## Module Boundaries
-
-### `src/bin/api.rs`
-
-`api.rs` is the API process entry point. It owns:
-
-- process startup and shutdown;
-- config loading;
-- tracing initialization;
-- startup database connection and migrations;
-- long-lived pool construction;
-- repository construction;
-- metrics recorder installation;
-- TCP listener binding;
-- final `axum::serve` call.
-
-The preferred shape is a small `main()` that delegates to `run()`.
-
-### `src/store`
-
-`store` is the low-level database infrastructure layer. It owns direct
-integration with database libraries:
-
-- `tokio_postgres` connections;
-- `deadpool_postgres` pools;
-- `refinery` migrations.
-
-This module may know about connection strings, Postgres clients, pools, and
-migration runners. Higher layers should not duplicate this setup logic.
-
-### `src/repository`
-
-`repository` is the application-facing database gateway. It wraps lower-level
-pool types and provides methods that route and service code can depend on.
-
-The `Postgres` gateway owns a `deadpool_postgres::Pool` internally. It exposes:
-
-- `get()` for direct pooled connection access, including infrastructure checks
-  and repository operations that do not need a transaction;
-- `in_transaction()` for general transactional work;
-- `in_actor_context()` for workspace- and actor-scoped transactional work;
-- `in_actor_context_read()` for workspace- and actor-scoped reads.
-
-Actor-scoped operations receive `WorkspaceId` and `ActorId` values at the
-repository boundary. Their queries run through repository-owned
-`ActorTransactionContext` and `ActorReadContext` types.
-
-Product queries and persistence primitives live in repository submodules for
-actors, API credentials, controls, evidence requests, evidence submissions,
-outbox messages, and workspaces. Route and service code should avoid reaching
-through to `store` for normal application data access.
-
-Repository methods are persistence primitives, not authorization boundaries.
-This matters for global identity data: actors and API credentials are not owned
-by a single workspace, so repository methods may read or mutate them globally.
-Do not expose those methods directly through HTTP routes. Any future actor or
-API credential management API must authorize the requested management action
-explicitly, for example with actor-owned credential permissions or an
-organization/admin-level permission in SpiceDB.
-
-### `src/app.rs`
-
-`app` is HTTP composition. It owns construction of the root Axum `Router`.
-
-`create_app` should take a single `AppDependencies` struct. This keeps app
-construction stable as new routers and dependencies are added.
-
-The app layer owns:
-
-- nesting route modules under their configured paths;
-- building per-router state from `AppDependencies`;
-- attaching root HTTP middleware, including request logging.
-
-It should not create infrastructure dependencies. Those are built by the binary
-and passed in.
-
-For product routes, `app` constructs the concrete services and supplies each
-router with its service, API-key authenticator, and workspace authorizer.
-
-### `src/routes`
-
-`routes` owns HTTP endpoint behavior. Each route module should expose a router
-constructor and define the state required by that router.
-
-Routes may depend on already-constructed application dependencies, such as
-services, authenticators, authorizers, or a metrics handle. They should not load
-config, run migrations, construct pools, or initialize global process state.
-
-Route **handlers must stay thin**: parse and validate the request, call the
-service, and return the result. A handler must not contain authorization
-branching — it never decides "is this caller allowed?" by reading a boolean
-predicate and choosing a status. That decision belongs to route middleware (the
-data-plane permission gate, see `src/authorization`) or to the service layer
-(management-plane role decisions). Handlers translate service problem types into
-HTTP via `routes::error`; they do not re-implement policy.
-
-Route errors should map to stable HTTP responses in `routes::error`. This is the
-single place where service problem types (such as `MemberError`) become
-`ApiError` HTTP statuses.
-
-### `src/services`
-
-`services` owns business orchestration between HTTP routes, persistence, and
-external adapters. Product route handlers call `ControlService`,
-`EvidenceRequestService`, or `EvidenceSubmissionService` rather than
-coordinating repository work directly.
-
-Services are responsible for:
-
-- coordinating workspace- and actor-scoped reads and transactions;
-- composing multiple persistence primitives into one business operation;
-- using object storage for attachment upload and cleanup behavior;
-- mediating between route payloads and repository operations;
-- owning **management-plane authorization decisions**. Human management-plane
-  operations (for example workspace membership management) authorize the acting
-  user from Postgres `workspace_memberships` — checking the owner/admin role —
-  inside the service method itself, before the operation runs. The acting
-  user's `UserId` is passed in by the route. Authorization outcomes are surfaced
-  as **problem types** (domain error enums such as `MemberError`) returned to
-  the route, never as raw HTTP statuses. Services do not branch on HTTP concerns.
-
-The current transaction context types are defined in `services` and used by the
-repository gateway. This is an existing layering compromise documented here as
-current runtime behavior, not a claim that dependency direction is fully clean.
-
-### Runtime Adapters
-
-The current API and worker runtimes use `FilesystemObjectStore`. Although object
-storage configuration accepts GCS settings and the `ObjectStore` trait defines
-the adapter contract, selecting GCS currently returns `UnsupportedBackend`.
-Production GCS support is planned in the
-[Production Runtime Adapters epic](./epics/production-runtime-adapters/README.md).
-
-The worker uses the concrete `ClamAvMalwareScanner`. Its required configuration
-contains the clamd TCP address plus connection and scan timeouts. There is no
-disabled mode or runtime scanner selection. The scan handler opens the
-quarantined object, validates its stored metadata against the attachment record,
-and streams bounded storage chunks to the scanner. The scanner only owns clamd
-connection, timeout, protocol, and response handling and subdivides input into
-bounded `INSTREAM` frames.
-
-### `src/authentication` and `src/routes/authentication.rs`
-
-API keys authenticate actors against credential records stored in Postgres.
-Workspace route middleware reads the actor ID and API key headers, authenticates
-the credential for the workspace in the route path, and attaches the resulting
-`authentication::ActorContext` to the request before the route handler runs.
-This authentication result carries the actor and workspace identity shared with
-routes, authorization, and services. Persistence receives the contained domain
-IDs rather than depending on the authentication type.
-
-### `src/authorization`
-
-Proofplane has two authorization planes, enforced in two different places. When
-adding an API, pick the matching pattern:
-
-**Actor data plane — route middleware.** `WorkspaceAuthorizer` checks workspace
-read or write permissions through SpiceDB for actor (API-credential) traffic on
-data-plane resources such as controls and evidence requests/submissions. Product
-route middleware selects the required permission from the HTTP method and
-resource type. Authentication and authorization both complete before the
-middleware invokes the route handler, so those service methods receive an
-already-authorized `ActorContext` and do not re-check permissions.
-
-**Human management plane — service layer.** Management-plane operations (for
-example workspace membership) are *not* governed by SpiceDB. They authorize the
-acting user from Postgres `workspace_memberships` (owner/admin role), and that
-check lives **inside the service method**, not in middleware or the handler. The
-service returns a problem type (such as `MemberError::Forbidden`) that
-`routes::error` maps to the appropriate HTTP status — currently `404`, so an
-absent workspace, a non-member, and an under-privileged member are
-indistinguishable and no existence is leaked.
-
-### `src/dequeuer`
-
-`dequeuer` owns the transactional outbox polling loop. It should stay independent
-from HTTP concerns. Its inputs are a `repository::Postgres`, a Pub/Sub
-`Publisher`, and an `OutboxDequeuerConfig`.
-
-The dequeuer is responsible for:
-
-- listing due outbox rows;
-- converting rows into Pub/Sub messages;
-- deleting rows after successful publish;
-- recording publish failures and retry timestamps;
-- applying bounded retry backoff.
-
-It should not know about individual domain handlers. Domain-specific work starts
-after Pub/Sub delivers the message to the worker.
-
-### `src/worker.rs` and `src/handlers`
-
-`worker.rs` owns the Pub/Sub push HTTP surface and event dispatch. It builds the
-worker router, decodes Pub/Sub push envelopes, validates message
-data, maps non-retryable outcomes to acknowledgements, and maps retryable
-handler failures to `500`.
-
-Domain-specific worker behavior belongs under `src/handlers`. The worker
-dispatch layer should multiplex by event type and call the appropriate handler.
-Handlers acknowledge invalid, stale, duplicate, mismatched, and already-terminal
-work by returning success. Successful processing also returns success. Scanner
-errors remain retryable until the configured final delivery attempt; on that
-attempt the scan handler persists a terminal attachment failure and returns
-success so the worker acknowledges the message.
-
-### `src/pubsub`
-
-`pubsub` owns Pub/Sub integration. It defines application topic names, outbound
-message publishing, Google Pub/Sub publisher construction, and worker
-subscription provisioning. The dequeuer depends on this module for publishing and
-startup provisioning; handlers should not publish directly unless a later domain
-flow explicitly needs a new event.
-
-## Dependency Direction
-
-The API dependency direction should remain:
-
-```text
-src/bin/api.rs
-  -> app::create_app(AppDependencies)
-  -> routes
-     -> authentication::ApiKeyAuthenticator -> repository
-     -> authorization::WorkspaceAuthorizer -> SpiceDB
-     -> services
-        -> repository
-        -> object_storage
-  -> repository
-  -> store
+# Proofplane Architecture
+
+This doc is a code-level reference, not a target-state design. Planned changes
+belong in [`docs/epics/`](./epics/README.md).
+
+## System Summary
+
+Proofplane is a single Rust crate compiled into six binaries. The implemented
+product is an HTTP API plus an asynchronous attachment-processing pipeline:
+
+- The `api` binary serves human management routes and actor-facing compliance
+  routes.
+- The `dequeuer` binary publishes transactional outbox rows to Google Pub/Sub.
+- The `worker` binary receives Pub/Sub push deliveries, scans attachments with
+  ClamAV, and finalizes clean objects.
+- The `seed` and `authz-schema` binaries initialize local application data and
+  SpiceDB schema.
+- The `mcp` binary is currently a scaffold. It runs migrations and exits without
+  binding a server.
+
+Postgres is the primary application datastore. SpiceDB makes actor data-plane
+authorization decisions. Auth0 verifies human identities. Attachment bytes live
+in a filesystem object store in the implemented runtime. Pub/Sub connects the
+outbox dequeuer to the worker, and ClamAV scans quarantined attachment streams.
+
+```mermaid
+flowchart LR
+    Human[Human client] -->|Bearer token| API
+    Actor[Actor or agent client] -->|Actor ID + API key| API
+    Auth0[Auth0 JWKS] --> API
+    API --> PG[(Postgres)]
+    API --> SpiceDB[SpiceDB]
+    API --> FS[(Filesystem object store)]
+
+    PG --> Dequeuer[Outbox dequeuer]
+    Dequeuer --> PubSub[Google Pub/Sub API<br/>local Deltio emulator]
+    PubSub -->|HTTP push| Worker
+    Worker --> PG
+    Worker --> FS
+    Worker --> ClamAV[ClamAV clamd]
+
+    Seed[Seed CLI] --> PG
+    Seed --> SpiceDB
+    Schema[AuthZ schema CLI] --> SpiceDB
 ```
 
-This diagram describes runtime composition. `ActorContext` belongs to
-authentication and is consumed by routes, authorization, and services.
-Repository code remains independent of those layers and accepts domain identity
-types at its actor-scoped operation boundary.
+## Runtime Processes
 
-The asynchronous worker dependency direction should remain:
+| Binary | Runtime role | Listens | Main dependencies | Current behavior |
+| --- | --- | --- | --- | --- |
+| `api` | Synchronous HTTP application | `server.api_bind` | Postgres, SpiceDB, Auth0 JWKS, object storage | Runs migrations, constructs the Axum router, and serves until Ctrl-C. |
+| `worker` | Pub/Sub push consumer | `server.worker_bind` | Postgres, object storage, ClamAV | Runs migrations and serves push, health, and metrics routes until Ctrl-C. |
+| `dequeuer` | Transactional outbox publisher | None | Postgres, Pub/Sub | Runs migrations, provisions topics/subscription, and polls the outbox until Ctrl-C. It currently requires `PUBSUB_EMULATOR_HOST`. |
+| `mcp` | MCP placeholder | None | Postgres | Runs migrations, logs a scaffold message, and exits. `server.mcp_bind` is not used. |
+| `seed` | Idempotent local fixture loader | None | Postgres, SpiceDB | Runs migrations; seeds workspaces, users, actors, one API key, SpiceDB membership, requests, frameworks, requirements, and controls. |
+| `authz-schema` | SpiceDB schema deployment CLI | None | SpiceDB | Reads `spicedb.schema_path` and writes the schema explicitly. |
+
+The API, worker, dequeuer, MCP, and seed binaries all run application database
+migrations during startup. SpiceDB schema deployment is deliberately separate:
+normal application startup never writes the authorization schema.
+
+## Local Topology
+
+`docker-compose.yml` supplies four local dependencies:
+
+- Postgres 16 on `127.0.0.1:5432`.
+- Deltio, a Google Pub/Sub emulator, on `127.0.0.1:8085`.
+- SpiceDB on `127.0.0.1:50051`.
+- ClamAV `clamd` on `127.0.0.1:3310`.
+
+SpiceDB uses a separate `proofplane_spicedb` database inside the same Postgres
+container. Docker Compose creates that database and runs SpiceDB's own datastore
+migrations before starting SpiceDB.
+
+The local object store is not a container. It writes beneath `.local/storage`.
+The Pub/Sub push endpoint is
+`http://host.docker.internal:3001/pubsub/messages`, allowing the emulator
+container to call the worker running on the host.
+
+## Code Organization And Dependency Direction
+
+The crate is organized into recognizable application layers:
 
 ```text
-src/bin/dequeuer.rs
-  -> dequeuer::OutboxDequeuer
-  -> pubsub::Publisher
-  -> repository
-  -> store
-
-src/bin/worker.rs
-  -> worker::create_worker_app(WorkerAppDependencies)
-  -> worker::router
-  -> handlers
-  -> repository
-  -> store
+src/bin/             process entrypoints and dependency composition
+src/routes/          HTTP transport, DTOs, middleware, response mapping
+src/worker.rs        Pub/Sub push transport and event dispatch
+src/handlers/        message-driven business logic
+src/services/        router-facing business logic and orchestration
+src/domain/          domain entities, typed IDs, enums, validation rules
+src/repository/      concrete Postgres persistence and transaction contexts
+src/authentication/  Auth0 and API-key authentication
+src/authorization/   SpiceDB authorization adapter
+src/object_storage/  object-store contract and filesystem implementation
+src/pubsub/           publisher contract and Google Pub/Sub implementation
+src/scanner/          ClamAV protocol adapter
+src/store/            Postgres connection pools and migrations
+src/config/           YAML loading, parsing, and validation
+src/observability/    tracing subscriber setup
 ```
 
-The binary is allowed to depend on every layer because it assembles the process.
-Routes and app code should depend only on the dependencies they are handed.
-Lower layers should not depend on HTTP modules.
+The usual request-driven dependency path is:
+
+```text
+route -> service -> repository -> Postgres
+```
+
+Routes own HTTP concerns: extraction, DTO conversion, validation error mapping,
+authentication middleware, authorization middleware, and response
+serialization. Services implement business logic on behalf of routes. They
+coordinate repository operations, transaction boundaries, external
+dependencies, and outbox messages when a use case needs asynchronous follow-up.
+Repositories own SQL and convert rows into domain types. Domain modules do not
+depend on Axum, Postgres, SpiceDB, or generated protobuf types.
+
+The architecture is pragmatic rather than strictly hexagonal:
+
+- `Postgres` is a concrete repository gateway, not a repository trait.
+- `EvidenceSubmissionService` depends directly on `FilesystemObjectStore`.
+- The API and worker dependency structs also require `FilesystemObjectStore`.
+- `AttachmentScanHandler` depends directly on the filesystem store and concrete
+  ClamAV scanner.
+- `AttachmentFinalizationHandler` is generic over the `ObjectStore` trait.
+- Pub/Sub publishing is behind a `Publisher` trait, which supports a fake in
+  unit tests.
+
+The active Production Runtime Adapters epic tracks removal of the
+filesystem-only composition constraints.
+
+## Composition Roots
+
+Each binary in `src/bin/` is a composition root. Shared library modules do not
+load global configuration or construct production clients on their own.
+
+The common startup sequence is:
+
+1. Load the YAML file named by `PROOFPLANE_CONFIG`.
+2. Validate all configured fields into typed configuration.
+3. Initialize tracing.
+4. Connect to Postgres and run embedded Refinery migrations.
+5. Construct process-specific pools and external clients.
+6. Start the server or polling loop.
+
+`AppDependencies` and `WorkerAppDependencies` make HTTP router construction
+explicit and allow integration tests to compose in-process servers with test
+dependencies.
 
 ## Configuration
 
-Postgres configuration is a connection string stored as a `SecretString`.
-This keeps the runtime interface simple for `tokio_postgres` and avoids
-spreading host, port, database, username, and password fields through the app.
+Configuration is loaded from one YAML file. The loader first deserializes into
+raw string-oriented types, then validates into typed values such as
+`SocketAddr`, `Url`, `PathBuf`, positive integers, enums, and `SecretString`.
+Validation accumulates independent field errors rather than stopping at the
+first invalid field.
 
-The connection string may be exposed only at infrastructure boundaries that need
-to pass it into database libraries.
+Configuration groups are:
 
-Some configuration fields are reserved for staged runtime capabilities:
+- `server`: API, worker, and reserved MCP bind addresses.
+- `postgres`: application connection string.
+- `pubsub`: project, worker subscription, push endpoint, and maximum delivery
+  attempts.
+- `spicedb`: gRPC endpoint, preshared key, and schema file.
+- `auth0`: issuer, audience, and JWKS URL.
+- `object_storage`: filesystem or GCS-shaped configuration.
+- `scanner`: clamd address and connection/scan timeouts.
+- `uploads`: maximum multipart attachment size.
+- `observability`: log format and default filter.
+- `worker`: concurrency, local retry count, and shutdown grace.
+- `health`: liveness/readiness paths and dependency timeout.
 
-- `server.mcp_bind` is validated but not currently used. The MCP binary runs
-  migrations, logs its scaffold startup message, and exits without binding a
-  server. The planned runtime is described in the
-  [MCP Server epic](./epics/mcp-server/README.md).
-- `worker.concurrency` and `worker.shutdown_grace_seconds` are validated but are
-  not currently consumed by the worker runtime. Request concurrency comes from
-  Axum's HTTP serving model and the deployment platform; for live Cloud Run
-  delivery, this direction is recorded in the
-  [Production Runtime Adapters spec](./epics/production-runtime-adapters/spec.md).
-  Worker shutdown currently waits for Axum's graceful shutdown without applying
-  the configured grace duration.
+Some accepted configuration is not yet wired into runtime behavior:
 
-Configured-but-unused fields should not be described as affecting runtime
-behavior until their owning binaries consume them.
+- GCS configuration is parsed, but object-store construction returns
+  `UnsupportedBackend`.
+- `server.mcp_bind` is unused.
+- `worker.concurrency`, `worker.retry_attempts`, and
+  `worker.shutdown_grace_seconds` are not used by the worker.
+- The dequeuer reuses `worker.retry_attempts` as its publish `max_attempts`.
 
-## Observability
+## Domain Model
 
-Proofplane uses `tracing_subscriber` for structured logging. We are not building
-OpenTelemetry tracing, distributed traces, or span-exporter infrastructure at
-this stage.
+The workspace is the tenant boundary. Workspace-owned rows are always queried
+or mutated with a workspace predicate in actor-facing repository contexts.
 
-HTTP request logging belongs on the root router in `app`, so all routes receive
-consistent request logs.
+The implemented domain graph is:
 
-## Practical Rules
+```mermaid
+erDiagram
+    WORKSPACE ||--o{ CONTROL : owns
+    WORKSPACE ||--o{ EVIDENCE_REQUEST : owns
+    WORKSPACE ||--o{ WORKSPACE_MEMBERSHIP : has
+    USER ||--o{ WORKSPACE_MEMBERSHIP : joins
+    ACTOR ||--|| API_CREDENTIAL : authenticates_with
+    FRAMEWORK ||--o{ FRAMEWORK_REQUIREMENT : contains
+    CONTROL }o--o{ FRAMEWORK_REQUIREMENT : maps_to
+    EVIDENCE_REQUEST }o--o{ CONTROL : supports
+    EVIDENCE_REQUEST ||--o{ EVIDENCE_SUBMISSION : receives
+    ACTOR ||--o{ EVIDENCE_SUBMISSION : submits
+    EVIDENCE_SUBMISSION ||--o{ EVIDENCE_ATTACHMENT : contains
+```
 
-- Keep startup orchestration in binaries.
-- Keep database library setup in `store`.
-- Keep app-facing database access in `repository`.
-- Keep HTTP composition in `app`.
-- Keep endpoint behavior in `routes`.
-- Keep outbox publishing in the standalone `dequeuer`.
-- Keep Pub/Sub push decoding and event dispatch in `worker`.
-- Pass dependencies explicitly through structs instead of reaching for globals.
-- Prefer a single dependency struct at app construction boundaries.
-- Do not add placeholder abstractions before a real boundary needs them.
+Key distinctions:
+
+- `User` is an Auth0-backed human management identity.
+- `Actor` is a data-plane identity used by agents, integrations, services, and
+  other API clients.
+- `WorkspaceMembership` grants a human the `owner` or `admin` role in Postgres.
+- SpiceDB `workspace#member` relationships grant actors all currently modeled
+  read/write permissions.
+- Frameworks and framework requirements are global reference data.
+- Controls, evidence requests, submissions, and attachments are
+  workspace-scoped.
+
+Typed UUID newtypes prevent accidental interchange of workspace, user, actor,
+control, request, submission, and attachment identifiers inside Rust code.
+Persisted enum strings are parsed into domain enums; unknown database values
+become repository invalid-data errors.
+
+### Attachment State Machine
+
+The database constrains attachment status to:
+
+```text
+pending -> finalizing -> uploaded
+pending -> contains_virus
+pending -> failed
+```
+
+In the current implementation, `contains_virus` and `failed` transitions occur
+only from `pending`. A finalization error leaves the row `finalizing` for
+redelivery.
+
+## Identity And Authorization
+
+Proofplane currently has two deliberately separate identity planes.
+
+### Human Management Plane
+
+Human routes use an Auth0 bearer token:
+
+1. The route middleware extracts `Authorization: Bearer <token>`.
+2. `Auth0TokenVerifier` verifies the RS256 token through a remotely cached JWKS
+   set.
+3. Issuer, audience, validity window, and non-empty subject are checked.
+4. `UserAuthenticator` upserts the user by `auth0_sub`.
+5. A `UserContext` is attached to the request.
+6. Workspace management authorization reads `workspace_memberships` from
+   Postgres.
+
+The implemented human routes are `GET /me`, workspace create/list, and member
+removal. Workspace creation and the owner membership are committed in one
+Postgres transaction. The last-owner guard locks owner membership rows before
+counting and deleting.
+
+Human workspace ownership does not automatically create a SpiceDB actor
+relationship. The human and actor planes are separate.
+
+### Actor Data Plane
+
+Actor-facing routes require:
+
+- `x-proofplane-actor-id`
+- `x-proofplane-api-key`
+- A workspace UUID in the route path
+
+Authentication loads the actor and its single credential from Postgres,
+rejects revoked or expired credentials, extracts the API key ID, and verifies
+the Argon2id credential hash.
+
+After authentication, route-specific middleware asks SpiceDB for a fully
+consistent workspace permission check. The current schema maps every permission
+to the single `member` relation:
+
+- `read_evidence_requests`
+- `write_evidence_requests`
+- `read_evidence_submissions`
+- `write_evidence_submissions`
+- `read_controls`
+- `write_controls`
+
+Denied authorization returns `404 Not Found` to avoid revealing resource or
+workspace existence. SpiceDB request failures return an internal error, so an
+authorization dependency failure does not grant access.
+
+Postgres workspace predicates provide a second tenant boundary after the
+SpiceDB route check. Cross-workspace IDs therefore resolve as absent even when
+the caller is authorized for the workspace in the URL.
+
+## HTTP API
+
+The API router combines public infrastructure routes, human routes, and
+actor-facing routes.
+
+### Public And Operational Routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | configured liveness path, locally `/livez` | Process liveness only. |
+| `GET` | configured readiness path, locally `/readyz` | Acquire a Postgres connection and run `SELECT 1` with timeouts. |
+| `GET` | `/metrics` | Render the process Prometheus registry. |
+| `GET` | `/version` | Return package name and version. |
+
+### Human Routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/me` | Return the JIT-provisioned Auth0 user. |
+| `POST` | `/workspaces` | Create a workspace and owner membership atomically. |
+| `GET` | `/workspaces` | List the authenticated user's memberships and roles. |
+| `DELETE` | `/workspaces/{workspace_id}/members/{user_id}` | Remove a member while preserving at least one owner. |
+
+### Actor Routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/workspaces/{workspace_id}/frameworks` | List global framework reference data. |
+| `GET` | `/workspaces/{workspace_id}/frameworks/{framework_id}/requirements` | List framework requirements. |
+| `POST`, `GET` | `/workspaces/{workspace_id}/controls` | Create or list controls. |
+| `GET`, `PUT` | `/workspaces/{workspace_id}/controls/{control_id}` | Read or replace a control. |
+| `POST`, `GET` | `/workspaces/{workspace_id}/evidence-requests` | Create or list evidence requests. |
+| `GET` | `/workspaces/{workspace_id}/evidence-requests/due` | List active requests due at the optional `now` query instant. |
+| `GET`, `PUT` | `/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}` | Read or replace an evidence request. |
+| `POST`, `GET` | `/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/control-mappings` | Create or list request-to-control mappings. |
+| `DELETE` | `/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/control-mappings/{control_id}` | Delete a mapping. |
+| `POST` | `/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions` | Create an evidence submission. |
+| `GET` | `/workspaces/{workspace_id}/evidence-submissions/{submission_id}` | Read a submission with attachments. |
+| `POST` | `/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments` | Stream one multipart file into quarantine. |
+
+Routes use transport DTOs rather than serializing domain types directly.
+Validation uses the crate's `Validation` type and `validate!` macro to collect
+multiple domain errors into one stable JSON error response.
+
+All API requests receive an `x-request-id`. A valid inbound UUID is preserved;
+otherwise a UUID is generated. The ID is returned in the response, recorded in
+the tracing span, and copied into attachment outbox messages.
+
+## Persistence Architecture
+
+`Postgres` wraps a `deadpool-postgres` pool. SQL is colocated by aggregate in
+repository modules. There is no ORM.
+
+Three repository execution contexts express transaction and tenant needs:
+
+- `Postgres` methods perform global or standalone operations.
+- `TransactionContext` wraps a general write transaction.
+- `ActorTransactionContext` carries `workspace_id` and `actor_id` through a
+  write transaction.
+- `ActorReadContext` carries the same actor context with a pooled read client.
+
+Actor context is not injected into Postgres session variables. Repository SQL
+must use the context fields explicitly in predicates and inserted ownership
+columns.
+
+Important atomic operations include:
+
+- Workspace creation plus owner membership.
+- Control mutation plus framework-requirement mappings.
+- Attachment row creation plus `attachment.scan_requested` outbox insertion.
+- Attachment transition to `finalizing` plus
+  `attachment.finalization_requested` outbox insertion.
+
+Known database artifacts that are not exposed through current behavior:
+
+- `audit_events` exists but has no repository or application usage.
+- `latest_evidence_submission_for_request` exists in the repository but has no
+  route or service method.
+- `list_exhausted_outbox_messages` exists but no runtime consumes it.
+
+## Object Storage
+
+`ObjectStore` defines put, get, head, copy, and delete operations. Only
+`FilesystemObjectStore` is implemented and constructible.
+
+Object keys are validated paths beginning with a workspace UUID:
+
+```text
+workspaces/{workspace_id}/...
+```
+
+Traversal segments, absolute paths, backslashes, NUL bytes, and malformed
+workspace IDs are rejected.
+
+The filesystem adapter stores:
+
+```text
+{root}/objects/{object_key}
+{root}/metadata/{object_key}.json
+```
+
+The metadata sidecar records object key, content type, length, and SHA-256.
+Writes stream chunks to disk while calculating length and SHA-256. Gets return a
+64 KiB chunk stream. Copies are implemented as a streamed get followed by put.
+Deletes remove both bytes and metadata and are idempotent.
+
+Attachment keys have two forms:
+
+```text
+workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/attachments/{upload_id}/{filename}
+workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}
+```
+
+## Attachment Upload And Processing
+
+Attachment handling is the main cross-process workflow.
+
+### 1. API Upload
+
+1. The actor is authenticated and authorized to write submissions.
+2. The API confirms the submission exists inside the workspace.
+3. Axum streams the first multipart field named `file`.
+4. The route requires an RFC structured `Content-Digest` containing CRC32C.
+5. The service streams bytes to a unique quarantine key.
+6. The filesystem store calculates content length and SHA-256 while the route
+   calculates CRC32C.
+7. A checksum mismatch deletes the staged object and returns `400`.
+8. The service inserts the `pending` attachment and scan-request outbox row in
+   one actor-scoped Postgres transaction.
+9. A database failure triggers best-effort deletion of the quarantine object.
+10. The API returns `202 Accepted`.
+
+Only the first multipart field is processed. Additional fields are ignored.
+
+### 2. Outbox Publication
+
+The dequeuer polls due rows in batches of 100 and processes them sequentially.
+It serializes a self-describing JSON envelope and publishes it to
+`proof.message_bus`.
+
+On successful publish, it deletes the outbox row. On failure, it increments
+`attempt_count` and schedules exponential backoff capped at five minutes by
+default.
+
+The publish and row deletion are separate operations, so duplicate publication
+is possible if publication succeeds and deletion fails. Worker handlers are
+therefore designed for at-least-once delivery.
+
+The configured `max_attempts` does not currently stop publication. An exhausted
+row is logged and rescheduled at the maximum delay, after which it becomes due
+again. There is no outbox dead-letter consumer.
+
+### 3. Pub/Sub Delivery
+
+At dequeuer startup, the Pub/Sub adapter ensures:
+
+- Topic `proof.message_bus`.
+- Topic `proof.message_bus.dead_letter`.
+- A push subscription targeting the configured worker endpoint.
+- A dead-letter policy with the configured maximum delivery attempts.
+
+The worker accepts Google Pub/Sub's push envelope at `/pubsub/messages`,
+base64-decodes the data, validates the internal envelope, and dispatches by
+`event_type`.
+
+Malformed envelopes, unknown event types, and permanently invalid handler
+payloads are acknowledged with `204`. Retryable handler failures return `500`,
+causing Pub/Sub redelivery.
+
+### 4. Malware Scan
+
+For `attachment.scan_requested`, the handler:
+
+1. Loads a row only when attachment ID, quarantine key, and `pending` status
+   match.
+2. Treats absent work as a duplicate or stale delivery and acknowledges it.
+3. Loads the quarantine object and verifies content type, length, and SHA-256
+   against Postgres.
+4. Streams object chunks to ClamAV using the `zINSTREAM` protocol.
+5. Applies the result.
+
+Outcomes:
+
+- Clean: atomically set `finalizing` and enqueue a finalization event.
+- Malicious: set `contains_virus`.
+- ClamAV `ERROR` response: set `failed`.
+- Missing quarantine object: set `failed`.
+- Adapter or metadata failures before the final Pub/Sub delivery: return `500`.
+- The same failures on or after the configured final delivery: set `failed` and
+  acknowledge.
+
+The current final-delivery behavior acknowledges terminal scan failure rather
+than allowing the message to reach the Pub/Sub dead-letter topic.
+
+### 5. Finalization
+
+For `attachment.finalization_requested`, the handler:
+
+1. Loads a row only when attachment ID, submission ID, quarantine key, and
+   `finalizing` status match.
+2. Treats absent work as duplicate or stale.
+3. Streams a copy from the quarantine key to the stable attachment key.
+4. Updates Postgres to the final key and `uploaded` status.
+5. Best-effort deletes the quarantine object after a successful update.
+
+Copy or database failures return `500`, leaving the row `finalizing`. A copied
+final object can therefore exist before the database update succeeds, and a
+redelivery may repeat the copy. No local `Retryable` loop is wired into this
+handler yet.
+
+## Messaging And Idempotency
+
+The pipeline uses conditional state transitions as idempotency guards:
+
+- Scan work loads only `pending` rows with the expected key.
+- Finalization requests change `pending` to `finalizing` before publication.
+- Finalization work loads only `finalizing` rows with the expected IDs and key.
+- Upload completion changes only the matching `finalizing` row.
+- Duplicate or stale deliveries are acknowledged without repeating domain
+  transitions.
+
+There is no inbox table or globally unique message-consumption record. The
+business state itself provides idempotency.
+
+The outbox poll does not claim rows with locks or leases. Multiple dequeuer
+instances can read and publish the same due row concurrently. The current
+runtime should therefore be treated as a single-dequeuer topology.
+
+## Error Semantics
+
+The HTTP API returns a stable JSON envelope:
+
+```json
+{
+  "error": {
+    "code": "bad_request",
+    "message": "request validation failed",
+    "details": []
+  }
+}
+```
+
+Important mappings:
+
+- Domain validation becomes `400`.
+- Missing or concealed resources become `404`.
+- Oversized multipart payloads become `413`.
+- Known uniqueness conflicts become `409` with specific codes.
+- Missing actor or human credentials become `401`.
+- Readiness failures become `503`.
+- Repository, storage, and unexpected dependency failures generally become
+  `500`.
+
+The worker has a narrower contract: `204` acknowledges a delivery and `500`
+requests Pub/Sub retry.
+
+## Observability And Operations
+
+The API and worker install independent Prometheus recorders and expose
+`/metrics`. No application counters, gauges, or histograms are currently
+recorded, so the endpoint primarily exposes recorder output.
+
+Both servers use `tower-http` trace layers. API spans record method, matched
+path, request ID, actor ID, and user ID. Completion logs include status and
+latency. Worker processing adds message ID, event type, aggregate identifiers,
+delivery attempt, request ID, and acknowledgement status.
+
+Tracing writes to stderr in configured pretty or JSON format. `RUST_LOG`
+overrides the configured default filter. CLI tracing is disabled unless
+`PROOFPLANE_CLI_LOG` is truthy.
+
+Liveness reports only that the HTTP process is running. Readiness checks only
+Postgres. Worker readiness does not currently probe object storage or ClamAV,
+and API readiness does not probe SpiceDB, Auth0 JWKS, or object storage.
+
+The `audit_events` table is dormant. Durable audit behavior is not implemented;
+current activity visibility comes from operational tracing logs.
+
+## Generated Code Boundary
+
+`build.rs` compiles vendored AuthZed protobufs. Generated request and response
+types remain private inside `authorization::spicedb`; domain, service, route,
+and repository interfaces do not expose generated protobuf types.
+
+## Testing Architecture
+
+Unit tests are colocated with modules and cover parsing, validation, adapter
+protocol behavior, retry helpers, message envelopes, and pure policy.
+
+Docker-backed integration tests run as one `tests/integration` target:
+
+- Postgres uses Testcontainers and real migrations.
+- SpiceDB uses a container and the real schema.
+- ClamAV uses a shared container for worker tests.
+- Deltio exercises the Google Pub/Sub client and subscription reconciliation.
+- Axum API and worker routers run in process through `axum-test`.
+- Filesystem object storage uses per-test temporary roots.
+- Auth0 is replaced by a fake `TokenVerifier`; API-key hashing and verification
+  remain real.
+
+Integration coverage emphasizes observable behavior and transactional
+guarantees: tenant isolation, auth ordering, JIT provisioning, conflicts,
+attachment integrity, outbox creation, duplicate worker delivery, rollback,
+scanner failures, and object finalization.
+
+## Current Implementation Boundaries
+
+The following are not part of the implemented architecture yet:
+
+- A running MCP server or MCP tools.
+- A browser application.
+- GCS object storage.
+- Production Pub/Sub startup without `PUBSUB_EMULATOR_HOST`.
+- Multiple API credentials per actor or actor-management HTTP routes.
+- Attachment download grants or attachment byte-serving routes.
+- Trusted source material and auditor packet models.
+- Structured audit-log contracts and retention.
+- Application metrics beyond scrape endpoints.
+- Worker concurrency control, graceful shutdown timing, or local finalization
+  retries from worker configuration.
+
+These items are tracked in the epic portfolio and should not be inferred from
+configuration fields, repository helpers, or scaffolding modules.
+
+## Source Map
+
+The most important implementation entrypoints are:
+
+- [`src/bin/api.rs`](../src/bin/api.rs) and [`src/app.rs`](../src/app.rs):
+  API composition and router.
+- [`src/bin/worker.rs`](../src/bin/worker.rs) and
+  [`src/worker.rs`](../src/worker.rs): worker composition, push decoding, and
+  dispatch.
+- [`src/bin/dequeuer.rs`](../src/bin/dequeuer.rs) and
+  [`src/dequeuer/mod.rs`](../src/dequeuer/mod.rs): outbox publication loop.
+- [`src/services/`](../src/services/): router-facing business logic and
+  orchestration.
+- [`src/handlers/`](../src/handlers/): message-driven attachment business
+  logic.
+- [`src/repository/`](../src/repository/): SQL and transaction contexts.
+- [`src/domain/`](../src/domain/): domain types and validation.
+- [`migrations/`](../migrations/): authoritative application schema.
+- [`authz/spicedb/proofplane.zed`](../authz/spicedb/proofplane.zed):
+  authoritative actor authorization schema.
+- [`config/local.yaml`](../config/local.yaml) and
+  [`docker-compose.yml`](../docker-compose.yml): implemented local topology.
