@@ -26,13 +26,39 @@ Cover externally visible behavior for:
   requests;
 - SpiceDB unavailable while authentication remains ordered first;
 - Pub/Sub publish failure and later outbox recovery;
-- object-storage write/read failure through attachment API surfaces;
+- initial quarantine-write failure in the attachment upload API: return a stable
+  error and commit no attachment row or scan-request outbox event;
+- final-object read failure in the human download route: return a stable error
+  without changing the persisted attachment lifecycle;
+- worker finalization copy failure: return a retryable delivery error and leave
+  the attachment `finalizing`;
+- database failure after a successful finalization copy: retry
+  `mark_attachment_uploaded` within the handler using the shared `Retryable`
+  trait and configured `worker.retry_attempts`; after local retries are
+  exhausted, return a retryable delivery error so Pub/Sub redelivers;
+- worker quarantine-delete failure after a successful copy: keep the attachment
+  `uploaded` and treat deletion as best-effort cleanup;
 - ClamAV unavailable/timeout through worker retry and final delivery;
 - GCS and production Pub/Sub adapter failures after those adapters land.
 
 Stable API errors must not expose dependency internals. Logs include request,
 actor, operation, and dependency context without credentials or attachment
 bytes.
+
+The API owns the initial stream into quarantine storage before creating the
+attachment row. The worker later owns the copy from quarantine to the final
+object key. Attachment lifecycle state, exposed to agents through the normal
+read tools, is the asynchronous status contract; the MVP browser app does not
+poll or render document-processing status.
+
+Finalization copy is idempotent. If the copy succeeds but the database update
+fails, the handler retries only the database update in-process rather than
+repeating the copy for every local attempt. Exhausting those bounded retries
+does not mark the attachment `failed`, because finalized bytes may already
+exist. The handler returns a retryable error, and a later Pub/Sub delivery may
+repeat the idempotent copy before trying the database transition again. If all
+Pub/Sub deliveries are exhausted, the message is dead-lettered and the
+attachment remains `finalizing` for operational recovery.
 
 ## Metrics Contract
 
@@ -102,3 +128,10 @@ deterministic alone and in the full integration target.
   coverage and removed stale claims that all failure work was unimplemented.
 - 2026-06-11: Replaced database-backed audit events and query APIs with
   structured application logs routed to a dedicated Cloud Logging sink.
+- 2026-06-11: Split storage-write failure coverage between the API-owned
+  quarantine upload and worker-owned finalization. Existing worker copy/delete
+  tests remain baseline; the missing work is API quarantine-write coverage.
+- 2026-06-11: Defined bounded in-handler database retries after a successful
+  finalization copy using `Retryable` and `worker.retry_attempts`; exhausted
+  local retries defer to Pub/Sub redelivery without falsely marking the
+  attachment failed.
