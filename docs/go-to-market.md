@@ -69,20 +69,21 @@ users who want help, but it should not gate product access.
 ## First-Run Sandbox Flow
 
 The website CTA should create a sandbox for the workspace owner and drop them
-into a guided first-run flow.
+into a minimal MCP setup flow.
 
 The first five minutes should produce a real artifact:
 
 1. User enters work email and creates an account.
 2. Proofplane creates a sandbox workspace.
 3. Workspace is preloaded with a lightweight SOC 2 starter control set.
-4. User creates or edits one control.
-5. User creates one evidence request mapped to that control.
-6. User sees how the mapped control and evidence request would appear in an
-   auditor-ready evidence packet.
+4. User issues a sandbox AI-agent credential and configures their MCP client.
+5. User asks a suggested prompt such as "What do I have left to do for SOC 2?"
+6. The agent inspects real sandbox records and can create/map an Evidence
+   Request or preview an auditor-ready evidence packet through MCP.
 
-The sandbox should use realistic sample data, not an empty dashboard. Empty
-states should lead directly to creation actions.
+The sandbox should use realistic sample data, not an empty dashboard. The
+browser should lead directly to MCP setup and suggested prompts rather than
+rebuilding compliance workflows as forms.
 
 Recommended sandbox defaults:
 
@@ -287,9 +288,10 @@ Even then, the ask should be low-pressure:
 Track the product-led funnel:
 
 - marketing site visitor to sandbox start;
-- sandbox start to first control created;
-- first control created to first evidence request created;
-- evidence request created to evidence packet preview or export;
+- sandbox start to MCP credential issued;
+- credential issued to first successful MCP tool call;
+- first tool call to first MCP write;
+- first MCP write to evidence packet preview or export;
 - sandbox to paid conversion;
 - time from landing page to first meaningful artifact.
 

@@ -79,8 +79,9 @@ paths. In particular, `spicedb.schema_path` selects the schema file used by
 `make authz-schema`.
 
 Object storage is not run in Docker Compose for the MVP. Local config reserves
-`.local/storage` for the filesystem-backed object storage adapter planned in
-story 014.
+`.local/storage` for the filesystem-backed object storage adapter. Production
+GCS work is tracked in the
+[Production Runtime Adapters epic](docs/epics/production-runtime-adapters/README.md).
 
 ## Running Processes
 
@@ -133,7 +134,7 @@ make authz-schema-validate
 - Application schema migrations live in `migrations/`.
 - SpiceDB schema-as-code lives in `authz/spicedb/`.
 - Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
-- MVP story notes live in [`docs/mvp-stories/`](docs/mvp-stories/).
+- MVP planning and tickets live in [`docs/epics/`](docs/epics/).
 
 Do not add generated SpiceDB Rust types to application-facing interfaces.
 Keep generated AuthZed protobuf types behind the authorization adapter.

@@ -18,7 +18,7 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
 | 001. [Auth0 User Identity & JIT Provisioning](./tickets/001-auth0-user-identity-and-jit-provisioning.md) | Done   | `users` table, `TokenVerifier` (jwtk/RS256+JWKS), `authenticate_user`, JIT provisioning, `GET /me`.                                      |
 | 002. [Workspace Self-Onboarding & Membership](./tickets/002-workspace-self-onboarding-and-membership.md) | Done   | `workspace_memberships`, `POST`/`GET /workspaces`, member add/remove, last-owner guard. Human `manage_*` answered from Postgres (SpiceDB stays data-plane-only); dormant `platform` tier descoped. |
 | 003. [Actor & API Key Management](./tickets/003-actor-and-api-key-management.md)                         | Todo   | Workspace-scoped actors, multi-credential rotation, `manage_actors`, create/list actors, issue/revoke keys.                              |
-| 004. [Auth & Identity Audit Events](./tickets/004-auth-and-identity-audit-events.md)                     | Todo   | `audit_events.user_id`, in-transaction audit writer, emit identity events.                                                               |
+| 004. [Auth & Identity Audit Logs](./tickets/004-auth-and-identity-audit-logs.md)                         | Todo   | Emit structured identity logs for the Cloud Logging audit sink.                                                                           |
 
 ## Sequencing
 
@@ -31,5 +31,5 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
   actually needs relational authorization.
 - **003** depends on 002 and changes data-plane auth to support multiple
   credentials per actor.
-- **004** depends on 001–003 for the operations it instruments; its writer/schema
-  can be built early but event emission lands alongside 002 and 003.
+- **004** depends on 001–003 for the operations it instruments and on
+  `reliability-observability/005` for the shared audit-log field contract.
