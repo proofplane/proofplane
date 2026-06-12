@@ -1,5 +1,11 @@
 # 025 - Marketing Site and Sandbox Onboarding
 
+> Superseded as an active plan by the
+> [Sandbox Product Launch epic](../epics/sandbox-product-launch/README.md).
+> The current direction is MCP-first: the browser handles discovery, login,
+> sandbox provisioning, and agent credential setup, while compliance work is
+> performed through the customer's AI agent rather than browser forms.
+
 ## Goal
 
 Create a product-led marketing surface that lets a startup founder or CTO start
@@ -44,14 +50,12 @@ Sandbox provisioning should:
 
 First-run flow:
 
-1. Show the starter control set.
-2. Guide the user to create or edit one control.
-3. Guide the user to create one evidence request.
-4. Map the evidence request to the control.
-5. Show an auditor-ready packet preview for the mapped control and evidence
-   request.
-6. Show the API/MCP shape an AI agent would use to inspect missing or stale
-   evidence.
+1. Show the provisioned sandbox and AI-agent actor.
+2. Issue and display an MCP credential once.
+3. Show MCP configuration for supported agent clients.
+4. Offer suggested prompts for inspecting gaps, creating an Evidence Request,
+   mapping it to a control, and previewing an auditor packet.
+5. Let the customer's agent perform those operations through MCP.
 
 The sandbox should contain realistic data. Avoid empty dashboards and avoid
 marketing-only walkthroughs that do not create product records.
@@ -82,17 +86,17 @@ back to the sandbox CTA.
 - The sandbox workspace is created automatically.
 - The sandbox includes starter SOC 2 controls and at least one mapped evidence
   request.
-- The user can create or edit a control in the sandbox.
-- The user can create an evidence request in the sandbox.
-- The user can see an auditor-ready packet preview for the control and mapped
-  evidence request.
+- The user can connect an MCP client using the sandbox actor.
+- The agent can inspect the sandbox, create an Evidence Request, map it to a
+  control, and request an auditor packet preview.
+- The browser does not require compliance CRUD forms or an embedded chat UI.
 - Public pricing is reachable before signup.
 - The site includes `robots.txt`, `sitemap.xml`, and `llms.txt`.
 - The key marketing pages have stable URLs and clear metadata for search and
   AI-answer tools.
-- Funnel events are emitted for landing page view, sandbox start, first control
-  creation, first evidence request creation, evidence packet preview, and paid
-  conversion if billing exists.
+- Funnel events are emitted for landing page view, sandbox start, credential
+  issuance, MCP setup viewed, first successful tool call, first MCP write,
+  evidence packet preview, and paid conversion if billing exists.
 
 ## Tests
 
@@ -102,7 +106,7 @@ back to the sandbox CTA.
   sandbox behavior without duplicate confusing workspaces.
 - API test verifies sandbox users cannot access non-sandbox workspaces.
 - Browser smoke test verifies the homepage CTA reaches the first-run flow.
-- Browser smoke test verifies a user can create a control and evidence request.
+- MCP integration coverage verifies the suggested read/write prompt flows.
 - Snapshot or contract test verifies `llms.txt`, `robots.txt`, and `sitemap.xml`
   are served.
 
@@ -113,9 +117,9 @@ back to the sandbox CTA.
 3. Click `Start SOC 2 Sandbox`.
 4. Complete minimal signup.
 5. Verify a sandbox workspace is created.
-6. Create or edit one control.
-7. Create one evidence request.
-8. Map the evidence request to the control.
-9. Open the auditor-ready packet preview.
+6. Issue the sandbox actor credential and configure an MCP client.
+7. Ask what remains for SOC 2 compliance.
+8. Ask the agent to create and map an Evidence Request.
+9. Ask the agent to preview the auditor-ready packet.
 10. Verify funnel events are emitted.
 11. Open `/llms.txt`, `/robots.txt`, and `/sitemap.xml`.

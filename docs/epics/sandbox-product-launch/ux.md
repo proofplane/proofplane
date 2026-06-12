@@ -2,52 +2,49 @@
 
 ## Core Principle
 
-The first session must create real Proofplane records and reach a useful artifact
-within five minutes. Avoid empty dashboards, fake tours, and sales-gated calls to
-action.
+The first session must connect the customer's agent to real Proofplane records
+and produce a useful compliance answer within five minutes. Avoid product
+dashboards, CRUD forms, fake tours, and sales-gated calls to action.
 
 ## Entry Flow
 
 1. Homepage primary CTA: **Start SOC 2 Sandbox**.
 2. Auth0 login or account creation with minimum required identity fields.
 3. Automatic create-or-resume sandbox provisioning.
-4. Redirect to the sandbox overview, not a setup wizard splash screen.
+4. Redirect to the MCP setup page.
 
 Provisioning shows progress and can be safely retried. A partial failure offers
 retry with the same workspace rather than creating another one.
 
-## First-Run Flow
+## MCP Setup
 
-The overview shows starter controls, one mapped Evidence Request, and a clear
-three-step checklist:
+The setup page has three jobs:
 
-1. Edit or create a control.
-2. Create an Evidence Request and map it.
-3. Open the auditor packet preview.
+1. Issue or select the sandbox AI-agent credential.
+2. Show copyable MCP configuration for supported clients.
+3. Offer suggested prompts that exercise real Proofplane tools.
 
-Each step links directly to the relevant form. Completion is derived from saved
-records, so refresh and resume preserve progress.
+The raw key is shown exactly once. Configuration examples keep the secret in a
+clearly marked placeholder or one-time copy control and do not place it in URLs,
+analytics, or persistent browser storage.
 
-## Packet Preview
+## Suggested Prompts
 
-Show:
+Initial prompts should progress from read to write:
 
-- selected control and framework requirements;
-- mapped Evidence Requests;
-- latest evidence/freshness state or an explicit missing-evidence gap;
-- source-material provenance;
-- attachment inventory with on-demand grants only for usable attachments;
-- actor and timestamps from record provenance.
+- "What do I have left to do for SOC 2 compliance?"
+- "Which evidence requests are due or missing usable evidence?"
+- "Create an access-review evidence request and map it to the relevant control."
+- "Preview the auditor packet for my access-control evidence."
 
-The preview should remain useful before a file is uploaded by clearly showing
-what is missing.
+The page explains that the user's agent will call Proofplane tools and modify
+real sandbox data. Proofplane does not embed a chat UI in the MVP.
 
-## API And Agent Moment
+## Returning Users
 
-After the first packet preview, show the workspace actor and MCP/API setup path.
-Reveal a newly issued raw key only once, with revoke/rotate guidance. Do not put
-credentials in URLs, analytics, or browser persistence beyond the immediate
-display needed by the user.
+Returning owners see connection status guidance, actor/credential metadata,
+rotate/revoke actions, setup instructions, and suggested prompts. They do not
+see control, Evidence Request, mapping, or packet-editing forms.
 
 ## Public Pages
 
@@ -58,6 +55,6 @@ signup to read.
 ## Responsive And Accessible Behavior
 
 The primary flow must work at narrow mobile and desktop widths, use keyboard
-navigation, visible focus, semantic form errors, and sufficient contrast.
-Loading, empty, error, and retry states are part of each screen's acceptance
-criteria, not deferred polish.
+navigation, visible focus, semantic errors, and sufficient contrast. Loading,
+empty, error, and retry states are part of each screen's acceptance criteria,
+not deferred polish.

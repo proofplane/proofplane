@@ -35,7 +35,7 @@ The sequence intentionally front-loads platform scaffolding before product featu
 | 022. [Dependency Failure Integration Coverage](./022-dependency-failure-integration-coverage.md) | Partial | Concrete-Postgres attachment worker rollback/retry coverage is in place; readiness, SpiceDB, Pub/Sub, and public API storage-failure coverage remain open. |
 | 023. [Prometheus Metrics Instrumentation](./023-prometheus-metrics-instrumentation.md) | Planned | Add application metrics on top of the existing `/metrics` scaffold before final demo hardening. |
 | 024. [End-to-End Demo and Release Hardening](./024-end-to-end-demo-and-release-hardening.md) | Deferred | Superseded as an active plan. A production-deployment epic will be created when deployment work begins. |
-| 025. [Marketing Site and Sandbox Onboarding](./025-marketing-site-and-sandbox-onboarding.md) | Planned | Product-led GTM milestone: public site, sandbox CTA, first-run SOC 2 flow, and AI-answer readiness. |
+| 025. [Marketing Site and Sandbox Onboarding](./025-marketing-site-and-sandbox-onboarding.md) | Superseded | Active work is in the [Sandbox Product Launch epic](../epics/sandbox-product-launch/README.md): public site, sandbox CTA, minimal MCP setup UI, suggested prompts, and AI-answer readiness. |
 
 ## Parallelization Notes
 

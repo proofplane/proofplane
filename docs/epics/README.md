@@ -27,7 +27,7 @@ provenance, and freshness is derived from linked evidence.
 | Evidence lifecycle | Submission create/get, upload integrity, quarantine, ClamAV scan, finalization | Latest API, download enforcement, demo submission/object seed |
 | Audit | Structured application logging | Stable audit-log fields, Cloud Logging retention, business event coverage |
 | Agent interface | MCP binary scaffold | MCP runtime and tools |
-| Launch surface | Product and GTM notes | Release runbook, sandbox/product UI, marketing site |
+| Launch surface | Product and GTM notes | Minimal sandbox/MCP setup UI and marketing site |
 
 ## Epic Portfolio
 
@@ -39,7 +39,7 @@ provenance, and freshness is derived from linked evidence.
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | 018, 019, 025 | Curated source material and auditor-ready packets expose provenance and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | 021 | Agents use the same services and authorization model as REST clients. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | 022, 023 | Dependency failures and runtime behavior are visible and tested. |
-| [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | 025 | A founder can discover, enter, and use a realistic SOC 2 sandbox. |
+| [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | 025 | A founder can connect an agent to a realistic SOC 2 sandbox. |
 
 ## Preferred Sequence
 
@@ -83,5 +83,5 @@ provenance, and freshness is derived from linked evidence.
   compliance material, and perform the supported MCP workflows.
 - Structured audit logs are routed to a restricted Cloud Logging sink with the
   documented retention policy.
-- The launch flow creates a realistic sandbox and reaches an auditor packet
-  preview from the public site without a sales gate.
+- The launch flow creates a realistic sandbox, connects the customer's agent,
+  and produces a useful MCP-backed compliance answer without a sales gate.

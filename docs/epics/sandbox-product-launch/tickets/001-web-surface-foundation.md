@@ -2,8 +2,8 @@
 
 **Status:** Todo · **Depends on:** none · **Spec:** [spec.md](../spec.md#goal)
 
-**Summary** - Choose and scaffold the browser application architecture, Auth0
-session model, API client, shared styling, and deployment boundary.
+**Summary** - Choose and scaffold the minimal browser architecture for public
+content, Auth0 login, sandbox provisioning, and MCP credential setup.
 
 **Acceptance criteria**
 
@@ -16,11 +16,13 @@ session model, API client, shared styling, and deployment boundary.
   clears the session safely and never logs tokens.
 - [ ] Given API-only clients, when the web surface ships, then existing REST and
   MCP contracts remain unchanged.
+- [ ] Given the authenticated browser surface, when its routes are inventoried,
+  then it does not include compliance CRUD or embedded-agent chat pages.
 
 **Tasks**
 
 - [ ] Record the frontend framework/deployment decision in the spec revision log.
-- [ ] Scaffold public and authenticated route groups.
+- [ ] Scaffold public routes and the minimal authenticated setup routes.
 - [ ] Add Auth0 browser session, CSRF, and API client handling.
 - [ ] Add accessibility and responsive layout foundations.
 - [ ] Add local startup and smoke tests.

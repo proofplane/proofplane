@@ -3,11 +3,14 @@
 ## Goal
 
 Let a founder discover Proofplane, create or resume a realistic SOC 2 sandbox,
-and reach an auditor packet preview without a sales conversation.
+connect their AI agent through MCP, and receive a useful compliance answer
+without a sales conversation.
 
-This epic adds a browser product surface to the current Rust backend. The
-specific frontend framework should be selected in ticket 001 after a short
-repository decision record; the contract below is framework-independent.
+This epic adds the minimum browser surface needed for discovery, authentication,
+sandbox provisioning, and MCP credential setup. Compliance work happens through
+the customer's agent, not browser forms. The specific frontend framework should
+be selected in ticket 001 after a short repository decision record; the contract
+below is framework-independent.
 
 ## Account And Sandbox Model
 
@@ -28,16 +31,31 @@ customer's records.
 
 ## Product API Gaps
 
-The existing data API can create Evidence Requests and controls, but the launch
-flow also needs:
+The launch flow needs:
 
 - human management support for actor creation/key issuance;
 - sandbox create-or-resume endpoint;
-- control create/replace UI contract;
-- packet preview endpoint;
 - a safe browser session and CSRF strategy for management operations.
+- MCP configuration snippets for supported agent clients;
+- enough MCP read/write tools for the suggested first-run prompts.
 
 The browser must not expose actor API keys after the one-time issuance response.
+It does not provide MVP forms for controls, Evidence Requests, mappings, source
+material, or packet generation.
+
+## Agent-First Success Path
+
+After provisioning, the setup page helps the owner issue an agent credential and
+configure their MCP client. It then provides suggested prompts such as:
+
+- "What do I have left to do for SOC 2 compliance?"
+- "Show me the evidence requests that are due or missing evidence."
+- "Create an access-review evidence request and map it to the relevant control."
+- "Preview the auditor packet for my access-control evidence."
+
+The first useful artifact is the agent's answer backed by Proofplane MCP tool
+calls. Suggested prompts are instructional copy, not a Proofplane-hosted chat
+interface. Tool results operate on real sandbox records.
 
 ## Funnel Events
 
@@ -45,10 +63,11 @@ Record:
 
 - landing page viewed;
 - sandbox started/resumed;
-- first control created or edited;
-- first Evidence Request created;
-- first mapping created;
-- packet preview viewed;
+- agent credential issued;
+- MCP setup instructions viewed;
+- first successful MCP tool call;
+- first MCP write;
+- first packet preview through MCP;
 - paid conversion, only when billing exists.
 
 Product analytics events are not compliance audit events. They use a separate
@@ -83,3 +102,5 @@ pricing is not.
 - 2026-06-11: Separated reusable packet functionality into Trusted Compliance
   Reads and retained browser onboarding, marketing, analytics, and sandbox
   provisioning in this epic.
+- 2026-06-11: Replaced browser forms and dashboard-first onboarding with MCP
+  credential setup and prompt-driven agent interaction.
