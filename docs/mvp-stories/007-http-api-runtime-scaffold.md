@@ -34,7 +34,8 @@ For this scaffold, `/readyz` checks Postgres through the shared pool. Pub/Sub re
 - Handler modules do not contain SQL.
 - Service modules do not depend on HTTP request or response types.
 - HTTP requests logged at INFO level and include path, method, response status code, and response time
-- `/metrics` returns Prometheus text with stable `proofplane_` metric names.
+- `/metrics` returns Prometheus text; application metrics added later use stable
+  `proof_` names.
 
 ## Tests
 

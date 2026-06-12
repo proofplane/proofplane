@@ -9,7 +9,7 @@ Full failure and metric contracts live in [spec.md](./spec.md).
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Postgres And Authorization Failures](./tickets/001-postgres-and-authorization-failures.md) | Todo | Readiness, recovery, and auth ordering. |
+| 001. [Authorization Dependency Failures](./tickets/001-authorization-dependency-failures.md) | Todo | Fail-closed authorization and authentication ordering. |
 | 002. [Messaging And Storage Failures](./tickets/002-messaging-and-storage-failures.md) | Todo | API quarantine-write coverage plus existing worker finalization guarantees. |
 | 003. [HTTP And Access Metrics](./tickets/003-http-and-access-metrics.md) | Todo | API traffic, auth, and readiness metrics. |
 | 004. [Async Pipeline Metrics](./tickets/004-async-pipeline-metrics.md) | Todo | Outbox, worker, scanner, and storage metrics. |

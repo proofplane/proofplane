@@ -13,7 +13,7 @@ real runtime paths.
 ## Design
 
 Use the existing `metrics` and `metrics-exporter-prometheus` crates. Metrics
-names must use a stable `proofplane_` prefix and low-cardinality labels.
+names must use a stable `proof_` prefix and low-cardinality labels.
 
 Start with API metrics:
 
@@ -43,7 +43,7 @@ status classes, and coarse result labels.
 
 ## Acceptance Criteria
 
-- `/metrics` exposes stable `proofplane_` metric names after normal API traffic.
+- `/metrics` exposes stable `proof_` metric names after normal API traffic.
 - HTTP metrics use matched route patterns rather than raw request paths.
 - Authentication and authorization metrics distinguish allowed, denied,
   unauthenticated, and dependency-error outcomes without leaking identifiers.
@@ -60,7 +60,7 @@ status classes, and coarse result labels.
 
 - Unit tests cover any metric naming/label helper functions.
 - API integration tests make representative requests and assert `/metrics`
-  contains the expected `proofplane_` metric names and low-cardinality labels.
+  contains the expected `proof_` metric names and low-cardinality labels.
 - Tests verify raw workspace IDs, actor IDs, request IDs, API keys, and object
   keys do not appear in emitted metric labels.
 - Worker/Pub/Sub/outbox/object-storage metric tests land alongside those
@@ -73,7 +73,7 @@ status classes, and coarse result labels.
 3. Exercise health, authentication failure, authorization denial, Evidence
    Request, controls, submission, and attachment flows that exist at that point
    in the MVP.
-4. Call `/metrics` and confirm stable `proofplane_` metrics are present.
+4. Call `/metrics` and confirm stable `proof_` metrics are present.
 5. Confirm metric labels use route patterns and coarse result labels, not raw
    identifiers or secrets.
 6. Start the worker after stories 011-013 land and confirm worker/outbox metrics

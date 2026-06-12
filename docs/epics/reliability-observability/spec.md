@@ -7,23 +7,25 @@ for the API, dequeuer, worker, storage, authorization, and MCP runtimes.
 
 ## Existing Baseline
 
-- `/readyz` checks Postgres with a timeout, but interruption/recovery integration
-  coverage is absent.
+- `/readyz` checks Postgres with a timeout.
 - Authorization uses SpiceDB and fails closed through route middleware.
 - Outbox publish retry and worker delivery behavior have integration coverage.
 - Attachment scan/finalization tests already cover concrete Postgres rollback,
   scanner failure, and object-store failure.
-- `/metrics` exists, but application-specific `proofplane_` metrics do not.
+- `/metrics` exists, but application-specific `proof_` metrics do not.
 
 The existing worker-handler coverage is baseline. Do not recreate it as pending
 work or replace concrete integration tests with internal mocks.
+
+Do not add live Postgres interruption/recovery tests. Those primarily exercise
+the database and connection-pool dependencies rather than Proofplane behavior.
+Continue testing application-owned transaction rollback, retry, and consistency
+rules against concrete Postgres where those rules are implemented.
 
 ## Failure Contracts
 
 Cover externally visible behavior for:
 
-- Postgres unavailable/timeout/recovery through readiness and representative API
-  requests;
 - SpiceDB unavailable while authentication remains ordered first;
 - Pub/Sub publish failure and later outbox recovery;
 - initial quarantine-write failure in the attachment upload API: return a stable
@@ -62,8 +64,8 @@ attachment remains `finalizing` for operational recovery.
 
 ## Metrics Contract
 
-Use the `proofplane_` prefix. Allowed labels are matched route, method,
-status class, operation, dependency, permission, event type, and coarse result.
+Use the `proof_` prefix. Allowed labels are matched route, method, status class,
+operation, dependency, permission, event type, and coarse result.
 Never label with workspace, actor, request, object, submission, attachment,
 credential, error string, or raw path.
 
@@ -135,3 +137,6 @@ deterministic alone and in the full integration target.
   finalization copy using `Retryable` and `worker.retry_attempts`; exhausted
   local retries defer to Pub/Sub redelivery without falsely marking the
   attachment failed.
+- 2026-06-11: Standardized application metrics on the `proof_` prefix.
+- 2026-06-11: Removed live Postgres interruption/recovery tests from scope;
+  concrete-Postgres tests remain for application-owned transaction behavior.

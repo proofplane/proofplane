@@ -3,9 +3,9 @@
 ## Status
 
 Partially implemented. Attachment scan and finalization handler integration
-tests now use concrete Postgres and inject database failures to verify atomic
-rollback and retry behavior. They also cover scanner and object-store failures
-at those adapter boundaries. API readiness, SpiceDB interruption, Pub/Sub
+tests now use concrete Postgres and inject database failures to verify
+application-owned atomic rollback and retry behavior. They also cover scanner
+and object-store failures at those adapter boundaries. SpiceDB errors, Pub/Sub
 interruption, and public attachment API storage-failure coverage remain open.
 
 ## Goal
@@ -23,32 +23,19 @@ Extend the integration harness from story 009 with helpers that can start the
 application against healthy dependencies, interrupt one dependency at a time, and
 assert the externally visible behavior.
 
-Cover the dependencies that can affect MVP runtime availability:
+Cover dependency errors where Proofplane owns meaningful handling behavior:
 
-- Postgres for API readiness and request handling
 - SpiceDB for Evidence Request authorization
 - Pub/Sub emulator once worker and outbox stories exist
 - filesystem object storage once evidence attachment storage exists
 
-Prefer process or network boundary checks. For example, exercise `/readyz`,
-Evidence Request API calls, worker startup, worker shutdown, and failed adapter
-operations through the same public surfaces used in production. Avoid
-reintroducing deleted app-unit tests that mock internal state.
+Exercise failed adapter operations through public surfaces where practical.
+Avoid reintroducing deleted app-unit tests that mock internal state.
 
-### API and Postgres
-
-Add API integration tests that demonstrate:
-
-- `/readyz` returns success when Postgres is reachable
-- `/readyz` returns `503` with the stable `not_ready` error shape when Postgres
-  is unavailable or the readiness query times out
-- in-flight or subsequent API requests fail with stable error responses when
-  Postgres disappears
-- the app recovers on later requests if the dependency becomes reachable again,
-  where the underlying pool and dependency support recovery
-
-The harness may stop a testcontainer, point the app at an unroutable endpoint, or
-use a timeout-oriented fixture. Pick the option that is deterministic in CI.
+Live Postgres interruption/recovery tests are not remaining scope. They
+primarily test Postgres and connection-pool behavior. Concrete-Postgres tests
+remain appropriate for Proofplane's transaction rollback, retry, and consistency
+rules.
 
 ### SpiceDB Authorization
 
@@ -77,8 +64,6 @@ coverage or split implementation into slices:
 
 ## Acceptance Criteria
 
-- Integration tests cover readiness behavior for a healthy and unhealthy
-  Postgres dependency.
 - Integration tests cover fail-closed Evidence Request authorization behavior
   when SpiceDB is unreachable or returns an authorization dependency error.
 - Authentication-before-authorization behavior remains covered for dependency
@@ -87,14 +72,13 @@ coverage or split implementation into slices:
   codes.
 - Logs include request and actor context where available, but never include raw
   API keys.
-- Harness helpers for dependency interruption are reusable by worker, Pub/Sub,
-  and object-storage tests.
+- Failure fixtures are reusable where multiple Proofplane adapter-boundary tests
+  require them.
 - Any dependency boundary not implemented yet is called out in this story as a
   deferred slice, not covered by app-unit mocks.
 
 ## Tests
 
-- `cargo test --test integration readiness_returns_not_ready_when_postgres_is_unavailable`
 - `cargo test --test integration evidence_request_authz_fails_closed_when_spicedb_is_unavailable`
 - `cargo test --test integration authentication_still_precedes_dependency_authorization_failures`
 - Worker/Pub/Sub/object-storage integration tests when those stories land.
