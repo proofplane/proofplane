@@ -44,7 +44,9 @@ When multiple object storage backends are supported at runtime, app and service 
 
 - Unit tests with fake object store cover service behavior.
 - Integration tests upload, read, and delete objects through the filesystem implementation.
-- GCS adapter tests use fakes or mocked boundaries until a staging GCS test is explicitly added.
+- Local integration tests use the filesystem adapter. CI integration tests run
+  the same storage contract against a real GCS test bucket with isolated
+  per-run prefixes and cleanup.
 - Tests verify checksum mismatch is detected.
 - Tests verify object keys are workspace-scoped.
 

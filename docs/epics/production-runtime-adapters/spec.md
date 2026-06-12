@@ -22,11 +22,11 @@ The enum delegates `put`, `get`, `head`, `copy`, and `delete` without dynamic
 dispatch. Services and handlers depend on the enum instead of the current
 filesystem concrete type.
 
-GCS configuration already defines bucket, optional endpoint override,
-credentials mode, and object-key prefix. `application_default` uses Google
-application default credentials; `anonymous` exists only for a local emulator.
-The configured prefix is prepended outside the logical workspace-scoped
-`ObjectKey` and is never persisted in attachment rows.
+GCS configuration defines the bucket and object-key prefix. GCS always uses
+Google application default credentials; the existing endpoint-override and
+anonymous-credential fields are removed because Proofplane does not run a GCS
+emulator. The configured prefix is prepended outside the logical
+workspace-scoped `ObjectKey` and is never persisted in attachment rows.
 
 Uploads and reads stream. Copy may use GCS server-side copy/rewrite, but must
 verify destination metadata before finalization marks an attachment uploaded.
@@ -60,15 +60,26 @@ or application default credentials.
 
 ## Verification
 
-GCS adapter contract tests run against an emulator when one is available in
-CI. SDK request construction and error mapping may use focused fakes, but the
-shared object-store contract must also run against filesystem.
+Local integration tests use `FilesystemObjectStore` and require no cloud
+credentials. CI has a dedicated GCS integration-test configuration with a real
+test bucket and application default credentials. The same object-store contract
+suite runs against filesystem locally and real GCS in CI, including upload,
+head, read, copy, delete, prefix isolation, checksums, and cleanup.
 
-Pub/Sub emulator integration tests remain. A credential-free construction test
-must prove the dequeuer no longer requires the emulator variable before a
-production deployment smoke test validates real provisioning.
+GCS tests create unique per-run prefixes and delete their objects even after
+failures. The CI identity is restricted to the test bucket. Unit tests may still
+cover parsing and deterministic error mapping, but fakes do not substitute for
+the real GCS integration suite.
+
+Pub/Sub emulator integration tests remain because Pub/Sub local behavior is a
+separate decision. A credential-free construction test proves the dequeuer no
+longer requires the emulator variable; normal CI integration coverage verifies
+the configured Pub/Sub mode without a separate deployment smoke test.
 
 ## Revisions
 
 - 2026-06-11: Added the production Pub/Sub gap discovered while reconciling
   legacy stories 011-014 with runtime code.
+- 2026-06-11: Removed the GCS emulator path. Local tests use filesystem storage;
+  CI integration tests exercise the real GCS adapter and clean up isolated
+  prefixes.

@@ -21,5 +21,6 @@ attachment storage, scanner delivery, and production adapters.
 
 - [ ] Extend Pub/Sub interruption/recovery coverage.
 - [ ] Add public attachment storage failure tests.
-- [ ] Add production adapter authentication/unavailability tests.
+- [ ] Add focused GCS credential/error-mapping tests without requiring local
+  cloud access; keep real GCS success-path integration coverage in CI.
 - [ ] Reuse existing scanner/finalization fixtures and close uncovered paths.
