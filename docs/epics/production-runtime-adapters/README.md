@@ -19,4 +19,4 @@ Full rationale and runtime decisions live in [spec.md](./spec.md).
 - **001** is foundational for 002 and can land without changing local behavior.
 - **002** and **003** can proceed in parallel after their configuration
   contracts are confirmed.
-- Release Hardening depends on all three tickets.
+- A future production-deployment epic will consume all three tickets.

@@ -39,7 +39,6 @@ provenance, and freshness is derived from linked evidence.
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | 018, 019, 025 | Curated source material and auditor-ready packets expose provenance and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | 021 | Agents use the same services and authorization model as REST clients. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | 022, 023 | Dependency failures and runtime behavior are visible and tested. |
-| [Release Hardening](./release-hardening/README.md) | Todo | 024 | The backend MVP is reproducible, deployable, and proven by a scripted flow. |
 | [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | 025 | A founder can discover, enter, and use a realistic SOC 2 sandbox. |
 
 ## Preferred Sequence
@@ -50,10 +49,9 @@ provenance, and freshness is derived from linked evidence.
 3. Build production adapters while Trusted Compliance Reads starts on the
    completed evidence model.
 4. Build MCP after actor management and trusted-read contracts are stable.
-5. Add reliability coverage and metrics continuously, completing that epic
-   before release hardening.
-6. Complete Release Hardening for the backend MVP.
-7. Build the Sandbox Product Launch on the stable APIs and packet preview.
+5. Add reliability coverage and metrics continuously alongside product work.
+6. Build the Sandbox Product Launch on the stable APIs and packet preview.
+7. Create a separate production-deployment epic when deployment planning begins.
 
 ## Legacy Story Crosswalk
 
@@ -70,7 +68,7 @@ provenance, and freshness is derived from linked evidence.
 | 020 | Reframed as structured audit logging owned by Reliability and Observability plus each instrumented domain epic; no audit table or query API. |
 | 021 | Moves to MCP Server with a reduced, implementable MVP tool set. |
 | 022-023 | Move to Reliability and Observability. Existing worker rollback tests are baseline, not remaining scope. |
-| 024 | Moves to Release Hardening and no longer assumes approval APIs. |
+| 024 | Deferred. A production-deployment epic will be created from current infrastructure decisions when deployment work begins. |
 | 025 | Splits backend packet reads from the UI/marketing work in Sandbox Product Launch. |
 
 ## Definition Of MVP Done

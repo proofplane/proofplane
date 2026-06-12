@@ -1,5 +1,9 @@
 # 024 - End-to-End Demo and Release Hardening
 
+> Deferred and no longer an active execution plan. Production deployment needs
+> a dedicated epic based on the infrastructure and operating model that exist
+> when deployment work begins.
+
 ## Goal
 
 Prove the MVP flow and harden the system for a demo-quality release.

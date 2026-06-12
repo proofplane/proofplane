@@ -1,6 +1,6 @@
 # 001 - Web Surface Foundation
 
-**Status:** Todo · **Depends on:** release-hardening/002 · **Spec:** [spec.md](../spec.md#goal)
+**Status:** Todo · **Depends on:** none · **Spec:** [spec.md](../spec.md#goal)
 
 **Summary** - Choose and scaffold the browser application architecture, Auth0
 session model, API client, shared styling, and deployment boundary.
