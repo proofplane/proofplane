@@ -30,9 +30,9 @@ use crate::{
     authentication::ActorContext,
     authentication::ApiKeyAuthenticator,
     domain::{
-        required_text, CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment,
-        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
-        WorkspacePermission,
+        required_text, validate_attachment_filename, CreateEvidenceSubmissionPayload, DomainError,
+        EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
+        EvidenceSubmissionId, WorkspacePermission,
     },
     object_storage::StorageError,
     routes::{
@@ -65,6 +65,10 @@ pub fn router(state: EvidenceSubmissionState) -> Router {
         .route(
             "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions",
             post(create_evidence_submission),
+        )
+        .route(
+            "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions/latest",
+            get(get_latest_evidence_submission),
         )
         .route(
             "/workspaces/{workspace_id}/evidence-submissions/{submission_id}",
@@ -149,6 +153,23 @@ struct EvidenceSubmissionAttachmentPath {
     submission_id: Uuid,
 }
 
+struct AttachmentUploadRequest {
+    filename: String,
+    content_type: String,
+}
+
+impl AttachmentUploadRequest {
+    fn validate(self) -> Validation<Self, DomainError> {
+        validate! {
+            filename <- validate_attachment_filename(self.filename),
+            => Self {
+                filename,
+                content_type: self.content_type,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct EvidenceSubmissionResponse {
     id: Uuid,
@@ -183,7 +204,6 @@ struct EvidenceAttachmentResponse {
     filename: String,
     content_type: String,
     content_length: i64,
-    object_key: String,
     checksum_sha256: String,
     checksum_crc32c: String,
     upload_status: &'static str,
@@ -197,7 +217,6 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
             filename: attachment.filename,
             content_type: attachment.content_type,
             content_length: attachment.content_length,
-            object_key: attachment.object_key,
             checksum_sha256: attachment.checksum_sha256,
             checksum_crc32c: attachment.checksum_crc32c,
             upload_status: attachment.upload_status.as_str(),
@@ -248,6 +267,20 @@ async fn get_evidence_submission(
     let detail = state
         .service
         .get(actor, EvidenceSubmissionId::from(path.submission_id))
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(detail.into()))
+}
+
+async fn get_latest_evidence_submission(
+    State(state): State<EvidenceSubmissionState>,
+    Path(path): Path<EvidenceRequestSubmissionsPath>,
+    Extension(actor): Extension<ActorContext>,
+) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+    let detail = state
+        .service
+        .latest_for_request(actor, EvidenceRequestId::from(path.evidence_request_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -329,11 +362,13 @@ async fn attachment_upload_from_multipart(
         .content_type()
         .map(str::to_owned)
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    if filename.trim().is_empty() {
-        return Err(ApiError::BadRequest(vec![
-            "file filename is required".to_owned()
-        ]));
+    let request = AttachmentUploadRequest {
+        filename,
+        content_type,
     }
+    .validate()
+    .into_result()
+    .map_err(domain_errors)?;
     let expected_crc32c = field_content_digest_crc32c(&field)
         .map_err(|message| ApiError::BadRequest(vec![message]))?;
 
@@ -343,8 +378,8 @@ async fn attachment_upload_from_multipart(
         .upload_attachment(
             actor,
             evidence_submission_id,
-            filename,
-            content_type,
+            request.filename,
+            request.content_type,
             chunks,
         )
         .await?;

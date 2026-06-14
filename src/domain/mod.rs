@@ -31,7 +31,7 @@ pub use evidence_submission::{
 };
 pub use permission::{ActorPermissions, WorkspacePermission};
 pub use user::{ProvisionUserPayload, User, UserId};
-pub use validation::{required_text, validate_freshness_window_days};
+pub use validation::{required_text, validate_attachment_filename, validate_freshness_window_days};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId, WorkspaceMembership,
     WorkspaceRole, WorkspaceWithRole,

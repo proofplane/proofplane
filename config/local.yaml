@@ -4,6 +4,8 @@ server:
   api_bind: "127.0.0.1:3000"
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
+  public_api_base_url: "http://127.0.0.1:3000"
+  download_signing_secret: "cHJvb2ZwbGFuZS1sb2NhbC1kb3dubG9hZC1zaWduaW5nLXNlY3JldC0wMDE="
 
 postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
 

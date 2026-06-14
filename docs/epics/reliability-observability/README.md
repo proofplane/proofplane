@@ -15,6 +15,7 @@ Full failure and metric contracts live in [spec.md](./spec.md).
 | 004. [Async Pipeline Metrics](./tickets/004-async-pipeline-metrics.md) | Todo | Outbox, worker, scanner, and storage metrics. |
 | 005. [Structured Audit Logging](./tickets/005-structured-audit-logging.md) | Todo | Define fields, remove the dormant table, and configure the sink contract. |
 | 006. [MCP Metrics](./tickets/006-mcp-metrics.md) | Todo | Complete instrumentation after the MCP runtime lands. |
+| 007. [Evidence Lifecycle Audit Logs](./tickets/007-evidence-lifecycle-audit-logs.md) | Todo | Domain audit events for evidence submission, attachment, grant, scan, and finalization lifecycle transitions. |
 
 ## Sequencing
 
@@ -23,3 +24,5 @@ Full failure and metric contracts live in [spec.md](./spec.md).
 - **004** can proceed with current local pipeline behavior.
 - **005** is the shared contract for audit logs emitted by domain epics.
 - **006** follows the MCP Server runtime.
+- **007** follows 005 and the completed Evidence Lifecycle Completion download
+  grant and seed work.

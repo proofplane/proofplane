@@ -1,3 +1,4 @@
+use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -27,6 +28,12 @@ pub struct PendingAttachmentUploadWork {
 }
 
 pub type FinalizingAttachmentUploadWork = PendingAttachmentUploadWork;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentDownloadCandidate {
+    pub workspace_id: WorkspaceId,
+    pub attachment: EvidenceAttachment,
+}
 
 impl Postgres {
     pub async fn load_pending_attachment_upload_work(
@@ -268,6 +275,49 @@ RETURNING
 }
 
 impl ActorReadContext {
+    pub async fn get_attachment_for_download_grant(
+        &self,
+        evidence_submission_id: EvidenceSubmissionId,
+        evidence_attachment_id: EvidenceAttachmentId,
+    ) -> Result<Option<AttachmentDownloadCandidate>, Error> {
+        let rows = &self
+            .client
+            .query(
+                r#"
+SELECT
+    er.workspace_id,
+    a.id AS attachment_id,
+    a.evidence_submission_id AS attachment_submission_id,
+    a.filename,
+    a.content_type,
+    a.content_length,
+    a.object_key,
+    a.checksum_sha256,
+    a.checksum_crc32c,
+    a.upload_status
+FROM evidence_attachments a
+JOIN evidence_submissions s ON s.id = a.evidence_submission_id
+JOIN evidence_requests er ON er.id = s.evidence_request_id
+JOIN actors actor ON actor.id = $2
+WHERE er.workspace_id = $1
+  AND s.id = $3
+  AND a.id = $4
+"#,
+                &[
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(self.actor_id),
+                    &Uuid::from(evidence_submission_id),
+                    &Uuid::from(evidence_attachment_id),
+                ],
+            )
+            .await?;
+
+        rows.iter()
+            .next()
+            .map(attachment_download_candidate_from_row)
+            .transpose()
+    }
+
     pub async fn evidence_submission_exists(
         &self,
         id: EvidenceSubmissionId,
@@ -525,5 +575,12 @@ fn pending_attachment_upload_work_from_row(
         object_key: row.try_get("object_key")?,
         checksum_sha256: row.try_get("checksum_sha256")?,
         upload_status,
+    })
+}
+
+fn attachment_download_candidate_from_row(row: &Row) -> Result<AttachmentDownloadCandidate, Error> {
+    Ok(AttachmentDownloadCandidate {
+        workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
+        attachment: evidence_attachment_from_row(row)?,
     })
 }

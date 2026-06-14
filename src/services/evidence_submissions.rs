@@ -80,6 +80,21 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
+    pub async fn latest_for_request(
+        &self,
+        actor: ActorContext,
+        evidence_request_id: EvidenceRequestId,
+    ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
+        Ok(self
+            .repository
+            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
+                context
+                    .latest_evidence_submission_for_request(evidence_request_id)
+                    .await
+            })
+            .await?)
+    }
+
     pub async fn evidence_submission_exists(
         &self,
         actor: &ActorContext,
