@@ -5,12 +5,13 @@ mod error;
 mod evidence_request;
 mod evidence_submission;
 mod ids;
+mod permission;
 mod user;
 mod validation;
 mod workspace;
 
 pub use actor::{
-    Actor, ActorId, ActorKind, ActorWithApiCredential, CreateActorPayload, UpdateActorPayload,
+    Actor, ActorId, ActorKind, ActorWithPermissions, CreateActorPayload, UpdateActorPayload,
 };
 pub use api_credential::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
 pub use controls::{
@@ -28,6 +29,7 @@ pub use evidence_submission::{
     EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmission, EvidenceSubmissionDetail,
     EvidenceSubmissionId,
 };
+pub use permission::{ActorPermissions, WorkspacePermission};
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{required_text, validate_freshness_window_days};
 pub use workspace::{

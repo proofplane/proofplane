@@ -8,10 +8,9 @@ use crate::{
     services::Error as ServiceError,
 };
 
-/// Human management-plane operations on workspaces. Authorization for the human
-/// plane is answered from Postgres (`workspace_memberships`), which is the
-/// transactional source of truth — no SpiceDB projection is involved. SpiceDB
-/// stays the engine for the actor data plane only.
+/// Human management-plane operations on workspaces. Authorization is answered
+/// from Postgres (`workspace_memberships`), the transactional source of truth for
+/// human roles.
 #[derive(Clone)]
 pub struct WorkspaceService {
     repository: Arc<Postgres>,
@@ -168,6 +167,11 @@ impl WorkspaceMemberPolicy {
     /// Owners and admins may add and remove members. A non-member (no role) may
     /// not.
     pub fn can_manage_members(role: Option<WorkspaceRole>) -> bool {
+        matches!(role, Some(WorkspaceRole::Owner | WorkspaceRole::Admin))
+    }
+
+    /// Owners and admins may create actors and issue or revoke their keys.
+    pub fn can_manage_actors(role: Option<WorkspaceRole>) -> bool {
         matches!(role, Some(WorkspaceRole::Owner | WorkspaceRole::Admin))
     }
 }

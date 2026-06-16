@@ -11,18 +11,16 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     authentication::ActorContext,
     authentication::ApiKeyAuthenticator,
-    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, Control, ControlId, CreateControlPayload,
         CreateEvidenceRequestControlMappingPayload, DomainError, EvidenceRequestControlMapping,
         EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
-        UpdateControlPayload,
+        UpdateControlPayload, WorkspacePermission,
     },
     routes::{
         authentication::authorize_workspace_route,
@@ -42,7 +40,6 @@ pub struct ControlState {
 #[derive(Clone)]
 pub struct ControlRouteAuthState {
     pub authenticator: ApiKeyAuthenticator,
-    pub authorizer: WorkspaceAuthorizer,
 }
 
 pub fn router(state: ControlState) -> Router {
@@ -85,41 +82,14 @@ async fn authorize_control_route(
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
-    let workspace_id = actor.workspace_id;
 
-    let allowed = match method {
-        Method::GET => state
-            .authorizer
-            .can_read_controls(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check read permissions for controls"
-                );
-                ApiError::Internal
-            }),
-        Method::POST | Method::PUT | Method::DELETE => state
-            .authorizer
-            .can_write_controls(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check write permissions for controls"
-                );
-                ApiError::Internal
-            }),
-        _ => Err(ApiError::MethodNotAllowed),
-    }?;
+    let required = match method {
+        Method::GET => WorkspacePermission::ReadControls,
+        Method::POST | Method::PUT | Method::DELETE => WorkspacePermission::WriteControls,
+        _ => return Err(ApiError::MethodNotAllowed),
+    };
 
-    if !allowed {
+    if !actor.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 

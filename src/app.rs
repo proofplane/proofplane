@@ -6,12 +6,12 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, UserAuthenticator},
-    authorization::workspaces::WorkspaceAuthorizer,
+    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator},
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
+        actors::{self, ActorsState},
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
@@ -24,7 +24,7 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        controls::ControlService, evidence_requests::EvidenceRequestService,
+        actors::ActorService, controls::ControlService, evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService, user::UserService,
         workspaces::WorkspaceService,
     },
@@ -37,7 +37,6 @@ pub struct AppDependencies<V: TokenVerifier> {
     pub metrics: PrometheusHandle,
     pub authenticator: ApiKeyAuthenticator,
     pub user_authenticator: UserAuthenticator<V>,
-    pub workspace_authorizer: WorkspaceAuthorizer,
 }
 
 pub fn create_app<V: TokenVerifier + 'static>(
@@ -65,7 +64,6 @@ pub fn create_app<V: TokenVerifier + 'static>(
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
             route_auth: EvidenceRequestRouteAuthState {
                 authenticator: dependencies.authenticator.clone(),
-                authorizer: dependencies.workspace_authorizer.clone(),
             },
         }))
         .merge(evidence_submissions::router(EvidenceSubmissionState {
@@ -76,14 +74,12 @@ pub fn create_app<V: TokenVerifier + 'static>(
             max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             route_auth: EvidenceSubmissionRouteAuthState {
                 authenticator: dependencies.authenticator.clone(),
-                authorizer: dependencies.workspace_authorizer.clone(),
             },
         }))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
-                authenticator: dependencies.authenticator,
-                authorizer: dependencies.workspace_authorizer,
+                authenticator: dependencies.authenticator.clone(),
             },
         }))
         .merge(me::router(MeState {
@@ -94,6 +90,12 @@ pub fn create_app<V: TokenVerifier + 'static>(
         }))
         .merge(workspaces::router(WorkspacesState {
             service: WorkspaceService::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator.clone(),
+            },
+        }))
+        .merge(actors::router(ActorsState {
+            service: ActorService::new(dependencies.postgres.clone(), ApiKeyManager::new()?),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator,
             },

@@ -2,14 +2,13 @@ use api_keys_simplified::{Environment, ExposeSecret};
 use chrono::{DateTime, Utc};
 use proofplane::{
     authentication::ApiKeyManager,
-    authorization::spicedb::{ClientError, SpiceDbClient},
-    config::{load_from_env, SpiceDbConfig},
+    config::load_from_env,
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload,
         CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
         EvidenceRequestStatus, ProvisionUserPayload, UpdateActorPayload,
         UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
-        WorkspaceId, WorkspaceRole,
+        WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
     observability,
     repository::{NewWorkspaceMembership, Postgres},
@@ -46,9 +45,6 @@ enum Error {
 
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
-
-    #[error("SpiceDB error")]
-    SpiceDb(#[from] ClientError),
 
     #[error("API key generation error")]
     ApiKey(#[from] proofplane::authentication::Error),
@@ -87,13 +83,12 @@ async fn run() -> Result<(), Error> {
 
     debug!("seeding local data");
     let api_key = seed_local_data(&postgres).await?;
-    seed_local_membership(&config.spicedb).await?;
     seed_local_owner(&postgres).await?;
     debug!("done seeding local data");
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded local workspaces, actors, API credential, authorized SpiceDB membership, demo evidence requests, and SOC 2 controls"
+        "Seeded local workspaces, actors, API credential, demo evidence requests, and SOC 2 controls"
     );
     println!(
         "authorized workspace: {}",
@@ -153,6 +148,8 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
 }
 
 async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
+    let workspace_id = local_authorized_workspace_id();
+    let permissions = WorkspacePermission::ALL.to_vec();
     for (id, kind, display_name) in [
         (
             actor_id(LOCAL_HUMAN_USER_ACTOR_ID),
@@ -188,20 +185,24 @@ async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
                     &UpdateActorPayload {
                         kind,
                         display_name: display_name.to_owned(),
+                        workspace_id,
                     },
                 )
                 .await?;
-
-            continue;
+        } else {
+            repository
+                .create_actor(&CreateActorPayload {
+                    id: Some(id),
+                    kind,
+                    display_name: display_name.to_owned(),
+                    workspace_id,
+                    created_by_user_id: None,
+                    permissions: permissions.clone(),
+                })
+                .await?;
         }
 
-        repository
-            .create_actor(&CreateActorPayload {
-                id: Some(id),
-                kind,
-                display_name: display_name.to_owned(),
-            })
-            .await?;
+        repository.set_actor_permissions(id, &permissions).await?;
     }
 
     Ok(())
@@ -241,15 +242,6 @@ async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
     }
 
     Ok(issued.raw_key.expose_secret().to_owned())
-}
-
-async fn seed_local_membership(config: &SpiceDbConfig) -> Result<(), Error> {
-    let client = SpiceDbClient::from_config(config).await?;
-    client
-        .write_workspace_membership(local_authorized_workspace_id(), SYSTEM_ACTOR_ID)
-        .await?;
-
-    Ok(())
 }
 
 async fn seed_local_owner(repository: &Postgres) -> Result<(), Error> {

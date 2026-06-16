@@ -29,13 +29,20 @@ pub(in crate::routes) async fn authorize_workspace_route(
         .map(WorkspaceId::from)
         .ok_or(ApiError::NotFound)?;
     let actor = authenticator
-        .authenticate(workspace_id, actor_id, &api_key)
+        .authenticate(actor_id, &api_key)
         .await
         .map_err(|error| {
             tracing::error!(%error, "API key authentication failed");
             ApiError::Internal
         })?
         .ok_or(ApiError::Unauthorized)?;
+
+    // The actor belongs to exactly one workspace. Accessing any other workspace
+    // is indistinguishable from the workspace not existing, so it 404s rather
+    // than leaking existence.
+    if actor.workspace_id != workspace_id {
+        return Err(ApiError::NotFound);
+    }
 
     attach_actor_context(request, actor);
 

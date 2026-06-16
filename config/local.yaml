@@ -14,11 +14,6 @@ pubsub:
     worker_push_endpoint: "http://host.docker.internal:3001/pubsub/messages"
     worker_max_delivery_attempts: 5
 
-spicedb:
-  endpoint: "http://127.0.0.1:50051"
-  preshared_key: "proofplane-local-spicedb-key"
-  schema_path: "authz/spicedb/proofplane.zed"
-
 auth0:
   issuer: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/"
   audience: "https://api.proofplane.com"

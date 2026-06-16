@@ -9,12 +9,11 @@ use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
         gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
-        parse_log_format, path_string, postgres_connection_string, secret_value, string_url,
-        string_value, ConfigValidationExt,
+        parse_log_format, path_string, postgres_connection_string, string_url, string_value,
+        ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, SpiceDbConfig, UploadsConfig,
-    WorkerConfig,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,7 +21,6 @@ pub(super) struct RawAppConfig {
     pub(super) server: RawServerConfig,
     pub(super) postgres: SecretString,
     pub(super) pubsub: RawPubSubConfig,
-    pub(super) spicedb: RawSpiceDbConfig,
     pub(super) auth0: RawAuth0Config,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) scanner: RawScannerConfig,
@@ -62,28 +60,6 @@ pub(super) fn validate_postgres_connection_string(
     value: SecretString,
 ) -> Validation<SecretString, ConfigFieldError> {
     postgres_connection_string(value).at("postgres")
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawSpiceDbConfig {
-    endpoint: String,
-    preshared_key: SecretString,
-    schema_path: String,
-}
-
-impl RawSpiceDbConfig {
-    pub(super) fn validate(self) -> Validation<SpiceDbConfig, ConfigFieldError> {
-        validate! {
-            endpoint <- string_url(self.endpoint).at("spicedb.endpoint"),
-            preshared_key <- secret_value(self.preshared_key).at("spicedb.preshared_key"),
-            schema_path <- string_value(self.schema_path).at("spicedb.schema_path"),
-            => SpiceDbConfig {
-                endpoint,
-                preshared_key,
-                schema_path: PathBuf::from(schema_path),
-            },
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

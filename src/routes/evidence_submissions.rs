@@ -24,16 +24,15 @@ use futures_core::Stream;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use sfv::{BareItem, Dictionary, ListEntry, Parser};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     authentication::ActorContext,
     authentication::ApiKeyAuthenticator,
-    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment,
         EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        WorkspacePermission,
     },
     object_storage::StorageError,
     routes::{
@@ -56,7 +55,6 @@ pub struct EvidenceSubmissionState {
 #[derive(Clone)]
 pub struct EvidenceSubmissionRouteAuthState {
     pub authenticator: ApiKeyAuthenticator,
-    pub authorizer: WorkspaceAuthorizer,
 }
 
 pub fn router(state: EvidenceSubmissionState) -> Router {
@@ -91,41 +89,14 @@ async fn authorize_evidence_submission_route(
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
-    let workspace_id = actor.workspace_id;
 
-    let allowed = match method {
-        Method::GET => state
-            .authorizer
-            .can_read_evidence_submissions(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check read permissions for evidence submissions"
-                );
-                ApiError::Internal
-            }),
-        Method::POST => state
-            .authorizer
-            .can_write_evidence_submissions(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check write permissions for evidence submissions"
-                );
-                ApiError::Internal
-            }),
-        _ => Err(ApiError::MethodNotAllowed),
-    }?;
+    let required = match method {
+        Method::GET => WorkspacePermission::ReadEvidenceSubmissions,
+        Method::POST => WorkspacePermission::WriteEvidenceSubmissions,
+        _ => return Err(ApiError::MethodNotAllowed),
+    };
 
-    if !allowed {
+    if !actor.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 

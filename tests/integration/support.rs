@@ -17,15 +17,14 @@ use proofplane::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
         ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
     },
-    authorization::{spicedb::SpiceDbClient, workspaces::WorkspaceAuthorizer},
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, SpiceDbConfig,
-        UploadsConfig, WorkerConfig,
+        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
-        WorkspaceId,
+        WorkspaceId, WorkspacePermission,
     },
     repository::Postgres,
     routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
@@ -44,8 +43,6 @@ use testcontainers_modules::postgres;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
-const SPICEDB_PRESHARED_KEY: &str = "proofplane-integration-spicedb-key";
-const SPICEDB_SCHEMA: &str = include_str!("../../authz/spicedb/proofplane.zed");
 const CLAMAV_IMAGE_TAG: &str = "1.4.3";
 pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
 // OnceCell provides one process-wide coordination slot; Mutex prevents concurrent
@@ -84,7 +81,6 @@ impl TokenVerifier for FakeTokenVerifier {
 pub struct TestApp {
     // Dropping Testcontainers handles removes dependencies while the app still needs them.
     _postgres_container: ContainerAsync<postgres::Postgres>,
-    _spicedb_container: ContainerAsync<GenericImage>,
     _clamav: Option<Arc<TestClamAv>>,
     pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
@@ -129,19 +125,7 @@ impl TestApp {
             .expect("Postgres test container exposes Postgres");
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-        let spicedb_container = start_spicedb().await;
-        let app_config = config(
-            database_url.clone(),
-            spicedb_endpoint(&spicedb_container).await,
-            builder.max_attachment_bytes,
-        );
-        let spicedb = SpiceDbClient::from_config(&app_config.spicedb)
-            .await
-            .expect("SpiceDB client connects");
-        spicedb
-            .write_schema(SPICEDB_SCHEMA)
-            .await
-            .expect("SpiceDB schema applies");
+        let app_config = config(database_url.clone(), builder.max_attachment_bytes);
 
         let mut database = store::conn(&database_url)
             .await
@@ -178,7 +162,6 @@ impl TestApp {
             metrics: recorder.handle(),
             authenticator,
             user_authenticator,
-            workspace_authorizer: WorkspaceAuthorizer::new(spicedb.clone()),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
@@ -187,9 +170,16 @@ impl TestApp {
             insert_soc2_reference_data(&postgres).await;
         }
 
-        let (workspace_ids, control_ids) =
-            insert_workspaces(&postgres, &spicedb, builder.workspaces).await;
-        let api_key = insert_api_credential(&postgres).await;
+        let (workspace_ids, control_ids, home_workspace_id) =
+            insert_workspaces(&postgres, builder.workspaces).await;
+        // The integration actor belongs to exactly one workspace: the first one
+        // granted default membership, or a dedicated home workspace when a test
+        // declares none. Data-plane access to any other workspace then 404s.
+        let home_workspace_id = match home_workspace_id {
+            Some(home_workspace_id) => home_workspace_id,
+            None => create_workspace(&postgres, "Integration Home").await,
+        };
+        let api_key = insert_api_credential(&postgres, WorkspaceId::from(home_workspace_id)).await;
         if builder.default_auth {
             server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
             server.add_header(API_KEY_HEADER, &api_key);
@@ -197,7 +187,6 @@ impl TestApp {
 
         Self {
             _postgres_container: postgres_container,
-            _spicedb_container: spicedb_container,
             _clamav: clamav,
             postgres,
             object_storage_root,
@@ -219,6 +208,60 @@ impl TestApp {
 
         response.assert_status_ok();
         response.json()
+    }
+
+    /// Creates an actor bound to `workspace_id` with exactly `permissions` and
+    /// issues it a credential, returning `(actor_id, api_key)` for use as
+    /// explicit data-plane headers.
+    pub async fn issue_actor(
+        &self,
+        workspace_id: Uuid,
+        permissions: Vec<WorkspacePermission>,
+    ) -> (String, String) {
+        let actor = self
+            .postgres
+            .create_actor(&CreateActorPayload {
+                id: None,
+                kind: ActorKind::ServiceAccount,
+                display_name: "Scoped actor".to_owned(),
+                workspace_id: WorkspaceId::from(workspace_id),
+                created_by_user_id: None,
+                permissions,
+            })
+            .await
+            .expect("scoped actor inserts");
+        let api_key = issue_credential(
+            &self.postgres,
+            actor.id,
+            &format!("scoped-{}", Uuid::from(actor.id)),
+            "Scoped key",
+        )
+        .await;
+
+        (Uuid::from(actor.id).to_string(), api_key)
+    }
+
+    /// Inserts an evidence request directly, bypassing the API, so tests can seed
+    /// a workspace the default actor is not a member of.
+    pub async fn insert_evidence_request_row(&self, workspace_id: Uuid, title: &str) {
+        let client = self
+            .postgres
+            .get()
+            .await
+            .expect("evidence request fixture connection opens");
+        client
+            .execute(
+                r#"
+INSERT INTO evidence_requests (
+    workspace_id, title, description, collection_instructions,
+    cadence, due_at, schedule_anchor_at, freshness_window_days, status
+)
+VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(), now(), 90, 'active')
+"#,
+                &[&workspace_id, &title],
+            )
+            .await
+            .expect("evidence request fixture inserts");
     }
 
     pub fn server(&self) -> &TestServer {
@@ -454,14 +497,15 @@ struct ControlSpec {
 
 async fn insert_workspaces(
     postgres: &Postgres,
-    spicedb: &SpiceDbClient,
     workspaces: Vec<WorkspaceSpec>,
 ) -> (
     HashMap<String, Uuid>,
     HashMap<String, HashMap<String, Uuid>>,
+    Option<Uuid>,
 ) {
     let mut ids = HashMap::new();
     let mut control_ids = HashMap::new();
+    let mut home_workspace_id = None;
 
     for workspace in workspaces {
         let id: Uuid = postgres
@@ -475,11 +519,10 @@ async fn insert_workspaces(
             .id
             .into();
 
-        if workspace.default_membership {
-            spicedb
-                .write_workspace_membership(WorkspaceId::from(id), INTEGRATION_ACTOR_ID)
-                .await
-                .expect("workspace fixture membership writes");
+        // The integration actor can belong to a single workspace, so the first
+        // workspace granted default membership becomes its home.
+        if workspace.default_membership && home_workspace_id.is_none() {
+            home_workspace_id = Some(id);
         }
 
         let mut workspace_control_ids = HashMap::new();
@@ -503,7 +546,20 @@ async fn insert_workspaces(
         control_ids.insert(workspace.key.to_owned(), workspace_control_ids);
     }
 
-    (ids, control_ids)
+    (ids, control_ids, home_workspace_id)
+}
+
+async fn create_workspace(postgres: &Postgres, name: &str) -> Uuid {
+    postgres
+        .create_workspace(&CreateWorkspacePayload {
+            id: None,
+            slug: None,
+            name: name.to_owned(),
+        })
+        .await
+        .expect("workspace fixture inserts")
+        .id
+        .into()
 }
 
 async fn insert_control(postgres: &Postgres, workspace_id: Uuid, control: &ControlSpec) -> Uuid {
@@ -588,12 +644,7 @@ VALUES ($1, $2, $3, $4, 'Seeded SOC 2 requirement.')
     }
 }
 
-async fn insert_api_credential(postgres: &Postgres) -> String {
-    let issued = ApiKeyManager::new()
-        .expect("API key manager builds")
-        .issue(Environment::test())
-        .expect("integration API key issues");
-    let api_key = issued.raw_key.expose_secret().to_owned();
+async fn insert_api_credential(postgres: &Postgres, workspace_id: WorkspaceId) -> String {
     let actor_id = integration_actor_id();
 
     postgres
@@ -601,17 +652,36 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
             id: Some(actor_id),
             kind: ActorKind::System,
             display_name: "Integration System".to_owned(),
+            workspace_id,
+            created_by_user_id: None,
+            permissions: WorkspacePermission::ALL.to_vec(),
         })
         .await
         .expect("integration actor inserts");
 
+    issue_credential(
+        postgres,
+        actor_id,
+        "integration-api-key",
+        "Integration API Key",
+    )
+    .await
+}
+
+async fn issue_credential(postgres: &Postgres, actor_id: ActorId, id: &str, name: &str) -> String {
+    let issued = ApiKeyManager::new()
+        .expect("API key manager builds")
+        .issue(Environment::test())
+        .expect("integration API key issues");
+    let api_key = issued.raw_key.expose_secret().to_owned();
+
     postgres
         .create_api_credential(&CreateApiCredentialPayload {
-            id: "integration-api-key".to_owned(),
+            id: id.to_owned(),
             actor_id,
-            name: "Integration API Key".to_owned(),
-            key_id: issued.key_id.clone(),
-            credential_hash: issued.credential_hash.clone(),
+            name: name.to_owned(),
+            key_id: issued.key_id,
+            credential_hash: issued.credential_hash,
             expires_at: None,
             revoked_at: None,
         })
@@ -623,16 +693,6 @@ async fn insert_api_credential(postgres: &Postgres) -> String {
 
 fn integration_actor_id() -> ActorId {
     ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).expect("integration actor ID is a UUID"))
-}
-
-async fn start_spicedb() -> ContainerAsync<GenericImage> {
-    GenericImage::new("authzed/spicedb", "v1.53.0")
-        .with_exposed_port(50051.tcp())
-        .with_wait_for(WaitFor::seconds(2))
-        .with_cmd(["serve-testing"])
-        .start()
-        .await
-        .expect("SpiceDB test server starts")
 }
 
 struct TestClamAv {
@@ -684,24 +744,7 @@ async fn shared_clamav() -> Arc<TestClamAv> {
     clamav
 }
 
-async fn spicedb_endpoint(spicedb: &ContainerAsync<GenericImage>) -> url::Url {
-    let host = spicedb
-        .get_host()
-        .await
-        .expect("SpiceDB test server has a host");
-    let port = spicedb
-        .get_host_port_ipv4(50051)
-        .await
-        .expect("SpiceDB test server exposes gRPC");
-
-    url::Url::parse(&format!("http://{host}:{port}")).expect("SpiceDB endpoint parses")
-}
-
-fn config(
-    database_url: String,
-    spicedb_endpoint: url::Url,
-    max_attachment_bytes: usize,
-) -> AppConfig {
+fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
     let storage_root =
         std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
 
@@ -720,11 +763,6 @@ fn config(
                     .expect("worker push endpoint parses"),
                 worker_max_delivery_attempts: 5,
             },
-        },
-        spicedb: SpiceDbConfig {
-            endpoint: spicedb_endpoint,
-            preshared_key: SecretString::from(SPICEDB_PRESHARED_KEY),
-            schema_path: PathBuf::from("authz/spicedb/proofplane.zed"),
         },
         auth0: Auth0Config {
             issuer: url::Url::parse("https://proofplane-integration.us.auth0.com/")

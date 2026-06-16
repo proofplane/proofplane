@@ -53,7 +53,7 @@ async fn list_returns_requests_for_a_workspace_in_due_date_then_title_order() {
         .workspace("workspace", "List workspace")
         .with_default_membership()
         .workspace("other_workspace", "Other list workspace")
-        .with_default_membership()
+        .without_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
@@ -74,11 +74,8 @@ async fn list_returns_requests_for_a_workspace_in_due_date_then_title_order() {
         &evidence_request("Alpha request", "2026-03-01T00:00:00Z", "active"),
     )
     .await;
-    app.create_evidence_request(
-        other_workspace_id,
-        &evidence_request("Hidden request", "2026-02-01T00:00:00Z", "active"),
-    )
-    .await;
+    app.insert_evidence_request_row(other_workspace_id, "Hidden request")
+        .await;
 
     let response = app.get(&collection_path(workspace_id)).await;
 
@@ -116,7 +113,7 @@ async fn list_due_returns_only_active_due_requests_for_the_workspace() {
         .workspace("workspace", "Due workspace")
         .with_default_membership()
         .workspace("other_workspace", "Other due workspace")
-        .with_default_membership()
+        .without_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
@@ -142,11 +139,8 @@ async fn list_due_returns_only_active_due_requests_for_the_workspace() {
         &evidence_request("Due retired", "2026-05-18T12:00:00Z", "retired"),
     )
     .await;
-    app.create_evidence_request(
-        other_workspace_id,
-        &evidence_request("Other due", "2026-05-17T12:00:00Z", "active"),
-    )
-    .await;
+    app.insert_evidence_request_row(other_workspace_id, "Other due")
+        .await;
 
     let due_path = format!(
         "{}/due?now=2026-05-21T12%3A00%3A00Z",
@@ -165,7 +159,7 @@ async fn get_returns_a_request_and_not_found_for_missing_or_cross_workspace_ids(
         .workspace("workspace", "Get workspace")
         .with_default_membership()
         .workspace("other_workspace", "Other get workspace")
-        .with_default_membership()
+        .without_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
@@ -278,7 +272,7 @@ async fn replace_rejects_cross_workspace_ids_without_modifying_the_owner_copy() 
         .workspace("workspace", "Owning replace workspace")
         .with_default_membership()
         .workspace("other_workspace", "Other replace workspace")
-        .with_default_membership()
+        .without_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");

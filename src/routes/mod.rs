@@ -1,3 +1,4 @@
+pub mod actors;
 pub mod authentication;
 pub mod controls;
 pub mod error;

@@ -11,17 +11,15 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     authentication::ActorContext,
     authentication::ApiKeyAuthenticator,
-    authorization::workspaces::WorkspaceAuthorizer,
     domain::{
         required_text, validate_freshness_window_days, CreateEvidenceRequestPayload, DomainError,
         EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
-        UpdateEvidenceRequestPayload,
+        UpdateEvidenceRequestPayload, WorkspacePermission,
     },
     routes::{
         authentication::authorize_workspace_route,
@@ -41,7 +39,6 @@ pub struct EvidenceRequestState {
 #[derive(Clone)]
 pub struct EvidenceRequestRouteAuthState {
     pub authenticator: ApiKeyAuthenticator,
-    pub authorizer: WorkspaceAuthorizer,
 }
 
 pub fn router(state: EvidenceRequestState) -> Router {
@@ -76,41 +73,14 @@ async fn authorize_evidence_request_route(
     let method = request.method().clone();
 
     let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
-    let workspace_id = actor.workspace_id;
 
-    let allowed = match method {
-        Method::GET => state
-            .authorizer
-            .can_read_evidence_requests(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check read permissions for evidence requests"
-                );
-                ApiError::Internal
-            }),
-        Method::POST | Method::PUT => state
-            .authorizer
-            .can_write_evidence_requests(&actor)
-            .await
-            .map_err(|e| {
-                error!(
-                    method = %method,
-                    actor = %actor.id,
-                    workspace = %workspace_id,
-                    error = %e,
-                    "unable to check write permissions for evidence requests"
-                );
-                ApiError::Internal
-            }),
-        _ => Err(ApiError::MethodNotAllowed),
-    }?;
+    let required = match method {
+        Method::GET => WorkspacePermission::ReadEvidenceRequests,
+        Method::POST | Method::PUT => WorkspacePermission::WriteEvidenceRequests,
+        _ => return Err(ApiError::MethodNotAllowed),
+    };
 
-    if !allowed {
+    if !actor.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 
