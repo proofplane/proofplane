@@ -2,7 +2,9 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 
-use super::{api_credential::ApiCredential, ids::uuid_id, DomainError};
+use super::{
+    ids::uuid_id, ActorPermissions, DomainError, UserId, WorkspaceId, WorkspacePermission,
+};
 
 uuid_id!(ActorId);
 
@@ -62,13 +64,15 @@ pub struct Actor {
     pub id: ActorId,
     pub kind: ActorKind,
     pub display_name: String,
+    pub workspace_id: WorkspaceId,
+    pub created_by_user_id: Option<UserId>,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActorWithApiCredential {
+pub struct ActorWithPermissions {
     pub actor: Actor,
-    pub api_credential: ApiCredential,
+    pub permissions: ActorPermissions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,12 +80,16 @@ pub struct CreateActorPayload {
     pub id: Option<ActorId>, // optional for tests to be able to pass in deterministic IDs
     pub kind: ActorKind,
     pub display_name: String,
+    pub workspace_id: WorkspaceId,
+    pub created_by_user_id: Option<UserId>,
+    pub permissions: Vec<WorkspacePermission>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateActorPayload {
     pub kind: ActorKind,
     pub display_name: String,
+    pub workspace_id: WorkspaceId,
 }
 
 #[cfg(test)]

@@ -20,7 +20,6 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub postgres: SecretString,
     pub pubsub: PubSubConfig,
-    pub spicedb: SpiceDbConfig,
     pub auth0: Auth0Config,
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
@@ -48,13 +47,6 @@ pub struct PubSubSubscriptionsConfig {
     pub worker: String,
     pub worker_push_endpoint: Url,
     pub worker_max_delivery_attempts: u16,
-}
-
-#[derive(Debug, Clone)]
-pub struct SpiceDbConfig {
-    pub endpoint: Url,
-    pub preshared_key: SecretString,
-    pub schema_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +189,6 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         server <- raw.server.validate(),
         postgres <- raw::validate_postgres_connection_string(raw.postgres),
         pubsub <- raw.pubsub.validate(),
-        spicedb <- raw.spicedb.validate(),
         auth0 <- raw.auth0.validate(),
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
@@ -209,7 +200,6 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             server,
             postgres,
             pubsub,
-            spicedb,
             auth0,
             object_storage,
             scanner,
@@ -252,10 +242,6 @@ mod tests {
             "http://host.docker.internal:3001/pubsub/messages"
         );
         assert_eq!(config.pubsub.subscriptions.worker_max_delivery_attempts, 5);
-        assert_eq!(
-            config.spicedb.schema_path,
-            PathBuf::from("authz/spicedb/proofplane.zed")
-        );
         assert!(matches!(
             config.object_storage,
             ObjectStorageConfig::Filesystem { .. }
@@ -307,7 +293,6 @@ environment: ""
 server: {}
 postgres: {}
 pubsub: {}
-spicedb: {}
 object_storage: {}
 scanner: {}
 observability: {}
@@ -339,10 +324,6 @@ pubsub:
     worker: "proofplane-worker"
     worker_push_endpoint: "not-a-url"
     worker_max_delivery_attempts: 4
-spicedb:
-  endpoint: ""
-  preshared_key: ""
-  schema_path: ""
 auth0:
   issuer: ""
   audience: ""
@@ -386,9 +367,6 @@ health:
                 assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
-                assert!(paths.contains(&"spicedb.endpoint"));
-                assert!(paths.contains(&"spicedb.preshared_key"));
-                assert!(paths.contains(&"spicedb.schema_path"));
                 assert!(paths.contains(&"auth0.issuer"));
                 assert!(paths.contains(&"auth0.audience"));
                 assert!(paths.contains(&"auth0.jwks_url"));
@@ -428,15 +406,6 @@ health:
         let debug = format!("{:?}", postgres);
 
         assert!(!debug.contains(postgres.expose_secret()));
-        assert!(debug.contains("Secret"));
-    }
-
-    #[test]
-    fn spicedb_preshared_key_is_redacted_in_debug_output() {
-        let config = load_from_path("config/local.yaml").expect("local config loads");
-        let debug = format!("{:?}", config.spicedb.preshared_key);
-
-        assert!(!debug.contains(config.spicedb.preshared_key.expose_secret()));
         assert!(debug.contains("Secret"));
     }
 

@@ -144,6 +144,21 @@ RETURNING
             .transpose()
     }
 
+    /// Revokes a credential idempotently: a second revoke keeps the original
+    /// revocation time and still reports success. Returns whether the
+    /// credential exists.
+    pub async fn revoke_api_credential(&self, id: &str) -> Result<bool, Error> {
+        let client = self.get().await?;
+        let updated = client
+            .execute(
+                "UPDATE api_credentials SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1",
+                &[&id],
+            )
+            .await?;
+
+        Ok(updated > 0)
+    }
+
     pub async fn delete_api_credential(&self, id: &str) -> Result<bool, Error> {
         let client = self.get().await?;
         let deleted = client

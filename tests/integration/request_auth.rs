@@ -135,27 +135,25 @@ async fn evidence_submission_routes_require_valid_api_keys() {
 }
 
 #[tokio::test]
-async fn valid_global_actor_api_key_is_authorized_by_workspace_membership() {
+async fn actor_api_key_is_authorized_only_in_its_home_workspace() {
     let app = TestApp::builder()
         .without_default_auth()
-        .workspace("first", "First workspace")
-        .with_default_membership()
-        .workspace("second", "Second workspace")
+        .workspace("home", "Home workspace")
         .with_default_membership()
         .workspace("ungranted", "Ungranted workspace")
         .without_membership()
         .build()
         .await;
 
-    for key in ["first", "second"] {
-        let workspace_id = app.workspace_id(key);
-        app.server()
-            .get(&format!("/workspaces/{workspace_id}/evidence-requests"))
-            .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
-            .add_header(API_KEY_HEADER, app.api_key())
-            .await
-            .assert_status_ok();
-    }
+    let home_workspace_id = app.workspace_id("home");
+    app.server()
+        .get(&format!(
+            "/workspaces/{home_workspace_id}/evidence-requests"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_ok();
 
     let ungranted_workspace_id = app.workspace_id("ungranted");
     let ungranted = app

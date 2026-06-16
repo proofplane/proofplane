@@ -7,10 +7,6 @@ use proofplane::{
     authentication::{
         auth0::Auth0TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
     },
-    authorization::{
-        spicedb::{ClientError as SpiceDbClientError, SpiceDbClient},
-        workspaces::WorkspaceAuthorizer,
-    },
     config, object_storage, observability, repository, store,
 };
 use secrecy::ExposeSecret;
@@ -38,9 +34,6 @@ enum Error {
 
     #[error("authentication initialization error")]
     Authentication(#[from] proofplane::authentication::Error),
-
-    #[error("SpiceDB client initialization error")]
-    SpiceDb(#[from] SpiceDbClientError),
 
     #[error("object storage initialization error")]
     ObjectStorage(#[from] object_storage::StorageError),
@@ -81,8 +74,6 @@ async fn run() -> Result<(), Error> {
         Arc::new(Auth0TokenVerifier::new(&config.auth0)),
         postgres.clone(),
     );
-    let workspace_authorizer =
-        WorkspaceAuthorizer::new(SpiceDbClient::from_config(&config.spicedb).await?);
 
     let deps = AppDependencies {
         config,
@@ -91,7 +82,6 @@ async fn run() -> Result<(), Error> {
         metrics,
         authenticator,
         user_authenticator,
-        workspace_authorizer,
     };
 
     let app = create_app(deps)?;

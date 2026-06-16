@@ -6,6 +6,7 @@ use proofplane::domain::{
     CreateEvidenceSubmissionPayload, CreateWorkspacePayload, EvidenceRequestCadence,
     EvidenceRequestStatus, EvidenceSubmissionId, FrameworkRequirementId, ProvisionUserPayload,
     UpdateActorPayload, UpdateApiCredentialPayload, UpdateControlPayload, UpdateWorkspacePayload,
+    WorkspacePermission,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
@@ -65,14 +66,26 @@ async fn user_repository_upsert_provisions_once_and_preserves_profile() {
 async fn actor_repository_crud_uses_typed_rows() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
+    let workspace = postgres
+        .create_workspace(&CreateWorkspacePayload {
+            id: None,
+            slug: None,
+            name: "Repository Actor Workspace".to_owned(),
+        })
+        .await
+        .expect("workspace creates");
     let actor = postgres
         .create_actor(&CreateActorPayload {
             id: Some(ActorId::from(Uuid::new_v4())),
             kind: ActorKind::HumanUser,
             display_name: "Repository Human".to_owned(),
+            workspace_id: workspace.id,
+            created_by_user_id: None,
+            permissions: vec![WorkspacePermission::ReadControls],
         })
         .await
         .expect("actor creates");
+    assert_eq!(actor.workspace_id, workspace.id);
 
     assert_eq!(
         postgres
@@ -94,6 +107,7 @@ async fn actor_repository_crud_uses_typed_rows() {
             &UpdateActorPayload {
                 kind: ActorKind::ServiceAccount,
                 display_name: "Repository Service".to_owned(),
+                workspace_id: workspace.id,
             },
         )
         .await
@@ -113,6 +127,7 @@ async fn actor_repository_crud_uses_typed_rows() {
             &UpdateActorPayload {
                 kind: ActorKind::System,
                 display_name: "Missing".to_owned(),
+                workspace_id: workspace.id,
             },
         )
         .await
@@ -204,11 +219,22 @@ async fn workspace_repository_crud_uses_typed_rows() {
 async fn api_credential_repository_crud_uses_lifecycle_fields() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
+    let workspace = postgres
+        .create_workspace(&CreateWorkspacePayload {
+            id: None,
+            slug: None,
+            name: "Repository Credential Workspace".to_owned(),
+        })
+        .await
+        .expect("workspace creates");
     let actor = postgres
         .create_actor(&CreateActorPayload {
             id: None,
             kind: ActorKind::Integration,
             display_name: "Credential Actor".to_owned(),
+            workspace_id: workspace.id,
+            created_by_user_id: None,
+            permissions: WorkspacePermission::ALL.to_vec(),
         })
         .await
         .expect("credential actor creates");
@@ -252,13 +278,14 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
     assert_eq!(updated.key_id, "rotated-key-id");
     assert!(updated.expires_at.is_none());
     assert!(updated.revoked_at.is_some());
-    let actor_with_credential = postgres
-        .actor_with_api_credential(actor.id)
+    let (found_actor, found_credential, found_permissions) = postgres
+        .actor_credential_by_key_id(actor.id, "rotated-key-id")
         .await
         .expect("actor credential reads")
         .expect("actor exists");
-    assert_eq!(actor_with_credential.actor, actor);
-    assert_eq!(actor_with_credential.api_credential, updated.clone());
+    assert_eq!(found_actor, actor);
+    assert_eq!(found_credential, updated.clone());
+    assert!(found_permissions.has(WorkspacePermission::ReadControls));
     assert!(postgres
         .list_api_credentials()
         .await
@@ -299,14 +326,25 @@ async fn api_credential_repository_crud_uses_lifecycle_fields() {
 }
 
 #[tokio::test]
-async fn api_credential_repository_enforces_one_credential_per_actor() {
+async fn api_credential_repository_allows_multiple_credentials_per_actor() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
+    let workspace = postgres
+        .create_workspace(&CreateWorkspacePayload {
+            id: None,
+            slug: None,
+            name: "Multi Credential Workspace".to_owned(),
+        })
+        .await
+        .expect("workspace creates");
     let actor = postgres
         .create_actor(&CreateActorPayload {
             id: None,
             kind: ActorKind::Integration,
-            display_name: "Single Credential Actor".to_owned(),
+            display_name: "Multi Credential Actor".to_owned(),
+            workspace_id: workspace.id,
+            created_by_user_id: None,
+            permissions: WorkspacePermission::ALL.to_vec(),
         })
         .await
         .expect("credential actor creates");
@@ -315,7 +353,7 @@ async fn api_credential_repository_enforces_one_credential_per_actor() {
         ("first-api-key", "first-key-id"),
         ("second-api-key", "second-key-id"),
     ] {
-        let result = postgres
+        postgres
             .create_api_credential(&CreateApiCredentialPayload {
                 id: id.to_owned(),
                 actor_id: actor.id,
@@ -325,13 +363,17 @@ async fn api_credential_repository_enforces_one_credential_per_actor() {
                 expires_at: None,
                 revoked_at: None,
             })
-            .await;
+            .await
+            .expect("API credential creates");
+    }
 
-        if id == "first-api-key" {
-            result.expect("first API credential creates");
-        } else {
-            result.expect_err("second API credential violates actor constraint");
-        }
+    // Both live credentials resolve by their own key_id, scoped to the actor.
+    for key_id in ["first-key-id", "second-key-id"] {
+        assert!(postgres
+            .actor_credential_by_key_id(actor.id, key_id)
+            .await
+            .expect("credential resolves")
+            .is_some());
     }
 }
 

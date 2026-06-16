@@ -20,13 +20,12 @@ Humans **manage**; actors **do work**. The two never cross.
 - **Clean separation of planes.** Humans authenticate via Auth0 and operate only
   the management plane. Actors authenticate via API keys and operate only the
   data plane. Humans do not call data APIs; actors do not manage anything.
-- **Two authorization stores, by plane.** The **human management plane**
-  authorizes from **Postgres** (`workspace_memberships.role`), the transactional
-  source of truth for human roles. **SpiceDB is the actor data plane only**
-  (`workspace#member@actor` → evidence/controls). _(Revised during ticket 002 —
-  see [Decision revision](#decision-revision-human-plane-authorizes-from-postgres)
-  below. The original draft modelled human `owner`/`admin`/`manage_*` in SpiceDB
-  with an outbox dual-write; that was dropped as redundant.)_
+- **One authorization store: Postgres.** The **human management plane**
+  authorizes from `workspace_memberships.role`; the **actor data plane**
+  authorizes from `actors.workspace_id` + `actor_permissions`. _(Revised: ticket
+  002 moved the human plane off SpiceDB; ticket 003 removed SpiceDB entirely and
+  ported the actor permissions to Postgres. The original draft used SpiceDB as
+  the actor data-plane engine with an outbox dual-write — both are gone.)_
 - **No platform-superadmin tier.** Reserved for a future platform plane; not
   built and not scaffolded (avoids dead code until it is actually needed).
 - **Human roles at launch: Owner + Admin.** Owner can delete/transfer the
@@ -70,47 +69,62 @@ CREATE TABLE workspace_memberships (
     PRIMARY KEY (user_id, workspace_id)
 );
 
--- Give actors a real DB home: tenant isolation no longer lives only in SpiceDB
+-- Give actors a real DB home (NOT NULL: every actor belongs to one workspace).
+-- Existing rows are backfilled to a dedicated system workspace before the
+-- constraint is enforced.
 ALTER TABLE actors ADD COLUMN workspace_id       UUID REFERENCES workspaces(id);
 ALTER TABLE actors ADD COLUMN created_by_user_id UUID REFERENCES users(id);
+-- ... backfill, then ...
+ALTER TABLE actors ALTER COLUMN workspace_id SET NOT NULL;
 
 -- Allow key rotation: multiple live credentials per actor
 DROP INDEX idx_api_credentials_actor_id;          -- the UNIQUE one
 ALTER TABLE api_credentials DROP CONSTRAINT api_credentials_actor_id_key;
 CREATE INDEX idx_api_credentials_actor_id ON api_credentials (actor_id);
+
+-- Per-actor data-plane permission grants (replaces the SpiceDB engine).
+CREATE TABLE actor_permissions (
+    actor_id   UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+    permission TEXT NOT NULL CHECK (permission IN (
+        'read_evidence_requests', 'write_evidence_requests',
+        'read_evidence_submissions', 'write_evidence_submissions',
+        'read_controls', 'write_controls')),
+    PRIMARY KEY (actor_id, permission)
+);
 ```
 
-### Migration notes
+### Migration notes (revised — ticket 003)
 
-- `actors.workspace_id` is **nullable** because the seeded **system actors** are
-  not workspace-bound. Tenant actors always set it; the auth path requires it for
-  non-system actor kinds.
-- Relaxing the one-key-per-actor constraint requires changing
-  `ApiKeyAuthenticator::authenticate` (`src/authentication/mod.rs:70`). Today it
-  loads the actor's single credential then checks `key_id`. With multiple
-  credentials it must resolve the credential **by `key_id`** (extracted from the
-  raw key) scoped to the actor.
+- `actors.workspace_id` is **NOT NULL**. The original draft made it nullable for
+  un-bound system actors; instead, a dedicated system workspace is seeded and the
+  system actor is added to it, so every actor belongs to exactly one workspace.
+- Relaxing the one-key-per-actor constraint changed
+  `ApiKeyAuthenticator::authenticate`: it resolves the credential **by `key_id`**
+  (extracted from the raw key) scoped to the actor, and returns the actor's home
+  workspace + permission grants on `ActorContext`.
+- The data-plane guard (`authorize_workspace_route`) then enforces that the
+  actor's home workspace equals the path workspace (404 on mismatch), and each
+  resource guard checks the specific `actor_permissions` grant for the
+  route+method (404 when not granted).
 
-## SpiceDB schema (`authz/spicedb/proofplane.zed`)
+## Data-plane authorization (revised — ticket 003: SpiceDB removed)
 
-SpiceDB models the **actor data plane only**. Human management roles are not in
-SpiceDB — they are authorized from Postgres (see the decision revision below).
+The original draft authorized the actor data plane through SpiceDB
+(`workspace#member@actor`, where `member` granted all six permissions). **Ticket
+003 removed SpiceDB entirely** — the gRPC client, the proto build pipeline, the
+`.zed` schema, the config, and the local/test infra are all gone. The six
+permissions it modelled were preserved, not collapsed:
 
-```
-definition actor {}
+- An actor belongs to exactly one workspace (`actors.workspace_id`).
+- An actor holds an explicit subset of the six data-plane permissions
+  (`actor_permissions`), specified at create time.
+- A data-plane request is authorized iff the actor's workspace matches the path
+  **and** the actor holds the permission for that route+method (GET → the
+  matching `read_*`, POST/PUT/DELETE → the matching `write_*`). Either failure is
+  a 404, so existence is not leaked.
 
-definition workspace {
-    relation member: actor
-
-    // Data plane (actors)
-    permission read_evidence_requests     = member
-    permission write_evidence_requests    = member
-    permission read_evidence_submissions  = member
-    permission write_evidence_submissions = member
-    permission read_controls              = member
-    permission write_controls             = member
-}
-```
+This keeps a single Postgres source of truth and removes the dual-store
+reconciliation the SpiceDB engine required.
 
 ### Decision revision: human plane authorizes from Postgres
 
@@ -130,11 +144,13 @@ dual-write and a worker backstop. **Ticket 002 dropped that.** Reasons:
   same thing collapsed to one transactional Postgres write.
 
 So `manage_members` / `manage_workspace` / `manage_actors` are answered by reading
-`workspace_memberships.role` (`owner` or `admin`). SpiceDB stays the data-plane
-engine, where fine-grained, relational, reverse-queryable actor access is actually
-heading. **Revisit** if the human plane ever needs relational authorization (team
-hierarchies, org→workspace inheritance, the platform tier) — then modelling humans
-in SpiceDB earns its keep.
+`workspace_memberships.role` (`owner` or `admin`). _(At the time this was written,
+SpiceDB was kept as the actor data-plane engine; **ticket 003 later removed it**
+in favor of Postgres `actors.workspace_id` + `actor_permissions` — see
+[Data-plane authorization](#data-plane-authorization-revised--ticket-003-spicedb-removed).)_
+**Revisit** an external relationship engine only if authorization ever needs
+genuinely relational, reverse-queryable access (team hierarchies, org→workspace
+inheritance, the platform tier).
 
 ## Two auth middleware paths
 
@@ -155,9 +171,9 @@ caches the remote JWKS with `kid` rotation and verifies RS256; fallback
 check out at build time). Avoid a full Axum auth-*layer* crate (e.g.
 `jwt-authorizer`): it leaks its layer/claims types into the router against this
 project's adapter/DI convention, and cannot perform JIT provisioning anyway. Wrap
-the chosen crate behind a `TokenVerifier` trait (static DI), mirroring how SpiceDB
-sits behind `WorkspaceAuthorizer` and API keys behind `ApiKeyManager`; the trait
-boundary also lets tests inject a fake verifier instead of calling live Auth0. No
+the chosen crate behind a `TokenVerifier` trait (static DI), mirroring how API
+keys sit behind `ApiKeyManager`; the trait boundary also lets tests inject a fake
+verifier instead of calling live Auth0. No
 `reqwest` dependency is needed. Auth0 config (domain, audience) goes in
 `AppConfig`.
 
@@ -185,28 +201,17 @@ capability the endpoint wrapped is retained for that future flow.)_
 resolves the chicken-and-egg problem where every existing route assumes a
 workspace in the path.
 
-## Dual-write consistency (Postgres ↔ SpiceDB)
+## Dual-write consistency (Postgres ↔ SpiceDB) — obsolete (ticket 003)
 
-This applies **only to operations that write a SpiceDB tuple** — i.e. the actor
-data plane: granting an actor `workspace#member` (ticket 003, *Actor & API Key
-Management*). It does **not** apply to workspace creation or human membership:
-those write only Postgres (`workspaces` + `workspace_memberships` in one
-transaction) and authorize from Postgres, so there is no second store to keep in
-sync.
+This section described keeping SpiceDB in sync with Postgres when creating an
+actor (write the row + an `outbox_messages` row for the tuple, plus a best-effort
+synchronous tuple write, with the worker as backstop). **It no longer applies:**
+SpiceDB was removed, so creating an actor is a single Postgres transaction
+(actor row + its `actor_permissions` rows) with no second store to reconcile.
 
-For an operation that does write both Postgres and SpiceDB (create actor +
-membership tuple), reuse the existing `outbox_messages` table and its
-dequeuer/worker:
-
-1. In **one PG transaction**, write the row(s) **and** an `outbox_messages` row
-   describing the SpiceDB tuple.
-2. After commit, optionally make a best-effort **synchronous** SpiceDB write
-   (idempotent `touch`) so the actor can be used immediately.
-3. The existing **worker** drains the outbox and retries the SpiceDB write if the
-   synchronous attempt failed.
-
-This gives snappy UX with a guaranteed eventually-consistent backstop, reusing
-infrastructure that already exists.
+The `outbox_messages` table, dequeuer, and worker remain — they are used by the
+attachment virus-scanning pipeline (Pub/Sub), which is unrelated to actor
+authorization.
 
 ## Build order
 
@@ -215,9 +220,9 @@ infrastructure that already exists.
 2. **Workspace self-onboarding** — `workspace_memberships` table, `POST` /
    `GET /workspaces` (workspace + owner membership committed in one Postgres
    transaction), member add/remove. Human `manage_*` authorized from Postgres.
-3. **Actor management** — `actors.workspace_id`, create actor (with SpiceDB
-   `member` tuple via the outbox dual-write), issue/revoke keys, multi-credential
-   auth change.
+3. **Actor management** — `actors.workspace_id` (NOT NULL) + `actor_permissions`,
+   create/list actors, issue/revoke keys, multi-credential auth change, and
+   removal of SpiceDB (data-plane authz moves to Postgres).
 4. **Audit logs** — emit structured `type = "audit_log"` application logs for
    login / workspace / member / key operations after successful commits.
 
@@ -226,12 +231,14 @@ infrastructure that already exists.
 - **"Root" naming** — the customer-facing concept is a workspace **owner**, not a
   cross-tenant superuser. "Root"/superadmin is reserved for a future platform
   tier (deferred; not built or scaffolded).
-- **Tenant isolation in DB** — actors gain a real `workspace_id` so isolation is
-  defense-in-depth, not SpiceDB-only.
+- **Tenant isolation in DB** — actors have a NOT NULL `workspace_id`, so
+  isolation lives in Postgres.
 - **Bootstrap gap** — solved by the account-level `POST /workspaces`.
-- **Two identity types** — clean separation of management vs data planes, with a
-  store per plane: human roles in Postgres, actor membership in SpiceDB.
-- **Cardinality** — many-to-many from day one.
-- **Dual-write** — outbox + synchronous write-through, for actor data-plane tuples
-  only (human membership is a single transactional Postgres write).
+- **Two identity types** — clean separation of management vs data planes, both
+  authorized from Postgres: human roles in `workspace_memberships`, actor access
+  from `actors.workspace_id` + `actor_permissions`.
+- **Cardinality** — users ↔ workspaces is many-to-many; an actor belongs to
+  exactly one workspace.
+- **No dual-write** — SpiceDB removed, so every write is a single Postgres
+  transaction.
 - **Key rotation** — one-key-per-actor constraint relaxed.

@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
-    domain::{ActorId, ActorWithApiCredential, ProvisionUserPayload, UserId, WorkspaceId},
+    domain::{ActorId, ActorPermissions, ProvisionUserPayload, UserId, WorkspaceId},
     repository,
 };
 
@@ -13,16 +13,22 @@ pub mod auth0;
 
 const API_KEY_PREFIX: &str = "proof";
 
-/// An authenticated actor acting within a workspace.
+/// An authenticated actor acting within its home workspace, carrying the
+/// permission grants resolved at authentication time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActorContext {
     pub workspace_id: WorkspaceId,
     pub id: ActorId,
+    pub permissions: ActorPermissions,
 }
 
 impl ActorContext {
-    pub fn new(workspace_id: WorkspaceId, id: ActorId) -> Self {
-        Self { workspace_id, id }
+    pub fn new(workspace_id: WorkspaceId, id: ActorId, permissions: ActorPermissions) -> Self {
+        Self {
+            workspace_id,
+            id,
+            permissions,
+        }
     }
 }
 
@@ -95,18 +101,21 @@ impl ApiKeyAuthenticator {
         }
     }
 
+    /// Resolves the credential by the `key_id` embedded in the presented key,
+    /// scoped to the claimed actor, then verifies it. Returns an `ActorContext`
+    /// bound to the actor's home workspace with its permission grants. An
+    /// unknown, revoked, or expired key yields `None`.
     pub async fn authenticate(
         &self,
-        workspace_id: WorkspaceId,
         actor_id: ActorId,
         api_key: &str,
     ) -> Result<Option<ActorContext>, Error> {
-        let Some(ActorWithApiCredential {
-            actor,
-            api_credential: credential,
-        }) = self
+        let raw_key = SecureString::from(api_key);
+        let key_id = self.api_keys.key_id(&raw_key);
+
+        let Some((actor, credential, permissions)) = self
             .repository
-            .actor_with_api_credential(actor_id)
+            .actor_credential_by_key_id(actor_id, &key_id)
             .await
             .map_err(Error::Repository)?
         else {
@@ -121,14 +130,15 @@ impl ApiKeyAuthenticator {
             return Ok(None);
         }
 
-        let raw_key = SecureString::from(api_key);
-        if credential.key_id != self.api_keys.key_id(&raw_key)
-            || !self.api_keys.verify(&raw_key, &credential.credential_hash)
-        {
+        if !self.api_keys.verify(&raw_key, &credential.credential_hash) {
             return Ok(None);
         }
 
-        Ok(Some(ActorContext::new(workspace_id, actor.id)))
+        Ok(Some(ActorContext::new(
+            actor.workspace_id,
+            actor.id,
+            permissions,
+        )))
     }
 }
 
