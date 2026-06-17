@@ -59,6 +59,37 @@ async fn me_provisions_user_without_profile_claims() {
 }
 
 #[tokio::test]
+async fn me_preserves_existing_profile_when_later_claims_are_absent() {
+    let app = TestApp::start_without_default_auth().await;
+    let sub = "auth0|me-profile-preserved";
+
+    let first = app
+        .server()
+        .get("/me")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+        .await;
+    first.assert_status_ok();
+    let first_body = first.json::<Value>();
+    let user_id = first_body["id"].clone();
+
+    assert_eq!(first_body["email"], format!("{sub}@example.com"));
+    assert_eq!(first_body["name"], "Integration Human");
+
+    let second = app
+        .server()
+        .get("/me")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer noprofile:{sub}"))
+        .await;
+    second.assert_status_ok();
+    let second_body = second.json::<Value>();
+
+    assert_eq!(second_body["id"], user_id);
+    assert_eq!(second_body["email"], format!("{sub}@example.com"));
+    assert_eq!(second_body["name"], "Integration Human");
+    assert_eq!(count_users_with_sub(&app, sub).await, 1);
+}
+
+#[tokio::test]
 async fn me_rejects_missing_or_invalid_bearer_tokens() {
     let app = TestApp::start_without_default_auth().await;
 
