@@ -16,7 +16,9 @@ mod workspaces;
 
 pub use constraints::ConflictKind;
 pub use error::Error;
-pub use evidence_submissions::{FinalizingAttachmentUploadWork, PendingAttachmentUploadWork};
+pub use evidence_submissions::{
+    AttachmentDownloadCandidate, FinalizingAttachmentUploadWork, PendingAttachmentUploadWork,
+};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use workspace_memberships::NewWorkspaceMembership;
 

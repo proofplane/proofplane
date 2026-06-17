@@ -13,6 +13,7 @@ pub mod pubsub;
 pub mod repository;
 pub mod routes;
 pub mod scanner;
+pub mod seed;
 pub mod services;
 pub mod store;
 pub mod validation;

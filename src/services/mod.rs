@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 pub mod actors;
+pub mod attachment_downloads;
 pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;

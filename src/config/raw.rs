@@ -8,9 +8,10 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
-        parse_log_format, path_string, postgres_connection_string, string_url, string_value,
-        ConfigValidationExt,
+        download_signing_secret as validate_download_signing_secret, gcs_credentials_mode,
+        nonzero_u16, nonzero_u64, nonzero_usize, optional_url, parse_log_format, path_string,
+        postgres_connection_string, public_api_base_url as validate_public_api_base_url,
+        string_url, string_value, ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
     PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
@@ -89,6 +90,8 @@ pub(super) struct RawServerConfig {
     api_bind: String,
     worker_bind: String,
     mcp_bind: String,
+    public_api_base_url: String,
+    download_signing_secret: SecretString,
 }
 
 impl RawServerConfig {
@@ -97,10 +100,16 @@ impl RawServerConfig {
             api_bind <- socket_addr(self.api_bind).at("server.api_bind"),
             worker_bind <- socket_addr(self.worker_bind).at("server.worker_bind"),
             mcp_bind <- socket_addr(self.mcp_bind).at("server.mcp_bind"),
+            public_api_base_url <- validate_public_api_base_url(self.public_api_base_url)
+                .at("server.public_api_base_url"),
+            download_signing_secret <- validate_download_signing_secret(self.download_signing_secret)
+                .at("server.download_signing_secret"),
             => ServerConfig {
                 api_bind,
                 worker_bind,
                 mcp_bind,
+                public_api_base_url,
+                download_signing_secret,
             },
         }
     }

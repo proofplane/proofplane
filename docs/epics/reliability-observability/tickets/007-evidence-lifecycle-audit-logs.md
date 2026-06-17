@@ -1,0 +1,38 @@
+# 007 - Evidence Lifecycle Audit Logs
+
+**Status:** Todo · **Depends on:** 005-structured-audit-logging, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003 · **Spec:**
+[spec.md](../spec.md#evidence-lifecycle-audit-events)
+
+**Summary** - Emit structured audit logs for evidence submission creation,
+attachment acceptance, download grant issuance and redemption, scan terminal
+outcomes, and finalization so lifecycle-sensitive evidence actions are
+attributable without exposing secrets.
+
+**Acceptance criteria**
+
+- [ ] Given successful evidence lifecycle operations, when logs are captured,
+  then one attributable `type = "audit_log"` record is emitted for each audited
+  lifecycle transition.
+- [ ] Given rejected requests, rolled-back mutations, retryable worker failures,
+  duplicate delivery, or stale delivery, when logs are captured, then no false
+  success audit record is emitted.
+- [ ] Given audit fields are inspected, then workspace, actor, request
+  correlation, event name, outcome, grant ID, submission ID, and attachment ID
+  may appear where applicable.
+- [ ] Given sensitive values exist during the flow, then raw grant tokens, API
+  keys, authorization headers, attachment bytes, object keys treated as storage
+  internals, scanner raw error strings, and credentials are absent.
+
+**Tasks**
+
+- [ ] Define stable evidence audit event names and allowed fields in the
+  Reliability spec.
+- [ ] Instrument submission creation and attachment acceptance after successful
+  commits.
+- [ ] Instrument download grant issuance and redemption without logging the JWT.
+- [ ] Instrument scan and finalization outcomes, with duplicate/stale deliveries
+  omitted or explicitly non-success.
+- [ ] Add captured-log tests for success, rollback/no-false-success,
+  retry/no-false-success, duplicate/stale delivery, and secret exclusion.
+- [ ] Update the evidence lifecycle epic pointer so audit logging ownership is
+  clear.

@@ -1,4 +1,5 @@
 pub mod actors;
+pub mod attachment_downloads;
 pub mod authentication;
 pub mod controls;
 pub mod error;

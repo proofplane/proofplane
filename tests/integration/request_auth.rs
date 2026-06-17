@@ -87,6 +87,9 @@ async fn evidence_submission_routes_require_valid_api_keys() {
     let submission_id = Uuid::new_v4();
     let create_path =
         format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions");
+    let latest_path = format!(
+        "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions/latest"
+    );
     let get_path = format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}");
     let upload_path =
         format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments");
@@ -101,6 +104,16 @@ async fn evidence_submission_routes_require_valid_api_keys() {
         .await;
     assert_unauthorized(&invalid_create.json(), invalid_create.status_code());
 
+    let missing_latest = app.server().get(&latest_path).await;
+    assert_unauthorized(&missing_latest.json(), missing_latest.status_code());
+    let invalid_latest = app
+        .server()
+        .get(&latest_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, "not-a-known-key")
+        .await;
+    assert_unauthorized(&invalid_latest.json(), invalid_latest.status_code());
+
     let missing_get = app.server().get(&get_path).await;
     assert_unauthorized(&missing_get.json(), missing_get.status_code());
     let invalid_get = app
@@ -111,6 +124,12 @@ async fn evidence_submission_routes_require_valid_api_keys() {
         .await;
     assert_unauthorized(&invalid_get.json(), invalid_get.status_code());
 
+    app.server()
+        .get(&latest_path)
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
     app.server()
         .get(&get_path)
         .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
@@ -202,6 +221,14 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         .await
         .assert_status_not_found();
     app.server()
+        .get(&format!(
+            "/workspaces/{granted_workspace_id}/evidence-requests/{evidence_request_id}/submissions/latest"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await
+        .assert_status_not_found();
+    app.server()
         .post(&format!(
             "/workspaces/{granted_workspace_id}/evidence-submissions/{submission_id}/attachments"
         ))
@@ -236,6 +263,20 @@ async fn submission_routes_are_authorized_by_workspace_membership() {
         .await;
     assert_eq!(ungranted_get.status_code(), StatusCode::NOT_FOUND);
     assert_eq!(ungranted_get.json::<Value>()["error"]["code"], "not_found");
+
+    let ungranted_latest = app
+        .server()
+        .get(&format!(
+            "/workspaces/{ungranted_workspace_id}/evidence-requests/{evidence_request_id}/submissions/latest"
+        ))
+        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
+        .add_header(API_KEY_HEADER, app.api_key())
+        .await;
+    assert_eq!(ungranted_latest.status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        ungranted_latest.json::<Value>()["error"]["code"],
+        "not_found"
+    );
 
     let ungranted_upload = app
         .server()
@@ -410,6 +451,11 @@ async fn authenticated_request_logs_context_without_api_key() {
         .add_header("x-request-id", "not-a-uuid")
         .await
         .assert_status_bad_request();
+    let download_token = "secret.jwt.log-sentinel";
+    app.server()
+        .get(&format!("/attachment-downloads?token={download_token}"))
+        .await
+        .assert_status_not_found();
 
     let bearer_token = "auth0|log-user";
     let me = app
@@ -431,6 +477,11 @@ async fn authenticated_request_logs_context_without_api_key() {
     assert!(!logs.contains(app.api_key()), "captured logs: {logs}");
     assert!(logs.contains(&user_id), "captured logs: {logs}");
     assert!(!logs.contains(bearer_token), "captured logs: {logs}");
+    assert!(!logs.contains(download_token), "captured logs: {logs}");
+    assert!(
+        !logs.contains("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="),
+        "captured logs: {logs}"
+    );
 }
 
 fn assert_unauthorized(body: &Value, status: StatusCode) {

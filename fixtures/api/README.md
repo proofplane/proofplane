@@ -245,8 +245,47 @@ ATTACH_JSON=$(curl --fail-with-body \
   --form "file=@fixtures/api/evidence-submissions/vuln-scanner-results.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments")
 
+export ATTACHMENT_ID=$(jq -r '.attachment.id' <<< "$ATTACH_JSON")
+
 echo "$ATTACH_JSON" | jq .
 ```
+
+After the dequeuer and worker process the scan and finalization requests,
+confirm the attachment reports `upload_status` as `uploaded`:
+
+```bash
+curl --fail-with-body \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID" |
+  jq --arg attachment_id "$ATTACHMENT_ID" \
+    '.attachments[] | select(.id == $attachment_id)'
+```
+
+Issue a five-minute download grant for the uploaded attachment:
+
+```bash
+GRANT_JSON=$(curl --fail-with-body \
+  --request POST \
+  --header "x-proofplane-actor-id: $ACTOR_ID" \
+  --header "x-proofplane-api-key: $PROOFPLANE_API_KEY" \
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments/$ATTACHMENT_ID/download-grants")
+
+echo "$GRANT_JSON" | jq .
+export ATTACHMENT_DOWNLOAD_URL=$(jq -r .url <<< "$GRANT_JSON")
+```
+
+Redeem the grant without API credentials and save the attachment:
+
+```bash
+curl --fail-with-body \
+  --remote-header-name \
+  --remote-name \
+  "$ATTACHMENT_DOWNLOAD_URL"
+```
+
+The URL is reusable until its five-minute expiry. Treat its `token` query
+parameter as a bearer secret and do not include it in logs or analytics.
 
 ### Malicious Scan Fixture
 

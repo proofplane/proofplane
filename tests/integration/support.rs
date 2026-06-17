@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chrono::{DateTime, Utc};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
@@ -49,6 +50,40 @@ pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
 // starts; Weak permits reuse without keeping the container alive. Each TestApp holds
 // a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
+
+pub async fn upload_attachment(
+    app: &TestApp,
+    workspace_id: Uuid,
+    submission_id: Uuid,
+    filename: &str,
+    content: &[u8],
+) -> Value {
+    let response = app
+        .post(&format!(
+            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments"
+        ))
+        .multipart(attachment_form(content, filename, "text/plain", None))
+        .await;
+    response.assert_status(axum::http::StatusCode::ACCEPTED);
+    response.json::<Value>()["attachment"].clone()
+}
+
+pub async fn set_submission_received_at(
+    postgres: &Postgres,
+    submission_id: Uuid,
+    received_at: DateTime<Utc>,
+) {
+    postgres
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE evidence_submissions SET received_at = $2 WHERE id = $1",
+            &[&submission_id, &received_at],
+        )
+        .await
+        .expect("submission received_at updates");
+}
 
 /// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,
 /// except for the reserved values below. Tokens prefixed with `noprofile:` omit the
@@ -753,6 +788,11 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
             api_bind: socket_addr("127.0.0.1:0"),
             worker_bind: socket_addr("127.0.0.1:0"),
             mcp_bind: socket_addr("127.0.0.1:0"),
+            public_api_base_url: url::Url::parse("https://api.proofplane.test/")
+                .expect("public API base URL parses"),
+            download_signing_secret: SecretString::from(
+                "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+            ),
         },
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {

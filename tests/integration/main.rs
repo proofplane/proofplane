@@ -1,4 +1,5 @@
 mod actors;
+mod attachment_downloads;
 mod controls;
 mod dequeuer_pubsub;
 mod evidence_requests;

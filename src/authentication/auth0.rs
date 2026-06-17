@@ -140,7 +140,7 @@ mod tests {
     use jwtk::hmac::{HmacAlgorithm, HmacKey};
     use jwtk::jwk::{JwkSet, WithKid};
     use jwtk::rsa::{RsaAlgorithm, RsaPrivateKey};
-    use jwtk::{sign, HeaderAndClaims, PublicKeyToJwk, SigningKey};
+    use jwtk::{sign, HeaderAndClaims, PublicKeyToJwk};
 
     use super::{Auth0ExtraClaims, Auth0TokenVerifier, Backend, TokenVerifier, VerifyError};
 
@@ -182,7 +182,7 @@ mod tests {
     }
 
     fn sign_with(fixture: &Fixture, mut claims: HeaderAndClaims<Auth0ExtraClaims>) -> String {
-        sign(&mut claims, &fixture.signing_key as &dyn SigningKey).expect("token signs")
+        sign(&mut claims, &fixture.signing_key).expect("token signs")
     }
 
     #[tokio::test]
@@ -297,8 +297,7 @@ mod tests {
         let hmac_key = HmacKey::generate(HmacAlgorithm::HS256).expect("hmac key generates");
         let hmac_with_kid = WithKid::new(fixture.signing_key.kid().to_owned(), hmac_key);
         let mut claims = claims(ISSUER, AUDIENCE, "auth0|abc");
-        let token =
-            sign(&mut claims, &hmac_with_kid as &dyn SigningKey).expect("hs256 token signs");
+        let token = sign(&mut claims, &hmac_with_kid).expect("hs256 token signs");
 
         let error = fixture
             .verifier

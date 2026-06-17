@@ -29,11 +29,13 @@ pub struct AppConfig {
     pub health: HealthConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub api_bind: SocketAddr,
     pub worker_bind: SocketAddr,
     pub mcp_bind: SocketAddr,
+    pub public_api_base_url: Url,
+    pub download_signing_secret: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +240,10 @@ mod tests {
 
         assert_eq!(config.server.api_bind.to_string(), "127.0.0.1:3000");
         assert_eq!(
+            config.server.public_api_base_url.as_str(),
+            "http://127.0.0.1:3000/"
+        );
+        assert_eq!(
             config.pubsub.subscriptions.worker_push_endpoint.as_str(),
             "http://host.docker.internal:3001/pubsub/messages"
         );
@@ -317,6 +323,8 @@ server:
   api_bind: "not-a-socket"
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
+  public_api_base_url: "http://example.com/api"
+  download_signing_secret: "c2hvcnQ="
 postgres: ""
 pubsub:
   project_id: "proofplane-local"
@@ -364,6 +372,8 @@ health:
                     .collect::<Vec<_>>();
 
                 assert!(paths.contains(&"server.api_bind"));
+                assert!(paths.contains(&"server.public_api_base_url"));
+                assert!(paths.contains(&"server.download_signing_secret"));
                 assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
@@ -406,6 +416,15 @@ health:
         let debug = format!("{:?}", postgres);
 
         assert!(!debug.contains(postgres.expose_secret()));
+        assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn download_signing_secret_is_redacted_in_debug_output() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.server.download_signing_secret);
+
+        assert!(!debug.contains(config.server.download_signing_secret.expose_secret()));
         assert!(debug.contains("Secret"));
     }
 

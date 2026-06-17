@@ -12,6 +12,7 @@ use crate::{
     repository::Postgres,
     routes::{
         actors::{self, ActorsState},
+        attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
@@ -24,7 +25,8 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        actors::ActorService, controls::ControlService, evidence_requests::EvidenceRequestService,
+        actors::ActorService, attachment_downloads::AttachmentDownloadService,
+        controls::ControlService, evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService, user::UserService,
         workspaces::WorkspaceService,
     },
@@ -42,6 +44,13 @@ pub struct AppDependencies<V: TokenVerifier> {
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
+    let attachment_download_service = AttachmentDownloadService::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        &dependencies.config.server.download_signing_secret,
+    );
+
     Ok(Router::new()
         .nest(
             &dependencies.config.health.live_path,
@@ -76,6 +85,12 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 authenticator: dependencies.authenticator.clone(),
             },
         }))
+        .merge(attachment_downloads::router(AttachmentDownloadState {
+            service: attachment_download_service,
+            route_auth: AttachmentDownloadRouteAuthState {
+                authenticator: dependencies.authenticator.clone(),
+            },
+        }))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
@@ -107,11 +122,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
                     let method = request.method();
-                    let path = request
-                        .extensions()
-                        .get::<MatchedPath>()
-                        .map(MatchedPath::as_str)
-                        .unwrap_or_else(|| request.uri().path());
+                    let path = trace_path(request);
 
                     tracing::info_span!(
                         "http_request",
@@ -131,4 +142,29 @@ pub fn create_app<V: TokenVerifier + 'static>(
                     );
                 }),
         ))
+}
+
+fn trace_path<B>(request: &Request<B>) -> &str {
+    request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, http::Request};
+
+    use super::trace_path;
+
+    #[test]
+    fn http_trace_path_never_contains_query_parameters() {
+        let request = Request::builder()
+            .uri("/attachment-downloads?token=secret-jwt")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(trace_path(&request), "/attachment-downloads");
+    }
 }

@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub mod auth0;
+pub(crate) mod signed_jwt;
 
 const API_KEY_PREFIX: &str = "proof";
 

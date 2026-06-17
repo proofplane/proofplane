@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
@@ -81,6 +82,42 @@ pub(super) fn string_url(value: String) -> Result<Url, String> {
     Url::parse(trim_required(value)?.as_str()).map_err(|_| "must be a valid URL".into())
 }
 
+pub(super) fn public_api_base_url(value: String) -> Result<Url, String> {
+    let url = string_url(value)?;
+    let is_loopback = url
+        .host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback())
+        || matches!(url.host_str(), Some("localhost"));
+
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
+        return Err("must use HTTPS except for loopback development URLs".into());
+    }
+    if url.cannot_be_a_base()
+        || url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err("must be an origin URL without credentials, path, query, or fragment".into());
+    }
+
+    Ok(url)
+}
+
+pub(super) fn download_signing_secret(value: SecretString) -> Result<SecretString, String> {
+    let encoded = secret_value(value)?;
+    let decoded = BASE64_STANDARD
+        .decode(encoded.expose_secret())
+        .map_err(|_| "must be valid base64".to_owned())?;
+    if decoded.len() < 32 {
+        return Err("must decode to at least 32 bytes".into());
+    }
+
+    Ok(encoded)
+}
+
 pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {
     match trim_required(value)?.as_str() {
         "json" => Ok(LogFormat::Json),
@@ -125,5 +162,34 @@ impl<T> ConfigValidationExt<T> for Result<T, String> {
             Ok(value) => Validation::valid(value),
             Err(message) => Validation::invalid(ConfigFieldError::new(path, message)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use secrecy::ExposeSecret;
+
+    use super::{download_signing_secret, public_api_base_url};
+
+    #[test]
+    fn public_api_base_url_requires_https_except_loopback_origins() {
+        assert!(public_api_base_url("https://api.proofplane.com".to_owned()).is_ok());
+        assert!(public_api_base_url("http://127.0.0.1:3000".to_owned()).is_ok());
+        assert!(public_api_base_url("http://localhost:3000".to_owned()).is_ok());
+        assert!(public_api_base_url("http://api.proofplane.com".to_owned()).is_err());
+        assert!(public_api_base_url("https://api.proofplane.com/v1".to_owned()).is_err());
+        assert!(public_api_base_url("https://user@example.com".to_owned()).is_err());
+    }
+
+    #[test]
+    fn download_signing_secret_requires_valid_base64_with_32_decoded_bytes() {
+        assert!(download_signing_secret("not-base64".into()).is_err());
+        assert!(download_signing_secret("c2hvcnQ=".into()).is_err());
+
+        let secret = download_signing_secret("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=".into())
+            .expect("32-byte secret validates");
+        let debug = format!("{secret:?}");
+        assert!(!debug.contains(secret.expose_secret()));
+        assert!(debug.contains("Secret"));
     }
 }

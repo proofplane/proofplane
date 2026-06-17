@@ -13,7 +13,7 @@ use proofplane::repository::NewOutboxMessage;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::support::{cc61_id, cc71_id, TestApp, INTEGRATION_ACTOR_ID};
+use super::support::{cc61_id, cc71_id, set_submission_received_at, TestApp, INTEGRATION_ACTOR_ID};
 
 #[derive(Clone, Copy)]
 struct RepositoryActor {
@@ -670,6 +670,124 @@ async fn evidence_submission_detail_includes_attachments_with_upload_status() {
 }
 
 #[tokio::test]
+async fn attachment_download_candidate_returns_matching_attachment() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+
+    let candidate = postgres
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
+            context
+                .get_attachment_for_download_grant(submission.id, attachment.id)
+                .await
+        })
+        .await
+        .expect("download candidate lookup resolves")
+        .expect("download candidate exists");
+
+    assert_eq!(candidate.workspace_id, actor.workspace_id);
+    assert_eq!(candidate.attachment, attachment);
+}
+
+#[tokio::test]
+async fn attachment_download_candidate_masks_wrong_workspace() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let other_actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+
+    assert!(postgres
+        .in_actor_context_read(
+            other_actor.workspace_id,
+            other_actor.actor_id,
+            async move |context| {
+                context
+                    .get_attachment_for_download_grant(submission.id, attachment.id)
+                    .await
+            },
+        )
+        .await
+        .expect("wrong workspace lookup resolves")
+        .is_none());
+}
+
+#[tokio::test]
+async fn attachment_download_candidate_masks_wrong_submission_or_attachment() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let other_submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+    let other_attachment =
+        create_repository_attachment_with_suffix(postgres, actor, other_submission.id, "other")
+            .await;
+
+    assert!(postgres
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
+            context
+                .get_attachment_for_download_grant(other_submission.id, attachment.id)
+                .await
+        })
+        .await
+        .expect("wrong submission lookup resolves")
+        .is_none());
+
+    assert!(postgres
+        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
+            context
+                .get_attachment_for_download_grant(submission.id, other_attachment.id)
+                .await
+        })
+        .await
+        .expect("wrong attachment lookup resolves")
+        .is_none());
+}
+
+#[tokio::test]
+async fn attachment_download_candidate_masks_deleted_context_actor() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let actor = repository_actor_context(&app).await;
+    let request = create_repository_evidence_request(postgres, actor).await;
+    let submission = create_repository_submission(postgres, actor, request.id).await;
+    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+    let issuer = postgres
+        .create_actor(&CreateActorPayload {
+            id: None,
+            kind: ActorKind::ServiceAccount,
+            display_name: "Deleted Download Issuer".to_owned(),
+            workspace_id: actor.workspace_id,
+            created_by_user_id: None,
+            permissions: WorkspacePermission::ALL.to_vec(),
+        })
+        .await
+        .expect("issuer creates");
+
+    assert!(postgres
+        .delete_actor(issuer.id)
+        .await
+        .expect("issuer deletes"));
+
+    assert!(postgres
+        .in_actor_context_read(actor.workspace_id, issuer.id, async move |context| {
+            context
+                .get_attachment_for_download_grant(submission.id, attachment.id)
+                .await
+        })
+        .await
+        .expect("deleted actor lookup resolves")
+        .is_none());
+}
+
+#[tokio::test]
 async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_key() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
@@ -892,10 +1010,20 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
     let other_actor = repository_actor_context(&app).await;
     let request = create_repository_evidence_request(postgres, actor).await;
     let first = create_repository_submission(postgres, actor, request.id).await;
-    let latest = create_repository_submission(postgres, actor, request.id).await;
+    let second = create_repository_submission(postgres, actor, request.id).await;
+    let received_at = Utc::now();
 
-    set_submission_received_at(postgres, first.id, Utc::now() - Duration::days(1)).await;
-    set_submission_received_at(postgres, latest.id, Utc::now()).await;
+    set_submission_received_at(postgres, Uuid::from(first.id), received_at).await;
+    set_submission_received_at(postgres, Uuid::from(second.id), received_at).await;
+    let latest = if Uuid::from(first.id) > Uuid::from(second.id) {
+        first
+    } else {
+        second
+    };
+    let later_attachment =
+        create_repository_attachment_with_suffix(postgres, actor, latest.id, "z-later").await;
+    let earlier_attachment =
+        create_repository_attachment_with_suffix(postgres, actor, latest.id, "a-earlier").await;
 
     let detail = postgres
         .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
@@ -907,6 +1035,10 @@ async fn latest_evidence_submission_for_request_returns_newest_visible_submissio
         .expect("latest submission resolves")
         .expect("latest submission exists");
     assert_eq!(detail.submission.id, latest.id);
+    assert_eq!(
+        detail.attachments,
+        vec![earlier_attachment, later_attachment]
+    );
 
     let missing = postgres
         .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
@@ -1151,29 +1283,24 @@ async fn create_repository_attachment(
     actor: RepositoryActor,
     submission_id: EvidenceSubmissionId,
 ) -> proofplane::domain::EvidenceAttachment {
+    create_repository_attachment_with_suffix(postgres, actor, submission_id, "detail").await
+}
+
+async fn create_repository_attachment_with_suffix(
+    postgres: &proofplane::repository::Postgres,
+    actor: RepositoryActor,
+    submission_id: EvidenceSubmissionId,
+    suffix: &str,
+) -> proofplane::domain::EvidenceAttachment {
+    let suffix = suffix.to_owned();
     postgres
         .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
             context
-                .create_evidence_attachment(&attachment_payload(submission_id, "detail"))
+                .create_evidence_attachment(&attachment_payload(submission_id, &suffix))
                 .await
         })
         .await
         .expect("attachment creates")
-}
-
-async fn set_submission_received_at(
-    postgres: &proofplane::repository::Postgres,
-    submission_id: EvidenceSubmissionId,
-    received_at: chrono::DateTime<Utc>,
-) {
-    let client = postgres.get().await.expect("connection opens");
-    client
-        .execute(
-            "UPDATE evidence_submissions SET received_at = $2 WHERE id = $1",
-            &[&Uuid::from(submission_id), &received_at],
-        )
-        .await
-        .expect("submission received_at updates");
 }
 
 async fn append_outbox(

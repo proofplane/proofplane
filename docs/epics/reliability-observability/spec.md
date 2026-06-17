@@ -117,6 +117,34 @@ in the MVP.
 The unused `audit_events` table is removed in a migration after confirming no
 runtime code writes it.
 
+## Evidence Lifecycle Audit Events
+
+Evidence lifecycle audit events use the shared structured audit-log contract.
+Stable event names are:
+
+- `evidence_submission.created`;
+- `evidence_attachment.accepted`;
+- `evidence_attachment_download_grant.issued`;
+- `evidence_attachment_download_grant.redeemed`;
+- `evidence_attachment_scan.completed`;
+- `evidence_attachment_finalization.completed`.
+
+Allowed fields include workspace ID, actor ID/user ID/system client, request
+correlation ID, event name, outcome, evidence request ID, submission ID,
+attachment ID, grant ID, and coarse lifecycle status where applicable. Audit
+records must not include raw grant tokens, API keys, authorization headers,
+attachment bytes, storage object keys treated as internals, scanner raw error
+strings, credentials, or unbounded dependency error strings.
+
+Submission creation, attachment acceptance, and download-grant issuance success
+records are emitted only after the database transaction commits. Download-grant
+redemption records are emitted only after a grant is validated and the
+attachment remains eligible for streaming. Scan and finalization terminal
+outcomes are attributable to the worker/system actor and must avoid false
+success records for retryable failures, duplicate delivery, stale delivery, or
+rolled-back mutations; duplicate or stale deliveries may be omitted or logged
+only with an explicit non-success outcome.
+
 ## Test Harness
 
 Add reusable dependency controls to `tests/integration/support.rs` only where
@@ -140,3 +168,6 @@ deterministic alone and in the full integration target.
 - 2026-06-11: Standardized application metrics on the `proof_` prefix.
 - 2026-06-11: Removed live Postgres interruption/recovery tests from scope;
   concrete-Postgres tests remain for application-owned transaction behavior.
+- 2026-06-16: Added the evidence lifecycle audit-event contract under
+  Reliability and Observability so domain lifecycle logs share the structured
+  audit foundation.

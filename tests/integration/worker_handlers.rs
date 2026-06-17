@@ -17,7 +17,7 @@ use proofplane::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::{attachment_form, TestApp};
+use super::support::{attachment_form, upload_attachment as upload_attachment_request, TestApp};
 
 const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
@@ -47,9 +47,8 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
     let attachment_id = attachment["id"]
         .as_str()
         .expect("attachment ID is a string");
-    let quarantine_key = attachment["object_key"]
-        .as_str()
-        .expect("object key is a string");
+    let attachment_uuid = Uuid::parse_str(attachment_id).expect("attachment ID is a UUID");
+    let quarantine_key = attachment_object_key(&app, attachment_uuid).await;
 
     let worker = app.worker_server().await;
     let scan_message = outbox_message(&app, ATTACHMENT_SCAN_REQUESTED, attachment_id).await;
@@ -75,9 +74,7 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
     let finalized = &detail["attachments"][0];
     assert_eq!(finalized["upload_status"], "uploaded");
 
-    let final_key = finalized["object_key"]
-        .as_str()
-        .expect("final object key is a string");
+    let final_key = attachment_object_key(&app, attachment_uuid).await;
     assert_eq!(
         final_key,
         format!(
@@ -87,12 +84,12 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
     assert!(app
         .object_storage_root()
         .join("objects")
-        .join(final_key)
+        .join(&final_key)
         .exists());
     assert!(!app
         .object_storage_root()
         .join("objects")
-        .join(quarantine_key)
+        .join(&quarantine_key)
         .exists());
 
     assert_eq!(
@@ -635,14 +632,8 @@ async fn upload_attachment_with_content(
     filename: &str,
     content: &[u8],
 ) -> UploadedAttachment {
-    let response = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments"
-        ))
-        .multipart(attachment_form(content, filename, "text/plain", None))
-        .await;
-    response.assert_status(StatusCode::ACCEPTED);
-    let attachment = response.json::<Value>()["attachment"].clone();
+    let attachment =
+        upload_attachment_request(app, workspace_id, submission_id, filename, content).await;
 
     UploadedAttachment {
         id: Uuid::parse_str(
@@ -651,12 +642,32 @@ async fn upload_attachment_with_content(
                 .expect("attachment ID is a string"),
         )
         .expect("attachment ID is a UUID"),
-        object_key: attachment["object_key"]
-            .as_str()
-            .expect("object key is a string")
-            .to_owned(),
+        object_key: attachment_object_key(
+            app,
+            Uuid::parse_str(
+                attachment["id"]
+                    .as_str()
+                    .expect("attachment ID is a string"),
+            )
+            .expect("attachment ID is a UUID"),
+        )
+        .await,
         filename: filename.to_owned(),
     }
+}
+
+async fn attachment_object_key(app: &TestApp, attachment_id: Uuid) -> String {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            "SELECT object_key FROM evidence_attachments WHERE id = $1",
+            &[&attachment_id],
+        )
+        .await
+        .expect("attachment object key loads")
+        .get("object_key")
 }
 
 fn scan_worker_message(
