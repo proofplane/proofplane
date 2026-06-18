@@ -297,23 +297,23 @@ fn validate_download_keys(
     );
 
     if errors.is_empty() {
-        Validation::valid(validated)
-    } else {
-        Validation::invalid_many(errors)
+        return Validation::valid(validated);
     }
+
+    Validation::invalid_many(errors)
 }
 
 fn validate_download_keyring(
     config: PasetoDownloadConfig,
 ) -> Validation<PasetoDownloadConfig, ConfigFieldError> {
     if config.keys.iter().any(|key| key.id == config.active_key_id) {
-        Validation::valid(config)
-    } else {
-        Validation::invalid(ConfigFieldError::new(
-            "paseto.download.active_key_id",
-            "must exist in paseto.download.keys",
-        ))
+        return Validation::valid(config);
     }
+
+    Validation::invalid(ConfigFieldError::new(
+        "paseto.download.active_key_id",
+        "must exist in paseto.download.keys",
+    ))
 }
 
 fn add_duplicate_id_errors<'a>(

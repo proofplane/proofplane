@@ -58,7 +58,7 @@ impl ApiTokenSigner {
         issuer: Url,
         audience: impl Into<String>,
         config: &PasetoApiConfig,
-    ) -> Result<Self, KeyringError> {
+    ) -> Result<Self, Error> {
         Ok(Self {
             issuer,
             audience: audience.into(),
@@ -66,7 +66,7 @@ impl ApiTokenSigner {
             secret_key: AsymmetricSecretKey::<V4>::try_from(
                 config.active_signing_key.secret.expose_secret(),
             )
-            .map_err(|_| KeyringError)?,
+            .map_err(|_| Error::Keyring)?,
         })
     }
 
@@ -74,7 +74,7 @@ impl ApiTokenSigner {
         &self,
         registered: RegisteredClaims,
         custom_claims: &T,
-    ) -> Result<IssuedPasetoToken, IssueError> {
+    ) -> Result<IssuedPasetoToken, Error> {
         let payload = payload(
             self.issuer.as_str(),
             &self.audience,
@@ -88,7 +88,7 @@ impl ApiTokenSigner {
             Some(footer.as_bytes()),
             Some(API_IMPLICIT_ASSERTION),
         )
-        .map_err(|_| IssueError)?;
+        .map_err(|_| Error::Issue)?;
 
         Ok(IssuedPasetoToken {
             token,
@@ -111,13 +111,13 @@ impl ApiTokenVerifier {
         issuer: Url,
         audience: impl Into<String>,
         config: &PasetoApiConfig,
-    ) -> Result<Self, KeyringError> {
+    ) -> Result<Self, Error> {
         let mut verification_keys = HashMap::new();
         for key in &config.verification_keys {
             verification_keys.insert(
                 key.id.clone(),
                 AsymmetricPublicKey::<V4>::try_from(key.public.as_str())
-                    .map_err(|_| KeyringError)?,
+                    .map_err(|_| Error::Keyring)?,
             );
         }
 
@@ -131,17 +131,20 @@ impl ApiTokenVerifier {
     pub fn verify<T: DeserializeOwned>(
         &self,
         token: &str,
-    ) -> Result<VerifiedPasetoToken<T>, VerifyError> {
-        let untrusted = UntrustedToken::<Public, V4>::try_from(token).map_err(|_| VerifyError)?;
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Public, V4>::try_from(token).map_err(|_| Error::Verify)?;
         let footer = parse_footer(untrusted.untrusted_footer())?;
-        let key = self.verification_keys.get(&footer.kid).ok_or(VerifyError)?;
+        let key = self
+            .verification_keys
+            .get(&footer.kid)
+            .ok_or(Error::Verify)?;
         let trusted = PublicToken::verify(
             key,
             &untrusted,
             Some(untrusted.untrusted_footer()),
             Some(API_IMPLICIT_ASSERTION),
         )
-        .map_err(|_| VerifyError)?;
+        .map_err(|_| Error::Verify)?;
 
         verified_payload(
             trusted.payload(),
@@ -165,19 +168,19 @@ impl DownloadGrantEncryptor {
         issuer: Url,
         audience: impl Into<String>,
         config: &PasetoDownloadConfig,
-    ) -> Result<Self, KeyringError> {
+    ) -> Result<Self, Error> {
         let active = config
             .keys
             .iter()
             .find(|key| key.id == config.active_key_id)
-            .ok_or(KeyringError)?;
+            .ok_or(Error::Keyring)?;
 
         Ok(Self {
             issuer,
             audience: audience.into(),
             key_id: active.id.clone(),
             secret_key: SymmetricKey::<V4>::try_from(active.secret.expose_secret())
-                .map_err(|_| KeyringError)?,
+                .map_err(|_| Error::Keyring)?,
         })
     }
 
@@ -185,7 +188,7 @@ impl DownloadGrantEncryptor {
         &self,
         registered: RegisteredClaims,
         custom_claims: &T,
-    ) -> Result<IssuedPasetoToken, IssueError> {
+    ) -> Result<IssuedPasetoToken, Error> {
         let payload = payload(
             self.issuer.as_str(),
             &self.audience,
@@ -199,7 +202,7 @@ impl DownloadGrantEncryptor {
             Some(footer.as_bytes()),
             Some(DOWNLOAD_IMPLICIT_ASSERTION),
         )
-        .map_err(|_| IssueError)?;
+        .map_err(|_| Error::Issue)?;
 
         Ok(IssuedPasetoToken {
             token,
@@ -222,13 +225,13 @@ impl DownloadGrantDecryptor {
         issuer: Url,
         audience: impl Into<String>,
         config: &PasetoDownloadConfig,
-    ) -> Result<Self, KeyringError> {
+    ) -> Result<Self, Error> {
         let mut keys = HashMap::new();
         for key in &config.keys {
             keys.insert(
                 key.id.clone(),
                 SymmetricKey::<V4>::try_from(key.secret.expose_secret())
-                    .map_err(|_| KeyringError)?,
+                    .map_err(|_| Error::Keyring)?,
             );
         }
 
@@ -242,17 +245,17 @@ impl DownloadGrantDecryptor {
     pub fn decrypt<T: DeserializeOwned>(
         &self,
         token: &str,
-    ) -> Result<VerifiedPasetoToken<T>, VerifyError> {
-        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| VerifyError)?;
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
         let footer = parse_footer(untrusted.untrusted_footer())?;
-        let key = self.keys.get(&footer.kid).ok_or(VerifyError)?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
         let trusted = LocalToken::decrypt(
             key,
             &untrusted,
             Some(untrusted.untrusted_footer()),
             Some(DOWNLOAD_IMPLICIT_ASSERTION),
         )
-        .map_err(|_| VerifyError)?;
+        .map_err(|_| Error::Verify)?;
 
         verified_payload(
             trusted.payload(),
@@ -264,16 +267,14 @@ impl DownloadGrantDecryptor {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("invalid PASETO keyring")]
-pub struct KeyringError;
-
-#[derive(Debug, thiserror::Error)]
-#[error("PASETO token issue failed")]
-pub struct IssueError;
-
-#[derive(Debug, thiserror::Error)]
-#[error("PASETO token verification failed")]
-pub struct VerifyError;
+pub enum Error {
+    #[error("invalid PASETO keyring")]
+    Keyring,
+    #[error("PASETO token issue failed")]
+    Issue,
+    #[error("PASETO token verification failed")]
+    Verify,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct TokenFooter {
@@ -285,20 +286,20 @@ fn payload<T: Serialize>(
     audience: &str,
     registered: &RegisteredClaims,
     custom_claims: &T,
-) -> Result<String, IssueError> {
+) -> Result<String, Error> {
     let issued_at = Utc::now();
     if registered.expires_at <= issued_at {
-        return Err(IssueError);
+        return Err(Error::Issue);
     }
 
-    let mut claims = match serde_json::to_value(custom_claims).map_err(|_| IssueError)? {
+    let mut claims = match serde_json::to_value(custom_claims).map_err(|_| Error::Issue)? {
         Value::Object(claims) => Ok(claims),
-        _ => Err(IssueError),
+        _ => Err(Error::Issue),
     }?;
 
     for claim in REGISTERED_CLAIMS {
         if claims.contains_key(claim) {
-            return Err(IssueError);
+            return Err(Error::Issue);
         }
     }
 
@@ -320,7 +321,7 @@ fn payload<T: Serialize>(
         Value::String(format_datetime(registered.expires_at)),
     );
 
-    serde_json::to_string(&claims).map_err(|_| IssueError)
+    serde_json::to_string(&claims).map_err(|_| Error::Issue)
 }
 
 fn verified_payload<T: DeserializeOwned>(
@@ -328,21 +329,22 @@ fn verified_payload<T: DeserializeOwned>(
     key_id: &str,
     issuer: &str,
     audience: &str,
-) -> Result<VerifiedPasetoToken<T>, VerifyError> {
-    let mut claims: Map<String, Value> = serde_json::from_str(payload).map_err(|_| VerifyError)?;
+) -> Result<VerifiedPasetoToken<T>, Error> {
+    let mut claims: Map<String, Value> =
+        serde_json::from_str(payload).map_err(|_| Error::Verify)?;
 
     if string_claim(&claims, "iss")? != issuer || string_claim(&claims, "aud")? != audience {
-        return Err(VerifyError);
+        return Err(Error::Verify);
     }
 
-    let _subject = Uuid::parse_str(string_claim(&claims, "sub")?).map_err(|_| VerifyError)?;
-    let token_id = Uuid::parse_str(string_claim(&claims, "jti")?).map_err(|_| VerifyError)?;
+    let _subject = Uuid::parse_str(string_claim(&claims, "sub")?).map_err(|_| Error::Verify)?;
+    let token_id = Uuid::parse_str(string_claim(&claims, "jti")?).map_err(|_| Error::Verify)?;
     let issued_at = datetime_claim(&claims, "iat")?;
     let not_before = datetime_claim(&claims, "nbf")?;
     let expires_at = datetime_claim(&claims, "exp")?;
     let now = Utc::now();
     if issued_at > now || not_before > now || expires_at <= now || issued_at >= expires_at {
-        return Err(VerifyError);
+        return Err(Error::Verify);
     }
 
     for claim in REGISTERED_CLAIMS {
@@ -353,48 +355,48 @@ fn verified_payload<T: DeserializeOwned>(
         token_id,
         key_id: key_id.to_owned(),
         expires_at,
-        claims: serde_json::from_value(Value::Object(claims)).map_err(|_| VerifyError)?,
+        claims: serde_json::from_value(Value::Object(claims)).map_err(|_| Error::Verify)?,
     })
 }
 
-fn footer(key_id: &str) -> Result<String, IssueError> {
+fn footer(key_id: &str) -> Result<String, Error> {
     serde_json::to_string(&TokenFooter {
         kid: key_id.to_owned(),
     })
-    .map_err(|_| IssueError)
+    .map_err(|_| Error::Issue)
 }
 
-fn parse_footer(footer: &[u8]) -> Result<TokenFooter, VerifyError> {
-    let footer: TokenFooter = serde_json::from_slice(footer).map_err(|_| VerifyError)?;
+fn parse_footer(footer: &[u8]) -> Result<TokenFooter, Error> {
+    let footer: TokenFooter = serde_json::from_slice(footer).map_err(|_| Error::Verify)?;
     if footer.kid.trim().is_empty() {
-        return Err(VerifyError);
+        return Err(Error::Verify);
     }
 
     Ok(footer)
 }
 
-fn string_claim<'a>(claims: &'a Map<String, Value>, claim: &str) -> Result<&'a str, VerifyError> {
+fn string_claim<'a>(claims: &'a Map<String, Value>, claim: &str) -> Result<&'a str, Error> {
     claims
         .get(claim)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(VerifyError)
+        .ok_or(Error::Verify)
 }
 
-fn datetime_claim(claims: &Map<String, Value>, claim: &str) -> Result<DateTime<Utc>, VerifyError> {
+fn datetime_claim(claims: &Map<String, Value>, claim: &str) -> Result<DateTime<Utc>, Error> {
     DateTime::parse_from_rfc3339(string_claim(claims, claim)?)
         .map(|value| value.with_timezone(&Utc))
-        .map_err(|_| VerifyError)
+        .map_err(|_| Error::Verify)
 }
 
 fn format_datetime(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn normalize_datetime(value: DateTime<Utc>) -> Result<DateTime<Utc>, IssueError> {
+fn normalize_datetime(value: DateTime<Utc>) -> Result<DateTime<Utc>, Error> {
     DateTime::parse_from_rfc3339(&format_datetime(value))
         .map(|value| value.with_timezone(&Utc))
-        .map_err(|_| IssueError)
+        .map_err(|_| Error::Issue)
 }
 
 #[cfg(test)]
