@@ -64,6 +64,7 @@ google-cloud-pubsub = { version = "1.7.1", package = "gcloud-pubsub" }
 google-cloud-gax = { version = "1.4.0", package = "gcloud-gax" }
 gcloud-auth = "1.3.0"
 google-cloud-googleapis = { version = "1.3.0", package = "gcloud-googleapis", features = ["pubsub"] }
+pasetors = "=0.7.8"
 
 [dev-dependencies]
 axum-test = "20"

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -9,12 +9,16 @@ use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
         download_signing_secret as validate_download_signing_secret, gcs_credentials_mode,
-        nonzero_u16, nonzero_u64, nonzero_usize, optional_url, parse_log_format, path_string,
-        postgres_connection_string, public_api_base_url as validate_public_api_base_url,
-        string_url, string_value, ConfigValidationExt,
+        nonzero_u16, nonzero_u64, nonzero_usize, optional_url, parse_log_format,
+        paseto_api_public_key, paseto_api_secret_key, paseto_download_key,
+        paseto_public_from_secret, path_string, postgres_connection_string,
+        public_api_base_url as validate_public_api_base_url, string_url, string_value,
+        ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey, PasetoConfig,
+    PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig, PubSubSubscriptionsConfig,
+    ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +27,7 @@ pub(super) struct RawAppConfig {
     pub(super) postgres: SecretString,
     pub(super) pubsub: RawPubSubConfig,
     pub(super) auth0: RawAuth0Config,
+    pub(super) paseto: RawPasetoConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) scanner: RawScannerConfig,
     pub(super) uploads: RawUploadsConfig,
@@ -82,6 +87,251 @@ impl RawAuth0Config {
                 jwks_url,
             },
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoConfig {
+    api: RawPasetoApiConfig,
+    download: RawPasetoDownloadConfig,
+}
+
+impl RawPasetoConfig {
+    pub(super) fn validate(self) -> Validation<PasetoConfig, ConfigFieldError> {
+        validate! {
+            api <- self.api.validate(),
+            download <- self.download.validate(),
+            => PasetoConfig { api, download },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoApiConfig {
+    active_signing_key: RawPasetoApiSigningKey,
+    verification_keys: Vec<RawPasetoApiVerificationKey>,
+}
+
+impl RawPasetoApiConfig {
+    pub(super) fn validate(self) -> Validation<PasetoApiConfig, ConfigFieldError> {
+        validate! {
+            active_signing_key <- self.active_signing_key.validate(),
+            verification_keys <- validate_api_verification_keys(self.verification_keys),
+            => PasetoApiConfig {
+                active_signing_key,
+                verification_keys,
+            },
+        }
+        .and_then(validate_api_keyring)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoApiSigningKey {
+    id: String,
+    secret: SecretString,
+}
+
+impl RawPasetoApiSigningKey {
+    fn validate(self) -> Validation<PasetoApiSigningKey, ConfigFieldError> {
+        validate! {
+            id <- string_value(self.id).at("paseto.api.active_signing_key.id"),
+            secret <- paseto_api_secret_key(self.secret).at("paseto.api.active_signing_key.secret"),
+            => PasetoApiSigningKey { id, secret },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoApiVerificationKey {
+    id: String,
+    public: String,
+}
+
+impl RawPasetoApiVerificationKey {
+    fn validate(self, index: usize) -> Validation<PasetoApiVerificationKey, ConfigFieldError> {
+        let id_path = format!("paseto.api.verification_keys[{index}].id");
+        let public_path = format!("paseto.api.verification_keys[{index}].public");
+
+        validate! {
+            id <- string_value(self.id).at(id_path),
+            public <- paseto_api_public_key(self.public).at(public_path),
+            => PasetoApiVerificationKey { id, public },
+        }
+    }
+}
+
+fn validate_api_verification_keys(
+    keys: Vec<RawPasetoApiVerificationKey>,
+) -> Validation<Vec<PasetoApiVerificationKey>, ConfigFieldError> {
+    let mut errors = Vec::new();
+    let mut validated = Vec::with_capacity(keys.len());
+
+    for (index, key) in keys.into_iter().enumerate() {
+        match key.validate(index) {
+            Validation::Valid(key) => validated.push(key),
+            Validation::Invalid(mut key_errors) => errors.append(&mut key_errors),
+        }
+    }
+
+    if validated.is_empty() {
+        errors.push(ConfigFieldError::new(
+            "paseto.api.verification_keys",
+            "must contain at least one key",
+        ));
+    }
+
+    add_duplicate_id_errors(
+        "paseto.api.verification_keys",
+        validated.iter().map(|key| key.id.as_str()),
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        return Validation::valid(validated);
+    }
+
+    Validation::invalid_many(errors)
+}
+
+fn validate_api_keyring(config: PasetoApiConfig) -> Validation<PasetoApiConfig, ConfigFieldError> {
+    let mut errors = Vec::new();
+
+    let active_public = config
+        .verification_keys
+        .iter()
+        .find(|key| key.id == config.active_signing_key.id);
+
+    let Some(active_public) = active_public else {
+        return Validation::invalid(ConfigFieldError::new(
+            "paseto.api.active_signing_key.id",
+            "must exist in paseto.api.verification_keys",
+        ));
+    };
+
+    match paseto_public_from_secret(&config.active_signing_key.secret) {
+        // Without this check, we could have a configuration where the private key
+        // ID points to a public key that doesn't match it, making token issuance
+        // work but validation fail.
+        Ok(derived_public) if derived_public == active_public.public => {}
+        Ok(_) => errors.push(ConfigFieldError::new(
+            "paseto.api.active_signing_key.secret",
+            "must match the public key for its configured key ID",
+        )),
+        Err(message) => errors.push(ConfigFieldError::new(
+            "paseto.api.active_signing_key.secret",
+            message,
+        )),
+    }
+
+    if errors.is_empty() {
+        return Validation::valid(config);
+    }
+
+    Validation::invalid_many(errors)
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoDownloadConfig {
+    active_key_id: String,
+    keys: Vec<RawPasetoDownloadKey>,
+}
+
+impl RawPasetoDownloadConfig {
+    pub(super) fn validate(self) -> Validation<PasetoDownloadConfig, ConfigFieldError> {
+        validate! {
+            active_key_id <- string_value(self.active_key_id).at("paseto.download.active_key_id"),
+            keys <- validate_download_keys(self.keys),
+            => PasetoDownloadConfig {
+                active_key_id,
+                keys,
+            },
+        }
+        .and_then(validate_download_keyring)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoDownloadKey {
+    id: String,
+    secret: SecretString,
+}
+
+impl RawPasetoDownloadKey {
+    fn validate(self, index: usize) -> Validation<PasetoDownloadKey, ConfigFieldError> {
+        let id_path = format!("paseto.download.keys[{index}].id");
+        let secret_path = format!("paseto.download.keys[{index}].secret");
+
+        validate! {
+            id <- string_value(self.id).at(id_path),
+            secret <- paseto_download_key(self.secret).at(secret_path),
+            => PasetoDownloadKey { id, secret },
+        }
+    }
+}
+
+fn validate_download_keys(
+    keys: Vec<RawPasetoDownloadKey>,
+) -> Validation<Vec<PasetoDownloadKey>, ConfigFieldError> {
+    let mut errors = Vec::new();
+    let mut validated = Vec::with_capacity(keys.len());
+
+    for (index, key) in keys.into_iter().enumerate() {
+        match key.validate(index) {
+            Validation::Valid(key) => validated.push(key),
+            Validation::Invalid(mut key_errors) => errors.append(&mut key_errors),
+        }
+    }
+
+    if validated.is_empty() {
+        errors.push(ConfigFieldError::new(
+            "paseto.download.keys",
+            "must contain at least one key",
+        ));
+    }
+
+    add_duplicate_id_errors(
+        "paseto.download.keys",
+        validated.iter().map(|key| key.id.as_str()),
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        Validation::valid(validated)
+    } else {
+        Validation::invalid_many(errors)
+    }
+}
+
+fn validate_download_keyring(
+    config: PasetoDownloadConfig,
+) -> Validation<PasetoDownloadConfig, ConfigFieldError> {
+    if config.keys.iter().any(|key| key.id == config.active_key_id) {
+        Validation::valid(config)
+    } else {
+        Validation::invalid(ConfigFieldError::new(
+            "paseto.download.active_key_id",
+            "must exist in paseto.download.keys",
+        ))
+    }
+}
+
+fn add_duplicate_id_errors<'a>(
+    path: &'static str,
+    ids: impl IntoIterator<Item = &'a str>,
+    errors: &mut Vec<ConfigFieldError>,
+) {
+    let mut seen = HashSet::new();
+    let mut duplicates = HashSet::new();
+
+    for id in ids {
+        if !seen.insert(id) {
+            duplicates.insert(id);
+        }
+    }
+
+    if !duplicates.is_empty() {
+        errors.push(ConfigFieldError::new(path, "key IDs must be unique"));
     }
 }
 

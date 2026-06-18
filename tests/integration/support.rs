@@ -20,8 +20,9 @@ use proofplane::{
     },
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
-        WorkerConfig,
+        PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey, PasetoConfig,
+        PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig, PubSubSubscriptionsConfig,
+        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
@@ -812,6 +813,29 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
                 "https://proofplane-integration.us.auth0.com/.well-known/jwks.json",
             )
             .expect("auth0 jwks url parses"),
+        },
+        paseto: PasetoConfig {
+            api: PasetoApiConfig {
+                active_signing_key: PasetoApiSigningKey {
+                    id: "integration-api-001".to_owned(),
+                    secret: SecretString::from(
+                        "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw",
+                    ),
+                },
+                verification_keys: vec![PasetoApiVerificationKey {
+                    id: "integration-api-001".to_owned(),
+                    public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos".to_owned(),
+                }],
+            },
+            download: PasetoDownloadConfig {
+                active_key_id: "integration-download-001".to_owned(),
+                keys: vec![PasetoDownloadKey {
+                    id: "integration-download-001".to_owned(),
+                    secret: SecretString::from(
+                        "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs",
+                    ),
+                }],
+            },
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         scanner: ScannerConfig {

@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub postgres: SecretString,
     pub pubsub: PubSubConfig,
     pub auth0: Auth0Config,
+    pub paseto: PasetoConfig,
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
@@ -56,6 +57,42 @@ pub struct Auth0Config {
     pub issuer: Url,
     pub audience: String,
     pub jwks_url: Url,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoConfig {
+    pub api: PasetoApiConfig,
+    pub download: PasetoDownloadConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoApiConfig {
+    pub active_signing_key: PasetoApiSigningKey,
+    pub verification_keys: Vec<PasetoApiVerificationKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoApiSigningKey {
+    pub id: String,
+    pub secret: SecretString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasetoApiVerificationKey {
+    pub id: String,
+    pub public: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoDownloadConfig {
+    pub active_key_id: String,
+    pub keys: Vec<PasetoDownloadKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoDownloadKey {
+    pub id: String,
+    pub secret: SecretString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +229,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         postgres <- raw::validate_postgres_connection_string(raw.postgres),
         pubsub <- raw.pubsub.validate(),
         auth0 <- raw.auth0.validate(),
+        paseto <- raw.paseto.validate(),
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
@@ -203,6 +241,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             postgres,
             pubsub,
             auth0,
+            paseto,
             object_storage,
             scanner,
             uploads,
@@ -256,6 +295,10 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
+        assert_eq!(config.paseto.api.active_signing_key.id, "local-api-001");
+        assert_eq!(config.paseto.api.verification_keys.len(), 1);
+        assert_eq!(config.paseto.download.active_key_id, "local-download-001");
+        assert_eq!(config.paseto.download.keys.len(), 1);
     }
 
     #[test]
@@ -336,6 +379,19 @@ auth0:
   issuer: ""
   audience: ""
   jwks_url: "not-a-url"
+paseto:
+  api:
+    active_signing_key:
+      id: ""
+      secret: "not-a-paserk"
+    verification_keys:
+      - id: ""
+        public: "not-a-paserk"
+  download:
+    active_key_id: ""
+    keys:
+      - id: ""
+        secret: "not-a-paserk"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -380,6 +436,13 @@ health:
                 assert!(paths.contains(&"auth0.issuer"));
                 assert!(paths.contains(&"auth0.audience"));
                 assert!(paths.contains(&"auth0.jwks_url"));
+                assert!(paths.contains(&"paseto.api.active_signing_key.id"));
+                assert!(paths.contains(&"paseto.api.active_signing_key.secret"));
+                assert!(paths.contains(&"paseto.api.verification_keys[0].id"));
+                assert!(paths.contains(&"paseto.api.verification_keys[0].public"));
+                assert!(paths.contains(&"paseto.download.active_key_id"));
+                assert!(paths.contains(&"paseto.download.keys[0].id"));
+                assert!(paths.contains(&"paseto.download.keys[0].secret"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"scanner.clamd_address"));
@@ -426,6 +489,142 @@ health:
 
         assert!(!debug.contains(config.server.download_signing_secret.expose_secret()));
         assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn paseto_secrets_are_redacted_in_debug_output() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.paseto);
+
+        assert!(!debug.contains(config.paseto.api.active_signing_key.secret.expose_secret()));
+        assert!(!debug.contains(config.paseto.download.keys[0].secret.expose_secret()));
+        assert!(debug.contains("Secret"));
+        assert!(debug.contains("k4.public."));
+    }
+
+    #[test]
+    fn paseto_keyring_validation_rejects_duplicate_ids() {
+        let path = write_temp_config(&local_config_with_paseto(
+            r#"
+paseto:
+  api:
+    active_signing_key:
+      id: "duplicate"
+      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
+    verification_keys:
+      - id: "duplicate"
+        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
+      - id: "duplicate"
+        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
+  download:
+    active_key_id: "duplicate"
+    keys:
+      - id: "duplicate"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+      - id: "duplicate"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+"#,
+        ));
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert_validation_paths(
+            error,
+            &["paseto.api.verification_keys", "paseto.download.keys"],
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn paseto_keyring_validation_rejects_missing_active_ids() {
+        let path = write_temp_config(&local_config_with_paseto(
+            r#"
+paseto:
+  api:
+    active_signing_key:
+      id: "missing-api"
+      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
+    verification_keys:
+      - id: "local-api-001"
+        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
+  download:
+    active_key_id: "missing-download"
+    keys:
+      - id: "local-download-001"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+"#,
+        ));
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert_validation_paths(
+            error,
+            &[
+                "paseto.api.active_signing_key.id",
+                "paseto.download.active_key_id",
+            ],
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn paseto_keyring_validation_rejects_mismatched_api_secret_and_public_key() {
+        let path = write_temp_config(&local_config_with_paseto(
+            r#"
+paseto:
+  api:
+    active_signing_key:
+      id: "local-api-001"
+      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
+    verification_keys:
+      - id: "local-api-001"
+        public: "k4.public.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  download:
+    active_key_id: "local-download-001"
+    keys:
+      - id: "local-download-001"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+"#,
+        ));
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert_validation_paths(error, &["paseto.api.active_signing_key.secret"]);
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn assert_validation_paths(error: ConfigError, expected_paths: &[&str]) {
+        let ConfigError::Validation(errors) = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        let paths = errors
+            .iter()
+            .map(|error| error.path.as_str())
+            .collect::<Vec<_>>();
+
+        for expected_path in expected_paths {
+            assert!(
+                paths.contains(expected_path),
+                "missing {expected_path}; got {paths:?}"
+            );
+        }
+    }
+
+    fn local_config_with_paseto(paseto: &str) -> String {
+        let local = fs::read_to_string("config/local.yaml").expect("local config reads");
+        let before_paseto = local
+            .split_once("\npaseto:\n")
+            .expect("local config has paseto")
+            .0;
+        let after_paseto = local
+            .split_once("\nobject_storage:\n")
+            .expect("local config has object_storage")
+            .1;
+
+        format!("{before_paseto}\n{paseto}\nobject_storage:\n{after_paseto}")
     }
 
     fn write_temp_config(contents: &str) -> PathBuf {

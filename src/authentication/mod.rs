@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub mod auth0;
+pub mod paseto;
 pub(crate) mod signed_jwt;
 
 const API_KEY_PREFIX: &str = "proof";

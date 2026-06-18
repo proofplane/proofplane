@@ -3,6 +3,11 @@
 use std::net::SocketAddr;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use pasetors::{
+    keys::{AsymmetricPublicKey, AsymmetricSecretKey, SymmetricKey},
+    paserk::FormatAsPaserk,
+    version4::V4,
+};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
@@ -118,6 +123,42 @@ pub(super) fn download_signing_secret(value: SecretString) -> Result<SecretStrin
     Ok(encoded)
 }
 
+pub(super) fn paseto_api_secret_key(value: SecretString) -> Result<SecretString, String> {
+    secret_value(value).and_then(|value| {
+        AsymmetricSecretKey::<V4>::try_from(value.expose_secret())
+            .map(|_| value)
+            .map_err(|_| "must be a valid k4.secret PASERK".into())
+    })
+}
+
+pub(super) fn paseto_api_public_key(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+    AsymmetricPublicKey::<V4>::try_from(value.as_str())
+        .map(|_| value)
+        .map_err(|_| "must be a valid k4.public PASERK".into())
+}
+
+pub(super) fn paseto_download_key(value: SecretString) -> Result<SecretString, String> {
+    secret_value(value).and_then(|value| {
+        SymmetricKey::<V4>::try_from(value.expose_secret())
+            .map(|_| value)
+            .map_err(|_| "must be a valid k4.local PASERK".into())
+    })
+}
+
+pub(super) fn paseto_public_from_secret(value: &SecretString) -> Result<String, String> {
+    let secret = AsymmetricSecretKey::<V4>::try_from(value.expose_secret())
+        .map_err(|_| "must be a valid k4.secret PASERK".to_owned())?;
+    let public = AsymmetricPublicKey::<V4>::try_from(&secret)
+        .map_err(|_| "must derive a k4.public key".to_owned())?;
+    let mut formatted = String::new();
+    public
+        .fmt(&mut formatted)
+        .map_err(|_| "must format derived public key".to_owned())?;
+
+    Ok(formatted)
+}
+
 pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {
     match trim_required(value)?.as_str() {
         "json" => Ok(LogFormat::Json),
@@ -153,11 +194,11 @@ pub(super) fn trim_required(value: String) -> Result<String, String> {
 }
 
 pub(super) trait ConfigValidationExt<T> {
-    fn at(self, path: &'static str) -> Validation<T, ConfigFieldError>;
+    fn at(self, path: impl Into<String>) -> Validation<T, ConfigFieldError>;
 }
 
 impl<T> ConfigValidationExt<T> for Result<T, String> {
-    fn at(self, path: &'static str) -> Validation<T, ConfigFieldError> {
+    fn at(self, path: impl Into<String>) -> Validation<T, ConfigFieldError> {
         match self {
             Ok(value) => Validation::valid(value),
             Err(message) => Validation::invalid(ConfigFieldError::new(path, message)),
