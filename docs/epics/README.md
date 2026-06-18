@@ -20,7 +20,7 @@ provenance, and freshness is derived from linked evidence.
 | Area | Implemented | Remaining |
 | --- | --- | --- |
 | Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
-| Identity and authorization | API-key data plane, Auth0 users, workspace self-onboarding and membership | Workspace actors, key rotation, identity audit logs |
+| Identity and authorization | Actor API-key data plane, Auth0 users, workspace self-onboarding and membership | User-owned PASETO tokens, actor retirement, identity audit logs |
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Trusted source material and auditor packet reads |
 | Evidence lifecycle | Submission create/get, upload integrity, quarantine, ClamAV scan, finalization | Latest API, download enforcement, demo submission/object seed |
 | Audit | Structured application logging | Stable audit-log fields, Cloud Logging retention, business event coverage |
@@ -32,6 +32,7 @@ provenance, and freshness is derived from linked evidence.
 | Epic | Status | Outcome |
 | --- | --- | --- |
 | [Auth Hierarchy API](./auth-hierarchy-api/README.md) | Doing | Humans manage workspace actors and rotating API keys. |
+| [PASETO Token Migration](./paseto-token-migration/README.md) | Todo | Users own workspace-scoped API tokens and download grants use encrypted PASETO. |
 | [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Todo | Evidence can be queried, safely downloaded, and demonstrated end to end. |
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Curated source material and auditor-ready packets expose provenance and freshness. |
@@ -41,15 +42,19 @@ provenance, and freshness is derived from linked evidence.
 
 ## Preferred Sequence
 
-1. Finish `auth-hierarchy-api/003` and the Evidence Lifecycle Completion epic.
-2. Establish the structured audit-log contract in Reliability and
+1. Finish the Evidence Lifecycle Completion epic and land
+   `paseto-token-migration/001-003`.
+2. Complete `paseto-token-migration/004` before MCP authentication is built;
+   its attachment-grant ticket can proceed in parallel after 001.
+3. Establish the structured audit-log contract in Reliability and
    Observability; identity and data-plane emission can then proceed in parallel.
-3. Build production adapters while Trusted Compliance Reads starts on the
+4. Build production adapters while Trusted Compliance Reads starts on the
    completed evidence model.
-4. Build MCP after actor management and trusted-read contracts are stable.
-5. Add reliability coverage and metrics continuously alongside product work.
-6. Build the Sandbox Product Launch on the stable APIs and packet preview.
-7. Create a separate production-deployment epic when deployment planning begins.
+5. Build MCP after user API-token authentication and trusted-read contracts are
+   stable.
+6. Add reliability coverage and metrics continuously alongside product work.
+7. Build the Sandbox Product Launch on the stable APIs and packet preview.
+8. Create a separate production-deployment epic when deployment planning begins.
 
 ## Definition Of MVP Done
 
@@ -59,8 +64,9 @@ provenance, and freshness is derived from linked evidence.
   flow and external dependency failures.
 - Production configuration supports Postgres, SpiceDB, Google Pub/Sub, GCS,
   Auth0, and ClamAV without local emulator requirements.
-- Actors can submit evidence, retrieve only finalized attachments, query trusted
-  compliance material, and perform the supported MCP workflows.
+- User-owned API tokens can submit evidence, retrieve only finalized
+  attachments, query trusted compliance material, and perform the supported MCP
+  workflows.
 - Structured audit logs are routed to a restricted Cloud Logging sink with the
   documented retention policy.
 - The launch flow creates a realistic sandbox, connects the customer's agent,

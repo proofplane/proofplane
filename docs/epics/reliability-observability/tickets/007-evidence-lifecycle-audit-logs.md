@@ -16,12 +16,12 @@ attributable without exposing secrets.
 - [ ] Given rejected requests, rolled-back mutations, retryable worker failures,
   duplicate delivery, or stale delivery, when logs are captured, then no false
   success audit record is emitted.
-- [ ] Given audit fields are inspected, then workspace, actor, request
-  correlation, event name, outcome, grant ID, submission ID, and attachment ID
-  may appear where applicable.
+- [ ] Given audit fields are inspected, then workspace, user, API token, system
+  client, request correlation, event name, outcome, grant ID, submission ID,
+  and attachment ID may appear where applicable.
 - [ ] Given sensitive values exist during the flow, then raw grant tokens, API
-  keys, authorization headers, attachment bytes, object keys treated as storage
-  internals, scanner raw error strings, and credentials are absent.
+  tokens, authorization headers, attachment bytes, object keys treated as
+  storage internals, scanner raw error strings, and credentials are absent.
 
 **Tasks**
 
@@ -29,7 +29,8 @@ attributable without exposing secrets.
   Reliability spec.
 - [ ] Instrument submission creation and attachment acceptance after successful
   commits.
-- [ ] Instrument download grant issuance and redemption without logging the JWT.
+- [ ] Instrument download grant issuance and redemption without logging the
+  PASETO token.
 - [ ] Instrument scan and finalization outcomes, with duplicate/stale deliveries
   omitted or explicitly non-success.
 - [ ] Add captured-log tests for success, rollback/no-false-success,

@@ -18,7 +18,7 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
 | 001. [Auth0 User Identity & JIT Provisioning](./tickets/001-auth0-user-identity-and-jit-provisioning.md) | Done   | `users` table, `TokenVerifier` (jwtk/RS256+JWKS), `authenticate_user`, JIT provisioning, `GET /me`.                                                                                                |
 | 002. [Workspace Self-Onboarding & Membership](./tickets/002-workspace-self-onboarding-and-membership.md) | Done   | `workspace_memberships`, `POST`/`GET /workspaces`, member add/remove, last-owner guard. Human `manage_*` answered from Postgres (SpiceDB was the actor data plane until 003 removed it); dormant `platform` tier descoped. |
 | 003. [Actor & API Key Management](./tickets/003-actor-and-api-key-management.md)                         | Done   | Workspace-scoped actors (`workspace_id` NOT NULL), multi-credential rotation, `manage_actors`, create/list actors, issue/revoke keys. **SpiceDB removed**: data-plane authz is now Postgres workspace binding + per-actor permission grants. |
-| 004. [Auth & Identity Audit Logs](./tickets/004-auth-and-identity-audit-logs.md)                         | Todo   | Emit structured identity logs for the Cloud Logging audit sink.                                                                                                                                    |
+| 004. [Auth & Identity Audit Logs](./tickets/004-auth-and-identity-audit-logs.md)                         | Todo   | Emit structured user, workspace, membership, and PASETO token lifecycle logs for the Cloud Logging audit sink.                                                                                      |
 
 ## Sequencing
 
@@ -33,5 +33,6 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
   the actor must belong to the path workspace and hold the specific permission
   grant for the route (the six read/write × evidence-requests / submissions /
   controls permissions ported into an `actor_permissions` table).
-- **004** depends on 001–003 for the operations it instruments and on
-  `reliability-observability/005` for the shared audit-log field contract.
+- **004** depends on 001-002 and `paseto-token-migration/002` for the operations
+  it instruments, and on `reliability-observability/005` for the shared
+  audit-log field contract.

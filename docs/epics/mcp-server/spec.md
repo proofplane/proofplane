@@ -17,12 +17,12 @@ errors in `src/mcp`; tools call services directly.
 
 ## Identity
 
-MCP is a data-plane interface. Requests authenticate with the same API-key
-credential contract as REST and produce the same `ActorContext`. Tool
-authorization uses the same workspace permissions as equivalent REST
-operations.
+MCP is a data-plane interface. Requests authenticate with the same user-owned
+`v4.public` PASETO bearer token contract as REST and produce the same
+`ApiTokenContext`. Tool authorization uses the same workspace permissions as
+equivalent REST operations.
 
-The initial transport may accept API-key headers on the HTTP session. Raw keys
+The initial transport accepts the bearer token on the HTTP session. Raw tokens
 must not enter tool arguments, logs, or audit payloads.
 
 ## MVP Tools
@@ -48,12 +48,12 @@ Write tools:
 - `create_or_update_source_material`
 
 `create_attachment_download_grant` is a read-classified tool because it does not
-change compliance data. It authorizes the current actor, verifies the attachment
-is finalized, and returns a short-lived Proofplane HTTPS URL for human
-inspection. The URL expires after five minutes and may be fetched more than once
-before expiry. The URL is a bearer secret; the tool result must tell the agent
-not to fetch, summarize, log, or persist it, only present it to the user. The
-attachment bytes do not pass through MCP or model context.
+change compliance data. It authorizes the current user API token, verifies the
+attachment is finalized, and returns a short-lived Proofplane HTTPS URL for
+human inspection. The URL expires after five minutes and may be fetched more
+than once before expiry. The URL is a bearer secret; the tool result must tell
+the agent not to fetch, summarize, log, or persist it, only present it to the
+user. The attachment bytes do not pass through MCP or model context.
 
 Binary attachment upload and packet ZIP transfer remain HTTP operations. Native
 approve/reject and derived control-status tools are not part of the MVP.
@@ -71,9 +71,9 @@ Protocol response shapes may differ.
 ## Audit
 
 Meaningful MCP reads and every write emit a structured audit log with client
-type `mcp`, actor, workspace, tool name, request/session correlation, and
-affected object. There is no audit-history or arbitrary agent-log tool in the
-MVP.
+type `mcp`, user, API token, workspace, tool name, request/session correlation,
+and affected object. There is no audit-history or arbitrary agent-log tool in
+the MVP.
 
 ## Revisions
 
@@ -83,3 +83,5 @@ MVP.
   structured application audit logs routed to Cloud Logging.
 - 2026-06-11: Added attachment download-grant issuance for human inspection;
   attachment bytes do not pass through the MCP connection.
+- 2026-06-17: Replaced the planned actor API-key session with the user-owned
+  PASETO bearer-token contract from the PASETO Token Migration epic.
