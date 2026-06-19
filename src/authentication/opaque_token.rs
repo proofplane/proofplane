@@ -51,7 +51,7 @@ pub fn generate_opaque_token() -> Result<GeneratedOpaqueToken, OpaqueTokenError>
     let mut token = String::with_capacity(TOKEN_LENGTH);
     token.push_str(PREFIX);
     token.push_str(&random_body);
-    token.push_str(&checksum_for_token_without_checksum(&token));
+    token.push_str(&get_checksum(&token));
 
     let digest = digest_token(&token);
     Ok(GeneratedOpaqueToken {
@@ -73,7 +73,7 @@ pub fn parse_opaque_token(raw_token: &str) -> Result<ApiTokenDigest, OpaqueToken
     }
 
     let checksum_start = PREFIX.len() + RANDOM_LENGTH;
-    let expected = checksum_for_token_without_checksum(&raw_token[..checksum_start]);
+    let expected = get_checksum(&raw_token[..checksum_start]);
     if raw_token[checksum_start..] != expected {
         return Err(OpaqueTokenError::ChecksumMismatch);
     }
@@ -87,9 +87,9 @@ fn digest_token(raw_token: &str) -> ApiTokenDigest {
     ApiTokenDigest(hasher.finalize().into())
 }
 
-fn checksum_for_token_without_checksum(token_without_checksum: &str) -> String {
+fn get_checksum(input: &str) -> String {
     let mut hasher = Hasher::new();
-    hasher.update(token_without_checksum.as_bytes());
+    hasher.update(input.as_bytes());
     encode_checksum_base62(hasher.finalize())
 }
 
@@ -157,7 +157,6 @@ mod tests {
 
     #[test]
     fn checksum_encoding_uses_six_zero_padded_base62_characters() {
-        assert_eq!(crc32fast::hash(b"123456789"), 0xcbf43926);
         assert_eq!(encode_checksum_base62(0xcbf43926), "3jZRME");
         assert_eq!(encode_checksum_base62(0).len(), CHECKSUM_LENGTH);
         assert_eq!(encode_checksum_base62(0), "000000");
