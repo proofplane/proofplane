@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
     domain::{
-        canonical_permissions, ActorId, ActorPermissions, ApiTokenId, ProvisionUserPayload, UserId,
-        WorkspaceId, WorkspacePermission,
+        canonical_permissions, ActorId, ActorPermissions, ApiTokenId, DomainError,
+        ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission,
     },
     repository,
 };
@@ -63,17 +63,23 @@ impl UserApiTokenClaims {
         }
     }
 
-    fn validate(&self) -> Option<ActorPermissions> {
+    fn validate(&self) -> Result<ActorPermissions, ApiTokenClaimError> {
         if self.version != Self::VERSION {
-            return None;
+            return Err(ApiTokenClaimError::UnsupportedVersion {
+                version: self.version,
+            });
         }
 
         let mut parsed = Vec::with_capacity(self.permissions.len());
         for permission in &self.permissions {
-            parsed.push(permission.parse::<WorkspacePermission>().ok()?);
+            parsed.push(
+                permission
+                    .parse::<WorkspacePermission>()
+                    .map_err(ApiTokenClaimError::Permission)?,
+            );
         }
 
-        let canonical = canonical_permissions(parsed).ok()?;
+        let canonical = canonical_permissions(parsed).map_err(ApiTokenClaimError::Permission)?;
         let canonical_strings = canonical
             .iter()
             .map(|permission| permission.as_str())
@@ -84,11 +90,21 @@ impl UserApiTokenClaims {
             .map(String::as_str)
             .collect::<Vec<_>>();
         if claim_strings != canonical_strings {
-            return None;
+            return Err(ApiTokenClaimError::NonCanonicalPermissionOrder);
         }
 
-        Some(ActorPermissions::from_iter(canonical))
+        Ok(ActorPermissions::from_iter(canonical))
     }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+enum ApiTokenClaimError {
+    #[error("unsupported API token claim version {version}")]
+    UnsupportedVersion { version: u8 },
+    #[error("invalid API token permission claims")]
+    Permission(#[source] DomainError),
+    #[error("API token permissions are not in canonical order")]
+    NonCanonicalPermissionOrder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,8 +144,9 @@ impl ApiTokenAuthenticator {
             Ok(verified) => verified,
             Err(_) => return Ok(None),
         };
-        let Some(permissions) = verified.claims.validate() else {
-            return Ok(None);
+        let permissions = match verified.claims.validate() {
+            Ok(permissions) => permissions,
+            Err(_) => return Ok(None),
         };
         let api_token_id = ApiTokenId::from(verified.token_id);
         let user_id = UserId::from(verified.subject);
@@ -372,8 +389,8 @@ mod tests {
     use crate::domain::{ApiTokenId, UserId};
 
     use super::{
-        ActorPermissions, ApiKeyManager, ApiTokenContext, UserApiTokenClaims, WorkspaceId,
-        WorkspacePermission,
+        ActorPermissions, ApiKeyManager, ApiTokenClaimError, ApiTokenContext, UserApiTokenClaims,
+        WorkspaceId, WorkspacePermission,
     };
 
     #[test]
@@ -431,35 +448,41 @@ mod tests {
             permissions: vec!["read_controls".to_owned()],
         }
         .validate()
-        .is_none());
+        .is_err());
         assert!(UserApiTokenClaims {
             version: 1,
             workspace_id,
             permissions: vec!["delete_everything".to_owned()],
         }
         .validate()
-        .is_none());
-        assert!(UserApiTokenClaims {
-            version: 1,
-            workspace_id,
-            permissions: vec!["read_controls".to_owned(), "read_controls".to_owned()],
-        }
-        .validate()
-        .is_none());
+        .is_err());
+        assert_eq!(
+            UserApiTokenClaims {
+                version: 1,
+                workspace_id,
+                permissions: vec!["read_controls".to_owned(), "read_controls".to_owned()],
+            }
+            .validate(),
+            Err(ApiTokenClaimError::Permission(
+                crate::domain::DomainError::DuplicatePermission {
+                    permission: "read_controls".to_owned(),
+                }
+            ))
+        );
         assert!(UserApiTokenClaims {
             version: 1,
             workspace_id,
             permissions: vec!["write_controls".to_owned(), "read_controls".to_owned()],
         }
         .validate()
-        .is_none());
+        .is_err());
         assert!(UserApiTokenClaims {
             version: 1,
             workspace_id,
             permissions: vec!["read_controls".to_owned(), "write_controls".to_owned()],
         }
         .validate()
-        .is_some());
+        .is_ok());
     }
 
     #[test]
