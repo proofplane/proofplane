@@ -20,7 +20,7 @@ use crate::{
     repository::{AttachmentDownloadCandidate, Postgres},
 };
 
-const DOWNLOAD_TOKEN_VERSION: u8 = 2;
+const DOWNLOAD_TOKEN_VERSION: u8 = 1;
 const DOWNLOAD_TTL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
