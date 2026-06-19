@@ -12,6 +12,7 @@ use crate::{
     repository::Postgres,
     routes::{
         actors::{self, ActorsState},
+        api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
@@ -25,9 +26,13 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        actors::ActorService, attachment_downloads::AttachmentDownloadService,
-        controls::ControlService, evidence_requests::EvidenceRequestService,
-        evidence_submissions::EvidenceSubmissionService, user::UserService,
+        actors::ActorService,
+        api_tokens::{api_token_signer, ApiTokenService},
+        attachment_downloads::AttachmentDownloadService,
+        controls::ControlService,
+        evidence_requests::EvidenceRequestService,
+        evidence_submissions::EvidenceSubmissionService,
+        user::UserService,
         workspaces::WorkspaceService,
     },
 };
@@ -44,6 +49,11 @@ pub struct AppDependencies<V: TokenVerifier> {
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
+    let api_token_signer = api_token_signer(
+        dependencies.config.server.public_api_base_url.clone(),
+        &dependencies.config.paseto.api,
+    )
+    .map_err(crate::authentication::Error::Paseto)?;
     let attachment_download_service = AttachmentDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -105,6 +115,12 @@ pub fn create_app<V: TokenVerifier + 'static>(
         }))
         .merge(workspaces::router(WorkspacesState {
             service: WorkspaceService::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator.clone(),
+            },
+        }))
+        .merge(api_tokens::router(ApiTokensState {
+            service: ApiTokenService::new(dependencies.postgres.clone(), api_token_signer),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },

@@ -144,7 +144,9 @@ issuing a replacement and revoking the old token.
 
 ### Persistence
 
-Add user-owned token records:
+Ticket 002 adds these user-owned token records in an incremental `V005`
+migration. Ticket 004 later folds the final post-cutover schema into the
+consolidated `V001`.
 
 ```text
 api_tokens
@@ -393,8 +395,10 @@ authentication contract.
 - 2026-06-17: Removed actor-contract and actor-provenance compatibility. The
   pre-deployment cutover now deletes actor data and replaces the external
   contract atomically.
-- 2026-06-17: Replaced incremental schema evolution with one consolidated
+- 2026-06-17: Replaced the final actor-retirement cutover with one consolidated
   `V001`; local databases and storage are reset instead of upgraded.
+- 2026-06-18: Clarified that ticket 002 still ships as incremental `V005`, with
+  final `V001` consolidation deferred to ticket 004.
 
 ## References
 

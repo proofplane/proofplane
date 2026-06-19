@@ -1,5 +1,6 @@
 mod actor;
 mod api_credential;
+mod api_token;
 mod controls;
 mod error;
 mod evidence_request;
@@ -14,6 +15,9 @@ pub use actor::{
     Actor, ActorId, ActorKind, ActorWithPermissions, CreateActorPayload, UpdateActorPayload,
 };
 pub use api_credential::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
+pub use api_token::{
+    canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
+};
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload,
     CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, Framework,

@@ -8,6 +8,9 @@ pub enum DomainError {
     #[error("{field} has invalid value {value}")]
     InvalidEnumValue { field: &'static str, value: String },
 
+    #[error("permissions contains duplicate value {permission}")]
+    DuplicatePermission { permission: String },
+
     #[error("freshness_window_days must be positive")]
     InvalidFreshnessWindowDays,
 

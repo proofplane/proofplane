@@ -15,7 +15,7 @@ handoff units that link into it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [PASETO Keyrings And Token Primitives](./tickets/001-paseto-keyrings-and-token-primitives.md) | Done | Add `pasetors`, separate key domains, configuration validation, and tested wrappers. |
-| 002. [Self-Service User API Tokens](./tickets/002-self-service-user-api-tokens.md) | Todo | Persist, issue, list, and revoke user-owned workspace tokens. |
+| 002. [Self-Service User API Tokens](./tickets/002-self-service-user-api-tokens.md) | Done | Persist, issue, list, and revoke user-owned workspace tokens. |
 | 003. [PASETO Data-Plane Authentication](./tickets/003-paseto-data-plane-authentication.md) | Todo | Build and test the shared `v4.public` authenticator and `ApiTokenContext`. |
 | 004. [Evidence Attribution And Actor Retirement](./tickets/004-evidence-attribution-and-actor-retirement.md) | Todo | Atomically switch routes/provenance, remove actors, and consolidate the final schema into one `V001`. |
 | 005. [PASETO Attachment Download Grants](./tickets/005-paseto-attachment-download-grants.md) | Todo | Issue encrypted `v4.local` grants while preserving current download safety checks. |

@@ -4,6 +4,7 @@ use crate::domain::{ActorId, WorkspaceId};
 
 mod actors;
 mod api_credentials;
+mod api_tokens;
 pub mod constraints;
 mod controls;
 pub mod error;

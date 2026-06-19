@@ -1,4 +1,5 @@
 mod actors;
+mod api_tokens;
 mod attachment_downloads;
 mod controls;
 mod dequeuer_pubsub;

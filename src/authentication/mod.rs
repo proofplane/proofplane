@@ -215,6 +215,8 @@ pub enum Error {
     ApiKey(#[source] api_keys_simplified::Error),
     #[error("credential repository error")]
     Repository(#[source] repository::Error),
+    #[error("PASETO initialization failed")]
+    Paseto(#[source] paseto::Error),
 }
 
 #[cfg(test)]
