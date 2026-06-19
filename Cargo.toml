@@ -36,9 +36,11 @@ bytes = "1"
 config = { version = "0.15", default-features = false, features = ["yaml"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 crc32c = "0.6"
+crc32fast = "1.5.0"
 deadpool-postgres = "0.14.1"
 futures-core = "0.3"
 futures-util = "0.3"
+getrandom = "0.4.3"
 hex = "0.4"
 jwtk = { version = "0.5", features = ["openssl"] }
 metrics = "0.24.6"

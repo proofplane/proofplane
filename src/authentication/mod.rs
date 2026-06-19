@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub mod auth0;
+pub mod opaque_token;
 pub mod paseto;
 
 /// Custom claims carried by user-owned API tokens. Issuance and verification
