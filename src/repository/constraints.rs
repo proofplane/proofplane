@@ -8,7 +8,6 @@ pub enum ConflictKind {
     ControlCodeTaken,
     WorkspaceMembershipExists,
     EvidenceRequestControlMappingExists,
-    ApiTokenDigestTaken,
 }
 
 impl ConflictKind {
@@ -18,7 +17,6 @@ impl ConflictKind {
             Self::ControlCodeTaken => "control_code_taken",
             Self::WorkspaceMembershipExists => "membership_exists",
             Self::EvidenceRequestControlMappingExists => "evidence_request_control_mapping_exists",
-            Self::ApiTokenDigestTaken => "api_token_digest_taken",
         }
     }
 
@@ -30,7 +28,6 @@ impl ConflictKind {
             Self::EvidenceRequestControlMappingExists => {
                 "this control is already mapped to the evidence request"
             }
-            Self::ApiTokenDigestTaken => "an API token with this digest already exists",
         }
     }
 }
@@ -43,7 +40,6 @@ fn conflict_kind_for_constraint(constraint: &str) -> Option<ConflictKind> {
         "evidence_request_control_mappings_pkey" => {
             Some(ConflictKind::EvidenceRequestControlMappingExists)
         }
-        "api_tokens_token_digest_key" => Some(ConflictKind::ApiTokenDigestTaken),
         _ => None,
     }
 }
@@ -81,10 +77,6 @@ mod tests {
         assert_eq!(
             conflict_kind_for_constraint("evidence_request_control_mappings_pkey"),
             Some(ConflictKind::EvidenceRequestControlMappingExists)
-        );
-        assert_eq!(
-            conflict_kind_for_constraint("api_tokens_token_digest_key"),
-            Some(ConflictKind::ApiTokenDigestTaken)
         );
     }
 

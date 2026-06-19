@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use super::{constraints::classify_db_error, Error, Postgres};
+use super::{Error, Postgres};
 
 const API_TOKEN_COLUMNS: &str =
     "id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at, created_at";
@@ -39,8 +39,7 @@ RETURNING id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at,
                     &token.expires_at,
                 ],
             )
-            .await
-            .map_err(classify_db_error)?;
+            .await?;
         let created = api_token_from_row(row)?;
 
         for permission in &token.permissions {

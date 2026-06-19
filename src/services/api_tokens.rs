@@ -11,10 +11,8 @@ use crate::{
         ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
         WorkspacePermission,
     },
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    repository::Postgres,
 };
-
-const TOKEN_ISSUE_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct ApiTokenService {
@@ -60,34 +58,25 @@ impl ApiTokenService {
         request: CreateUserApiTokenPayload,
     ) -> Result<IssuedUserApiToken, ApiTokenError> {
         self.authorize(workspace_id, user_id).await?;
-        for _ in 0..TOKEN_ISSUE_ATTEMPTS {
-            let token_id = ApiTokenId::from(Uuid::new_v4());
-            let issued = generate_opaque_token().map_err(ApiTokenError::Issue)?;
-            match self
-                .repository
-                .create_api_token(&CreateApiTokenPayload {
-                    id: token_id,
-                    token_digest: issued.digest,
-                    user_id,
-                    workspace_id,
-                    name: request.name.clone(),
-                    expires_at: request.expires_at,
-                    permissions: request.permissions.clone(),
-                })
-                .await
-            {
-                Ok(token) => {
-                    return Ok(IssuedUserApiToken {
-                        token,
-                        raw_token: issued.raw_token,
-                    });
-                }
-                Err(RepositoryError::Conflict(ConflictKind::ApiTokenDigestTaken)) => continue,
-                Err(error) => return Err(ApiTokenError::Repository(error)),
-            }
-        }
+        let token_id = ApiTokenId::from(Uuid::new_v4());
+        let issued = generate_opaque_token().map_err(ApiTokenError::Issue)?;
+        let token = self
+            .repository
+            .create_api_token(&CreateApiTokenPayload {
+                id: token_id,
+                token_digest: issued.digest,
+                user_id,
+                workspace_id,
+                name: request.name,
+                expires_at: request.expires_at,
+                permissions: request.permissions,
+            })
+            .await?;
 
-        Err(ApiTokenError::Issue(OpaqueTokenError::Generation))
+        Ok(IssuedUserApiToken {
+            token,
+            raw_token: issued.raw_token,
+        })
     }
 
     pub async fn list_tokens(
