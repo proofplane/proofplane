@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
     domain::{
-        canonical_permissions, ApiTokenId, DomainError, ProvisionUserPayload, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions,
+        ApiTokenId, ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission,
+        WorkspacePermissions,
     },
     repository,
 };
@@ -15,74 +15,6 @@ use crate::{
 pub mod auth0;
 pub mod opaque_token;
 pub mod paseto;
-
-/// Custom claims carried by user-owned API tokens. Issuance and verification
-/// share this type so claim names and permission serialization cannot drift.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UserApiTokenClaims {
-    pub version: u8,
-    pub workspace_id: Uuid,
-    pub permissions: Vec<String>,
-}
-
-impl UserApiTokenClaims {
-    pub const VERSION: u8 = 1;
-
-    pub fn new(workspace_id: WorkspaceId, permissions: &[WorkspacePermission]) -> Self {
-        let permissions = WorkspacePermissions::from_iter(permissions.iter().copied());
-        Self {
-            version: Self::VERSION,
-            workspace_id: Uuid::from(workspace_id),
-            permissions: permissions
-                .iter()
-                .map(|permission| permission.as_str().to_owned())
-                .collect(),
-        }
-    }
-
-    fn validate(&self) -> Result<WorkspacePermissions, ApiTokenClaimError> {
-        if self.version != Self::VERSION {
-            return Err(ApiTokenClaimError::UnsupportedVersion {
-                version: self.version,
-            });
-        }
-
-        let mut parsed = Vec::with_capacity(self.permissions.len());
-        for permission in &self.permissions {
-            parsed.push(
-                permission
-                    .parse::<WorkspacePermission>()
-                    .map_err(ApiTokenClaimError::Permission)?,
-            );
-        }
-
-        let canonical = canonical_permissions(parsed).map_err(ApiTokenClaimError::Permission)?;
-        let canonical_strings = canonical
-            .iter()
-            .map(|permission| permission.as_str())
-            .collect::<Vec<_>>();
-        let claim_strings = self
-            .permissions
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        if claim_strings != canonical_strings {
-            return Err(ApiTokenClaimError::NonCanonicalPermissionOrder);
-        }
-
-        Ok(WorkspacePermissions::from_iter(canonical))
-    }
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-enum ApiTokenClaimError {
-    #[error("unsupported API token claim version {version}")]
-    UnsupportedVersion { version: u8 },
-    #[error("invalid API token permission claims")]
-    Permission(#[source] DomainError),
-    #[error("API token permissions are not in canonical order")]
-    NonCanonicalPermissionOrder,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiTokenContext {
@@ -104,41 +36,33 @@ impl ApiTokenContext {
 
 #[derive(Clone)]
 pub struct ApiTokenAuthenticator {
-    verifier: paseto::ApiTokenVerifier,
     repository: Arc<repository::Postgres>,
 }
 
 impl ApiTokenAuthenticator {
-    pub fn new(verifier: paseto::ApiTokenVerifier, repository: Arc<repository::Postgres>) -> Self {
-        Self {
-            verifier,
-            repository,
-        }
+    pub fn new(repository: Arc<repository::Postgres>) -> Self {
+        Self { repository }
     }
 
     pub async fn authenticate(&self, raw_token: &str) -> Result<Option<ApiTokenContext>, Error> {
-        let verified = match self.verifier.verify::<UserApiTokenClaims>(raw_token) {
-            Ok(verified) => verified,
+        let digest = match opaque_token::parse_opaque_token(raw_token) {
+            Ok(digest) => digest,
             Err(_) => return Ok(None),
         };
-        let permissions = match verified.claims.validate() {
-            Ok(permissions) => permissions,
-            Err(_) => return Ok(None),
-        };
-        let api_token_id = ApiTokenId::from(verified.token_id);
-        let user_id = UserId::from(verified.subject);
-        let workspace_id = WorkspaceId::from(verified.claims.workspace_id);
 
         let Some(stored) = self
             .repository
-            .get_api_token(api_token_id)
+            .get_api_token_by_digest(digest)
             .await
             .map_err(Error::Repository)?
         else {
             return Ok(None);
         };
+        let api_token_id = stored.token.id;
+        let user_id = stored.token.user_id;
+        let workspace_id = stored.token.workspace_id;
 
-        if stored.token.revoked_at.is_some() {
+        if stored.token.revoked_at.is_some() || stored.token.expires_at <= Utc::now() {
             return Ok(None);
         }
 
@@ -168,7 +92,7 @@ impl ApiTokenAuthenticator {
             user_id,
             api_token_id,
             workspace_id,
-            permissions,
+            permissions: WorkspacePermissions::from_iter(stored.permissions),
         }))
     }
 }
@@ -257,16 +181,19 @@ pub enum Error {
     Paseto(#[source] paseto::Error),
 }
 
+impl From<paseto::Error> for Error {
+    fn from(error: paseto::Error) -> Self {
+        Self::Paseto(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
     use crate::domain::{ApiTokenId, UserId};
 
-    use super::{
-        ApiTokenClaimError, ApiTokenContext, UserApiTokenClaims, WorkspaceId, WorkspacePermission,
-        WorkspacePermissions,
-    };
+    use super::{ApiTokenContext, WorkspaceId, WorkspacePermission, WorkspacePermissions};
 
     #[test]
     fn api_token_context_allows_matching_workspace_and_permission_only() {
@@ -284,71 +211,5 @@ mod tests {
             WorkspaceId::from(Uuid::new_v4()),
             WorkspacePermission::ReadControls
         ));
-    }
-
-    #[test]
-    fn api_token_claim_validation_rejects_non_canonical_claims() {
-        let workspace_id = Uuid::new_v4();
-        assert!(UserApiTokenClaims {
-            version: 2,
-            workspace_id,
-            permissions: vec!["read_controls".to_owned()],
-        }
-        .validate()
-        .is_err());
-        assert!(UserApiTokenClaims {
-            version: 1,
-            workspace_id,
-            permissions: vec!["delete_everything".to_owned()],
-        }
-        .validate()
-        .is_err());
-        assert_eq!(
-            UserApiTokenClaims {
-                version: 1,
-                workspace_id,
-                permissions: vec!["read_controls".to_owned(), "read_controls".to_owned()],
-            }
-            .validate(),
-            Err(ApiTokenClaimError::Permission(
-                crate::domain::DomainError::DuplicatePermission {
-                    permission: "read_controls".to_owned(),
-                }
-            ))
-        );
-        assert!(UserApiTokenClaims {
-            version: 1,
-            workspace_id,
-            permissions: vec!["write_controls".to_owned(), "read_controls".to_owned()],
-        }
-        .validate()
-        .is_err());
-        assert!(UserApiTokenClaims {
-            version: 1,
-            workspace_id,
-            permissions: vec!["read_controls".to_owned(), "write_controls".to_owned()],
-        }
-        .validate()
-        .is_ok());
-    }
-
-    #[test]
-    fn malformed_permission_arrays_do_not_deserialize_as_claims() {
-        assert!(
-            serde_json::from_value::<UserApiTokenClaims>(serde_json::json!({
-                "version": 1,
-                "workspace_id": Uuid::new_v4(),
-                "permissions": "read_controls"
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<UserApiTokenClaims>(serde_json::json!({
-                "version": 1,
-                "workspace_id": Uuid::new_v4(),
-                "permissions": ["read_controls", 1]
-            }))
-            .is_err()
-        );
     }
 }

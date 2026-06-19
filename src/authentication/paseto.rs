@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use pasetors::{
-    keys::{AsymmetricPublicKey, AsymmetricSecretKey, SymmetricKey},
-    token::{Local, Public, UntrustedToken},
-    version4::{LocalToken, PublicToken, V4},
+    keys::SymmetricKey,
+    token::{Local, UntrustedToken},
+    version4::{LocalToken, V4},
 };
 use secrecy::ExposeSecret;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -12,13 +12,12 @@ use serde_json::{Map, Value};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::{PasetoApiConfig, PasetoDownloadConfig};
+use crate::config::PasetoDownloadConfig;
 
 // We use assertions as a mechanism for verifying that the API key is being
 // used for the right purpose. For example, for API keys, we want to make sure
 // that the tokens we're verifying were issued with the intention of them
 // being API keys and not something else.
-const API_IMPLICIT_ASSERTION: &[u8] = b"proofplane:api-access:v1";
 const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
@@ -44,116 +43,6 @@ pub struct VerifiedPasetoToken<T> {
     pub key_id: String,
     pub expires_at: DateTime<Utc>,
     pub claims: T,
-}
-
-#[derive(Clone)]
-pub struct ApiTokenSigner {
-    issuer: Url,
-    audience: String,
-    key_id: String,
-    secret_key: AsymmetricSecretKey<V4>,
-}
-
-impl ApiTokenSigner {
-    pub fn from_config(
-        issuer: Url,
-        audience: impl Into<String>,
-        config: &PasetoApiConfig,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            issuer,
-            audience: audience.into(),
-            key_id: config.active_signing_key.id.clone(),
-            secret_key: AsymmetricSecretKey::<V4>::try_from(
-                config.active_signing_key.secret.expose_secret(),
-            )
-            .map_err(|_| Error::Keyring)?,
-        })
-    }
-
-    pub fn issue<T: Serialize>(
-        &self,
-        registered: RegisteredClaims,
-        custom_claims: &T,
-    ) -> Result<IssuedPasetoToken, Error> {
-        let payload = payload(
-            self.issuer.as_str(),
-            &self.audience,
-            &registered,
-            custom_claims,
-        )?;
-        let footer = footer(&self.key_id)?;
-        let token = PublicToken::sign(
-            &self.secret_key,
-            payload.as_bytes(),
-            Some(footer.as_bytes()),
-            Some(API_IMPLICIT_ASSERTION),
-        )
-        .map_err(|_| Error::Issue)?;
-
-        Ok(IssuedPasetoToken {
-            token,
-            token_id: registered.token_id,
-            key_id: self.key_id.clone(),
-            expires_at: normalize_datetime(registered.expires_at)?,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct ApiTokenVerifier {
-    issuer: Url,
-    audience: String,
-    verification_keys: HashMap<String, AsymmetricPublicKey<V4>>,
-}
-
-impl ApiTokenVerifier {
-    pub fn from_config(
-        issuer: Url,
-        audience: impl Into<String>,
-        config: &PasetoApiConfig,
-    ) -> Result<Self, Error> {
-        let mut verification_keys = HashMap::new();
-        for key in &config.verification_keys {
-            verification_keys.insert(
-                key.id.clone(),
-                AsymmetricPublicKey::<V4>::try_from(key.public.as_str())
-                    .map_err(|_| Error::Keyring)?,
-            );
-        }
-
-        Ok(Self {
-            issuer,
-            audience: audience.into(),
-            verification_keys,
-        })
-    }
-
-    pub fn verify<T: DeserializeOwned>(
-        &self,
-        token: &str,
-    ) -> Result<VerifiedPasetoToken<T>, Error> {
-        let untrusted = UntrustedToken::<Public, V4>::try_from(token).map_err(|_| Error::Verify)?;
-        let footer = parse_footer(untrusted.untrusted_footer())?;
-        let key = self
-            .verification_keys
-            .get(&footer.kid)
-            .ok_or(Error::Verify)?;
-        let trusted = PublicToken::verify(
-            key,
-            &untrusted,
-            Some(untrusted.untrusted_footer()),
-            Some(API_IMPLICIT_ASSERTION),
-        )
-        .map_err(|_| Error::Verify)?;
-
-        verified_payload(
-            trusted.payload(),
-            &footer.kid,
-            self.issuer.as_str(),
-            &self.audience,
-        )
-    }
 }
 
 #[derive(Clone)]
@@ -407,14 +296,9 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::config::{PasetoApiSigningKey, PasetoApiVerificationKey, PasetoDownloadKey};
+    use crate::config::PasetoDownloadKey;
 
-    const API_AUDIENCE: &str = "proofplane-api";
     const DOWNLOAD_AUDIENCE: &str = "proofplane-attachment-download";
-    const API_SECRET: &str = "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw";
-    const API_PUBLIC: &str = "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos";
-    const OTHER_API_SECRET: &str = "k4.secret.9CgkMno7WtJFoVtui7YAo64QdHF4gEL9wrrTbsVvSRl0mFbeQ1nOzcYLVmdzOxpaKpPP-DYcTY9ETWV7ismu3g";
-    const OTHER_API_PUBLIC: &str = "k4.public.dJhW3kNZzs3GC1ZnczsaWiqTz_g2HE2PRE1le4rJrt4";
     const DOWNLOAD_SECRET: &str = "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs";
     const OTHER_DOWNLOAD_SECRET: &str = "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY";
 
@@ -443,29 +327,6 @@ mod tests {
         }
     }
 
-    fn api_config(active_id: &str) -> PasetoApiConfig {
-        PasetoApiConfig {
-            active_signing_key: PasetoApiSigningKey {
-                id: active_id.to_owned(),
-                secret: SecretString::from(if active_id == "old-api" {
-                    OTHER_API_SECRET
-                } else {
-                    API_SECRET
-                }),
-            },
-            verification_keys: vec![
-                PasetoApiVerificationKey {
-                    id: "local-api".to_owned(),
-                    public: API_PUBLIC.to_owned(),
-                },
-                PasetoApiVerificationKey {
-                    id: "old-api".to_owned(),
-                    public: OTHER_API_PUBLIC.to_owned(),
-                },
-            ],
-        }
-    }
-
     fn download_config(active_id: &str) -> PasetoDownloadConfig {
         PasetoDownloadConfig {
             active_key_id: active_id.to_owned(),
@@ -482,41 +343,12 @@ mod tests {
         }
     }
 
-    fn api_signer(config: &PasetoApiConfig) -> ApiTokenSigner {
-        ApiTokenSigner::from_config(issuer(), API_AUDIENCE, config).unwrap()
-    }
-
-    fn api_verifier(config: &PasetoApiConfig) -> ApiTokenVerifier {
-        ApiTokenVerifier::from_config(issuer(), API_AUDIENCE, config).unwrap()
-    }
-
     fn download_encryptor(config: &PasetoDownloadConfig) -> DownloadGrantEncryptor {
         DownloadGrantEncryptor::from_config(issuer(), DOWNLOAD_AUDIENCE, config).unwrap()
     }
 
     fn download_decryptor(config: &PasetoDownloadConfig) -> DownloadGrantDecryptor {
         DownloadGrantDecryptor::from_config(issuer(), DOWNLOAD_AUDIENCE, config).unwrap()
-    }
-
-    #[test]
-    fn api_public_tokens_round_trip() {
-        let config = api_config("local-api");
-        let registered = registered();
-        let claims = custom_claims();
-        let issued = api_signer(&config)
-            .issue(registered.clone(), &claims)
-            .unwrap();
-        let verified = api_verifier(&config)
-            .verify::<TestClaims>(&issued.token)
-            .unwrap();
-
-        assert_eq!(issued.token_id, registered.token_id);
-        assert_eq!(verified.subject, registered.subject);
-        assert_eq!(verified.token_id, registered.token_id);
-        assert_eq!(verified.key_id, "local-api");
-        assert_eq!(verified.claims, claims);
-        assert_eq!(verified.expires_at, issued.expires_at);
-        assert!(issued.token.starts_with("v4.public."));
     }
 
     #[test]
@@ -541,42 +373,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_unknown_kid_wrong_key_and_tampering() {
-        let api_config = api_config("local-api");
-        let issued = api_signer(&api_config)
-            .issue(registered(), &custom_claims())
-            .unwrap();
-
-        assert!(api_verifier(&api_config)
-            .verify::<TestClaims>("not-a-token")
-            .is_err());
-
-        let without_key = PasetoApiConfig {
-            active_signing_key: api_config.active_signing_key.clone(),
-            verification_keys: vec![],
-        };
-        assert!(api_verifier(&without_key)
-            .verify::<TestClaims>(&issued.token)
-            .is_err());
-
-        let wrong_key = PasetoApiConfig {
-            active_signing_key: api_config.active_signing_key.clone(),
-            verification_keys: vec![PasetoApiVerificationKey {
-                id: "local-api".to_owned(),
-                public: OTHER_API_PUBLIC.to_owned(),
-            }],
-        };
-        assert!(api_verifier(&wrong_key)
-            .verify::<TestClaims>(&issued.token)
-            .is_err());
-
-        assert!(api_verifier(&api_config)
-            .verify::<TestClaims>(&tamper(&issued.token))
-            .is_err());
-        assert!(api_verifier(&api_config)
-            .verify::<TestClaims>(&tamper_footer(&issued.token))
-            .is_err());
-
         let download_config = download_config("local-download");
+        assert!(download_decryptor(&download_config)
+            .decrypt::<TestClaims>("not-a-token")
+            .is_err());
         let issued = download_encryptor(&download_config)
             .encrypt(registered(), &custom_claims())
             .unwrap();
@@ -600,25 +400,6 @@ mod tests {
 
     #[test]
     fn key_rotation_keeps_old_keys_until_removed() {
-        let old_api_config = api_config("old-api");
-        let api_token = api_signer(&old_api_config)
-            .issue(registered(), &custom_claims())
-            .unwrap()
-            .token;
-        assert!(api_verifier(&api_config("local-api"))
-            .verify::<TestClaims>(&api_token)
-            .is_ok());
-        let removed_old_api = PasetoApiConfig {
-            active_signing_key: api_config("local-api").active_signing_key,
-            verification_keys: vec![PasetoApiVerificationKey {
-                id: "local-api".to_owned(),
-                public: API_PUBLIC.to_owned(),
-            }],
-        };
-        assert!(api_verifier(&removed_old_api)
-            .verify::<TestClaims>(&api_token)
-            .is_err());
-
         let old_download_config = download_config("old-download");
         let download_token = download_encryptor(&old_download_config)
             .encrypt(registered(), &custom_claims())
@@ -641,33 +422,16 @@ mod tests {
 
     #[test]
     fn purpose_and_implicit_assertion_separation_fail_closed() {
-        let api_config = api_config("local-api");
         let download_config = download_config("local-download");
-        let api_token = api_signer(&api_config)
-            .issue(registered(), &custom_claims())
-            .unwrap()
-            .token;
+        let wrong_audience_decryptor =
+            DownloadGrantDecryptor::from_config(issuer(), "wrong-audience", &download_config)
+                .unwrap();
         let download_token = download_encryptor(&download_config)
             .encrypt(registered(), &custom_claims())
             .unwrap()
             .token;
-
-        assert!(download_decryptor(&download_config)
-            .decrypt::<TestClaims>(&api_token)
-            .is_err());
-        assert!(api_verifier(&api_config)
-            .verify::<TestClaims>(&download_token)
-            .is_err());
-
-        let wrong_audience_verifier =
-            ApiTokenVerifier::from_config(issuer(), "wrong-audience", &api_config).unwrap();
-        assert!(wrong_audience_verifier
-            .verify::<TestClaims>(&api_token)
-            .is_err());
-
-        let api_wrong_implicit = public_token_with_implicit(&api_config, b"wrong-implicit");
-        assert!(api_verifier(&api_config)
-            .verify::<TestClaims>(&api_wrong_implicit)
+        assert!(wrong_audience_decryptor
+            .decrypt::<TestClaims>(&download_token)
             .is_err());
         let download_wrong_implicit =
             local_token_with_implicit(&download_config, b"wrong-implicit");
@@ -678,68 +442,33 @@ mod tests {
 
     #[test]
     fn rejects_bad_registered_claims_and_reserved_custom_claims() {
-        let config = api_config("local-api");
-        let signer = api_signer(&config);
+        let config = download_config("local-download");
+        let encryptor = download_encryptor(&config);
         let expired = RegisteredClaims {
             expires_at: Utc::now() - ChronoDuration::seconds(1),
             ..registered()
         };
-        assert!(signer.issue(expired, &custom_claims()).is_err());
+        assert!(encryptor.encrypt(expired, &custom_claims()).is_err());
 
         let custom = serde_json::json!({ "iss": "custom", "workspace_id": Uuid::new_v4() });
-        assert!(signer.issue(registered(), &custom).is_err());
+        assert!(encryptor.encrypt(registered(), &custom).is_err());
 
-        let missing_exp = public_token_with_payload(
+        let missing_exp = local_token_with_payload(
             &config,
             serde_json::json!({
                 "iss": issuer().as_str(),
-                "aud": API_AUDIENCE,
+                "aud": DOWNLOAD_AUDIENCE,
                 "sub": Uuid::new_v4(),
                 "jti": Uuid::new_v4(),
                 "iat": format_datetime(Utc::now()),
                 "nbf": format_datetime(Utc::now()),
                 "workspace_id": Uuid::new_v4(),
             }),
-            API_IMPLICIT_ASSERTION,
+            DOWNLOAD_IMPLICIT_ASSERTION,
         );
-        assert!(api_verifier(&config)
-            .verify::<TestClaims>(&missing_exp)
+        assert!(download_decryptor(&config)
+            .decrypt::<TestClaims>(&missing_exp)
             .is_err());
-    }
-
-    fn public_token_with_implicit(config: &PasetoApiConfig, implicit_assertion: &[u8]) -> String {
-        public_token_with_payload(
-            config,
-            serde_json::from_str(
-                &payload(
-                    issuer().as_str(),
-                    API_AUDIENCE,
-                    &registered(),
-                    &custom_claims(),
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-            implicit_assertion,
-        )
-    }
-
-    fn public_token_with_payload(
-        config: &PasetoApiConfig,
-        payload: Value,
-        implicit_assertion: &[u8],
-    ) -> String {
-        let secret =
-            AsymmetricSecretKey::<V4>::try_from(config.active_signing_key.secret.expose_secret())
-                .unwrap();
-        let footer = footer(&config.active_signing_key.id).unwrap();
-        PublicToken::sign(
-            &secret,
-            serde_json::to_string(&payload).unwrap().as_bytes(),
-            Some(footer.as_bytes()),
-            Some(implicit_assertion),
-        )
-        .unwrap()
     }
 
     fn local_token_with_implicit(
@@ -763,6 +492,27 @@ mod tests {
         LocalToken::encrypt(
             &secret,
             payload.as_bytes(),
+            Some(footer.as_bytes()),
+            Some(implicit_assertion),
+        )
+        .unwrap()
+    }
+
+    fn local_token_with_payload(
+        config: &PasetoDownloadConfig,
+        payload: Value,
+        implicit_assertion: &[u8],
+    ) -> String {
+        let active = config
+            .keys
+            .iter()
+            .find(|key| key.id == config.active_key_id)
+            .unwrap();
+        let secret = SymmetricKey::<V4>::try_from(active.secret.expose_secret()).unwrap();
+        let footer = footer(&config.active_key_id).unwrap();
+        LocalToken::encrypt(
+            &secret,
+            serde_json::to_string(&payload).unwrap().as_bytes(),
             Some(footer.as_bytes()),
             Some(implicit_assertion),
         )

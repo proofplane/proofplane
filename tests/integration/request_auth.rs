@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::support::{TestApp, INTEGRATION_API_TOKEN_ID};
 
 #[tokio::test]
-async fn data_plane_routes_require_valid_paseto_bearer_tokens() {
+async fn data_plane_routes_require_valid_opaque_bearer_tokens() {
     let app = TestApp::builder()
         .without_default_auth()
         .workspace("workspace", "Protected workspace")
@@ -22,7 +22,7 @@ async fn data_plane_routes_require_valid_paseto_bearer_tokens() {
     let malformed = app
         .server()
         .get(&path)
-        .add_header(AUTHORIZATION_HEADER, "Bearer not-a-paseto")
+        .add_header(AUTHORIZATION_HEADER, "Bearer not-a-token")
         .await;
     assert_unauthorized(&malformed.json(), malformed.status_code());
 

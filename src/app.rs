@@ -8,7 +8,7 @@ use tracing::Span;
 use crate::{
     authentication::{
         auth0::TokenVerifier,
-        paseto::{ApiTokenSigner, DownloadGrantDecryptor, DownloadGrantEncryptor},
+        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::AppConfig,
@@ -48,25 +48,19 @@ pub struct AppDependencies<V: TokenVerifier> {
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
-    let api_token_signer = ApiTokenSigner::from_config(
-        dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-api",
-        &dependencies.config.paseto.api,
-    )
-    .map_err(crate::authentication::Error::Paseto)?;
     let api_token_authenticator = dependencies.api_token_authenticator.clone();
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         "proofplane-attachment-download",
         &dependencies.config.paseto.download,
     )
-    .map_err(crate::authentication::Error::Paseto)?;
+    .map_err(crate::authentication::Error::from)?;
     let download_grant_decryptor = DownloadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         "proofplane-attachment-download",
         &dependencies.config.paseto.download,
     )
-    .map_err(crate::authentication::Error::Paseto)?;
+    .map_err(crate::authentication::Error::from)?;
     let attachment_download_service = AttachmentDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -134,7 +128,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             },
         }))
         .merge(api_tokens::router(ApiTokensState {
-            service: ApiTokenService::new(dependencies.postgres.clone(), api_token_signer),
+            service: ApiTokenService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },

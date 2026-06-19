@@ -6,10 +6,7 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{ApiTokenSigner, RegisteredClaims},
-        UserApiTokenClaims,
-    },
+    authentication::opaque_token::generate_opaque_token,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
         ApiTokenId, CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
@@ -53,7 +50,7 @@ pub enum Error {
     Timestamp(#[from] chrono::ParseError),
 
     #[error("API token generation error")]
-    ApiToken(#[from] crate::authentication::paseto::Error),
+    ApiToken(#[from] crate::authentication::opaque_token::OpaqueTokenError),
 
     #[error("object storage error")]
     ObjectStorage(#[from] StorageError),
@@ -173,35 +170,24 @@ async fn seed_local_owner(repository: &Postgres) -> Result<UserId, Error> {
 
 async fn seed_api_token(
     repository: &Postgres,
-    config: &crate::config::AppConfig,
+    _config: &crate::config::AppConfig,
     user_id: UserId,
 ) -> Result<String, Error> {
     let workspace_id = local_authorized_workspace_id();
     let token_id = local_api_token_id();
     let expires_at = timestamp("2036-01-01T00:00:00Z")?;
     let permissions = WorkspacePermission::ALL.to_vec();
-    let signer = ApiTokenSigner::from_config(
-        config.server.public_api_base_url.clone(),
-        "proofplane-api",
-        &config.paseto.api,
-    )?;
-    let issued = signer.issue(
-        RegisteredClaims {
-            subject: Uuid::from(user_id),
-            token_id: Uuid::from(token_id),
-            expires_at,
-        },
-        &UserApiTokenClaims::new(workspace_id, &permissions),
-    )?;
+    let issued = generate_opaque_token()?;
 
     let client = repository.get().await?;
     client
         .execute(
             r#"
-INSERT INTO api_tokens (id, user_id, workspace_id, name, expires_at)
-VALUES ($1, $2, $3, 'Local Owner API Token', $4)
+INSERT INTO api_tokens (id, token_digest, user_id, workspace_id, name, expires_at)
+VALUES ($1, $2, $3, $4, 'Local Owner API Token', $5)
 ON CONFLICT (id) DO UPDATE
-SET user_id = EXCLUDED.user_id,
+SET token_digest = EXCLUDED.token_digest,
+    user_id = EXCLUDED.user_id,
     workspace_id = EXCLUDED.workspace_id,
     name = EXCLUDED.name,
     expires_at = EXCLUDED.expires_at,
@@ -209,9 +195,10 @@ SET user_id = EXCLUDED.user_id,
 "#,
             &[
                 &Uuid::from(token_id),
+                &&issued.digest.as_bytes()[..],
                 &Uuid::from(user_id),
                 &Uuid::from(workspace_id),
-                &issued.expires_at,
+                &expires_at,
             ],
         )
         .await?;
@@ -230,7 +217,7 @@ SET user_id = EXCLUDED.user_id,
             .await?;
     }
 
-    Ok(issued.token)
+    Ok(issued.raw_token.expose_secret().to_owned())
 }
 
 async fn seed_evidence_requests(

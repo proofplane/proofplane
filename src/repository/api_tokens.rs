@@ -2,12 +2,15 @@ use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{
-    ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
-    WorkspacePermission,
+use crate::{
+    authentication::opaque_token::ApiTokenDigest,
+    domain::{
+        ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
+        WorkspacePermission,
+    },
 };
 
-use super::{Error, Postgres};
+use super::{constraints::classify_db_error, Error, Postgres};
 
 const API_TOKEN_COLUMNS: &str =
     "id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at, created_at";
@@ -23,19 +26,21 @@ impl Postgres {
         let row = transaction
             .query_one(
                 r#"
-INSERT INTO api_tokens (id, user_id, workspace_id, name, expires_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO api_tokens (id, token_digest, user_id, workspace_id, name, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at, created_at
 "#,
                 &[
                     &Uuid::from(token.id),
+                    &&token.token_digest.as_bytes()[..],
                     &Uuid::from(token.user_id),
                     &Uuid::from(token.workspace_id),
                     &token.name,
                     &token.expires_at,
                 ],
             )
-            .await?;
+            .await
+            .map_err(classify_db_error)?;
         let created = api_token_from_row(row)?;
 
         for permission in &token.permissions {
@@ -94,6 +99,26 @@ ORDER BY created_at DESC, id DESC
             .query(
                 &format!("SELECT {API_TOKEN_COLUMNS} FROM api_tokens WHERE id = $1"),
                 &[&Uuid::from(id)],
+            )
+            .await?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(None);
+        };
+        let token = api_token_from_row(row)?;
+        let permissions = permissions_for_token(&client, token.id).await?;
+
+        Ok(Some(ApiTokenWithPermissions { token, permissions }))
+    }
+
+    pub async fn get_api_token_by_digest(
+        &self,
+        digest: ApiTokenDigest,
+    ) -> Result<Option<ApiTokenWithPermissions>, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .query(
+                &format!("SELECT {API_TOKEN_COLUMNS} FROM api_tokens WHERE token_digest = $1"),
+                &[&&digest.as_bytes()[..]],
             )
             .await?;
         let Some(row) = rows.into_iter().next() else {

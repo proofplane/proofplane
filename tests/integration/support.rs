@@ -15,14 +15,13 @@ use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
-        paseto::{ApiTokenSigner, ApiTokenVerifier, RegisteredClaims},
-        ApiTokenAuthenticator, UserApiTokenClaims, UserAuthenticator,
+        opaque_token::generate_opaque_token,
+        ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey, PasetoConfig,
-        PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig, PubSubSubscriptionsConfig,
-        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
+        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
@@ -34,7 +33,7 @@ use proofplane::{
     store,
     worker::{create_worker_app, WorkerAppDependencies},
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
@@ -187,14 +186,7 @@ impl TestApp {
                 .expect("filesystem object store initializes"),
         );
         let recorder = PrometheusBuilder::new().build_recorder();
-        let api_token_verifier = ApiTokenVerifier::from_config(
-            app_config.server.public_api_base_url.clone(),
-            "proofplane-api",
-            &app_config.paseto.api,
-        )
-        .expect("API token verifier initializes");
-        let api_token_authenticator =
-            ApiTokenAuthenticator::new(api_token_verifier, postgres.clone());
+        let api_token_authenticator = ApiTokenAuthenticator::new(postgres.clone());
         let user_authenticator =
             UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone());
 
@@ -700,7 +692,7 @@ pub struct IssuedTestApiToken {
 
 async fn issue_api_token_for_workspace(
     postgres: &Postgres,
-    app_config: &AppConfig,
+    _app_config: &AppConfig,
     workspace_id: WorkspaceId,
     permissions: Vec<WorkspacePermission>,
     token_id: Option<ApiTokenId>,
@@ -730,36 +722,22 @@ async fn issue_api_token_for_workspace(
 
     let token_id = token_id.unwrap_or_else(|| ApiTokenId::from(Uuid::new_v4()));
     let expires_at = Utc::now() + chrono::Duration::days(30);
-    let signer = ApiTokenSigner::from_config(
-        app_config.server.public_api_base_url.clone(),
-        "proofplane-api",
-        &app_config.paseto.api,
-    )
-    .expect("API token signer initializes");
-    let issued = signer
-        .issue(
-            RegisteredClaims {
-                subject: Uuid::from(user.id),
-                token_id: Uuid::from(token_id),
-                expires_at,
-            },
-            &UserApiTokenClaims::new(workspace_id, &permissions),
-        )
-        .expect("API token signs");
+    let issued = generate_opaque_token().expect("opaque API token generates");
     let token = postgres
         .create_api_token(&CreateApiTokenPayload {
             id: token_id,
+            token_digest: issued.digest,
             user_id: user.id,
             workspace_id,
             name: "Integration API Token".to_owned(),
-            expires_at: issued.expires_at,
+            expires_at,
             permissions,
         })
         .await
         .expect("API token inserts");
 
     IssuedTestApiToken {
-        raw_token: issued.token,
+        raw_token: issued.raw_token.expose_secret().to_owned(),
         token_id: token.token.id,
         user_id: user.id,
     }
@@ -846,18 +824,6 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
             .expect("auth0 jwks url parses"),
         },
         paseto: PasetoConfig {
-            api: PasetoApiConfig {
-                active_signing_key: PasetoApiSigningKey {
-                    id: "integration-api-001".to_owned(),
-                    secret: SecretString::from(
-                        "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw",
-                    ),
-                },
-                verification_keys: vec![PasetoApiVerificationKey {
-                    id: "integration-api-001".to_owned(),
-                    public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos".to_owned(),
-                }],
-            },
             download: PasetoDownloadConfig {
                 active_key_id: "integration-download-001".to_owned(),
                 keys: vec![PasetoDownloadKey {

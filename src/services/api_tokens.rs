@@ -6,21 +6,19 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{ApiTokenSigner, RegisteredClaims},
-        UserApiTokenClaims,
-    },
+    authentication::opaque_token::{generate_opaque_token, OpaqueTokenError},
     domain::{
         ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
         WorkspacePermission,
     },
-    repository::Postgres,
+    repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
+
+const TOKEN_ISSUE_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct ApiTokenService {
     repository: Arc<Postgres>,
-    signer: ApiTokenSigner,
 }
 
 #[derive(Debug, Error)]
@@ -32,7 +30,7 @@ pub enum ApiTokenError {
     NotFound,
 
     #[error("API token issuance failed")]
-    Issue(#[source] crate::authentication::paseto::Error),
+    Issue(#[source] OpaqueTokenError),
 
     #[error("repository error")]
     Repository(#[from] crate::repository::Error),
@@ -51,8 +49,8 @@ pub struct CreateUserApiTokenPayload {
 }
 
 impl ApiTokenService {
-    pub fn new(repository: Arc<Postgres>, signer: ApiTokenSigner) -> Self {
-        Self { repository, signer }
+    pub fn new(repository: Arc<Postgres>) -> Self {
+        Self { repository }
     }
 
     pub async fn create_token(
@@ -62,35 +60,34 @@ impl ApiTokenService {
         request: CreateUserApiTokenPayload,
     ) -> Result<IssuedUserApiToken, ApiTokenError> {
         self.authorize(workspace_id, user_id).await?;
-        let token_id = ApiTokenId::from(Uuid::new_v4());
-        let claims = UserApiTokenClaims::new(workspace_id, &request.permissions);
-        let issued = self
-            .signer
-            .issue(
-                RegisteredClaims {
-                    subject: Uuid::from(user_id),
-                    token_id: Uuid::from(token_id),
+        for _ in 0..TOKEN_ISSUE_ATTEMPTS {
+            let token_id = ApiTokenId::from(Uuid::new_v4());
+            let issued = generate_opaque_token().map_err(ApiTokenError::Issue)?;
+            match self
+                .repository
+                .create_api_token(&CreateApiTokenPayload {
+                    id: token_id,
+                    token_digest: issued.digest,
+                    user_id,
+                    workspace_id,
+                    name: request.name.clone(),
                     expires_at: request.expires_at,
-                },
-                &claims,
-            )
-            .map_err(ApiTokenError::Issue)?;
-        let token = self
-            .repository
-            .create_api_token(&CreateApiTokenPayload {
-                id: token_id,
-                user_id,
-                workspace_id,
-                name: request.name,
-                expires_at: issued.expires_at,
-                permissions: request.permissions,
-            })
-            .await?;
+                    permissions: request.permissions.clone(),
+                })
+                .await
+            {
+                Ok(token) => {
+                    return Ok(IssuedUserApiToken {
+                        token,
+                        raw_token: issued.raw_token,
+                    });
+                }
+                Err(RepositoryError::Conflict(ConflictKind::ApiTokenDigestTaken)) => continue,
+                Err(error) => return Err(ApiTokenError::Repository(error)),
+            }
+        }
 
-        Ok(IssuedUserApiToken {
-            token,
-            raw_token: SecretString::from(issued.token),
-        })
+        Err(ApiTokenError::Issue(OpaqueTokenError::Generation))
     }
 
     pub async fn list_tokens(
@@ -135,75 +132,5 @@ impl ApiTokenService {
             .ok_or(ApiTokenError::NotFound)?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::Duration as ChronoDuration;
-    use secrecy::SecretString;
-
-    use super::*;
-    use crate::{
-        authentication::paseto::ApiTokenVerifier,
-        config::{PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey},
-    };
-
-    const API_AUDIENCE: &str = "proofplane-api";
-    const API_SECRET: &str = "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw";
-    const API_PUBLIC: &str = "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos";
-
-    #[test]
-    fn paseto_custom_claims_round_trip_with_expected_registered_claims() {
-        let issuer = url::Url::parse("https://api.proofplane.test/").unwrap();
-        let config = api_config();
-        let signer = ApiTokenSigner::from_config(issuer.clone(), API_AUDIENCE, &config).unwrap();
-        let verifier = ApiTokenVerifier::from_config(issuer, API_AUDIENCE, &config).unwrap();
-        let user_id = Uuid::new_v4();
-        let token_id = Uuid::new_v4();
-        let workspace_id = Uuid::new_v4();
-        let expires_at = Utc::now() + ChronoDuration::days(90);
-
-        let issued = signer
-            .issue(
-                RegisteredClaims {
-                    subject: user_id,
-                    token_id,
-                    expires_at,
-                },
-                &UserApiTokenClaims {
-                    version: 1,
-                    workspace_id,
-                    permissions: vec!["read_controls".to_owned(), "write_controls".to_owned()],
-                },
-            )
-            .unwrap();
-        let verified = verifier
-            .verify::<UserApiTokenClaims>(&issued.token)
-            .expect("token verifies");
-
-        assert_eq!(issued.token_id, token_id);
-        assert_eq!(verified.subject, user_id);
-        assert_eq!(verified.token_id, token_id);
-        assert_eq!(verified.claims.version, 1);
-        assert_eq!(verified.claims.workspace_id, workspace_id);
-        assert_eq!(
-            verified.claims.permissions,
-            vec!["read_controls", "write_controls"]
-        );
-        assert_eq!(verified.expires_at, issued.expires_at);
-    }
-
-    fn api_config() -> PasetoApiConfig {
-        PasetoApiConfig {
-            active_signing_key: PasetoApiSigningKey {
-                id: "local-api".to_owned(),
-                secret: SecretString::from(API_SECRET),
-            },
-            verification_keys: vec![PasetoApiVerificationKey {
-                id: "local-api".to_owned(),
-                public: API_PUBLIC.to_owned(),
-            }],
-        }
     }
 }

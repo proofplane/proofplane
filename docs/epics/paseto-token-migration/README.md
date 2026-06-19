@@ -19,7 +19,7 @@ handoff units that link into it.
 | 003. [PASETO Data-Plane Authentication](./tickets/003-paseto-data-plane-authentication.md) | Done | Build and test the shared `v4.public` authenticator and `ApiTokenContext`. |
 | 004. [Evidence Attribution And Actor Retirement](./tickets/004-evidence-attribution-and-actor-retirement.md) | Done | Atomically switched routes/provenance, removed actors, and consolidated the final schema into one `V001`. |
 | 005. [PASETO Attachment Download Grants](./tickets/005-paseto-attachment-download-grants.md) | Done | Issues encrypted `v4.local` grants while preserving current download safety checks. |
-| 006. [Compact Opaque User API Tokens](./tickets/006-compact-opaque-user-api-tokens.md) | Todo | Replace long `v4.public` API credentials with `ppat_` opaque tokens resolved by an indexed digest. |
+| 006. [Compact Opaque User API Tokens](./tickets/006-compact-opaque-user-api-tokens.md) | Done | Replaced long `v4.public` API credentials with `ppat_` opaque tokens resolved by an indexed digest. |
 
 ## Sequencing
 

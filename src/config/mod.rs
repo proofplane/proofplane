@@ -60,26 +60,7 @@ pub struct Auth0Config {
 
 #[derive(Debug, Clone)]
 pub struct PasetoConfig {
-    pub api: PasetoApiConfig,
     pub download: PasetoDownloadConfig,
-}
-
-#[derive(Debug, Clone)]
-pub struct PasetoApiConfig {
-    pub active_signing_key: PasetoApiSigningKey,
-    pub verification_keys: Vec<PasetoApiVerificationKey>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PasetoApiSigningKey {
-    pub id: String,
-    pub secret: SecretString,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PasetoApiVerificationKey {
-    pub id: String,
-    pub public: String,
 }
 
 #[derive(Debug, Clone)]
@@ -294,8 +275,6 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
-        assert_eq!(config.paseto.api.active_signing_key.id, "local-api-001");
-        assert_eq!(config.paseto.api.verification_keys.len(), 1);
         assert_eq!(config.paseto.download.active_key_id, "local-download-001");
         assert_eq!(config.paseto.download.keys.len(), 1);
     }
@@ -378,13 +357,6 @@ auth0:
   audience: ""
   jwks_url: "not-a-url"
 paseto:
-  api:
-    active_signing_key:
-      id: ""
-      secret: "not-a-paserk"
-    verification_keys:
-      - id: ""
-        public: "not-a-paserk"
   download:
     active_key_id: ""
     keys:
@@ -433,10 +405,6 @@ health:
                 assert!(paths.contains(&"auth0.issuer"));
                 assert!(paths.contains(&"auth0.audience"));
                 assert!(paths.contains(&"auth0.jwks_url"));
-                assert!(paths.contains(&"paseto.api.active_signing_key.id"));
-                assert!(paths.contains(&"paseto.api.active_signing_key.secret"));
-                assert!(paths.contains(&"paseto.api.verification_keys[0].id"));
-                assert!(paths.contains(&"paseto.api.verification_keys[0].public"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));
@@ -484,10 +452,8 @@ health:
         let config = load_from_path("config/local.yaml").expect("local config loads");
         let debug = format!("{:?}", config.paseto);
 
-        assert!(!debug.contains(config.paseto.api.active_signing_key.secret.expose_secret()));
         assert!(!debug.contains(config.paseto.download.keys[0].secret.expose_secret()));
         assert!(debug.contains("Secret"));
-        assert!(debug.contains("k4.public."));
     }
 
     #[test]
@@ -495,15 +461,6 @@ health:
         let path = write_temp_config(&local_config_with_paseto(
             r#"
 paseto:
-  api:
-    active_signing_key:
-      id: "duplicate"
-      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
-    verification_keys:
-      - id: "duplicate"
-        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
-      - id: "duplicate"
-        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
   download:
     active_key_id: "duplicate"
     keys:
@@ -516,10 +473,7 @@ paseto:
 
         let error = load_from_path(&path).expect_err("config is invalid");
 
-        assert_validation_paths(
-            error,
-            &["paseto.api.verification_keys", "paseto.download.keys"],
-        );
+        assert_validation_paths(error, &["paseto.download.keys"]);
 
         let _ = fs::remove_file(path);
     }
@@ -529,13 +483,6 @@ paseto:
         let path = write_temp_config(&local_config_with_paseto(
             r#"
 paseto:
-  api:
-    active_signing_key:
-      id: "missing-api"
-      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
-    verification_keys:
-      - id: "local-api-001"
-        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
   download:
     active_key_id: "missing-download"
     keys:
@@ -546,40 +493,7 @@ paseto:
 
         let error = load_from_path(&path).expect_err("config is invalid");
 
-        assert_validation_paths(
-            error,
-            &[
-                "paseto.api.active_signing_key.id",
-                "paseto.download.active_key_id",
-            ],
-        );
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn paseto_keyring_validation_rejects_mismatched_api_secret_and_public_key() {
-        let path = write_temp_config(&local_config_with_paseto(
-            r#"
-paseto:
-  api:
-    active_signing_key:
-      id: "local-api-001"
-      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
-    verification_keys:
-      - id: "local-api-001"
-        public: "k4.public.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-  download:
-    active_key_id: "local-download-001"
-    keys:
-      - id: "local-download-001"
-        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
-"#,
-        ));
-
-        let error = load_from_path(&path).expect_err("config is invalid");
-
-        assert_validation_paths(error, &["paseto.api.active_signing_key.secret"]);
+        assert_validation_paths(error, &["paseto.download.active_key_id"]);
 
         let _ = fs::remove_file(path);
     }

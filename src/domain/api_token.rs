@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+use crate::authentication::opaque_token::ApiTokenDigest;
+
 use super::{ids::uuid_id, DomainError, UserId, WorkspaceId, WorkspacePermission};
 
 uuid_id!(ApiTokenId);
@@ -25,6 +27,7 @@ pub struct ApiTokenWithPermissions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateApiTokenPayload {
     pub id: ApiTokenId,
+    pub token_digest: ApiTokenDigest,
     pub user_id: UserId,
     pub workspace_id: WorkspaceId,
     pub name: String,

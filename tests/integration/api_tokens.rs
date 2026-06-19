@@ -35,7 +35,8 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
         .as_str()
         .expect("api_token is returned once");
 
-    assert!(raw.starts_with("v4.public."));
+    assert_eq!(raw.len(), 41);
+    assert!(raw.starts_with("ppat_"));
     assert_eq!(issued["name"], "CI token");
     assert_eq!(issued["workspace_id"], workspace_id.to_string());
     assert_eq!(
@@ -51,6 +52,7 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
         .expect("token exists");
     assert_eq!(Uuid::from(stored.token.id), token_id);
     assert_eq!(stored.token.revoked_at, None);
+    assert_eq!(stored_digest_length(&app, token_id).await, 32);
 
     let listed = list_tokens(&app, member, workspace_id).await;
     listed.assert_status_ok();
@@ -250,6 +252,18 @@ async fn insert_membership(app: &TestApp, workspace_id: Uuid, user_id: Uuid, rol
         )
         .await
         .expect("membership insert runs");
+}
+
+async fn stored_digest_length(app: &TestApp, token_id: Uuid) -> i32 {
+    let client = app.postgres().get().await.expect("pool client opens");
+    client
+        .query_one(
+            "SELECT octet_length(token_digest) AS digest_length FROM api_tokens WHERE id = $1",
+            &[&token_id],
+        )
+        .await
+        .expect("digest length query runs")
+        .get("digest_length")
 }
 
 fn workspace_uuid(created: &Value) -> Uuid {

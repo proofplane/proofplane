@@ -21,13 +21,6 @@ auth0:
   jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
 
 paseto:
-  api:
-    active_signing_key:
-      id: "local-api-001"
-      secret: "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw"
-    verification_keys:
-      - id: "local-api-001"
-        public: "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos"
   download:
     active_key_id: "local-download-001"
     keys:
