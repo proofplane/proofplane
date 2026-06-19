@@ -8,9 +8,8 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        download_signing_secret as validate_download_signing_secret, gcs_credentials_mode,
-        nonzero_u16, nonzero_u64, nonzero_usize, optional_url, parse_log_format,
-        paseto_api_public_key, paseto_api_secret_key, paseto_download_key,
+        gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
+        parse_log_format, paseto_api_public_key, paseto_api_secret_key, paseto_download_key,
         paseto_public_from_secret, path_string, postgres_connection_string,
         public_api_base_url as validate_public_api_base_url, string_url, string_value,
         ConfigValidationExt,
@@ -341,7 +340,6 @@ pub(super) struct RawServerConfig {
     worker_bind: String,
     mcp_bind: String,
     public_api_base_url: String,
-    download_signing_secret: SecretString,
 }
 
 impl RawServerConfig {
@@ -352,14 +350,11 @@ impl RawServerConfig {
             mcp_bind <- socket_addr(self.mcp_bind).at("server.mcp_bind"),
             public_api_base_url <- validate_public_api_base_url(self.public_api_base_url)
                 .at("server.public_api_base_url"),
-            download_signing_secret <- validate_download_signing_secret(self.download_signing_secret)
-                .at("server.download_signing_secret"),
             => ServerConfig {
                 api_bind,
                 worker_bind,
                 mcp_bind,
                 public_api_base_url,
-                download_signing_secret,
             },
         }
     }

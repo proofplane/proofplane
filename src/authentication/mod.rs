@@ -14,7 +14,6 @@ use crate::{
 
 pub mod auth0;
 pub mod paseto;
-pub(crate) mod signed_jwt;
 
 /// Custom claims carried by user-owned API tokens. Issuance and verification
 /// share this type so claim names and permission serialization cannot drift.

@@ -7,7 +7,9 @@ use tracing::Span;
 
 use crate::{
     authentication::{
-        auth0::TokenVerifier, paseto::ApiTokenSigner, ApiTokenAuthenticator, UserAuthenticator,
+        auth0::TokenVerifier,
+        paseto::{ApiTokenSigner, DownloadGrantDecryptor, DownloadGrantEncryptor},
+        ApiTokenAuthenticator, UserAuthenticator,
     },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
@@ -53,11 +55,24 @@ pub fn create_app<V: TokenVerifier + 'static>(
     )
     .map_err(crate::authentication::Error::Paseto)?;
     let api_token_authenticator = dependencies.api_token_authenticator.clone();
+    let download_grant_encryptor = DownloadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &dependencies.config.paseto.download,
+    )
+    .map_err(crate::authentication::Error::Paseto)?;
+    let download_grant_decryptor = DownloadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &dependencies.config.paseto.download,
+    )
+    .map_err(crate::authentication::Error::Paseto)?;
     let attachment_download_service = AttachmentDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
         dependencies.config.server.public_api_base_url.clone(),
-        &dependencies.config.server.download_signing_secret,
+        download_grant_encryptor,
+        download_grant_decryptor,
     );
 
     Ok(Router::new()

@@ -825,9 +825,6 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
             mcp_bind: socket_addr("127.0.0.1:0"),
             public_api_base_url: url::Url::parse("https://api.proofplane.test/")
                 .expect("public API base URL parses"),
-            download_signing_secret: SecretString::from(
-                "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-            ),
         },
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {

@@ -1,15 +1,23 @@
 use std::time::{Duration as StdDuration, SystemTime};
 
 use axum::http::StatusCode;
+use chrono::{SecondsFormat, Utc};
 use jwtk::{
     hmac::{HmacAlgorithm, HmacKey},
     sign, HeaderAndClaims,
 };
+use pasetors::{
+    keys::SymmetricKey,
+    version4::{LocalToken, V4},
+};
+use proofplane::authentication::paseto::{DownloadGrantEncryptor, RegisteredClaims};
+use proofplane::config::{PasetoDownloadConfig, PasetoDownloadKey};
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use proofplane::{
     domain::WorkspacePermission,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
 };
+use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,6 +27,9 @@ use super::support::{upload_attachment, TestApp, INTEGRATION_API_TOKEN_ID};
 const SIGNING_SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
 const ISSUER: &str = "https://api.proofplane.test/";
 const AUDIENCE: &str = "proofplane-attachment-download";
+const DOWNLOAD_KEY_ID: &str = "integration-download-001";
+const DOWNLOAD_KEY: &str = "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs";
+const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
 
 #[tokio::test]
 async fn uploaded_attachment_grant_streams_reusably_with_safe_headers() {
@@ -45,7 +56,19 @@ async fn uploaded_attachment_grant_streams_reusably_with_safe_headers() {
     assert_eq!(grant["filename"], "Quarterly evidence (final).txt");
     assert_eq!(grant["content_type"], "text/plain");
     assert_eq!(grant["content_length"], content.len() as i64);
-    let download_path = local_download_path(grant["url"].as_str().expect("URL is a string"));
+    let url = grant["url"].as_str().expect("URL is a string");
+    let grant_token = download_token(url);
+    assert!(grant_token.starts_with("v4.local."));
+    for hidden in [
+        workspace_id,
+        submission_id,
+        attachment_id,
+        app.user_id(),
+        app.api_token_id(),
+    ] {
+        assert!(!grant_token.contains(&hidden.to_string()));
+    }
+    let download_path = local_download_path(url);
 
     let (first, second) = tokio::join!(
         app.server().get(&download_path),
@@ -239,14 +262,33 @@ async fn redemption_conceals_invalid_tokens_and_newly_ineligible_or_missing_obje
         .await
         .assert_status_not_found();
 
-    let expired = signed_token(1, true, workspace_id, submission_id, attachment_id);
+    let expired = paseto_token(
+        2,
+        true,
+        workspace_id,
+        submission_id,
+        attachment_id,
+        app.user_id(),
+    );
     app.server()
         .get(&format!("/attachment-downloads?token={expired}"))
         .await
         .assert_status_not_found();
-    let unknown_version = signed_token(2, false, workspace_id, submission_id, attachment_id);
+    let unknown_version = paseto_token(
+        3,
+        false,
+        workspace_id,
+        submission_id,
+        attachment_id,
+        app.user_id(),
+    );
     app.server()
         .get(&format!("/attachment-downloads?token={unknown_version}"))
+        .await
+        .assert_status_not_found();
+    let legacy_jwt = signed_token(1, false, workspace_id, submission_id, attachment_id);
+    app.server()
+        .get(&format!("/attachment-downloads?token={legacy_jwt}"))
         .await
         .assert_status_not_found();
     set_attachment_status(&app, attachment_id, "contains_virus").await;
@@ -443,6 +485,13 @@ fn local_download_path(url: &str) -> String {
     )
 }
 
+fn download_token(url: &str) -> String {
+    let url = url::Url::parse(url).expect("download URL parses");
+    url.query_pairs()
+        .find_map(|(key, value)| (key == "token").then(|| value.into_owned()))
+        .expect("download URL contains token")
+}
+
 fn grant_path(workspace_id: Uuid, submission_id: Uuid, attachment_id: Uuid) -> String {
     format!(
         "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/download-grants"
@@ -464,7 +513,84 @@ struct TestDownloadClaims {
     workspace_id: String,
     submission_id: String,
     attachment_id: String,
-    issued_by: String,
+    issued_by_user_id: String,
+    issued_via_api_token_id: String,
+}
+
+fn paseto_token(
+    version: u8,
+    expired: bool,
+    workspace_id: Uuid,
+    submission_id: Uuid,
+    attachment_id: Uuid,
+    issued_by_user_id: Uuid,
+) -> String {
+    let claims = TestDownloadClaims {
+        version,
+        workspace_id: workspace_id.to_string(),
+        submission_id: submission_id.to_string(),
+        attachment_id: attachment_id.to_string(),
+        issued_by_user_id: issued_by_user_id.to_string(),
+        issued_via_api_token_id: INTEGRATION_API_TOKEN_ID.to_owned(),
+    };
+    if expired {
+        return expired_paseto_token(claims, issued_by_user_id);
+    }
+
+    DownloadGrantEncryptor::from_config(
+        url::Url::parse(ISSUER).expect("issuer parses"),
+        AUDIENCE,
+        &download_config(),
+    )
+    .expect("download grant encryptor initializes")
+    .encrypt(
+        RegisteredClaims {
+            subject: issued_by_user_id,
+            token_id: Uuid::new_v4(),
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+        },
+        &claims,
+    )
+    .expect("test PASETO token encrypts")
+    .token
+}
+
+fn expired_paseto_token(claims: TestDownloadClaims, subject: Uuid) -> String {
+    let key = SymmetricKey::<V4>::try_from(DOWNLOAD_KEY).expect("download key parses");
+    let now = Utc::now();
+    let payload = serde_json::json!({
+        "iss": ISSUER,
+        "aud": AUDIENCE,
+        "sub": subject.to_string(),
+        "jti": Uuid::new_v4().to_string(),
+        "iat": (now - chrono::Duration::minutes(10)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "nbf": (now - chrono::Duration::minutes(10)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "exp": (now - chrono::Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "version": claims.version,
+        "workspace_id": claims.workspace_id,
+        "submission_id": claims.submission_id,
+        "attachment_id": claims.attachment_id,
+        "issued_by_user_id": claims.issued_by_user_id,
+        "issued_via_api_token_id": claims.issued_via_api_token_id,
+    });
+    let footer = serde_json::json!({ "kid": DOWNLOAD_KEY_ID }).to_string();
+    LocalToken::encrypt(
+        &key,
+        payload.to_string().as_bytes(),
+        Some(footer.as_bytes()),
+        Some(DOWNLOAD_IMPLICIT_ASSERTION),
+    )
+    .expect("expired PASETO token encrypts")
+}
+
+fn download_config() -> PasetoDownloadConfig {
+    PasetoDownloadConfig {
+        active_key_id: DOWNLOAD_KEY_ID.to_owned(),
+        keys: vec![PasetoDownloadKey {
+            id: DOWNLOAD_KEY_ID.to_owned(),
+            secret: SecretString::from(DOWNLOAD_KEY),
+        }],
+    }
 }
 
 fn signed_token(
@@ -498,7 +624,8 @@ fn signed_token_for_issuer(
         workspace_id: workspace_id.to_string(),
         submission_id: submission_id.to_string(),
         attachment_id: attachment_id.to_string(),
-        issued_by,
+        issued_by_user_id: issued_by,
+        issued_via_api_token_id: INTEGRATION_API_TOKEN_ID.to_owned(),
     });
     claims
         .set_iss(ISSUER)
