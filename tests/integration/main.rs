@@ -1,4 +1,5 @@
 mod actors;
+mod api_token_authentication;
 mod api_tokens;
 mod attachment_downloads;
 mod controls;

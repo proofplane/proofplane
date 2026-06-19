@@ -2,12 +2,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    authentication::paseto::{ApiTokenSigner, RegisteredClaims},
+    authentication::{
+        paseto::{ApiTokenSigner, RegisteredClaims},
+        UserApiTokenClaims,
+    },
     domain::{
         ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
         WorkspacePermission,
@@ -48,13 +50,6 @@ pub struct CreateUserApiTokenPayload {
     pub permissions: Vec<WorkspacePermission>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UserApiTokenClaims {
-    pub version: u8,
-    pub workspace_id: Uuid,
-    pub permissions: Vec<String>,
-}
-
 impl ApiTokenService {
     pub fn new(repository: Arc<Postgres>, signer: ApiTokenSigner) -> Self {
         Self { repository, signer }
@@ -68,15 +63,7 @@ impl ApiTokenService {
     ) -> Result<IssuedUserApiToken, ApiTokenError> {
         self.authorize(workspace_id, user_id).await?;
         let token_id = ApiTokenId::from(Uuid::new_v4());
-        let claims = UserApiTokenClaims {
-            version: 1,
-            workspace_id: Uuid::from(workspace_id),
-            permissions: request
-                .permissions
-                .iter()
-                .map(|permission| permission.as_str().to_owned())
-                .collect(),
-        };
+        let claims = UserApiTokenClaims::new(workspace_id, &request.permissions);
         let issued = self
             .signer
             .issue(
@@ -196,6 +183,7 @@ mod tests {
             .expect("token verifies");
 
         assert_eq!(issued.token_id, token_id);
+        assert_eq!(verified.subject, user_id);
         assert_eq!(verified.token_id, token_id);
         assert_eq!(verified.claims.version, 1);
         assert_eq!(verified.claims.workspace_id, workspace_id);

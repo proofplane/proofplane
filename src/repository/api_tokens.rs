@@ -129,6 +129,18 @@ WHERE id = $1 AND user_id = $2 AND workspace_id = $3
 
         Ok(updated > 0)
     }
+
+    pub async fn touch_api_token_last_used_at(&self, id: ApiTokenId) -> Result<bool, Error> {
+        let client = self.get().await?;
+        let updated = client
+            .execute(
+                "UPDATE api_tokens SET last_used_at = now() WHERE id = $1",
+                &[&Uuid::from(id)],
+            )
+            .await?;
+
+        Ok(updated > 0)
+    }
 }
 
 async fn permissions_for_token(

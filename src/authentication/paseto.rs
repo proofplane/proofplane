@@ -39,6 +39,7 @@ pub struct IssuedPasetoToken {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedPasetoToken<T> {
+    pub subject: Uuid,
     pub token_id: Uuid,
     pub key_id: String,
     pub expires_at: DateTime<Utc>,
@@ -337,7 +338,7 @@ fn verified_payload<T: DeserializeOwned>(
         return Err(Error::Verify);
     }
 
-    let _subject = Uuid::parse_str(string_claim(&claims, "sub")?).map_err(|_| Error::Verify)?;
+    let subject = Uuid::parse_str(string_claim(&claims, "sub")?).map_err(|_| Error::Verify)?;
     let token_id = Uuid::parse_str(string_claim(&claims, "jti")?).map_err(|_| Error::Verify)?;
     let issued_at = datetime_claim(&claims, "iat")?;
     let not_before = datetime_claim(&claims, "nbf")?;
@@ -352,6 +353,7 @@ fn verified_payload<T: DeserializeOwned>(
     }
 
     Ok(VerifiedPasetoToken {
+        subject,
         token_id,
         key_id: key_id.to_owned(),
         expires_at,
@@ -509,6 +511,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(issued.token_id, registered.token_id);
+        assert_eq!(verified.subject, registered.subject);
         assert_eq!(verified.token_id, registered.token_id);
         assert_eq!(verified.key_id, "local-api");
         assert_eq!(verified.claims, claims);
@@ -529,6 +532,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(verified.token_id, registered.token_id);
+        assert_eq!(verified.subject, registered.subject);
         assert_eq!(verified.key_id, "local-download");
         assert_eq!(verified.claims, claims);
         assert_eq!(verified.expires_at, issued.expires_at);

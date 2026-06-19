@@ -2,10 +2,15 @@ use std::sync::Arc;
 
 use api_keys_simplified::{ApiKeyManagerV0, Environment, KeyStatus, SecureString};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
-    domain::{ActorId, ActorPermissions, ProvisionUserPayload, UserId, WorkspaceId},
+    domain::{
+        canonical_permissions, ActorId, ActorPermissions, ApiTokenId, ProvisionUserPayload, UserId,
+        WorkspaceId, WorkspacePermission,
+    },
     repository,
 };
 
@@ -31,6 +36,152 @@ impl ActorContext {
             id,
             permissions,
         }
+    }
+}
+
+/// Custom claims carried by user-owned API tokens. Issuance and verification
+/// share this type so claim names and permission serialization cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserApiTokenClaims {
+    pub version: u8,
+    pub workspace_id: Uuid,
+    pub permissions: Vec<String>,
+}
+
+impl UserApiTokenClaims {
+    pub const VERSION: u8 = 1;
+
+    pub fn new(workspace_id: WorkspaceId, permissions: &[WorkspacePermission]) -> Self {
+        let permissions = ActorPermissions::from_iter(permissions.iter().copied());
+        Self {
+            version: Self::VERSION,
+            workspace_id: Uuid::from(workspace_id),
+            permissions: permissions
+                .iter()
+                .map(|permission| permission.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    fn validate(&self) -> Option<ActorPermissions> {
+        if self.version != Self::VERSION {
+            return None;
+        }
+
+        let mut parsed = Vec::with_capacity(self.permissions.len());
+        for permission in &self.permissions {
+            parsed.push(permission.parse::<WorkspacePermission>().ok()?);
+        }
+
+        let canonical = canonical_permissions(parsed).ok()?;
+        let canonical_strings = canonical
+            .iter()
+            .map(|permission| permission.as_str())
+            .collect::<Vec<_>>();
+        let claim_strings = self
+            .permissions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if claim_strings != canonical_strings {
+            return None;
+        }
+
+        Some(ActorPermissions::from_iter(canonical))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApiTokenContext {
+    pub user_id: UserId,
+    pub api_token_id: ApiTokenId,
+    pub workspace_id: WorkspaceId,
+    pub permissions: ActorPermissions,
+}
+
+impl ApiTokenContext {
+    pub fn allows(
+        &self,
+        workspace_id: WorkspaceId,
+        required_permission: WorkspacePermission,
+    ) -> bool {
+        self.workspace_id == workspace_id && self.permissions.has(required_permission)
+    }
+}
+
+#[derive(Clone)]
+pub struct ApiTokenAuthenticator {
+    verifier: paseto::ApiTokenVerifier,
+    repository: Arc<repository::Postgres>,
+}
+
+impl ApiTokenAuthenticator {
+    pub fn new(verifier: paseto::ApiTokenVerifier, repository: Arc<repository::Postgres>) -> Self {
+        Self {
+            verifier,
+            repository,
+        }
+    }
+
+    pub async fn authenticate(&self, raw_token: &str) -> Result<Option<ApiTokenContext>, Error> {
+        let verified = match self.verifier.verify::<UserApiTokenClaims>(raw_token) {
+            Ok(verified) => verified,
+            Err(_) => return Ok(None),
+        };
+        let Some(permissions) = verified.claims.validate() else {
+            return Ok(None);
+        };
+        let api_token_id = ApiTokenId::from(verified.token_id);
+        let user_id = UserId::from(verified.subject);
+        let workspace_id = WorkspaceId::from(verified.claims.workspace_id);
+
+        let Some(stored) = self
+            .repository
+            .get_api_token(api_token_id)
+            .await
+            .map_err(Error::Repository)?
+        else {
+            return Ok(None);
+        };
+
+        if stored.token.user_id != user_id
+            || stored.token.workspace_id != workspace_id
+            || stored.token.expires_at != verified.expires_at
+            || stored.token.revoked_at.is_some()
+            || stored.token.expires_at <= Utc::now()
+            || ActorPermissions::from_iter(stored.permissions) != permissions
+        {
+            return Ok(None);
+        }
+
+        if self
+            .repository
+            .get_membership_role(workspace_id, user_id)
+            .await
+            .map_err(Error::Repository)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        if let Err(error) = self
+            .repository
+            .touch_api_token_last_used_at(api_token_id)
+            .await
+        {
+            tracing::warn!(
+                %error,
+                api_token_id = %Uuid::from(api_token_id),
+                "API token last_used_at update failed"
+            );
+        }
+
+        Ok(Some(ApiTokenContext {
+            user_id,
+            api_token_id,
+            workspace_id,
+            permissions,
+        }))
     }
 }
 
@@ -222,8 +373,12 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use api_keys_simplified::{Environment, ExposeSecret, SecureString};
+    use uuid::Uuid;
 
-    use super::ApiKeyManager;
+    use super::{
+        ActorPermissions, ApiKeyManager, ApiTokenContext, UserApiTokenClaims, WorkspaceId,
+        WorkspacePermission,
+    };
 
     #[test]
     fn issuance_returns_generated_key_and_storable_hash_material() {
@@ -251,5 +406,83 @@ mod tests {
             &SecureString::from("not-an-api-key"),
             &issued.credential_hash
         ));
+    }
+
+    #[test]
+    fn api_token_context_allows_matching_workspace_and_permission_only() {
+        let workspace_id = WorkspaceId::from(Uuid::new_v4());
+        let context = ApiTokenContext {
+            user_id: crate::domain::UserId::from(Uuid::new_v4()),
+            api_token_id: crate::domain::ApiTokenId::from(Uuid::new_v4()),
+            workspace_id,
+            permissions: ActorPermissions::from_iter([WorkspacePermission::ReadControls]),
+        };
+
+        assert!(context.allows(workspace_id, WorkspacePermission::ReadControls));
+        assert!(!context.allows(workspace_id, WorkspacePermission::WriteControls));
+        assert!(!context.allows(
+            WorkspaceId::from(Uuid::new_v4()),
+            WorkspacePermission::ReadControls
+        ));
+    }
+
+    #[test]
+    fn api_token_claim_validation_rejects_non_canonical_claims() {
+        let workspace_id = Uuid::new_v4();
+        assert!(UserApiTokenClaims {
+            version: 2,
+            workspace_id,
+            permissions: vec!["read_controls".to_owned()],
+        }
+        .validate()
+        .is_none());
+        assert!(UserApiTokenClaims {
+            version: 1,
+            workspace_id,
+            permissions: vec!["delete_everything".to_owned()],
+        }
+        .validate()
+        .is_none());
+        assert!(UserApiTokenClaims {
+            version: 1,
+            workspace_id,
+            permissions: vec!["read_controls".to_owned(), "read_controls".to_owned()],
+        }
+        .validate()
+        .is_none());
+        assert!(UserApiTokenClaims {
+            version: 1,
+            workspace_id,
+            permissions: vec!["write_controls".to_owned(), "read_controls".to_owned()],
+        }
+        .validate()
+        .is_none());
+        assert!(UserApiTokenClaims {
+            version: 1,
+            workspace_id,
+            permissions: vec!["read_controls".to_owned(), "write_controls".to_owned()],
+        }
+        .validate()
+        .is_some());
+    }
+
+    #[test]
+    fn malformed_permission_arrays_do_not_deserialize_as_claims() {
+        assert!(
+            serde_json::from_value::<UserApiTokenClaims>(serde_json::json!({
+                "version": 1,
+                "workspace_id": Uuid::new_v4(),
+                "permissions": "read_controls"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<UserApiTokenClaims>(serde_json::json!({
+                "version": 1,
+                "workspace_id": Uuid::new_v4(),
+                "permissions": ["read_controls", 1]
+            }))
+            .is_err()
+        );
     }
 }

@@ -308,6 +308,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         &self.postgres
     }
 
+    pub fn postgres_arc(&self) -> Arc<Postgres> {
+        self.postgres.clone()
+    }
+
     /// Authenticates as `sub` through `GET /me`, which JIT-provisions the user,
     /// and returns the resulting user id.
     pub async fn login(&self, sub: &str) -> Uuid {

@@ -176,8 +176,9 @@ drifting independently.
 
 Token rows are retained after revocation because historical evidence and audit
 records may reference them. Revocation is idempotent; management APIs do not
-hard-delete tokens. `last_used_at` is informational and may be updated at most
-once per hour so authentication does not create a database write per request.
+hard-delete tokens. `last_used_at` is informational; authentication attempts to
+set it to the current database timestamp after every successful authentication.
+This write is best-effort and is not part of authorization correctness.
 
 ### Management API
 
@@ -223,7 +224,8 @@ Authentication proceeds in this order:
 5. Require matching user, workspace, expiration, and permission claims.
 6. Reject a revoked or expired token.
 7. Require that the user still has a membership in the token workspace.
-8. Produce `ApiTokenContext`.
+8. Best-effort update `last_used_at`.
+9. Produce `ApiTokenContext`.
 
 ```text
 ApiTokenContext
@@ -398,6 +400,8 @@ authentication contract.
   contract atomically.
 - 2026-06-17: Replaced the final actor-retirement cutover with one consolidated
   `V001`; local databases and storage are reset instead of upgraded.
+- 2026-06-19: Made API-token `last_used_at` updates best-effort on every
+  successful authentication instead of hourly-throttled.
 - 2026-06-18: Clarified that ticket 002 still ships as incremental `V005`, with
   final `V001` consolidation deferred to ticket 004.
 
