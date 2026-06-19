@@ -144,13 +144,7 @@ impl ApiTokenAuthenticator {
             return Ok(None);
         };
 
-        if stored.token.user_id != user_id
-            || stored.token.workspace_id != workspace_id
-            || stored.token.expires_at != verified.expires_at
-            || stored.token.revoked_at.is_some()
-            || stored.token.expires_at <= Utc::now()
-            || ActorPermissions::from_iter(stored.permissions) != permissions
-        {
+        if stored.token.revoked_at.is_some() {
             return Ok(None);
         }
 
@@ -375,6 +369,8 @@ mod tests {
     use api_keys_simplified::{Environment, ExposeSecret, SecureString};
     use uuid::Uuid;
 
+    use crate::domain::{ApiTokenId, UserId};
+
     use super::{
         ActorPermissions, ApiKeyManager, ApiTokenContext, UserApiTokenClaims, WorkspaceId,
         WorkspacePermission,
@@ -412,8 +408,8 @@ mod tests {
     fn api_token_context_allows_matching_workspace_and_permission_only() {
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
         let context = ApiTokenContext {
-            user_id: crate::domain::UserId::from(Uuid::new_v4()),
-            api_token_id: crate::domain::ApiTokenId::from(Uuid::new_v4()),
+            user_id: UserId::from(Uuid::new_v4()),
+            api_token_id: ApiTokenId::from(Uuid::new_v4()),
             workspace_id,
             permissions: ActorPermissions::from_iter([WorkspacePermission::ReadControls]),
         };

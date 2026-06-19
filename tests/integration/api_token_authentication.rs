@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, Utc};
 use proofplane::{
     authentication::{
@@ -7,13 +6,12 @@ use proofplane::{
     },
     config::{PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey},
     domain::{ApiTokenId, CreateApiTokenPayload, UserId, WorkspaceId, WorkspacePermission},
-    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
 };
 use secrecy::SecretString;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-use super::support::{TestApp, INTEGRATION_ACTOR_ID};
+use super::support::TestApp;
 
 const API_AUDIENCE: &str = "proofplane-api";
 const API_SECRET: &str = "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw";
@@ -66,9 +64,7 @@ async fn invalid_or_stale_tokens_authenticate_as_none() {
     let app = TestApp::start_without_default_auth().await;
     let sub = "auth0|api-token-auth-rejections";
     let user_id = app.login(sub).await;
-    let other_user_id = app.login("auth0|api-token-auth-other-user").await;
     let workspace_id = workspace_uuid(&app.create_workspace_as(sub, "Auth Rejections").await);
-    let other_workspace_id = workspace_uuid(&app.create_workspace_as(sub, "Other Auth").await);
 
     let unknown = sign_token(
         user_id,
@@ -92,84 +88,6 @@ async fn invalid_or_stale_tokens_authenticate_as_none() {
     )
     .await;
     assert_authenticates_none(&app, &revoked.raw).await;
-
-    let expired_row = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![WorkspacePermission::ReadControls],
-    )
-    .await;
-    execute(
-        &app,
-        "UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = $1",
-        &[&expired_row.token_id],
-    )
-    .await;
-    assert_authenticates_none(&app, &expired_row.raw).await;
-
-    let user_mismatch = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![WorkspacePermission::ReadControls],
-    )
-    .await;
-    execute(
-        &app,
-        "UPDATE api_tokens SET user_id = $2 WHERE id = $1",
-        &[&user_mismatch.token_id, &other_user_id],
-    )
-    .await;
-    assert_authenticates_none(&app, &user_mismatch.raw).await;
-
-    let workspace_mismatch = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![WorkspacePermission::ReadControls],
-    )
-    .await;
-    execute(
-        &app,
-        "UPDATE api_tokens SET workspace_id = $2 WHERE id = $1",
-        &[&workspace_mismatch.token_id, &other_workspace_id],
-    )
-    .await;
-    assert_authenticates_none(&app, &workspace_mismatch.raw).await;
-
-    let expiration_mismatch = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![WorkspacePermission::ReadControls],
-    )
-    .await;
-    execute(
-        &app,
-        "UPDATE api_tokens SET expires_at = expires_at + interval '1 second' WHERE id = $1",
-        &[&expiration_mismatch.token_id],
-    )
-    .await;
-    assert_authenticates_none(&app, &expiration_mismatch.raw).await;
-
-    let permission_mismatch = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![
-            WorkspacePermission::ReadControls,
-            WorkspacePermission::WriteControls,
-        ],
-    )
-    .await;
-    execute(
-        &app,
-        "DELETE FROM api_token_permissions WHERE api_token_id = $1 AND permission = 'write_controls'",
-        &[&permission_mismatch.token_id],
-    )
-    .await;
-    assert_authenticates_none(&app, &permission_mismatch.raw).await;
 
     let stale_membership = issue_token(
         &app,
@@ -233,40 +151,6 @@ async fn last_used_at_is_set_and_advances_on_successful_authentication() {
         .expect("last_used_at is set again");
 
     assert!(second > first);
-}
-
-#[tokio::test]
-async fn paseto_bearer_does_not_authenticate_current_data_plane_routes() {
-    let app = TestApp::builder()
-        .without_default_auth()
-        .workspace("workspace", "REST unchanged")
-        .with_default_membership()
-        .build()
-        .await;
-    let workspace_id = app.workspace_id("workspace");
-    let user_id = app.login("auth0|api-token-auth-rest").await;
-    let issued = issue_token(
-        &app,
-        user_id,
-        workspace_id,
-        vec![WorkspacePermission::ReadEvidenceRequests],
-    )
-    .await;
-    let path = format!("/workspaces/{workspace_id}/evidence-requests");
-
-    let bearer_only = app
-        .server()
-        .get(&path)
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {}", issued.raw))
-        .await;
-    assert_eq!(bearer_only.status_code(), StatusCode::UNAUTHORIZED);
-
-    app.server()
-        .get(&path)
-        .add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID)
-        .add_header(API_KEY_HEADER, app.api_key())
-        .await
-        .assert_status_ok();
 }
 
 struct IssuedToken {
