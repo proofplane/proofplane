@@ -6,47 +6,42 @@ use uuid::Uuid;
 
 use crate::{
     authentication::{
-        auth0::TokenVerifier, ActorContext, ApiKeyAuthenticator, AuthError, UserAuthenticator,
+        auth0::TokenVerifier, ApiTokenAuthenticator, ApiTokenContext, AuthError, UserAuthenticator,
         UserContext,
     },
-    domain::{ActorId, WorkspaceId},
+    domain::WorkspaceId,
     routes::error::ApiError,
 };
 
-pub const ACTOR_ID_HEADER: &str = "x-proofplane-actor-id";
-pub const API_KEY_HEADER: &str = "x-proofplane-api-key";
 pub const AUTHORIZATION_HEADER: &str = "authorization";
 
 pub(in crate::routes) async fn authorize_workspace_route(
-    authenticator: &ApiKeyAuthenticator,
+    authenticator: &ApiTokenAuthenticator,
     path: &HashMap<String, String>,
     request: &mut Request,
-) -> Result<ActorContext, ApiError> {
-    let (actor_id, api_key) = credentials_from_request(request)?;
+) -> Result<ApiTokenContext, ApiError> {
+    let token = bearer_token_from_request(request).ok_or(ApiError::Unauthorized)?;
     let workspace_id = path
         .get("workspace_id")
         .and_then(|workspace_id| Uuid::parse_str(workspace_id).ok())
         .map(WorkspaceId::from)
         .ok_or(ApiError::NotFound)?;
-    let actor = authenticator
-        .authenticate(actor_id, &api_key)
+    let token_context = authenticator
+        .authenticate(&token)
         .await
         .map_err(|error| {
-            tracing::error!(%error, "API key authentication failed");
+            tracing::error!(%error, "API token authentication failed");
             ApiError::Internal
         })?
         .ok_or(ApiError::Unauthorized)?;
 
-    // The actor belongs to exactly one workspace. Accessing any other workspace
-    // is indistinguishable from the workspace not existing, so it 404s rather
-    // than leaking existence.
-    if actor.workspace_id != workspace_id {
+    if token_context.workspace_id != workspace_id {
         return Err(ApiError::NotFound);
     }
 
-    attach_actor_context(request, actor);
+    attach_api_token_context(request, token_context);
 
-    Ok(actor)
+    Ok(token_context)
 }
 
 pub(in crate::routes) async fn authenticate_user<V: TokenVerifier>(
@@ -81,19 +76,10 @@ fn attach_user_context(request: &mut Request, user: UserContext) {
     request.extensions_mut().insert(user);
 }
 
-fn credentials_from_request(request: &Request) -> Result<(ActorId, String), ApiError> {
-    let api_key = header_value(request, API_KEY_HEADER).ok_or(ApiError::Unauthorized)?;
-    let actor_id = header_value(request, ACTOR_ID_HEADER)
-        .and_then(|value| Uuid::parse_str(&value).ok())
-        .map(ActorId::from)
-        .ok_or(ApiError::Unauthorized)?;
-
-    Ok((actor_id, api_key))
-}
-
-fn attach_actor_context(request: &mut Request, actor: ActorContext) {
-    Span::current().record("actor_id", actor.id.to_string());
-    request.extensions_mut().insert(actor);
+fn attach_api_token_context(request: &mut Request, context: ApiTokenContext) {
+    Span::current().record("user_id", context.user_id.to_string());
+    Span::current().record("api_token_id", context.api_token_id.to_string());
+    request.extensions_mut().insert(context);
 }
 
 fn header_value(request: &Request, header: &'static str) -> Option<String> {

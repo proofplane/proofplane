@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    authentication::{ActorContext, ApiKeyAuthenticator},
+    authentication::{ApiTokenAuthenticator, ApiTokenContext},
     domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspacePermission},
     routes::{authentication::authorize_workspace_route, error::ApiError},
     services::attachment_downloads::{
@@ -34,7 +34,7 @@ pub struct AttachmentDownloadState {
 
 #[derive(Clone)]
 pub struct AttachmentDownloadRouteAuthState {
-    pub authenticator: ApiKeyAuthenticator,
+    pub authenticator: ApiTokenAuthenticator,
 }
 
 pub fn router(state: AttachmentDownloadState) -> Router {
@@ -64,8 +64,8 @@ async fn authorize_download_grant_route(
         return Err(ApiError::MethodNotAllowed);
     }
 
-    let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
-    if !actor
+    let token = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    if !token
         .permissions
         .has(WorkspacePermission::ReadEvidenceSubmissions)
     {
@@ -110,12 +110,12 @@ impl From<IssuedDownloadGrant> for DownloadGrantResponse {
 async fn issue_download_grant(
     State(state): State<AttachmentDownloadState>,
     Path(path): Path<DownloadGrantPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<DownloadGrantResponse>, ApiError> {
     let grant = state
         .service
         .issue(
-            &actor,
+            &token,
             EvidenceSubmissionId::from(path.submission_id),
             EvidenceAttachmentId::from(path.attachment_id),
         )

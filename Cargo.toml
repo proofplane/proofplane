@@ -30,7 +30,6 @@ path = "src/bin/seed.rs"
 
 [dependencies]
 async-trait = "0.1"
-api-keys-simplified = "0.5.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.22"
 bytes = "1"

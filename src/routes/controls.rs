@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    authentication::ActorContext,
-    authentication::ApiKeyAuthenticator,
+    authentication::ApiTokenAuthenticator,
+    authentication::ApiTokenContext,
     domain::{
         required_text, Control, ControlId, CreateControlPayload,
         CreateEvidenceRequestControlMappingPayload, DomainError, EvidenceRequestControlMapping,
@@ -39,7 +39,7 @@ pub struct ControlState {
 
 #[derive(Clone)]
 pub struct ControlRouteAuthState {
-    pub authenticator: ApiKeyAuthenticator,
+    pub authenticator: ApiTokenAuthenticator,
 }
 
 pub fn router(state: ControlState) -> Router {
@@ -81,7 +81,7 @@ async fn authorize_control_route(
     next: Next,
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    let token = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
 
     let required = match method {
         Method::GET => WorkspacePermission::ReadControls,
@@ -89,7 +89,7 @@ async fn authorize_control_route(
         _ => return Err(ApiError::MethodNotAllowed),
     };
 
-    if !actor.permissions.has(required) {
+    if !token.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 
@@ -307,20 +307,20 @@ async fn list_framework_requirements(
 
 async fn create_control(
     State(state): State<ControlState>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_new().into_result().map_err(domain_errors)?;
-    let control = state.service.create_control(actor, payload).await?;
+    let control = state.service.create_control(token, payload).await?;
 
     Ok(Json(control.into()))
 }
 
 async fn list_controls(
     State(state): State<ControlState>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<Vec<ControlResponse>>, ApiError> {
-    let controls = state.service.list_controls(actor).await?;
+    let controls = state.service.list_controls(token).await?;
 
     Ok(Json(controls.into_iter().map(Into::into).collect()))
 }
@@ -328,11 +328,11 @@ async fn list_controls(
 async fn get_control(
     State(state): State<ControlState>,
     Path(path): Path<ControlPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let control = state
         .service
-        .get_control(actor, ControlId::from(path.control_id))
+        .get_control(token, ControlId::from(path.control_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -342,13 +342,13 @@ async fn get_control(
 async fn replace_control(
     State(state): State<ControlState>,
     Path(path): Path<ControlPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<ControlDTO>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_update().into_result().map_err(domain_errors)?;
     let control = state
         .service
-        .replace_control(actor, ControlId::from(path.control_id), payload)
+        .replace_control(token, ControlId::from(path.control_id), payload)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -358,7 +358,7 @@ async fn replace_control(
 async fn create_evidence_request_control_mapping(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingsPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<MappingDTO>,
 ) -> Result<Json<EvidenceRequestControlMappingResponse>, ApiError> {
     let payload = body
@@ -367,7 +367,7 @@ async fn create_evidence_request_control_mapping(
         .map_err(domain_errors)?;
     let mapping = state
         .service
-        .create_evidence_request_control_mapping(actor, payload)
+        .create_evidence_request_control_mapping(token, payload)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -377,12 +377,12 @@ async fn create_evidence_request_control_mapping(
 async fn list_evidence_request_control_mappings(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingsPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<Vec<EvidenceRequestControlMappingResponse>>, ApiError> {
     let mappings = state
         .service
         .list_evidence_request_control_mappings(
-            actor,
+            token,
             EvidenceRequestId::from(path.evidence_request_id),
         )
         .await?
@@ -394,12 +394,12 @@ async fn list_evidence_request_control_mappings(
 async fn delete_evidence_request_control_mapping(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let deleted = state
         .service
         .delete_evidence_request_control_mapping(
-            actor,
+            token,
             EvidenceRequestId::from(path.evidence_request_id),
             ControlId::from(path.control_id),
         )

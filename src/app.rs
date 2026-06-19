@@ -7,14 +7,12 @@ use tracing::Span;
 
 use crate::{
     authentication::{
-        auth0::TokenVerifier, paseto::ApiTokenSigner, ApiKeyAuthenticator, ApiKeyManager,
-        UserAuthenticator,
+        auth0::TokenVerifier, paseto::ApiTokenSigner, ApiTokenAuthenticator, UserAuthenticator,
     },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
-        actors::{self, ActorsState},
         api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         controls::{self, ControlRouteAuthState, ControlState},
@@ -29,10 +27,10 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        actors::ActorService, api_tokens::ApiTokenService,
-        attachment_downloads::AttachmentDownloadService, controls::ControlService,
-        evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
-        user::UserService, workspaces::WorkspaceService,
+        api_tokens::ApiTokenService, attachment_downloads::AttachmentDownloadService,
+        controls::ControlService, evidence_requests::EvidenceRequestService,
+        evidence_submissions::EvidenceSubmissionService, user::UserService,
+        workspaces::WorkspaceService,
     },
 };
 
@@ -41,7 +39,7 @@ pub struct AppDependencies<V: TokenVerifier> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub authenticator: ApiKeyAuthenticator,
+    pub api_token_authenticator: ApiTokenAuthenticator,
     pub user_authenticator: UserAuthenticator<V>,
 }
 
@@ -54,6 +52,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
         &dependencies.config.paseto.api,
     )
     .map_err(crate::authentication::Error::Paseto)?;
+    let api_token_authenticator = dependencies.api_token_authenticator.clone();
     let attachment_download_service = AttachmentDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -82,7 +81,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
         .merge(evidence_requests::router(EvidenceRequestState {
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
             route_auth: EvidenceRequestRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(evidence_submissions::router(EvidenceSubmissionState {
@@ -92,19 +91,19 @@ pub fn create_app<V: TokenVerifier + 'static>(
             ),
             max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             route_auth: EvidenceSubmissionRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(attachment_downloads::router(AttachmentDownloadState {
             service: attachment_download_service,
             route_auth: AttachmentDownloadRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator,
             },
         }))
         .merge(me::router(MeState {
@@ -125,12 +124,6 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
-        .merge(actors::router(ActorsState {
-            service: ActorService::new(dependencies.postgres.clone(), ApiKeyManager::new()?),
-            route_auth: UserRouteAuthState {
-                authenticator: dependencies.user_authenticator,
-            },
-        }))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))
@@ -145,7 +138,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        actor_id = tracing::field::Empty,
+                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })

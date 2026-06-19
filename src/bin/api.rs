@@ -5,7 +5,8 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
-        auth0::Auth0TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
+        auth0::Auth0TokenVerifier, paseto::ApiTokenVerifier, ApiTokenAuthenticator,
+        UserAuthenticator,
     },
     config, object_storage, observability, repository, store,
 };
@@ -69,7 +70,13 @@ async fn run() -> Result<(), Error> {
     let listener = TcpListener::bind(config.server.api_bind).await.unwrap();
     info!("listening on {}", config.server.api_bind);
 
-    let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
+    let api_token_verifier = ApiTokenVerifier::from_config(
+        config.server.public_api_base_url.clone(),
+        "proofplane-api",
+        &config.paseto.api,
+    )
+    .map_err(proofplane::authentication::Error::Paseto)?;
+    let api_token_authenticator = ApiTokenAuthenticator::new(api_token_verifier, postgres.clone());
     let user_authenticator = UserAuthenticator::new(
         Arc::new(Auth0TokenVerifier::new(&config.auth0)),
         postgres.clone(),
@@ -80,7 +87,7 @@ async fn run() -> Result<(), Error> {
         postgres,
         object_store,
         metrics,
-        authenticator,
+        api_token_authenticator,
         user_authenticator,
     };
 

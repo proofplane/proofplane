@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use api_keys_simplified::{Environment, ExposeSecret};
 use async_trait::async_trait;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
@@ -16,7 +15,8 @@ use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
-        ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
+        paseto::{ApiTokenSigner, ApiTokenVerifier, RegisteredClaims},
+        ApiTokenAuthenticator, UserApiTokenClaims, UserAuthenticator,
     },
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
@@ -25,11 +25,11 @@ use proofplane::{
         ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
-        ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload, CreateWorkspacePayload,
-        WorkspaceId, WorkspacePermission,
+        ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
+        WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
-    repository::Postgres,
-    routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER, AUTHORIZATION_HEADER},
+    repository::{NewWorkspaceMembership, Postgres},
+    routes::authentication::AUTHORIZATION_HEADER,
     scanner::ClamAvMalwareScanner,
     store,
     worker::{create_worker_app, WorkerAppDependencies},
@@ -46,7 +46,7 @@ use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
 const CLAMAV_IMAGE_TAG: &str = "1.4.3";
-pub const INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000201";
+pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201";
 // OnceCell provides one process-wide coordination slot; Mutex prevents concurrent
 // starts; Weak permits reuse without keeping the container alive. Each TestApp holds
 // a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
@@ -120,8 +120,11 @@ pub struct TestApp {
     _clamav: Option<Arc<TestClamAv>>,
     pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
+    app_config: AppConfig,
     server: TestServer,
-    api_key: String,
+    api_token: String,
+    api_token_id: Uuid,
+    user_id: Uuid,
     workspace_ids: HashMap<String, Uuid>,
     control_ids: HashMap<String, HashMap<String, Uuid>>,
 }
@@ -184,19 +187,23 @@ impl TestApp {
                 .expect("filesystem object store initializes"),
         );
         let recorder = PrometheusBuilder::new().build_recorder();
-        // It's safe to unwrap the result of returning the new ApiKeyManager because
-        // we're in a test and it really shouldn't panic anyways.
-        let authenticator =
-            ApiKeyAuthenticator::new(ApiKeyManager::new().unwrap(), postgres.clone());
+        let api_token_verifier = ApiTokenVerifier::from_config(
+            app_config.server.public_api_base_url.clone(),
+            "proofplane-api",
+            &app_config.paseto.api,
+        )
+        .expect("API token verifier initializes");
+        let api_token_authenticator =
+            ApiTokenAuthenticator::new(api_token_verifier, postgres.clone());
         let user_authenticator =
             UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone());
 
         let dependencies = AppDependencies {
-            config: app_config,
+            config: app_config.clone(),
             postgres: postgres.clone(),
             object_store,
             metrics: recorder.handle(),
-            authenticator,
+            api_token_authenticator,
             user_authenticator,
         };
 
@@ -208,17 +215,26 @@ impl TestApp {
 
         let (workspace_ids, control_ids, home_workspace_id) =
             insert_workspaces(&postgres, builder.workspaces).await;
-        // The integration actor belongs to exactly one workspace: the first one
-        // granted default membership, or a dedicated home workspace when a test
-        // declares none. Data-plane access to any other workspace then 404s.
+        // The integration API token belongs to exactly one workspace: the first
+        // workspace granted default membership, or a dedicated home workspace
+        // when a test declares none. Data-plane access to any other workspace
+        // then 404s.
         let home_workspace_id = match home_workspace_id {
             Some(home_workspace_id) => home_workspace_id,
             None => create_workspace(&postgres, "Integration Home").await,
         };
-        let api_key = insert_api_credential(&postgres, WorkspaceId::from(home_workspace_id)).await;
+        let issued = issue_api_token_for_workspace(
+            &postgres,
+            &app_config,
+            WorkspaceId::from(home_workspace_id),
+            WorkspacePermission::ALL.to_vec(),
+            Some(ApiTokenId::from(
+                Uuid::parse_str(INTEGRATION_API_TOKEN_ID).expect("integration token ID is a UUID"),
+            )),
+        )
+        .await;
         if builder.default_auth {
-            server.add_header(ACTOR_ID_HEADER, INTEGRATION_ACTOR_ID);
-            server.add_header(API_KEY_HEADER, &api_key);
+            server.add_header(AUTHORIZATION_HEADER, format!("Bearer {}", issued.raw_token));
         }
 
         Self {
@@ -226,8 +242,11 @@ impl TestApp {
             _clamav: clamav,
             postgres,
             object_storage_root,
+            app_config,
             server,
-            api_key,
+            api_token: issued.raw_token,
+            api_token_id: Uuid::from(issued.token_id),
+            user_id: Uuid::from(issued.user_id),
             workspace_ids,
             control_ids,
         }
@@ -237,8 +256,7 @@ impl TestApp {
         let response = self
             .server
             .post(&format!("/workspaces/{workspace_id}/evidence-requests"))
-            .add_header(ACTOR_ID_HEADER, self.actor_id())
-            .add_header(API_KEY_HEADER, self.api_key())
+            .add_header(AUTHORIZATION_HEADER, self.bearer_token())
             .json(body)
             .await;
 
@@ -246,39 +264,25 @@ impl TestApp {
         response.json()
     }
 
-    /// Creates an actor bound to `workspace_id` with exactly `permissions` and
-    /// issues it a credential, returning `(actor_id, api_key)` for use as
-    /// explicit data-plane headers.
-    pub async fn issue_actor(
+    /// Creates an API token bound to `workspace_id` with exactly `permissions`,
+    /// returning the raw bearer token for explicit data-plane headers.
+    pub async fn issue_api_token(
         &self,
         workspace_id: Uuid,
         permissions: Vec<WorkspacePermission>,
-    ) -> (String, String) {
-        let actor = self
-            .postgres
-            .create_actor(&CreateActorPayload {
-                id: None,
-                kind: ActorKind::ServiceAccount,
-                display_name: "Scoped actor".to_owned(),
-                workspace_id: WorkspaceId::from(workspace_id),
-                created_by_user_id: None,
-                permissions,
-            })
-            .await
-            .expect("scoped actor inserts");
-        let api_key = issue_credential(
+    ) -> IssuedTestApiToken {
+        issue_api_token_for_workspace(
             &self.postgres,
-            actor.id,
-            &format!("scoped-{}", Uuid::from(actor.id)),
-            "Scoped key",
+            &self.app_config,
+            WorkspaceId::from(workspace_id),
+            permissions,
+            None,
         )
-        .await;
-
-        (Uuid::from(actor.id).to_string(), api_key)
+        .await
     }
 
     /// Inserts an evidence request directly, bypassing the API, so tests can seed
-    /// a workspace the default actor is not a member of.
+    /// a workspace the default API token is not scoped to.
     pub async fn insert_evidence_request_row(&self, workspace_id: Uuid, title: &str) {
         let client = self
             .postgres
@@ -376,40 +380,44 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             .address
     }
 
-    pub fn api_key(&self) -> &str {
-        &self.api_key
+    pub fn api_token(&self) -> &str {
+        &self.api_token
     }
 
-    pub fn actor_id(&self) -> &str {
-        INTEGRATION_ACTOR_ID
+    pub fn api_token_id(&self) -> Uuid {
+        self.api_token_id
+    }
+
+    pub fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
+    pub fn bearer_token(&self) -> String {
+        format!("Bearer {}", self.api_token)
     }
 
     pub fn get(&self, path: &str) -> TestRequest {
         self.server
             .get(path)
-            .add_header(ACTOR_ID_HEADER, self.actor_id())
-            .add_header(API_KEY_HEADER, self.api_key())
+            .add_header(AUTHORIZATION_HEADER, self.bearer_token())
     }
 
     pub fn post(&self, path: &str) -> TestRequest {
         self.server
             .post(path)
-            .add_header(ACTOR_ID_HEADER, self.actor_id())
-            .add_header(API_KEY_HEADER, self.api_key())
+            .add_header(AUTHORIZATION_HEADER, self.bearer_token())
     }
 
     pub fn put(&self, path: &str) -> TestRequest {
         self.server
             .put(path)
-            .add_header(ACTOR_ID_HEADER, self.actor_id())
-            .add_header(API_KEY_HEADER, self.api_key())
+            .add_header(AUTHORIZATION_HEADER, self.bearer_token())
     }
 
     pub fn delete(&self, path: &str) -> TestRequest {
         self.server
             .delete(path)
-            .add_header(ACTOR_ID_HEADER, self.actor_id())
-            .add_header(API_KEY_HEADER, self.api_key())
+            .add_header(AUTHORIZATION_HEADER, self.bearer_token())
     }
 
     pub fn workspace_id(&self, key: &str) -> Uuid {
@@ -559,8 +567,8 @@ async fn insert_workspaces(
             .id
             .into();
 
-        // The integration actor can belong to a single workspace, so the first
-        // workspace granted default membership becomes its home.
+        // The integration API token can belong to a single workspace, so the
+        // first workspace granted default membership becomes its home.
         if workspace.default_membership && home_workspace_id.is_none() {
             home_workspace_id = Some(id);
         }
@@ -684,55 +692,77 @@ VALUES ($1, $2, $3, $4, 'Seeded SOC 2 requirement.')
     }
 }
 
-async fn insert_api_credential(postgres: &Postgres, workspace_id: WorkspaceId) -> String {
-    let actor_id = integration_actor_id();
+pub struct IssuedTestApiToken {
+    pub raw_token: String,
+    pub token_id: ApiTokenId,
+    pub user_id: UserId,
+}
 
-    postgres
-        .create_actor(&CreateActorPayload {
-            id: Some(actor_id),
-            kind: ActorKind::System,
-            display_name: "Integration System".to_owned(),
-            workspace_id,
-            created_by_user_id: None,
-            permissions: WorkspacePermission::ALL.to_vec(),
+async fn issue_api_token_for_workspace(
+    postgres: &Postgres,
+    app_config: &AppConfig,
+    workspace_id: WorkspaceId,
+    permissions: Vec<WorkspacePermission>,
+    token_id: Option<ApiTokenId>,
+) -> IssuedTestApiToken {
+    let user = postgres
+        .upsert_user_by_auth0_sub(&ProvisionUserPayload {
+            auth0_sub: format!("auth0|api-token-user-{}", Uuid::new_v4()),
+            email: Some("api-token-user@example.com".to_owned()),
+            name: Some("API Token User".to_owned()),
         })
         .await
-        .expect("integration actor inserts");
+        .expect("API token user inserts");
 
-    issue_credential(
-        postgres,
-        actor_id,
-        "integration-api-key",
-        "Integration API Key",
+    postgres
+        .in_transaction(async |context| {
+            context
+                .insert_workspace_membership(&NewWorkspaceMembership {
+                    user_id: user.id,
+                    workspace_id,
+                    role: WorkspaceRole::Owner,
+                })
+                .await?;
+            Ok(())
+        })
+        .await
+        .expect("API token user membership inserts");
+
+    let token_id = token_id.unwrap_or_else(|| ApiTokenId::from(Uuid::new_v4()));
+    let expires_at = Utc::now() + chrono::Duration::days(30);
+    let signer = ApiTokenSigner::from_config(
+        app_config.server.public_api_base_url.clone(),
+        "proofplane-api",
+        &app_config.paseto.api,
     )
-    .await
-}
-
-async fn issue_credential(postgres: &Postgres, actor_id: ActorId, id: &str, name: &str) -> String {
-    let issued = ApiKeyManager::new()
-        .expect("API key manager builds")
-        .issue(Environment::test())
-        .expect("integration API key issues");
-    let api_key = issued.raw_key.expose_secret().to_owned();
-
-    postgres
-        .create_api_credential(&CreateApiCredentialPayload {
-            id: id.to_owned(),
-            actor_id,
-            name: name.to_owned(),
-            key_id: issued.key_id,
-            credential_hash: issued.credential_hash,
-            expires_at: None,
-            revoked_at: None,
+    .expect("API token signer initializes");
+    let issued = signer
+        .issue(
+            RegisteredClaims {
+                subject: Uuid::from(user.id),
+                token_id: Uuid::from(token_id),
+                expires_at,
+            },
+            &UserApiTokenClaims::new(workspace_id, &permissions),
+        )
+        .expect("API token signs");
+    let token = postgres
+        .create_api_token(&CreateApiTokenPayload {
+            id: token_id,
+            user_id: user.id,
+            workspace_id,
+            name: "Integration API Token".to_owned(),
+            expires_at: issued.expires_at,
+            permissions,
         })
         .await
-        .expect("integration API credential inserts");
+        .expect("API token inserts");
 
-    api_key
-}
-
-fn integration_actor_id() -> ActorId {
-    ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).expect("integration actor ID is a UUID"))
+    IssuedTestApiToken {
+        raw_token: issued.token,
+        token_id: token.token.id,
+        user_id: user.id,
+    }
 }
 
 struct TestClamAv {

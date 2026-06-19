@@ -9,10 +9,10 @@ use uuid::Uuid;
 use crate::{
     authentication::{
         signed_jwt::{SignedJwt, VerifiedToken},
-        ActorContext,
+        ApiTokenContext,
     },
     domain::{
-        ActorId, AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId,
+        ApiTokenId, AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId,
         EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
@@ -37,7 +37,7 @@ struct VerifiedDownloadGrant {
     workspace_id: WorkspaceId,
     submission_id: EvidenceSubmissionId,
     attachment_id: EvidenceAttachmentId,
-    issued_by: ActorId,
+    issued_by: ApiTokenId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,13 +82,13 @@ impl AttachmentDownloadService {
 
     pub async fn issue(
         &self,
-        actor: &ActorContext,
+        token: &ApiTokenContext,
         submission_id: EvidenceSubmissionId,
         attachment_id: EvidenceAttachmentId,
     ) -> Result<IssuedDownloadGrant, DownloadError> {
         let candidate = self
             .repository
-            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
+            .in_workspace_context_read(token.workspace_id, async move |context| {
                 context
                     .get_attachment_for_download_grant(submission_id, attachment_id)
                     .await
@@ -112,10 +112,10 @@ impl AttachmentDownloadService {
             .signed_jwt
             .issue(DownloadClaims {
                 version: DOWNLOAD_TOKEN_VERSION,
-                workspace_id: actor.workspace_id.to_string(),
+                workspace_id: token.workspace_id.to_string(),
                 submission_id: submission_id.to_string(),
                 attachment_id: candidate.attachment.id.to_string(),
-                issued_by: actor.id.to_string(),
+                issued_by: token.api_token_id.to_string(),
             })
             .map_err(|_| DownloadError::Internal)?;
         let mut url = self
@@ -145,7 +145,7 @@ impl AttachmentDownloadService {
 
         let candidate = self
             .repository
-            .in_actor_context_read(grant.workspace_id, grant.issued_by, async move |context| {
+            .in_workspace_context_read(grant.workspace_id, async move |context| {
                 context
                     .get_attachment_for_download_grant(grant.submission_id, grant.attachment_id)
                     .await
@@ -204,7 +204,7 @@ impl TryFrom<VerifiedToken<DownloadClaims>> for VerifiedDownloadGrant {
             workspace_id: WorkspaceId::from(parse_uuid(&claims.workspace_id)?),
             submission_id: EvidenceSubmissionId::from(parse_uuid(&claims.submission_id)?),
             attachment_id: EvidenceAttachmentId::from(parse_uuid(&claims.attachment_id)?),
-            issued_by: ActorId::from(parse_uuid(&claims.issued_by)?),
+            issued_by: ApiTokenId::from(parse_uuid(&claims.issued_by)?),
         })
     }
 }

@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    authentication::ActorContext,
-    authentication::ApiKeyAuthenticator,
+    authentication::ApiTokenAuthenticator,
+    authentication::ApiTokenContext,
     domain::{
         required_text, validate_freshness_window_days, CreateEvidenceRequestPayload, DomainError,
         EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
@@ -38,7 +38,7 @@ pub struct EvidenceRequestState {
 
 #[derive(Clone)]
 pub struct EvidenceRequestRouteAuthState {
-    pub authenticator: ApiKeyAuthenticator,
+    pub authenticator: ApiTokenAuthenticator,
 }
 
 pub fn router(state: EvidenceRequestState) -> Router {
@@ -72,7 +72,7 @@ async fn authorize_evidence_request_route(
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
 
-    let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    let token = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
 
     let required = match method {
         Method::GET => WorkspacePermission::ReadEvidenceRequests,
@@ -80,7 +80,7 @@ async fn authorize_evidence_request_route(
         _ => return Err(ApiError::MethodNotAllowed),
     };
 
-    if !actor.permissions.has(required) {
+    if !token.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 
@@ -196,20 +196,20 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 
 async fn create_evidence_request(
     State(state): State<EvidenceRequestState>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let request = body.into_new().into_result().map_err(domain_errors)?;
-    let request = state.service.create(actor, request).await?;
+    let request = state.service.create(token, request).await?;
 
     Ok(Json(request.into()))
 }
 
 async fn list_evidence_requests(
     State(state): State<EvidenceRequestState>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
-    let requests = state.service.list_by_workspace(actor).await?;
+    let requests = state.service.list_by_workspace(token).await?;
 
     Ok(Json(requests.into_iter().map(Into::into).collect()))
 }
@@ -217,11 +217,11 @@ async fn list_evidence_requests(
 async fn list_due_evidence_requests(
     State(state): State<EvidenceRequestState>,
     Query(query): Query<DueQuery>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
     let requests = state
         .service
-        .list_due(actor, query.now.unwrap_or_else(Utc::now))
+        .list_due(token, query.now.unwrap_or_else(Utc::now))
         .await?
         .into_iter()
         .map(Into::into)
@@ -233,11 +233,11 @@ async fn list_due_evidence_requests(
 async fn get_evidence_request(
     State(state): State<EvidenceRequestState>,
     Path(path): Path<EvidenceRequestPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let request = state
         .service
-        .get(actor, EvidenceRequestId::from(path.evidence_request_id))
+        .get(token, EvidenceRequestId::from(path.evidence_request_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -247,14 +247,14 @@ async fn get_evidence_request(
 async fn replace_evidence_request(
     State(state): State<EvidenceRequestState>,
     Path(path): Path<EvidenceRequestPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<EvidenceRequestDTO>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let update = body.into_update().into_result().map_err(domain_errors)?;
     let request = state
         .service
-        .replace(actor, evidence_request_id, update)
+        .replace(token, evidence_request_id, update)
         .await?
         .ok_or(ApiError::NotFound)?;
 

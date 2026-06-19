@@ -7,12 +7,12 @@ use crate::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
         EvidenceRequestStatus, UpdateEvidenceRequestPayload, WorkspaceId,
     },
-    repository::{ActorReadContext, ActorTransactionContext},
+    repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
 use super::Error;
 
-impl ActorTransactionContext<'_> {
+impl WorkspaceTransactionContext<'_> {
     pub async fn create_evidence_request(
         &self,
         request: &CreateEvidenceRequestPayload,
@@ -122,7 +122,7 @@ RETURNING
     }
 }
 
-impl ActorReadContext {
+impl WorkspaceReadContext {
     pub async fn get_evidence_request(
         &self,
         id: EvidenceRequestId,

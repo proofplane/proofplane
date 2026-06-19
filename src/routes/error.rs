@@ -10,7 +10,6 @@ use crate::{
     domain::DomainError,
     object_storage::StorageError,
     repository::{ConflictKind, Error as RepositoryError},
-    services::actors::ActorError,
     services::api_tokens::ApiTokenError,
     services::controls::ControlMutationError,
     services::workspaces::{CreateWorkspaceError, MemberError},
@@ -143,20 +142,6 @@ impl From<MemberError> for ApiError {
                 message: "the workspace must retain at least one owner".to_owned(),
             },
             MemberError::Repository(error) => repository_error(error),
-        }
-    }
-}
-
-impl From<ActorError> for ApiError {
-    fn from(error: ActorError) -> Self {
-        match error {
-            ActorError::Forbidden => ApiError::NotFound,
-            ActorError::NotFound => ApiError::NotFound,
-            ActorError::KeyIssue(error) => {
-                tracing::error!(%error, "API key issuance failed");
-                ApiError::Internal
-            }
-            ActorError::Repository(error) => repository_error(error),
         }
     }
 }

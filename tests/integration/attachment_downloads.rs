@@ -5,8 +5,7 @@ use jwtk::{
     hmac::{HmacAlgorithm, HmacKey},
     sign, HeaderAndClaims,
 };
-use proofplane::domain::{ActorKind, CreateActorPayload, WorkspaceId};
-use proofplane::routes::authentication::{ACTOR_ID_HEADER, API_KEY_HEADER};
+use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use proofplane::{
     domain::WorkspacePermission,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
@@ -15,7 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::support::{upload_attachment, TestApp, INTEGRATION_ACTOR_ID};
+use super::support::{upload_attachment, TestApp, INTEGRATION_API_TOKEN_ID};
 
 const SIGNING_SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
 const ISSUER: &str = "https://api.proofplane.test/";
@@ -67,7 +66,7 @@ async fn uploaded_attachment_grant_streams_reusably_with_safe_headers() {
 }
 
 #[tokio::test]
-async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
+async fn grant_issuance_requires_api_token_read_evidence_submissions_permission() {
     let app = TestApp::builder()
         .workspace("workspace", "Download workspace")
         .with_default_membership()
@@ -84,8 +83,8 @@ async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
     finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
     let path = grant_path(workspace_id, submission_id, attachment_id);
 
-    let (reader_actor_id, reader_api_key) = app
-        .issue_actor(
+    let reader = app
+        .issue_api_token(
             workspace_id,
             vec![WorkspacePermission::ReadEvidenceSubmissions],
         )
@@ -93,13 +92,12 @@ async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
     app.server()
         .post(&path)
         .clear_headers()
-        .add_header(ACTOR_ID_HEADER, reader_actor_id)
-        .add_header(API_KEY_HEADER, reader_api_key)
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {}", reader.raw_token))
         .await
         .assert_status_ok();
 
-    let (other_actor_id, other_api_key) = app
-        .issue_actor(
+    let other = app
+        .issue_api_token(
             other_workspace_id,
             vec![WorkspacePermission::ReadEvidenceSubmissions],
         )
@@ -107,13 +105,12 @@ async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
     app.server()
         .post(&path)
         .clear_headers()
-        .add_header(ACTOR_ID_HEADER, other_actor_id)
-        .add_header(API_KEY_HEADER, other_api_key)
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {}", other.raw_token))
         .await
         .assert_status_not_found();
 
-    let (limited_actor_id, limited_api_key) = app
-        .issue_actor(
+    let limited = app
+        .issue_api_token(
             workspace_id,
             vec![WorkspacePermission::ReadEvidenceRequests],
         )
@@ -121,8 +118,10 @@ async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
     app.server()
         .post(&path)
         .clear_headers()
-        .add_header(ACTOR_ID_HEADER, &limited_actor_id)
-        .add_header(API_KEY_HEADER, &limited_api_key)
+        .add_header(
+            AUTHORIZATION_HEADER,
+            format!("Bearer {}", limited.raw_token),
+        )
         .await
         .assert_status_not_found();
 
@@ -134,8 +133,7 @@ async fn grant_issuance_requires_actor_read_evidence_submissions_permission() {
     app.server()
         .post(&path)
         .clear_headers()
-        .add_header(ACTOR_ID_HEADER, limited_actor_id)
-        .add_header(API_KEY_HEADER, "invalid")
+        .add_header(AUTHORIZATION_HEADER, "Bearer invalid")
         .await
         .assert_status_unauthorized();
 }
@@ -200,8 +198,7 @@ async fn issuance_uses_read_auth_and_conceals_wrong_scope_and_terminal_statuses(
     app.server()
         .post(&path)
         .clear_headers()
-        .add_header(ACTOR_ID_HEADER, app.actor_id())
-        .add_header(API_KEY_HEADER, "invalid")
+        .add_header(AUTHORIZATION_HEADER, "Bearer invalid")
         .await
         .assert_status_unauthorized();
 }
@@ -258,38 +255,6 @@ async fn redemption_conceals_invalid_tokens_and_newly_ineligible_or_missing_obje
         .get(&format!("/attachment-downloads?token={unknown_version}"))
         .await
         .assert_status_not_found();
-    let deleted_issuer = app
-        .postgres()
-        .create_actor(&CreateActorPayload {
-            id: None,
-            kind: ActorKind::ServiceAccount,
-            display_name: "Deleted Download Issuer".to_owned(),
-            workspace_id: WorkspaceId::from(workspace_id),
-            created_by_user_id: None,
-            permissions: WorkspacePermission::ALL.to_vec(),
-        })
-        .await
-        .expect("deleted issuer creates");
-    assert!(app
-        .postgres()
-        .delete_actor(deleted_issuer.id)
-        .await
-        .expect("deleted issuer deletes"));
-    let deleted_issuer_token = signed_token_for_issuer(
-        1,
-        false,
-        workspace_id,
-        submission_id,
-        attachment_id,
-        deleted_issuer.id.to_string(),
-    );
-    app.server()
-        .get(&format!(
-            "/attachment-downloads?token={deleted_issuer_token}"
-        ))
-        .await
-        .assert_status_not_found();
-
     set_attachment_status(&app, attachment_id, "contains_virus").await;
     app.server()
         .get(&download_path)
@@ -521,7 +486,7 @@ fn signed_token(
         workspace_id,
         submission_id,
         attachment_id,
-        INTEGRATION_ACTOR_ID.to_owned(),
+        INTEGRATION_API_TOKEN_ID.to_owned(),
     )
 }
 

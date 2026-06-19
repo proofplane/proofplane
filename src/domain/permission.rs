@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use super::DomainError;
 
-/// A data-plane capability an actor may hold within its workspace. Mirrors the
+/// A data-plane capability a token may hold within its workspace. Mirrors the
 /// read/write split across the three data-plane resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkspacePermission {
@@ -66,14 +66,14 @@ impl FromStr for WorkspacePermission {
     }
 }
 
-/// A `Copy` set of an actor's granted permissions, small enough to live inside
-/// `ActorContext` and be checked in-memory on every data-plane request.
+/// A `Copy` set of granted workspace permissions, small enough to live inside
+/// `ApiTokenContext` and be checked in-memory on every data-plane request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ActorPermissions {
+pub struct WorkspacePermissions {
     bits: u8,
 }
 
-impl ActorPermissions {
+impl WorkspacePermissions {
     pub fn none() -> Self {
         Self { bits: 0 }
     }
@@ -101,7 +101,7 @@ impl ActorPermissions {
     }
 }
 
-impl FromIterator<WorkspacePermission> for ActorPermissions {
+impl FromIterator<WorkspacePermission> for WorkspacePermissions {
     fn from_iter<T: IntoIterator<Item = WorkspacePermission>>(iter: T) -> Self {
         let mut permissions = Self::none();
         for permission in iter {
@@ -115,7 +115,7 @@ impl FromIterator<WorkspacePermission> for ActorPermissions {
 mod tests {
     use std::str::FromStr;
 
-    use super::{ActorPermissions, WorkspacePermission};
+    use super::{WorkspacePermission, WorkspacePermissions};
 
     #[test]
     fn permission_round_trips_through_string() {
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn set_tracks_only_granted_permissions() {
-        let permissions = ActorPermissions::from_iter([
+        let permissions = WorkspacePermissions::from_iter([
             WorkspacePermission::ReadEvidenceRequests,
             WorkspacePermission::ReadControls,
         ]);
@@ -147,10 +147,10 @@ mod tests {
 
     #[test]
     fn all_grants_every_permission_and_none_grants_nothing() {
-        let all = ActorPermissions::all();
+        let all = WorkspacePermissions::all();
         for permission in WorkspacePermission::ALL {
             assert!(all.has(permission));
         }
-        assert!(ActorPermissions::none().is_empty());
+        assert!(WorkspacePermissions::none().is_empty());
     }
 }

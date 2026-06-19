@@ -38,7 +38,13 @@ async fn create_returns_the_submission() {
         created["evidence_request_id"],
         evidence_request_id.to_string()
     );
-    assert_eq!(created["submitted_by"], app.actor_id());
+    assert_eq!(
+        created["submitted_by"],
+        serde_json::json!({
+            "api_token_id": app.api_token_id().to_string(),
+            "user_id": app.user_id().to_string(),
+        })
+    );
     assert_submission_matches(&created, &body);
     assert_timestamp(&created["received_at"]);
 }

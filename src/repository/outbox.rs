@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::pubsub::TopicName;
 
-use super::{ActorTransactionContext, Error, Postgres, TransactionContext};
+use super::{Error, Postgres, TransactionContext, WorkspaceTransactionContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewOutboxMessage {
@@ -32,7 +32,7 @@ pub struct OutboxMessage {
     pub created_at: DateTime<Utc>,
 }
 
-impl ActorTransactionContext<'_> {
+impl WorkspaceTransactionContext<'_> {
     pub async fn append_outbox_message(
         &self,
         message: &NewOutboxMessage,
