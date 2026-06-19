@@ -60,7 +60,7 @@ impl FromStr for AttachmentUploadStatus {
 pub struct EvidenceSubmission {
     pub id: EvidenceSubmissionId,
     pub evidence_request_id: EvidenceRequestId,
-    pub submitted_by: EvidenceSubmissionSubmitter,
+    pub submitted_by: EvidenceSubmitter,
     pub received_at: DateTime<Utc>,
     pub coverage_start_at: DateTime<Utc>,
     pub coverage_end_at: DateTime<Utc>,
@@ -69,7 +69,7 @@ pub struct EvidenceSubmission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EvidenceSubmissionSubmitter {
+pub struct EvidenceSubmitter {
     pub api_token_id: ApiTokenId,
     pub user_id: UserId,
 }

@@ -15,7 +15,6 @@ async fn main() {
     println!(
         "Seeded fresh local workspaces, owner membership, API token permissions, demo evidence requests, SOC 2 controls, and demo evidence submission"
     );
-    println!("Old local databases are not upgraded; use make reset-local && make seed after this cutover.");
     match summary.demo_attachment {
         seed::DemoAttachmentSeedStatus::Seeded => {
             println!("demo evidence attachment/object: seeded for filesystem storage");

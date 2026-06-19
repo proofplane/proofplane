@@ -6,7 +6,7 @@ use crate::{
     domain::{
         AttachmentUploadStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
         EvidenceAttachment, EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmissionSubmitter, WorkspaceId,
+        EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
     },
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -538,7 +538,7 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         evidence_request_id: EvidenceRequestId::from(
             row.try_get::<_, Uuid>("evidence_request_id")?,
         ),
-        submitted_by: EvidenceSubmissionSubmitter {
+        submitted_by: EvidenceSubmitter {
             api_token_id: row.try_get::<_, Uuid>("submitted_by_api_token_id")?.into(),
             user_id: row.try_get::<_, Uuid>("submitted_by_user_id")?.into(),
         },

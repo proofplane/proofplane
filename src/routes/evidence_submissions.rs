@@ -174,7 +174,7 @@ impl AttachmentUploadRequest {
 struct EvidenceSubmissionResponse {
     id: Uuid,
     evidence_request_id: Uuid,
-    submitted_by: EvidenceSubmissionSubmitterResponse,
+    submitted_by: EvidenceSubmitterResponse,
     received_at: DateTime<Utc>,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
@@ -183,7 +183,7 @@ struct EvidenceSubmissionResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionSubmitterResponse {
+struct EvidenceSubmitterResponse {
     api_token_id: Uuid,
     user_id: Uuid,
 }
@@ -193,7 +193,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmissionSubmitterResponse {
+            submitted_by: EvidenceSubmitterResponse {
                 api_token_id: Uuid::from(submission.submitted_by.api_token_id),
                 user_id: Uuid::from(submission.submitted_by.user_id),
             },

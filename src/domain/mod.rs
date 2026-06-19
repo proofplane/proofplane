@@ -25,7 +25,7 @@ pub use evidence_request::{
 pub use evidence_submission::{
     AttachmentUploadStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
     EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmission, EvidenceSubmissionDetail,
-    EvidenceSubmissionId, EvidenceSubmissionSubmitter,
+    EvidenceSubmissionId, EvidenceSubmitter,
 };
 pub use permission::{WorkspacePermission, WorkspacePermissions};
 pub use user::{ProvisionUserPayload, User, UserId};

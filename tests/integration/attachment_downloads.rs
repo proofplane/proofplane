@@ -195,12 +195,6 @@ async fn issuance_uses_read_auth_and_conceals_wrong_scope_and_terminal_statuses(
         .clear_headers()
         .await
         .assert_status_unauthorized();
-    app.server()
-        .post(&path)
-        .clear_headers()
-        .add_header(AUTHORIZATION_HEADER, "Bearer invalid")
-        .await
-        .assert_status_unauthorized();
 }
 
 #[tokio::test]

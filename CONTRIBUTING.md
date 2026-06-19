@@ -12,9 +12,6 @@ Install these tools before starting:
 - `make`
 - Docker with Docker Compose
 
-The Rust build vendors `protoc`, so contributors do not need a separate local
-Protocol Buffers compiler.
-
 ## First Setup
 
 From the repository root:
