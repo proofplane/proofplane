@@ -11,7 +11,6 @@ pub const CHECKSUM_LENGTH: usize = 6;
 pub const TOKEN_LENGTH: usize = PREFIX.len() + RANDOM_LENGTH + CHECKSUM_LENGTH;
 
 const ACCEPTED_RANDOM_BYTE_BOUND: u8 = 248;
-const RANDOM_CHUNK_LENGTH: usize = RANDOM_LENGTH;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ApiTokenDigest([u8; 32]);
@@ -45,8 +44,8 @@ pub enum OpaqueTokenError {
 }
 
 pub fn generate_opaque_token() -> Result<GeneratedOpaqueToken, OpaqueTokenError> {
-    let random_body = random_body_from_random_bytes(RANDOM_LENGTH, getrandom::fill)
-        .map_err(|_| OpaqueTokenError::Generation)?;
+    let random_body =
+        generate_token_body(getrandom::fill).map_err(|_| OpaqueTokenError::Generation)?;
 
     let mut token = String::with_capacity(TOKEN_LENGTH);
     token.push_str(PREFIX);
@@ -102,17 +101,17 @@ fn encode_checksum_base62(value: u32) -> String {
         remaining /= ALPHABET.len() as u32;
     }
 
-    String::from_utf8(encoded.to_vec()).expect("checksum alphabet is valid UTF-8")
+    encoded.iter().map(|byte| char::from(*byte)).collect()
 }
 
-fn random_body_from_random_bytes<F, E>(random_length: usize, mut fill: F) -> Result<String, E>
+fn generate_token_body<F, E>(mut fill: F) -> Result<String, E>
 where
     F: FnMut(&mut [u8]) -> Result<(), E>,
 {
-    let mut random_body = String::with_capacity(random_length);
-    let mut buffer = [0; RANDOM_CHUNK_LENGTH];
+    let mut random_body = String::with_capacity(RANDOM_LENGTH);
+    let mut buffer = [0; RANDOM_LENGTH];
 
-    while random_body.len() < random_length {
+    while random_body.len() < RANDOM_LENGTH {
         fill(&mut buffer)?;
         for byte in buffer {
             if byte >= ACCEPTED_RANDOM_BYTE_BOUND {
@@ -120,7 +119,7 @@ where
             }
 
             random_body.push(ALPHABET[(byte % ALPHABET.len() as u8) as usize] as char);
-            if random_body.len() == random_length {
+            if random_body.len() == RANDOM_LENGTH {
                 break;
             }
         }
@@ -134,9 +133,8 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::{
-        encode_checksum_base62, generate_opaque_token, parse_opaque_token,
-        random_body_from_random_bytes, OpaqueTokenError, ALPHABET, CHECKSUM_LENGTH, PREFIX,
-        RANDOM_LENGTH, TOKEN_LENGTH,
+        encode_checksum_base62, generate_opaque_token, generate_token_body, parse_opaque_token,
+        OpaqueTokenError, ALPHABET, CHECKSUM_LENGTH, PREFIX, RANDOM_LENGTH, TOKEN_LENGTH,
     };
 
     #[test]
@@ -223,7 +221,7 @@ mod tests {
         ];
         let mut chunk_index = 0;
 
-        let body = random_body_from_random_bytes(RANDOM_LENGTH, |buffer| {
+        let body = generate_token_body(|buffer| {
             buffer.copy_from_slice(&chunks[chunk_index]);
             chunk_index += 1;
             Ok::<_, ()>(())
