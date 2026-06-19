@@ -196,7 +196,8 @@ requires that the token belongs to both the current user and path workspace.
 Unknown workspaces, non-membership, and cross-user/cross-workspace token IDs
 return 404 to avoid existence leaks.
 
-The raw `v4.public` token appears only in the successful create response.
+The raw `v4.public` token appears only in the successful create response under
+the `api_token` field.
 
 ## Data-Plane Authentication And Authorization
 

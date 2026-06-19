@@ -30,9 +30,9 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     issued.assert_status_ok();
     let issued = issued.json::<Value>();
     let token_id = token_uuid(&issued);
-    let raw = issued["api_key"]
+    let raw = issued["api_token"]
         .as_str()
-        .expect("api_key is returned once");
+        .expect("api_token is returned once");
 
     assert!(raw.starts_with("v4.public."));
     assert_eq!(issued["name"], "CI token");
@@ -55,7 +55,7 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     listed.assert_status_ok();
     let list_text = listed.text();
     assert!(!list_text.contains(raw));
-    assert!(!list_text.contains("api_key"));
+    assert!(!list_text.contains("api_token"));
     let listed = serde_json::from_str::<Value>(&list_text).expect("list response parses");
     assert_eq!(listed.as_array().expect("list is an array").len(), 1);
     assert_eq!(listed[0]["id"], token_id.to_string());

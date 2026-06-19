@@ -177,7 +177,7 @@ struct ApiTokenResponse {
     id: Uuid,
     name: String,
     workspace_id: Uuid,
-    permissions: Vec<&'static str>,
+    permissions: Vec<String>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
     last_used_at: Option<DateTime<Utc>>,
@@ -193,7 +193,7 @@ impl From<ApiTokenWithPermissions> for ApiTokenResponse {
             permissions: value
                 .permissions
                 .iter()
-                .map(|permission| permission.as_str())
+                .map(|permission| permission.as_str().to_owned())
                 .collect(),
             expires_at: value.token.expires_at,
             revoked_at: value.token.revoked_at,
@@ -208,12 +208,12 @@ struct IssuedApiTokenResponse {
     id: Uuid,
     name: String,
     workspace_id: Uuid,
-    permissions: Vec<&'static str>,
+    permissions: Vec<String>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
     last_used_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
-    api_key: String,
+    api_token: String,
 }
 
 impl From<IssuedUserApiToken> for IssuedApiTokenResponse {
@@ -229,7 +229,7 @@ impl From<IssuedUserApiToken> for IssuedApiTokenResponse {
             revoked_at: metadata.revoked_at,
             last_used_at: metadata.last_used_at,
             created_at: metadata.created_at,
-            api_key: value.raw_token.expose_secret().to_owned(),
+            api_token: value.raw_token.expose_secret().to_owned(),
         }
     }
 }

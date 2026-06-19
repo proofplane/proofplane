@@ -9,7 +9,7 @@ records support lifecycle, audit attribution, and immediate revocation.
 
 **Acceptance criteria**
 
-- [x] Given a current workspace member, when they issue a token with valid permissions and a future expiration, then the response shows the raw PASETO once and stores only its lifecycle metadata.
+- [x] Given a current workspace member, when they issue a token with valid permissions and a future expiration, then the response shows the raw PASETO once as `api_token` and stores only its lifecycle metadata.
 - [x] Given an expiration arbitrarily far in the future, when the timestamp is valid, then issuance succeeds without applying a maximum token lifetime.
 - [x] Given a user listing their tokens, when a token exists, then name, workspace, permissions, expiration, revocation, last-use, and creation metadata are returned without raw tokens or key material.
 - [x] Given a token owned by the caller in the path workspace, when it is revoked twice, then both requests succeed without deleting its historical record.
@@ -22,7 +22,7 @@ records support lifecycle, audit attribution, and immediate revocation.
 - [x] Add API-token domain types and repository operations for issue, list, lookup, and idempotent revoke.
 - [x] Add Auth0-protected `POST`/`GET`/`DELETE /workspaces/{workspace_id}/api-tokens` routes scoped to the current user.
 - [x] Mint immutable `v4.public` claims with required issuer, audience, subject, token ID, workspace, permissions, version, and expiration without a maximum TTL.
-- [x] Return the raw token only from create and redact all token/key material from errors and logs.
+- [x] Return the raw token only from create as `api_token` and redact all token/key material from errors and logs.
 - [x] Add unit and integration tests for success, one-time disclosure, ownership isolation, permission reuse, missing/past/far-future expiration, expiry, and revocation.
 
 **Notes**
