@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, Utc};
+use proofplane::domain::WorkspacePermission;
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -59,6 +60,19 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     let listed = serde_json::from_str::<Value>(&list_text).expect("list response parses");
     assert_eq!(listed.as_array().expect("list is an array").len(), 1);
     assert_eq!(listed[0]["id"], token_id.to_string());
+    assert_eq!(
+        listed[0]["permissions"],
+        json!(WorkspacePermission::ALL
+            .into_iter()
+            .filter(|permission| matches!(
+                permission,
+                WorkspacePermission::ReadEvidenceRequests
+                    | WorkspacePermission::ReadControls
+                    | WorkspacePermission::WriteControls
+            ))
+            .map(WorkspacePermission::as_str)
+            .collect::<Vec<_>>())
+    );
     assert_eq!(listed[0]["last_used_at"], Value::Null);
 
     revoke_token(&app, member, workspace_id, token_id)

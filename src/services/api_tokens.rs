@@ -15,8 +15,6 @@ use crate::{
     repository::Postgres,
 };
 
-const API_AUDIENCE: &str = "proofplane-api";
-
 #[derive(Clone)]
 pub struct ApiTokenService {
     repository: Arc<Postgres>,
@@ -128,18 +126,9 @@ impl ApiTokenService {
         token_id: ApiTokenId,
     ) -> Result<(), ApiTokenError> {
         self.authorize(workspace_id, user_id).await?;
-        let token = self
-            .repository
-            .get_api_token(token_id)
-            .await?
-            .filter(|token| {
-                token.token.user_id == user_id && token.token.workspace_id == workspace_id
-            })
-            .ok_or(ApiTokenError::NotFound)?;
-
         if !self
             .repository
-            .revoke_api_token_for_owner_workspace(token.token.id, user_id, workspace_id)
+            .revoke_api_token_for_owner_workspace(token_id, user_id, workspace_id)
             .await?
         {
             return Err(ApiTokenError::NotFound);
@@ -162,13 +151,6 @@ impl ApiTokenService {
     }
 }
 
-pub fn api_token_signer(
-    public_api_base_url: url::Url,
-    config: &crate::config::PasetoApiConfig,
-) -> Result<ApiTokenSigner, crate::authentication::paseto::Error> {
-    ApiTokenSigner::from_config(public_api_base_url, API_AUDIENCE, config)
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Duration as ChronoDuration;
@@ -180,6 +162,7 @@ mod tests {
         config::{PasetoApiConfig, PasetoApiSigningKey, PasetoApiVerificationKey},
     };
 
+    const API_AUDIENCE: &str = "proofplane-api";
     const API_SECRET: &str = "k4.secret.sEP9YtkNeO7EGJbpVYznvHnVXotZyGbkzuvHkOO3RgXAqGWIhrrfscm74zMx72tBOOD02gy8G4sB8-60b1cWiw";
     const API_PUBLIC: &str = "k4.public.wKhliIa637HJu-MzMe9rQTjg9NoMvBuLAfPutG9XFos";
 
@@ -187,7 +170,7 @@ mod tests {
     fn paseto_custom_claims_round_trip_with_expected_registered_claims() {
         let issuer = url::Url::parse("https://api.proofplane.test/").unwrap();
         let config = api_config();
-        let signer = api_token_signer(issuer.clone(), &config).unwrap();
+        let signer = ApiTokenSigner::from_config(issuer.clone(), API_AUDIENCE, &config).unwrap();
         let verifier = ApiTokenVerifier::from_config(issuer, API_AUDIENCE, &config).unwrap();
         let user_id = Uuid::new_v4();
         let token_id = Uuid::new_v4();

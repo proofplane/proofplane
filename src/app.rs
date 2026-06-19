@@ -6,7 +6,10 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator},
+    authentication::{
+        auth0::TokenVerifier, paseto::ApiTokenSigner, ApiKeyAuthenticator, ApiKeyManager,
+        UserAuthenticator,
+    },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
@@ -26,14 +29,10 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        actors::ActorService,
-        api_tokens::{api_token_signer, ApiTokenService},
-        attachment_downloads::AttachmentDownloadService,
-        controls::ControlService,
-        evidence_requests::EvidenceRequestService,
-        evidence_submissions::EvidenceSubmissionService,
-        user::UserService,
-        workspaces::WorkspaceService,
+        actors::ActorService, api_tokens::ApiTokenService,
+        attachment_downloads::AttachmentDownloadService, controls::ControlService,
+        evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
+        user::UserService, workspaces::WorkspaceService,
     },
 };
 
@@ -49,8 +48,9 @@ pub struct AppDependencies<V: TokenVerifier> {
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
-    let api_token_signer = api_token_signer(
+    let api_token_signer = ApiTokenSigner::from_config(
         dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-api",
         &dependencies.config.paseto.api,
     )
     .map_err(crate::authentication::Error::Paseto)?;

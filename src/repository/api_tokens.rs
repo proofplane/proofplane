@@ -152,7 +152,15 @@ async fn permissions_for_token(
         );
     }
 
-    crate::domain::canonical_permissions(values).map_err(Error::InvalidData)
+    // Keep the API stable.
+    values.sort_by_key(|permission| {
+        WorkspacePermission::ALL
+            .iter()
+            .position(|canonical| canonical == permission)
+            .expect("parsed permission is listed in WorkspacePermission::ALL")
+    });
+
+    Ok(values)
 }
 
 fn api_token_from_row(row: Row) -> Result<ApiToken, Error> {
