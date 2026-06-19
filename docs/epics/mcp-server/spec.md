@@ -18,7 +18,7 @@ errors in `src/mcp`; tools call services directly.
 ## Identity
 
 MCP is a data-plane interface. Requests authenticate with the same user-owned
-`v4.public` PASETO bearer token contract as REST and produce the same
+opaque `ppat_` bearer-token contract as REST and produce the same
 `ApiTokenContext`. Tool authorization uses the same workspace permissions as
 equivalent REST operations.
 
@@ -85,3 +85,5 @@ the MVP.
   attachment bytes do not pass through the MCP connection.
 - 2026-06-17: Replaced the planned actor API-key session with the user-owned
   PASETO bearer-token contract from the PASETO Token Migration epic.
+- 2026-06-19: Followed the API-token epic pivot from `v4.public` PASETO to the
+  compact opaque `ppat_` bearer-token contract.

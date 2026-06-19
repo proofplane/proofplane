@@ -33,3 +33,6 @@ records support lifecycle, audit attribution, and immediate revocation.
   timestamp is accepted without a maximum TTL.
 - 2026-06-18 implementation note: this ticket uses `V005`; final `V001`
   consolidation remains deferred to ticket 004.
+- The 2026-06-19 spec revision preserves this management and lifecycle model
+  but supersedes PASETO issuance; ticket 006 adds compact opaque issuance and
+  digest persistence.

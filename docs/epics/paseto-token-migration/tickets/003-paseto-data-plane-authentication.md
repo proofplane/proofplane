@@ -27,3 +27,6 @@ This ticket introduces no dual-authentication behavior.
   prerequisite; ticket 004 replaces the actor contract atomically.
 - Reconciled the spec on 2026-06-19: `last_used_at` is updated best-effort on
   every successful authentication.
+- The later 2026-06-19 opaque-token pivot supersedes this `v4.public` verifier;
+  ticket 006 replaces verification with digest lookup while retaining
+  `ApiTokenContext`, authorization policy, and last-use behavior.

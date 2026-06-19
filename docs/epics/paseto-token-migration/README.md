@@ -1,10 +1,10 @@
-# PASETO Token Migration Epic
+# API Token And PASETO Migration Epic
 
-Replace actor-owned API keys with self-service, user-owned PASETO tokens and
-move attachment download grants to a separate encrypted PASETO profile. The
-core principle is explicit authority: API access is attributable to a user and
-token, while each token is constrained to one workspace and an immutable
-permission set.
+Replace actor-owned API keys with compact, self-service user API tokens and move
+attachment download grants to an encrypted PASETO profile. The core principle
+is fit-for-purpose authority: human-managed API credentials are short opaque
+references to persisted permissions, while short-lived download grants carry a
+stateless encrypted payload.
 
 Full rationale, schema, token profiles, rollout, and decisions live in
 [spec.md](./spec.md), the source of technical depth. Tickets below are lean
@@ -19,6 +19,7 @@ handoff units that link into it.
 | 003. [PASETO Data-Plane Authentication](./tickets/003-paseto-data-plane-authentication.md) | Done | Build and test the shared `v4.public` authenticator and `ApiTokenContext`. |
 | 004. [Evidence Attribution And Actor Retirement](./tickets/004-evidence-attribution-and-actor-retirement.md) | Done | Atomically switched routes/provenance, removed actors, and consolidated the final schema into one `V001`. |
 | 005. [PASETO Attachment Download Grants](./tickets/005-paseto-attachment-download-grants.md) | Todo | Issue encrypted `v4.local` grants while preserving current download safety checks. |
+| 006. [Compact Opaque User API Tokens](./tickets/006-compact-opaque-user-api-tokens.md) | Todo | Replace long `v4.public` API credentials with `ppat_` opaque tokens resolved by an indexed digest. |
 
 ## Sequencing
 
@@ -31,6 +32,11 @@ handoff units that link into it.
 - **004** depends on 003 and atomically replaces the actor contract. There is no
   compatibility or deployed-data preservation phase; local databases are reset
   and rebuilt from the consolidated initial migration.
-- **005** depends only on 001 and can proceed in parallel with 002-004. Because
-  the download service is not deployed, it replaces JWT grants atomically
-  without a compatibility phase.
+- **005** depends only on 001. Because the download service is not deployed, it
+  replaces JWT grants atomically without a compatibility phase.
+- **006** depends on the completed actor cutover in 004. It replaces the
+  `v4.public` credential format atomically, retains the user-token lifecycle and
+  attribution model, and removes the API signing-key domain.
+- **005** and **006** can proceed in parallel, but changes to shared PASETO
+  configuration and authentication modules require merge coordination. After
+  both ship, `pasetors` remains only for attachment download grants.

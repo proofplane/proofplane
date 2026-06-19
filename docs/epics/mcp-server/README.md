@@ -16,7 +16,7 @@ Full runtime, tool, identity, and error decisions live in [spec.md](./spec.md).
 
 ## Sequencing
 
-- **001** depends on PASETO Token Migration ticket 004.
+- **001** depends on API Token And PASETO Migration ticket 006.
 - **002** follows 001 and Evidence Lifecycle Completion ticket 002, and can grow
   as Trusted Compliance Reads lands.
 - **003** follows 001 and the relevant service contracts.

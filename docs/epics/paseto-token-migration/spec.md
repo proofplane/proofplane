@@ -1,9 +1,11 @@
-# PASETO Token Migration Spec
+# API Token And PASETO Migration Spec
 
 ## Goal
 
-Replace actor-owned opaque API credentials with user-owned personal API tokens,
-and replace JWT attachment download grants with purpose-bound PASETO tokens.
+Replace actor-owned API credentials with user-owned personal API tokens, and
+replace JWT attachment download grants with purpose-bound PASETO tokens. Human-
+managed API tokens use a compact opaque format; PASETO is reserved for
+short-lived attachment grants whose stateless encrypted payload is useful.
 
 The core authorization model becomes:
 
@@ -13,8 +15,8 @@ The core authorization model becomes:
   data-plane permissions.
 - Data-plane requests authenticate with one bearer token and are attributed to
   both the user and the token.
-- Attachment download grants remain short-lived bearer URLs and use a separate
-  encrypted token profile.
+- Attachment download grants remain short-lived bearer URLs and use an
+  encrypted PASETO profile.
 
 This epic supersedes the actor and API-key portions of the Auth Hierarchy API
 spec after the migration is complete. Workspace membership remains the source
@@ -22,24 +24,21 @@ of truth for whether a user may act in a workspace.
 
 ## Existing Baseline
 
-Proofplane currently has two identity planes:
+Tickets 001-004 retired actors and established the current user-owned API-token
+model. Auth0 bearer JWTs produce `UserContext` for management routes. Data-plane
+routes accept user-owned `v4.public` PASETO bearer tokens and produce
+`ApiTokenContext`; evidence provenance references the persisted API-token row.
 
-- Auth0 bearer JWTs produce `UserContext` for workspace, membership, actor, and
-  credential management.
-- `x-proofplane-actor-id` plus `x-proofplane-api-key` authenticate data-plane
-  routes. The API key is an opaque secret with an Argon2 hash in
-  `api_credentials`; authentication loads `actors.workspace_id` and
-  `actor_permissions` into `ActorContext`.
+The PASETO contains user, token, workspace, expiration, and permission claims,
+but authentication still loads the lifecycle row and current workspace
+membership from PostgreSQL. The self-contained claims and signature therefore
+add substantial credential length and key-rotation complexity without removing
+a persistence lookup.
 
-Attachment download grants are stateless five-minute HS256 JWTs. The grant
+Attachment download grants remain stateless five-minute HS256 JWTs. Their
 claims are readable, and every redemption reloads the attachment and validates
-its current lifecycle and object metadata.
-
-Actors also provide persisted provenance. `evidence_submissions.submitted_by`
-references `actors.id`, repository read/write contexts carry an actor ID, and
-audit plans identify actors. Removing actors therefore requires an attribution
-schema change, not only an authentication change. Because none of this data is
-deployed, the final schema does not preserve actor-era records or contracts.
+its current lifecycle and object metadata. Ticket 005 replaces only these
+grants with encrypted `v4.local` PASETO.
 
 ## Decisions
 
@@ -50,7 +49,8 @@ into one `migrations/V001__initial_schema.sql`. Delete the existing incremental
 migrations and rewrite `V001` to describe only the final schema:
 
 - users and workspace memberships;
-- user-owned API tokens and `WorkspacePermission` grants;
+- user-owned API-token metadata, token digests, and `WorkspacePermission`
+  grants;
 - evidence provenance through `submitted_by_api_token_id`;
 - all current compliance, outbox, and attachment tables;
 - no actors, actor permissions, actor credentials, or dormant `audit_events`.
@@ -63,10 +63,11 @@ from an empty database and apply only the consolidated `V001`.
 
 ### Library And Protocols
 
-Use `pasetors` 0.7.8 with its high-level claims APIs and PASETO version 4:
+User API tokens are opaque bearer credentials resolved through PostgreSQL. They
+do not use PASETO, JWT, or another self-contained claims format.
 
-- API tokens use `v4.public`.
-- Attachment download grants use `v4.local`.
+Use `pasetors` 0.7.8 with its high-level claims APIs and PASETO version 4 only
+for attachment download grants, which use `v4.local`.
 
 Version 0.7.8 is the current release as of June 17, 2026 and requires Rust
 1.88 or newer; Proofplane's current toolchain satisfies that requirement. The
@@ -74,83 +75,81 @@ crate has not undergone a third-party security audit, so Proofplane's wrapper
 must stay small, pin the dependency deliberately, validate all custom claims,
 and cover the official failure classes in tests.
 
-Do not expose raw `pasetors` types outside the authentication module. Domain and
-service code consume Proofplane-owned verified token types.
+Do not expose raw `pasetors` types outside the authentication module. Download
+services consume Proofplane-owned verified grant types.
 
-### Separate Cryptographic Domains
+### PASETO Download Key Domain
 
-API tokens and download grants must never share keys or purpose strings.
+Attachment downloads use a dedicated symmetric-key ring and the implicit
+assertion `proofplane:attachment-download:v1`. Opaque user API tokens have no
+signing key and share no key material with download grants.
 
-| Profile | PASETO purpose | Key authority | Implicit assertion |
-| --- | --- | --- | --- |
-| API access | `v4.public` | API signing private key; verifier public-key ring | `proofplane:api-access:v1` |
-| Attachment download | `v4.local` | Dedicated symmetric-key ring | `proofplane:attachment-download:v1` |
+Each download grant carries a non-secret `kid` in its authenticated footer.
+Verification may inspect the untrusted footer only to select a candidate key;
+no footer or payload value is trusted until cryptographic verification
+succeeds.
 
-Each token carries a non-secret `kid` in its authenticated footer. Verification
-may inspect the untrusted footer only to select a candidate key; no footer or
-payload value is trusted until cryptographic verification succeeds.
-
-Configuration provides:
-
-- one active API signing key and a public verification-key ring;
-- one active download-grant key and a decryption-key ring;
-- stable key IDs controlled by operators.
-
-The logical configuration lives under `paseto.api` and `paseto.download`. Keys
-use encodings accepted by `pasetors`/PASERK rather than a Proofplane-specific
-binary format.
+Configuration provides one active download-grant key, a decryption-key ring,
+and stable operator-controlled key IDs under `paseto.download`. Ticket 006
+removes `paseto.api` and its signing and verification keys. Download keys use
+encodings accepted by `pasetors`/PASERK rather than a Proofplane-specific binary
+format.
 
 Startup fails on malformed keys, a missing active key, duplicate key IDs, or an
-active key absent from its verification/decryption ring. Private and symmetric
-key material remains in redacted secret configuration. Public verification keys
-may be distributed to another verifier without granting minting authority.
+active key absent from its decryption ring. Symmetric key material remains in
+redacted secret configuration.
 
-Rotation adds a new active key while retaining old verification keys. Old API
-public keys remain configured until every token signed by them is expired or
-revoked; a token with a far-future expiration may therefore keep its signing
-key in the verification ring for a long time. Removing an old public key
-explicitly invalidates every remaining token signed by it. Old download keys
-need remain only for the maximum grant lifetime plus deployment skew.
+Rotation adds a new active download key while retaining old decryption keys for
+the maximum grant lifetime plus deployment skew. API-token rotation is a
+per-token issue-and-revoke operation and has no operator signing-key lifecycle.
 
 ## User API Tokens
 
-### Claims
+### Format
 
-An API token has this logical payload:
+The complete user-facing token format is:
 
 ```text
-iss             configured public API origin
-aud             proofplane-api
-sub             user UUID
-jti             API token UUID
-iat             issuance time
-nbf             issuance time
-exp             required expiration
-version         1
-workspace_id    workspace UUID
-permissions     array of WorkspacePermission strings
+ppat_<30 random Base62 characters><6 Base62 checksum characters>
 ```
 
-Registered claims are validated through `ClaimsValidationRules`. Proofplane
-manually validates every custom claim, rejects unknown permission strings,
-rejects duplicate permissions, and requires the token version it understands.
-The `exp` claim is required and must be strictly in the future at issuance.
+The fixed length is 41 ASCII characters and the accepted shape is
+`^ppat_[0-9A-Za-z]{36}$`. The underscore and alphanumeric body allow common
+mouse-selection behavior to select the complete credential as one word. The
+`ppat_` prefix identifies Proofplane personal API tokens to humans and secret
+scanners.
+
+The random portion is generated from a cryptographically secure random source
+with unbiased Base62 sampling and supplies approximately 178 bits of entropy.
+Base62 uses the ordered alphabet
+`0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz`. The final six
+characters are the zero-padded Base62 encoding of CRC-32/ISO-HDLC, as provided
+by zlib-compatible CRC32 implementations, over the ASCII `ppat_` prefix and
+random portion. The checksum supports typo and offline secret-format detection;
+it is not an authenticator and is never used instead of the stored digest
+lookup.
+
+The token carries no user, workspace, permission, expiration, or key identifier
+claims. All authority comes from the persisted lifecycle row and its permission
+records.
+
+Expiration remains required and must be strictly in the future at issuance.
 Proofplane imposes no maximum token lifetime: any parseable future timestamp is
-accepted, including dates centuries in the future. Permissions are serialized
-in canonical enum order and compared to persistence as a set.
+accepted, including dates centuries in the future.
 
 Tokens are immutable. Changing workspace, expiration, or permissions means
 issuing a replacement and revoking the old token.
 
 ### Persistence
 
-Ticket 002 adds these user-owned token records in an incremental `V005`
-migration. Ticket 004 later folds the final post-cutover schema into the
-consolidated `V001`.
+Tickets 002 and 004 established these user-owned records and consolidated them
+into `V001`. Ticket 006 adds `token_digest` directly to that undeployed initial
+schema; there is no incremental migration or digest backfill.
 
 ```text
 api_tokens
-- id UUID PRIMARY KEY                         -- same value as jti
+- id UUID PRIMARY KEY
+- token_digest BYTEA NOT NULL UNIQUE          -- SHA-256 of the complete token
 - user_id UUID NOT NULL REFERENCES users(id)
 - workspace_id UUID NOT NULL REFERENCES workspaces(id)
 - name TEXT NOT NULL
@@ -166,13 +165,14 @@ api_token_permissions
 ```
 
 `api_token_permissions.permission` reuses the existing `WorkspacePermission`
-domain enum and the exact database values/check constraint currently used by
-`actor_permissions`. Do not introduce a second API-token permission enum.
+domain enum and database values. Do not introduce a second API-token permission
+enum.
 
-The raw token is returned once and is never persisted or logged. The verified
-`jti` resolves the lifecycle row; exact user, workspace, expiration, and
-permission agreement between claims and the row prevents token metadata from
-drifting independently.
+The raw token is returned once and is never persisted or logged. Proofplane
+stores the 32-byte SHA-256 digest of the complete token because the input has
+high cryptographic entropy and does not require password-hardening. The unique
+digest index resolves the lifecycle row directly. Token generation retries the
+entire random value on the practically impossible unique-digest collision.
 
 Token rows are retained after revocation because historical evidence and audit
 records may reference them. Revocation is idempotent; management APIs do not
@@ -197,35 +197,34 @@ requires that the token belongs to both the current user and path workspace.
 Unknown workspaces, non-membership, and cross-user/cross-workspace token IDs
 return 404 to avoid existence leaks.
 
-The raw `v4.public` token appears only in the successful create response under
-the `api_token` field.
+The raw opaque token appears only in the successful create response under the
+existing `api_token` field.
 
 ## Data-Plane Authentication And Authorization
 
 Data-plane routes move to:
 
 ```text
-Authorization: Bearer v4.public....
+Authorization: Bearer ppat_....
 ```
 
 The `x-proofplane-actor-id` and `x-proofplane-api-key` contract is retired.
 Management routes continue to interpret bearer credentials as Auth0 JWTs;
-data-plane routes interpret them as Proofplane PASETO API tokens. No route
-accepts the actor headers after the cutover, and there is no dual-authentication
-or deprecation period.
+data-plane routes interpret them as Proofplane opaque API tokens. No route
+accepts the actor headers after the cutover. Because the service is not
+deployed, ticket 006 atomically stops accepting `v4.public` API tokens and
+reissues seed credentials; there is no dual-authentication or migration period.
 
 Authentication proceeds in this order:
 
-1. Require exactly one bearer token with the `v4.public` purpose.
-2. Read the untrusted footer only to select a configured public key.
-3. Verify the signature, registered claims, audience, issuer, implicit
-   assertion, and custom claim structure.
-4. Load `api_tokens` and `api_token_permissions` by `jti`.
-5. Require matching user, workspace, expiration, and permission claims.
-6. Reject a revoked or expired token.
-7. Require that the user still has a membership in the token workspace.
-8. Best-effort update `last_used_at`.
-9. Produce `ApiTokenContext`.
+1. Require exactly one bearer token matching the fixed `ppat_` shape.
+2. Validate the checksum and reject malformed tokens before persistence access.
+3. Compute SHA-256 over the complete presented token.
+4. Load `api_tokens` and `api_token_permissions` by the unique digest.
+5. Reject an unknown, revoked, or expired lifecycle row.
+6. Require that the owning user still has membership in the stored workspace.
+7. Best-effort update `last_used_at`.
+8. Produce `ApiTokenContext` entirely from persisted authority.
 
 ```text
 ApiTokenContext
@@ -235,10 +234,10 @@ ApiTokenContext
 - permissions
 ```
 
-Invalid, unknown, revoked, expired, malformed, or stale-membership tokens return
-401. After authentication, a path workspace mismatch or missing route
-permission returns 404, preserving the existing tenant non-disclosure rule.
-Requests using the old actor headers are unauthenticated and receive 401.
+Invalid-checksum, unknown, revoked, expired, malformed, or stale-membership
+tokens return 401. After authentication, a path workspace mismatch or missing
+route permission returns 404, preserving the existing tenant non-disclosure
+rule. Requests using the old actor headers are unauthenticated and receive 401.
 
 ## Attribution And Actor Retirement
 
@@ -348,34 +347,42 @@ workspace IDs as labels.
 
 ## Build Sequence
 
-Preferred implementation sequence:
+Tickets 001-004 are complete and record the actor-to-user-token cutover. The
+remaining preferred implementation sequence is:
 
-1. Add PASETO configuration and token primitives without changing traffic.
-2. Add user token management and begin issuing `v4.public` tokens.
-3. Build and test the PASETO data-plane authenticator behind a shared internal
-   interface, but do not wire it to HTTP routes yet.
-4. Atomically switch every data-plane route to PASETO, replace evidence
-   provenance, remove actor headers/routes/code, and squash the schema into one
-   final `V001`.
-5. Replace attachment-grant JWT issuance and verification with `v4.local`, and
+1. Replace user `v4.public` issuance and authentication with compact opaque
+   credentials, add digest persistence to `V001`, remove API signing-key
+   configuration and primitives, and reissue local seed tokens atomically.
+2. Replace attachment-grant JWT issuance and verification with `v4.local`, and
    remove the JWT helper and signing-secret configuration in the same change.
+
+The two remaining tickets can proceed in parallel: the opaque-token pivot owns
+user API authentication, while the download ticket retains only the `v4.local`
+PASETO primitives and configuration. Changes to the shared authentication
+module and configuration require merge coordination.
 
 ## Test Strategy
 
 Unit coverage includes:
 
-- `v4.public` and `v4.local` round trips;
-- tampering, wrong key, unknown `kid`, wrong purpose/assertion, issuer,
-  audience, version, malformed custom claims, future validity, and expiry;
-- API-token claim/row matching and permission parsing;
-- startup rejection for invalid key-ring configuration.
+- exact opaque-token shape, unbiased random generation, deterministic checksum,
+  malformed token rejection, digest stability, and digest non-disclosure;
+- API-token lifecycle, expiration, membership, and permission parsing from the
+  persisted row;
+- `v4.local` round trips, tampering, wrong key, unknown `kid`, wrong
+  purpose/assertion, issuer, audience, version, malformed custom claims, future
+  validity, and expiry;
+- startup rejection for invalid download key-ring configuration.
 
 Integration coverage includes:
 
 - self-service issue/list/revoke with raw token shown once;
 - cross-user and cross-workspace management rejection;
 - successful data access and each permission rejection;
-- revoked, expired, membership-removed, and claim/row mismatch rejection;
+- malformed, bad-checksum, unknown-digest, revoked, expired, and
+  membership-removed rejection;
+- rejection of superseded `v4.public` API tokens and removal of API signing-key
+  configuration;
 - an empty database migrated by the single `V001`, with no actor tables and
   API-token provenance plus derived user attribution;
 - PASETO download grant issuance/redemption, hidden claim payload, tampering,
@@ -400,12 +407,22 @@ authentication contract.
   contract atomically.
 - 2026-06-17: Replaced the final actor-retirement cutover with one consolidated
   `V001`; local databases and storage are reset instead of upgraded.
-- 2026-06-19: Made API-token `last_used_at` updates best-effort on every
-  successful authentication instead of hourly-throttled.
 - 2026-06-18: Clarified that ticket 002 still ships as incremental `V005`, with
   final `V001` consolidation deferred to ticket 004.
+- 2026-06-19: Made API-token `last_used_at` updates best-effort on every
+  successful authentication instead of hourly-throttled.
+- 2026-06-19: Pivoted user API credentials from self-contained `v4.public`
+  PASETO to 41-character `ppat_` opaque tokens with approximately 178 bits of
+  entropy, an offline CRC32 checksum, and indexed SHA-256 digest persistence.
+  Proofplane already requires lifecycle and membership lookups, so the PASETO
+  claims duplicated persisted authority while making human-managed credentials
+  cumbersome. Retained `v4.local` exclusively for short-lived encrypted
+  attachment download grants.
 
 ## References
 
 - [pasetors 0.7.8 documentation](https://docs.rs/pasetors/0.7.8/pasetors/)
 - [PASETO version 4 specification](https://github.com/paseto-standard/paseto-spec/blob/master/docs/01-Protocol-Versions/Version4.md)
+- [Behind GitHub's new authentication token formats](https://github.blog/engineering/behind-githubs-new-authentication-token-formats/)
+- [GitLab `TokenAuthenticatable` storage strategies](https://docs.gitlab.com/development/token_authenticatable/)
+- [OAuth 2.0 access-token formats](https://www.rfc-editor.org/rfc/rfc6749#section-1.4)

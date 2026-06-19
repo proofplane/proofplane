@@ -27,3 +27,6 @@ couple services to crate-specific types.
 
 - `pasetors` custom claims are not validated automatically; each consuming
   profile must validate its complete custom payload.
+- The 2026-06-19 spec revision supersedes the API `v4.public` half of this
+  foundation; ticket 006 removes it while retaining the `v4.local` download
+  primitives for ticket 005.

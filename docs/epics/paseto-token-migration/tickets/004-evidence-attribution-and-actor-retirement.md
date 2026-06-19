@@ -36,3 +36,6 @@ the migration history with one final initial schema for fresh local databases.
   ticket performs the complete external replacement atomically.
 - Revised again on 2026-06-17: schema history is consolidated into one `V001`;
   old local databases are reset rather than migrated.
+- The 2026-06-19 spec revision changes only the user credential format in
+  ticket 006; actor retirement, API-token provenance, route cutover, and the
+  consolidated-schema decision remain in force.

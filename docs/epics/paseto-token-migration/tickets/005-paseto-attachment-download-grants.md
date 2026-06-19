@@ -26,3 +26,6 @@ stateless redemption, and all current attachment and object-integrity checks.
 
 - Revised with the 2026-06-17 spec update: the undeployed service has no
   JWT/PASETO compatibility phase.
+- The 2026-06-19 opaque user-token pivot does not change this ticket's
+  `v4.local` grant profile; issuance continues to record the authenticated user
+  and API-token IDs supplied by `ApiTokenContext`.

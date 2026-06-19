@@ -1,6 +1,6 @@
 # 001 - MCP Runtime And Authentication
 
-**Status:** Todo · **Depends on:** paseto-token-migration/004 · **Spec:** [spec.md](../spec.md#runtime-and-transport)
+**Status:** Todo · **Depends on:** paseto-token-migration/006 · **Spec:** [spec.md](../spec.md#runtime-and-transport)
 
 **Summary** - Replace the existing scaffold with a streamable-HTTP MCP runtime
 that authenticates user-owned workspace API tokens and shuts down cleanly.
@@ -20,6 +20,11 @@ that authenticates user-owned workspace API tokens and shuts down cleanly.
 
 - [ ] Select and integrate the MCP SDK.
 - [ ] Build runtime dependency composition in the binary.
-- [ ] Add PASETO bearer session authentication and `ApiTokenContext`.
+- [ ] Add opaque `ppat_` bearer session authentication and `ApiTokenContext`.
 - [ ] Add health, metrics, and graceful shutdown.
 - [ ] Add protocol startup/auth integration tests.
+
+**Notes**
+
+- Revised with the 2026-06-19 API-token spec pivot: MCP waits for ticket 006
+  and consumes the same opaque bearer contract as REST.

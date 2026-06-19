@@ -1,6 +1,6 @@
 # 004 — Auth & Identity Audit Logs
 
-**Status:** Todo · **Depends on:** 001, 002, paseto-token-migration/002, reliability-observability/005 · **Spec:** [PASETO spec](../../paseto-token-migration/spec.md#audit-and-secret-handling)
+**Status:** Todo · **Depends on:** 001, 002, paseto-token-migration/006, reliability-observability/005 · **Spec:** [API-token spec](../../paseto-token-migration/spec.md#audit-and-secret-handling)
 
 **Summary** — Emit structured identity and access audit logs for login, workspace
 creation, membership change, and user API-token issue/revoke.
@@ -36,3 +36,5 @@ creation, membership change, and user API-token issue/revoke.
 - There is no Proofplane audit read/query API in the MVP.
 - Revised on 2026-06-17 to replace actor/credential events with user-owned
   PASETO token events from the PASETO Token Migration spec.
+- Revised on 2026-06-19 to depend on the compact opaque API-token pivot; event
+  names and identifier-only audit fields remain unchanged.
