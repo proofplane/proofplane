@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::{
     authentication::paseto::{ApiTokenSigner, RegisteredClaims},
     domain::{
-        canonical_permissions, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
-        DomainError, UserId, WorkspaceId, WorkspacePermission,
+        ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
+        WorkspacePermission,
     },
     repository::Postgres,
 };
@@ -43,6 +43,13 @@ pub struct IssuedUserApiToken {
     pub raw_token: SecretString,
 }
 
+#[derive(Debug)]
+pub struct CreateUserApiTokenPayload {
+    pub name: String,
+    pub expires_at: DateTime<Utc>,
+    pub permissions: Vec<WorkspacePermission>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserApiTokenClaims {
     pub version: u8,
@@ -59,24 +66,15 @@ impl ApiTokenService {
         &self,
         user_id: UserId,
         workspace_id: WorkspaceId,
-        name: String,
-        expires_at: Option<DateTime<Utc>>,
-        permissions: Vec<WorkspacePermission>,
+        request: CreateUserApiTokenPayload,
     ) -> Result<IssuedUserApiToken, ApiTokenError> {
         self.authorize(workspace_id, user_id).await?;
-        let expires_at = expires_at
-            .ok_or_else(|| ApiTokenError::Invalid(vec!["expires_at is required".to_owned()]))?;
-        if expires_at <= Utc::now() {
-            return Err(ApiTokenError::Invalid(vec![
-                "expires_at must be in the future".to_owned(),
-            ]));
-        }
-        let permissions = canonical_permissions(permissions).map_err(domain_error)?;
         let token_id = ApiTokenId::from(Uuid::new_v4());
         let claims = UserApiTokenClaims {
             version: 1,
             workspace_id: Uuid::from(workspace_id),
-            permissions: permissions
+            permissions: request
+                .permissions
                 .iter()
                 .map(|permission| permission.as_str().to_owned())
                 .collect(),
@@ -87,7 +85,7 @@ impl ApiTokenService {
                 RegisteredClaims {
                     subject: Uuid::from(user_id),
                     token_id: Uuid::from(token_id),
-                    expires_at,
+                    expires_at: request.expires_at,
                 },
                 &claims,
             )
@@ -98,9 +96,9 @@ impl ApiTokenService {
                 id: token_id,
                 user_id,
                 workspace_id,
-                name,
+                name: request.name,
                 expires_at: issued.expires_at,
-                permissions,
+                permissions: request.permissions,
             })
             .await?;
 
@@ -169,10 +167,6 @@ pub fn api_token_signer(
     config: &crate::config::PasetoApiConfig,
 ) -> Result<ApiTokenSigner, crate::authentication::paseto::Error> {
     ApiTokenSigner::from_config(public_api_base_url, API_AUDIENCE, config)
-}
-
-fn domain_error(error: DomainError) -> ApiTokenError {
-    ApiTokenError::Invalid(vec![error.to_string()])
 }
 
 #[cfg(test)]
