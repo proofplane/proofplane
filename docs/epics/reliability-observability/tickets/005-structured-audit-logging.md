@@ -10,8 +10,9 @@ dormant database table, and document the dedicated Cloud Logging sink contract.
 - [ ] Given an audit log, when serialized, then `type = "audit_log"` and the
   stable identity, correlation, operation, outcome, and object fields are
   present where applicable.
-- [ ] Given credentials, object bytes, source-material bodies, or unbounded
-  errors, when an audit log is emitted, then those values are absent.
+- [ ] Given credentials, bearer grant tokens or URLs, internal object keys,
+  attachment or packet bytes, submission summaries or descriptions, or
+  unbounded errors, when an audit log is emitted, then those values are absent.
 - [ ] Given a rolled-back mutation, when logs are captured, then no success audit
   log is emitted; given a commit, then the success log is emitted afterward.
 - [ ] Given the consolidated initial migration is applied to an empty database,

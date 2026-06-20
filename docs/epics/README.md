@@ -12,8 +12,8 @@ The MVP has two release boundaries:
   sandbox, first-run product experience, public pricing, and launch operations.
 
 Native submission approval remains deferred. Trust is explicit: attachments
-must be malware-scanned and finalized, source material is curated with
-provenance, and freshness is derived from linked evidence.
+must be malware-scanned and finalized, submission summaries retain actor
+provenance, and freshness is derived from submitted evidence.
 
 ## Current Reality
 
@@ -21,8 +21,8 @@ provenance, and freshness is derived from linked evidence.
 | --- | --- | --- |
 | Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
 | Identity and authorization | Auth0 users, workspace membership, user-owned opaque API tokens, actor retirement | Identity audit logs |
-| Compliance model | Frameworks, controls, Evidence Requests, mappings | Trusted source material and auditor packet reads |
-| Evidence lifecycle | Submission create/get, upload integrity, quarantine, ClamAV scan, finalization | Latest API, download enforcement, demo submission/object seed |
+| Compliance model | Frameworks, controls, Evidence Requests, mappings | Submission summaries and auditor packet reads |
+| Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields, Cloud Logging retention, business event coverage |
 | Agent interface | MCP binary scaffold | MCP runtime and tools |
 | Launch surface | Product and GTM notes | Minimal sandbox/MCP setup UI and marketing site |
@@ -35,7 +35,7 @@ provenance, and freshness is derived from linked evidence.
 | [API Token And PASETO Migration](./paseto-token-migration/README.md) | Todo | Users authenticate with compact workspace-scoped API tokens and download grants use encrypted PASETO. |
 | [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Todo | Evidence can be queried, safely downloaded, and demonstrated end to end. |
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
-| [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Curated source material and auditor-ready packets expose provenance and freshness. |
+| [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
 | [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | A founder can connect an agent to a realistic SOC 2 sandbox. |
@@ -64,7 +64,7 @@ provenance, and freshness is derived from linked evidence.
 - Production configuration supports Postgres, SpiceDB, Google Pub/Sub, GCS,
   Auth0, and ClamAV without local emulator requirements.
 - User-owned API tokens can submit evidence, retrieve only finalized
-  attachments, query trusted compliance material, and perform the supported MCP
+  attachments, inspect summarized evidence, and perform the supported MCP
   workflows.
 - Structured audit logs are routed to a restricted Cloud Logging sink with the
   documented retention policy.

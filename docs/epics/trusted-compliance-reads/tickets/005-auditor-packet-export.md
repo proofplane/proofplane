@@ -1,25 +1,38 @@
-# 005 - Auditor Packet Export
+# 005 - Auditor Packet Export Jobs
 
-**Status:** Todo · **Depends on:** 004 · **Spec:** [spec.md](../spec.md#auditor-packet-read-model)
+**Status:** Todo · **Depends on:** 004, production-runtime-adapters/001, reliability-observability/005 · **Spec:** [spec.md](../spec.md#auditor-packet-read-model)
 
-**Summary** - Stream an auditor-ready ZIP containing a machine-readable
-manifest, readable summary, and only finalized attachment bytes.
+**Summary** - Create durable export jobs and have the background worker assemble
+auditor-ready ZIPs into object storage without routing bytes through the
+requesting agent or API process.
 
 **Acceptance criteria**
 
-- [ ] Given a valid packet selection, when export runs, then the ZIP contains a
-  JSON manifest, Markdown summary, and every eligible uploaded attachment.
+- [ ] Given a valid packet selection, when export is requested, then a pending
+  export and its outbox message commit atomically and the API returns `202`.
+- [ ] Given a pending export, when the worker completes it, then a deterministic
+  ZIP containing the manifest, Markdown, bounded summaries, and eligible
+  attachments is stored and the export becomes `ready` with verified metadata.
 - [ ] Given pending, malicious, failed, missing, or integrity-mismatched objects,
-  when export runs, then they are excluded with an explicit manifest gap or the
-  export fails before serving a corrupt packet.
-- [ ] Given duplicate filenames, when export runs, then archive paths are stable
-  and collision-free.
-- [ ] Given a successful export, when structured logs are inspected, then one
-  packet export audit log is present without attachment bytes.
+  when the worker runs, then the manifest records an allowed gap or the export
+  fails before becoming downloadable.
+- [ ] Given duplicate delivery or a retryable storage failure, when processing
+  resumes, then one deterministic export object is produced without duplicate
+  rows or conflicting archives.
+- [ ] Given an export status read, when it succeeds, then it returns compact
+  lifecycle metadata and bounded polling guidance without object keys, ZIP
+  bytes, or attachment contents.
 
 **Tasks**
 
-- [ ] Add streaming ZIP assembly and stable archive paths.
-- [ ] Reuse attachment eligibility and metadata verification.
-- [ ] Add export route, headers, and audit log.
-- [ ] Add archive-content and failure integration tests.
+- [ ] Add export records, lifecycle states, expiry, and transactional outbox
+  creation.
+- [ ] Add request/status services, authorization, REST routes, and audit events.
+- [ ] Add worker dispatch and idempotent bounded-resource ZIP assembly.
+- [ ] Store under a dedicated export prefix and persist verified object metadata.
+- [ ] Add request, worker retry/idempotency, archive-content, and isolation tests.
+
+**Notes**
+
+- Production use also requires Production Runtime Adapters tickets 002 and 003
+  for GCS and non-emulator Pub/Sub startup.

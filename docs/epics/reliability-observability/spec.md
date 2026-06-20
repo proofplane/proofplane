@@ -99,7 +99,8 @@ Postgres rows. Every audit record includes:
 - affected object type and ID where applicable.
 
 Audit records never include credentials, authorization headers, credential
-hashes, object bytes, source-material bodies, or unbounded error strings.
+hashes, bearer grant tokens or URLs, internal object keys, attachment or packet
+bytes, submission summaries or descriptions, or unbounded error strings.
 Domain tickets define their stable event names and allowed fields.
 
 Mutation success logs are emitted only after the database transaction commits.

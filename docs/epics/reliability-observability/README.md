@@ -23,6 +23,7 @@ Full failure and metric contracts live in [spec.md](./spec.md).
 - **002** builds on existing failure tests and production adapters.
 - **004** can proceed with current local pipeline behavior.
 - **005** is the shared contract for audit logs emitted by domain epics.
-- **006** follows the MCP Server runtime.
-- **007** follows 005 and the completed Evidence Lifecycle Completion download
-  grant and seed work.
+- **006** follows MCP Server ticket 005 and completes operational MCP
+  instrumentation.
+- **007** follows 005 and Evidence Lifecycle Completion ticket 004; it is a
+  prerequisite for MCP submission-write equivalence.

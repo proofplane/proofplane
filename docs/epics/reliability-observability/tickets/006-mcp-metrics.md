@@ -1,6 +1,6 @@
 # 006 - MCP Metrics
 
-**Status:** Todo · **Depends on:** mcp-server/004 · **Spec:** [spec.md](../spec.md#metrics-contract)
+**Status:** Todo · **Depends on:** mcp-server/005 · **Spec:** [spec.md](../spec.md#metrics-contract)
 
 **Summary** - Complete MVP instrumentation with MCP tool outcome and duration
 metrics.

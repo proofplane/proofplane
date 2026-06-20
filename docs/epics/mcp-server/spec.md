@@ -37,26 +37,49 @@ Read tools:
 - `create_attachment_download_grant`
 - `list_controls`
 - `list_evidence_request_control_mappings`
-- `find_source_material`
 - `preview_auditor_packet`
+- `get_auditor_packet_export`
+- `create_auditor_packet_download_grant`
 
 Write tools:
 
 - `create_evidence_submission`
 - `map_evidence_request_to_control`
 - `remove_evidence_request_control_mapping`
-- `create_or_update_source_material`
+- `request_auditor_packet_export`
 
-`create_attachment_download_grant` is a read-classified tool because it does not
-change compliance data. It authorizes the current user API token, verifies the
-attachment is finalized, and returns a short-lived Proofplane HTTPS URL for
-human inspection. The URL expires after five minutes and may be fetched more
-than once before expiry. The URL is a bearer secret; the tool result must tell
-the agent not to fetch, summarize, log, or persist it, only present it to the
-user. The attachment bytes do not pass through MCP or model context.
+## Context-Efficient Results
 
-Binary attachment upload and packet ZIP transfer remain HTTP operations. Native
-approve/reject and derived control-status tools are not part of the MVP.
+MCP tools return the smallest result needed for the next decision and do not
+mirror verbose REST response shapes mechanically:
+
+- `create_evidence_submission` accepts optional summary and description fields
+  but returns only the created submission ID and compact upload-next-step data;
+- `get_latest_evidence_submission` returns the summary but never the
+  description;
+- `get_evidence_submission` is the deliberate direct-detail operation and may
+  return both summary and description;
+- `preview_auditor_packet` returns readiness metadata and gaps without either
+  free-text field;
+- `request_auditor_packet_export` returns only export ID and status;
+- `get_auditor_packet_export` returns compact lifecycle/result metadata and
+  bounded polling guidance;
+- `create_auditor_packet_download_grant` returns a browser URL only for a ready
+  export and never returns or fetches ZIP bytes;
+- tool results do not duplicate structured fields in explanatory prose.
+
+Attachment and packet download-grant tools are read-classified because they do
+not change compliance data. Each authorizes the current user API token, verifies
+the object is eligible, and returns a short-lived Proofplane HTTPS URL for human
+inspection. URLs expire after five minutes and may be fetched more than once
+before expiry. A URL is a bearer secret; the tool result must tell the agent not
+to fetch, summarize, log, or persist it, only present it to the user. Attachment
+and ZIP bytes do not pass through MCP or model context.
+
+Binary attachment upload and packet ZIP download remain HTTP operations. MCP
+may request and poll an asynchronous packet export and create its human download
+grant, but never transports the ZIP. Native approve/reject and derived
+control-status tools are not part of the MVP.
 
 ## Errors And Equivalence
 
@@ -87,3 +110,9 @@ the MVP.
   user-owned PASETO bearer-token contract from the PASETO Token Migration epic.
 - 2026-06-19: Followed the API-token epic pivot from `v4.public` PASETO to the
   compact opaque `ppat_` bearer-token contract.
+- 2026-06-20: Removed the deferred source-material tools. Added bounded
+  submission context with selective MCP disclosure: summaries only on focused
+  submission reads and descriptions only on direct-by-ID retrieval.
+- 2026-06-20: Added asynchronous packet export request/status/grant tools. The
+  worker persists the ZIP and the agent presents a browser grant URL without
+  mediating packet bytes.

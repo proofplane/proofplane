@@ -1,9 +1,10 @@
 # 002 - Compliance Read Tools
 
-**Status:** Todo · **Depends on:** 001, evidence-lifecycle-completion/002, trusted-compliance-reads/004 · **Spec:** [spec.md](../spec.md#mvp-tools)
+**Status:** Todo · **Depends on:** 001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/004, trusted-compliance-reads/004 · **Spec:** [spec.md](../spec.md#mvp-tools)
 
-**Summary** - Add the MVP read tools for requests, submissions, human attachment
-download grants, controls, curated source material, and packet previews.
+**Summary** - Add the MVP read tools for requests, selectively detailed
+submissions, human attachment download grants, controls, and compact packet
+previews.
 
 **Acceptance criteria**
 
@@ -19,10 +20,21 @@ download grants, controls, curated source material, and packet previews.
   attachment bytes.
 - [ ] Given a download-grant result, when it is returned, then it identifies the
   URL as a bearer secret for human use and excludes the raw token from logs.
+- [ ] Given a latest-submission read, when it succeeds, then the bounded summary
+  may be returned but the description is absent.
+- [ ] Given a submission read by ID, when it succeeds, then its optional summary
+  and description are returned without duplicated explanatory prose.
+- [ ] Given a packet preview, when it succeeds, then summaries and descriptions
+  are absent from the aggregate result.
 
 **Tasks**
 
 - [ ] Add request, submission, download-grant, control, and mapping read tools.
-- [ ] Add source-material and packet-preview tools.
+- [ ] Add the packet-preview tool.
 - [ ] Map domain problems to stable MCP problem codes.
 - [ ] Add representative integration tests for every read family.
+
+**Notes**
+
+- The spec was revised on 2026-06-20 to defer source material and disclose
+  submission context only through focused reads.

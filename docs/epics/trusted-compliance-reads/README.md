@@ -1,8 +1,9 @@
 # Trusted Compliance Reads Epic
 
-Turn controls and evidence into concise, provenance-bearing reads for agents and
-auditors. Trust comes from explicit curation, finalized attachments, freshness,
-and record provenance rather than a hidden approval flag.
+Turn controls and evidence into concise, provenance-bearing packet views for
+agents and auditors. Trust comes from immutable summarized submissions,
+finalized attachments, freshness, and record provenance rather than a hidden
+approval flag.
 
 Full schema, freshness, packet, and export decisions live in
 [spec.md](./spec.md).
@@ -11,15 +12,24 @@ Full schema, freshness, packet, and export decisions live in
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Source Material Model](./tickets/001-source-material-model.md) | Todo | Add schema, invariants, and persistence. |
-| 002. [Source Material API](./tickets/002-source-material-api.md) | Todo | Create, update, retrieve, and search curated material. |
-| 003. [Freshness And Usability](./tickets/003-freshness-and-usability.md) | Todo | Derive current, stale, unusable, and retired states. |
+| 003. [Evidence Freshness And Usability](./tickets/003-evidence-freshness-and-usability.md) | Todo | Derive current, stale, missing, and unusable states. |
 | 004. [Auditor Packet Preview](./tickets/004-auditor-packet-preview.md) | Todo | Assemble the control-to-evidence read model. |
-| 005. [Auditor Packet Export](./tickets/005-auditor-packet-export.md) | Todo | Stream a ZIP with manifest, summary, and usable files. |
+| 005. [Auditor Packet Export Jobs](./tickets/005-auditor-packet-export.md) | Todo | Build packet ZIPs asynchronously into object storage. |
+| 006. [Auditor Packet Download Grants](./tickets/006-auditor-packet-download-grants.md) | Todo | Give humans short-lived browser URLs without agent-mediated bytes. |
 
 ## Sequencing
 
-- **001** precedes 002 and 003.
-- **002** and **003** can overlap once the schema is stable.
-- **004** depends on Evidence Lifecycle Completion and 003.
-- **005** depends on 004 and finalized attachment download eligibility.
+- **003** depends on the completed latest-submission and attachment-eligibility
+  contracts.
+- **004** depends on Evidence Lifecycle Completion ticket 004 and 003.
+- **005** depends on 004, the runtime object-store abstraction, the shared audit
+  contract, and finalized attachment eligibility.
+- **006** depends on 005. Production delivery additionally requires the GCS
+  object store and production Pub/Sub startup tickets.
+
+## Deferred Work
+
+The standalone source-material model, curation API, lifecycle, and full-text
+search are deferred until a concrete workflow requires narratives spanning
+multiple controls, requests, and submissions. Evidence Submission summaries
+cover the immediate need without a second provenance model.

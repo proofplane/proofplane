@@ -1,9 +1,9 @@
 # 003 - Compliance Write Tools
 
-**Status:** Todo · **Depends on:** 001, trusted-compliance-reads/002 · **Spec:** [spec.md](../spec.md#mvp-tools)
+**Status:** Todo · **Depends on:** 001, evidence-lifecycle-completion/004, reliability-observability/007 · **Spec:** [spec.md](../spec.md#mvp-tools)
 
-**Summary** - Add service-backed tools for submission records, control mappings,
-and curated source material while leaving binary file transfer to REST.
+**Summary** - Add service-backed tools for submission records with bounded
+context and for control mappings while leaving binary file transfer to REST.
 
 **Acceptance criteria**
 
@@ -14,11 +14,16 @@ and curated source material while leaving binary file transfer to REST.
 - [ ] Given an unauthorized user API token, when a write tool runs, then no
   state or success audit log is produced.
 - [ ] Given submission creation through MCP, when it succeeds, then the result
-  explains the REST attachment upload contract without accepting file bytes.
+  returns the submission ID and compact REST attachment-upload instructions
+  without echoing its optional summary or description or accepting file bytes.
 
 **Tasks**
 
 - [ ] Add submission and mapping tools.
-- [ ] Add source-material create/update tool.
 - [ ] Reuse service DTO mapping and validation semantics.
 - [ ] Add write, rejection, and rollback integration tests.
+
+**Notes**
+
+- The spec was revised on 2026-06-20 to defer standalone source-material
+  curation.

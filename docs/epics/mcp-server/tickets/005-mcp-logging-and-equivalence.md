@@ -1,6 +1,6 @@
-# 004 - MCP Logging And Equivalence
+# 005 - MCP Logging And Equivalence
 
-**Status:** Todo · **Depends on:** 002, 003, reliability-observability/005 · **Spec:** [spec.md](../spec.md#audit)
+**Status:** Todo · **Depends on:** 002, 003, 004, reliability-observability/005, reliability-observability/007 · **Spec:** [spec.md](../spec.md#audit)
 
 **Summary** - Emit attributable structured logs for MCP activity and prove that
 shared REST/MCP operations have equivalent domain outcomes.
@@ -14,8 +14,9 @@ shared REST/MCP operations have equivalent domain outcomes.
   state and authorization outcomes are equivalent.
 - [ ] Given a tool failure or rollback, when logs are inspected, then no success
   audit log is present.
-- [ ] Given any tool input, when logs are inspected, then credentials and
-  free-form source-material content are absent.
+- [ ] Given any tool input, when logs are inspected, then credentials,
+  free-form submission context, grant URLs, object keys, and packet bytes are
+  absent.
 
 **Tasks**
 

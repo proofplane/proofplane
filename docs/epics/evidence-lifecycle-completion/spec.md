@@ -5,7 +5,8 @@
 Complete the evidence lifecycle on top of the implemented submission,
 quarantine, ClamAV scan, and finalization pipeline. Callers must be able to find
 the latest submission, create a safe human download grant for finalized
-attachment bytes, and exercise the flow from seeded local data.
+attachment bytes, describe what submitted evidence demonstrates, and exercise
+the flow from seeded local data.
 
 ## Current Implementation
 
@@ -16,7 +17,29 @@ attachment bytes, and exercise the flow from seeded local data.
 - ClamAV scanning and finalization are idempotent worker deliveries.
 - The latest-submission route and repository query are implemented and tested.
 - Stateless attachment download grants are implemented and tested.
-- There is no seeded submission/object.
+- A deterministic local submission and filesystem object are seeded.
+- Evidence Submissions do not carry human- or agent-authored context.
+
+## Evidence Submission Context
+
+An Evidence Submission has two optional plain-text fields supplied when it is
+created:
+
+- `summary` concisely states what the evidence demonstrates and is limited to
+  500 characters;
+- `description` provides additional context and is limited to 4,000 characters.
+
+Both fields are part of the immutable submission observation. Neither is an
+approval, derived compliance conclusion, or independently mutable curated
+record. Omitting either field remains valid for backward compatibility and
+existing rows read with both fields absent. When present, each value is trimmed
+and must be non-blank.
+
+Submission creation accepts both fields but does not echo the description. The
+direct submission-detail endpoint addressed by submission ID returns both. The
+latest-submission endpoint returns the summary but omits the description, so a
+caller must deliberately retrieve that submission by ID to load the larger
+field. Full-text search is not part of this change.
 
 ## API Contract
 
@@ -116,9 +139,9 @@ failure, not downloadable content. Attachment bytes are streamed through
 Proofplane; the API does not buffer the full object and does not expose a GCS
 signed URL.
 
-This is the reusable eligibility rule for later source-material and packet work.
-Those features may reference only uploaded attachments with finalized keys and
-must create their own grants when offering human download links.
+This is the reusable eligibility rule for later packet work. Packet features
+may reference only uploaded attachments with finalized keys and must create
+their own grants when offering human download links.
 
 ## Demo Seed
 
@@ -145,3 +168,7 @@ GCS seeding is not required; production data is created through normal APIs.
   so downloads can use the stored name directly in `Content-Disposition`.
 - 2026-06-16: Moved evidence lifecycle audit logging ownership to the
   Reliability and Observability epic.
+- 2026-06-20: Added optional immutable submission context: a 500-character
+  summary for compact reads and a 4,000-character description available only
+  through direct retrieval. Deferred the separate curated source-material
+  model and search API.

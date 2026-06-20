@@ -1,6 +1,6 @@
 # 007 - Evidence Lifecycle Audit Logs
 
-**Status:** Todo · **Depends on:** 005-structured-audit-logging, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003 · **Spec:**
+**Status:** Todo · **Depends on:** 005, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003, evidence-lifecycle-completion/004 · **Spec:**
 [spec.md](../spec.md#evidence-lifecycle-audit-events)
 
 **Summary** - Emit structured audit logs for evidence submission creation,
@@ -21,7 +21,8 @@ attributable without exposing secrets.
   and attachment ID may appear where applicable.
 - [ ] Given sensitive values exist during the flow, then raw grant tokens, API
   tokens, authorization headers, attachment bytes, object keys treated as
-  storage internals, scanner raw error strings, and credentials are absent.
+  storage internals, submission summaries and descriptions, scanner raw error
+  strings, and credentials are absent.
 
 **Tasks**
 
@@ -34,6 +35,7 @@ attributable without exposing secrets.
 - [ ] Instrument scan and finalization outcomes, with duplicate/stale deliveries
   omitted or explicitly non-success.
 - [ ] Add captured-log tests for success, rollback/no-false-success,
-  retry/no-false-success, duplicate/stale delivery, and secret exclusion.
+  retry/no-false-success, duplicate/stale delivery, and sensitive-context
+  exclusion.
 - [ ] Update the evidence lifecycle epic pointer so audit logging ownership is
   clear.
