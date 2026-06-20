@@ -16,7 +16,7 @@ make seed
 Copy the token printed by the latest seed run:
 
 ```text
-local owner bearer API token (reissued by this seed run): v4.public...
+local owner bearer API token (reissued by this seed run): ppat_...
 ```
 
 In a separate terminal, start the API:
@@ -33,7 +33,7 @@ export WORKSPACE_ID=00000000-0000-4000-8000-000000000001
 export UNAUTHORIZED_WORKSPACE_ID=00000000-0000-4000-8000-000000000002
 export SOC2_FRAMEWORK_ID=136bfa09-f431-589c-ba4f-0176ad981a39
 export SEEDED_ACCESS_CONTROL_ID=25559395-28b2-5e5f-9fae-4a68d4386d5e
-export PROOFPLANE_API_TOKEN=v4.public-replace-with-latest-seed-output
+export PROOFPLANE_API_TOKEN=ppat_replace-with-latest-seed-output
 ```
 
 The authorized workspace has local owner membership and a seeded bearer API token. The

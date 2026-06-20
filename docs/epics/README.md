@@ -20,7 +20,7 @@ provenance, and freshness is derived from linked evidence.
 | Area | Implemented | Remaining |
 | --- | --- | --- |
 | Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
-| Identity and authorization | Auth0 users, workspace membership, user-owned PASETO API tokens, actor retirement | Compact opaque API tokens and identity audit logs |
+| Identity and authorization | Auth0 users, workspace membership, user-owned opaque API tokens, actor retirement | Identity audit logs |
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Trusted source material and auditor packet reads |
 | Evidence lifecycle | Submission create/get, upload integrity, quarantine, ClamAV scan, finalization | Latest API, download enforcement, demo submission/object seed |
 | Audit | Structured application logging | Stable audit-log fields, Cloud Logging retention, business event coverage |

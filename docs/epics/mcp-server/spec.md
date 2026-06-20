@@ -83,7 +83,7 @@ the MVP.
   structured application audit logs routed to Cloud Logging.
 - 2026-06-11: Added attachment download-grant issuance for human inspection;
   attachment bytes do not pass through the MCP connection.
-- 2026-06-17: Replaced the planned actor API-key session with the user-owned
-  PASETO bearer-token contract from the PASETO Token Migration epic.
+- 2026-06-17: Replaced the planned actor API-key session with the then-planned
+  user-owned PASETO bearer-token contract from the PASETO Token Migration epic.
 - 2026-06-19: Followed the API-token epic pivot from `v4.public` PASETO to the
   compact opaque `ppat_` bearer-token contract.
