@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    authentication::ActorContext,
+    authentication::ApiTokenContext,
     domain::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestId,
         UpdateEvidenceRequestPayload,
@@ -24,25 +24,28 @@ impl EvidenceRequestService {
 
     pub async fn create(
         &self,
-        actor: ActorContext,
+        token: ApiTokenContext,
         request: CreateEvidenceRequestPayload,
     ) -> Result<EvidenceRequest, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
-                context.create_evidence_request(&request).await
-            })
+            .in_workspace_context(
+                token.workspace_id,
+                token.user_id,
+                token.api_token_id,
+                async move |context| context.create_evidence_request(&request).await,
+            )
             .await?)
     }
 
     pub async fn get(
         &self,
-        actor: ActorContext,
+        token: ApiTokenContext,
         id: EvidenceRequestId,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
+            .in_workspace_context_read(token.workspace_id, async move |context| {
                 context.get_evidence_request(id).await
             })
             .await?)
@@ -50,11 +53,11 @@ impl EvidenceRequestService {
 
     pub async fn list_by_workspace(
         &self,
-        actor: ActorContext,
+        token: ApiTokenContext,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor.workspace_id, actor.id, async |context| {
+            .in_workspace_context_read(token.workspace_id, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)
@@ -62,26 +65,29 @@ impl EvidenceRequestService {
 
     pub async fn replace(
         &self,
-        actor: ActorContext,
+        token: ApiTokenContext,
         id: EvidenceRequestId,
         update: UpdateEvidenceRequestPayload,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context(actor.workspace_id, actor.id, async move |context| {
-                context.replace_evidence_request(id, &update).await
-            })
+            .in_workspace_context(
+                token.workspace_id,
+                token.user_id,
+                token.api_token_id,
+                async move |context| context.replace_evidence_request(id, &update).await,
+            )
             .await?)
     }
 
     pub async fn list_due(
         &self,
-        actor: ActorContext,
+        token: ApiTokenContext,
         now: DateTime<Utc>,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_actor_context_read(actor.workspace_id, actor.id, async move |context| {
+            .in_workspace_context_read(token.workspace_id, async move |context| {
                 context.list_due_evidence_requests(now).await
             })
             .await?)

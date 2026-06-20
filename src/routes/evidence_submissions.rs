@@ -27,8 +27,8 @@ use sfv::{BareItem, Dictionary, ListEntry, Parser};
 use uuid::Uuid;
 
 use crate::{
-    authentication::ActorContext,
-    authentication::ApiKeyAuthenticator,
+    authentication::ApiTokenAuthenticator,
+    authentication::ApiTokenContext,
     domain::{
         required_text, validate_attachment_filename, CreateEvidenceSubmissionPayload, DomainError,
         EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
@@ -54,7 +54,7 @@ pub struct EvidenceSubmissionState {
 
 #[derive(Clone)]
 pub struct EvidenceSubmissionRouteAuthState {
-    pub authenticator: ApiKeyAuthenticator,
+    pub authenticator: ApiTokenAuthenticator,
 }
 
 pub fn router(state: EvidenceSubmissionState) -> Router {
@@ -92,7 +92,7 @@ async fn authorize_evidence_submission_route(
     next: Next,
 ) -> Result<Response, ApiError> {
     let method = request.method().clone();
-    let actor = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
+    let token = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
 
     let required = match method {
         Method::GET => WorkspacePermission::ReadEvidenceSubmissions,
@@ -100,7 +100,7 @@ async fn authorize_evidence_submission_route(
         _ => return Err(ApiError::MethodNotAllowed),
     };
 
-    if !actor.permissions.has(required) {
+    if !token.permissions.has(required) {
         return Err(ApiError::NotFound);
     }
 
@@ -174,7 +174,7 @@ impl AttachmentUploadRequest {
 struct EvidenceSubmissionResponse {
     id: Uuid,
     evidence_request_id: Uuid,
-    submitted_by: Uuid,
+    submitted_by: EvidenceSubmitterResponse,
     received_at: DateTime<Utc>,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
@@ -182,12 +182,21 @@ struct EvidenceSubmissionResponse {
     collection_method: String,
 }
 
+#[derive(Debug, Serialize)]
+struct EvidenceSubmitterResponse {
+    api_token_id: Uuid,
+    user_id: Uuid,
+}
+
 impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: Uuid::from(submission.submitted_by),
+            submitted_by: EvidenceSubmitterResponse {
+                api_token_id: Uuid::from(submission.submitted_by.api_token_id),
+                user_id: Uuid::from(submission.submitted_by.user_id),
+            },
             received_at: submission.received_at,
             coverage_start_at: submission.coverage_start_at,
             coverage_end_at: submission.coverage_end_at,
@@ -242,7 +251,7 @@ impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
 async fn create_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<EvidenceSubmissionDTO>,
 ) -> Result<Json<EvidenceSubmissionResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
@@ -252,7 +261,7 @@ async fn create_evidence_submission(
         .map_err(domain_errors)?;
     let submission = state
         .service
-        .create(actor, evidence_request_id, payload)
+        .create(token, evidence_request_id, payload)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -262,11 +271,11 @@ async fn create_evidence_submission(
 async fn get_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
     let detail = state
         .service
-        .get(actor, EvidenceSubmissionId::from(path.submission_id))
+        .get(token, EvidenceSubmissionId::from(path.submission_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -276,11 +285,11 @@ async fn get_evidence_submission(
 async fn get_latest_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
 ) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
     let detail = state
         .service
-        .latest_for_request(actor, EvidenceRequestId::from(path.evidence_request_id))
+        .latest_for_request(token, EvidenceRequestId::from(path.evidence_request_id))
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -303,14 +312,14 @@ impl From<EvidenceAttachment> for EvidenceAttachmentUploadResponse {
 async fn upload_evidence_attachment(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionAttachmentPath>,
-    Extension(actor): Extension<ActorContext>,
+    Extension(token): Extension<ApiTokenContext>,
     Extension(request_id): Extension<RequestId>,
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<EvidenceAttachmentUploadResponse>), ApiError> {
     let submission_id = EvidenceSubmissionId::from(path.submission_id);
     if !state
         .service
-        .evidence_submission_exists(&actor, submission_id)
+        .evidence_submission_exists(&token, submission_id)
         .await?
     {
         return Err(ApiError::NotFound);
@@ -321,10 +330,10 @@ async fn upload_evidence_attachment(
     // automatically cleaned up with object storage retention settings since it's in a quarantine
     // bucket and that will probably have a cleanup policy.
     let payload =
-        attachment_upload_from_multipart(&state.service, &actor, submission_id, multipart).await?;
+        attachment_upload_from_multipart(&state.service, &token, submission_id, multipart).await?;
     let attachment = state
         .service
-        .create_attachment(&actor, request_id.0, submission_id, payload)
+        .create_attachment(&token, request_id.0, submission_id, payload)
         .await?;
 
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))
@@ -332,7 +341,7 @@ async fn upload_evidence_attachment(
 
 async fn attachment_upload_from_multipart(
     service: &EvidenceSubmissionService,
-    actor: &ActorContext,
+    token: &ApiTokenContext,
     evidence_submission_id: EvidenceSubmissionId,
     mut multipart: Multipart,
 ) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
@@ -376,7 +385,7 @@ async fn attachment_upload_from_multipart(
     let chunks = file_chunks(field, Arc::clone(&crc32c));
     let mut uploaded_file = service
         .upload_attachment(
-            actor,
+            token,
             evidence_submission_id,
             request.filename,
             request.content_type,

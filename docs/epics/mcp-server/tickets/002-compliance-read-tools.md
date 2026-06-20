@@ -7,8 +7,9 @@ download grants, controls, curated source material, and packet previews.
 
 **Acceptance criteria**
 
-- [ ] Given an authorized actor, when a read tool is called, then it returns the
-  same domain records and tenant scope as the equivalent REST operation.
+- [ ] Given an authorized user API token, when a read tool is called, then it
+  returns the same domain records and tenant scope as the equivalent REST
+  operation.
 - [ ] Given invalid input, when a tool is called, then structured field issues
   identify every invalid field.
 - [ ] Given unauthorized or cross-workspace input, when a tool is called, then a

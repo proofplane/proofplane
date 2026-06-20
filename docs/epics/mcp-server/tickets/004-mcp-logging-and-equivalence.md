@@ -8,7 +8,8 @@ shared REST/MCP operations have equivalent domain outcomes.
 **Acceptance criteria**
 
 - [ ] Given a meaningful MCP read or write, when it completes, then audit
-  logs record actor, workspace, client type, tool, and correlation context.
+  logs record user, API token, workspace, client type, tool, and correlation
+  context.
 - [ ] Given matched REST and MCP scenarios, when executed, then persisted domain
   state and authorization outcomes are equivalent.
 - [ ] Given a tool failure or rollback, when logs are inspected, then no success

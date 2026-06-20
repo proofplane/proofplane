@@ -1,8 +1,8 @@
 # Contributing to Proofplane
 
-This repository is an early Rust scaffold for Proofplane. Keep changes scoped,
-run the repo checks before handing work off, and update the local docs when a
-change alters setup or deployment order.
+Proofplane is a single Rust crate. Keep changes scoped, run the repository
+checks before handing work off, and update local docs when a change alters setup
+or workflow.
 
 ## Prerequisites
 
@@ -11,16 +11,6 @@ Install these tools before starting:
 - Rust and Cargo for the current stable toolchain
 - `make`
 - Docker with Docker Compose
-- the AuthZed `zed` CLI for SpiceDB schema validation
-
-On macOS, install `zed` with Homebrew:
-
-```bash
-brew install authzed/tap/zed
-```
-
-The Rust build vendors `protoc`, so contributors do not need a separate local
-Protocol Buffers compiler for the generated SpiceDB bindings.
 
 ## First Setup
 
@@ -30,34 +20,40 @@ From the repository root:
 cargo build
 make up
 make health
-make authz-schema-validate
-make authz-schema
 make seed
 ```
 
-`make up` starts the local Postgres, Pub/Sub emulator, and SpiceDB services.
-`make health` checks that those services are reachable and creates the local
-filesystem storage directory when needed.
+`make up` starts local Postgres, the Pub/Sub emulator, and ClamAV. `make health`
+checks that those services are reachable and creates the local filesystem
+storage directory when needed.
 
 The local Docker services listen on:
 
 - Postgres: `127.0.0.1:5432`
 - Pub/Sub emulator: `127.0.0.1:8085`
-- SpiceDB gRPC: `127.0.0.1:50051`
 - ClamAV clamd: `127.0.0.1:3310`
 
-SpiceDB stores its local state in the `proofplane_spicedb` database on the
-local Postgres service. `make up` runs the idempotent database create step and
-the SpiceDB datastore migration before it starts SpiceDB, so an existing local
-Postgres volume can be reused.
+`make seed` runs the application database migrations before writing local data.
+The current schema is a consolidated initial schema. If you have an old local
+database from before the API-token cutover, use:
 
-SpiceDB schema deployment is explicit. Validate the schema fixture before
-applying the configured schema, and apply it before seed writes authorization
-relationships. The API does not deploy the SpiceDB schema on startup.
+```bash
+make reset-local
+make seed
+```
 
-The seed binary runs the application database migrations before writing local
-data. It expects the SpiceDB schema to exist before it writes the seeded local
-workspace membership.
+The seed output prints a local owner bearer API token. Use that token for
+data-plane API calls:
+
+```bash
+export PROOFPLANE_API_TOKEN=v4.public-replace-with-latest-seed-output
+curl --fail-with-body \
+  --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
+  http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
+```
+
+Management routes still use Auth0 bearer JWTs. Local fixture examples for the
+data plane live in [`fixtures/api/README.md`](fixtures/api/README.md).
 
 ## Configuration
 
@@ -73,10 +69,9 @@ Pass another config path when needed:
 make api PROOFPLANE_CONFIG=path/to/config.yaml
 ```
 
-The local config covers process bind addresses, Postgres, Pub/Sub, SpiceDB,
-object storage, observability, auth settings, worker settings, and health
-paths. In particular, `spicedb.schema_path` selects the schema file used by
-`make authz-schema`.
+The local config covers process bind addresses, Postgres, Pub/Sub, PASETO API
+and download keys, filesystem object storage, ClamAV, observability, Auth0
+settings, worker settings, upload limits, and health paths.
 
 Object storage is not run in Docker Compose for the MVP. Local config reserves
 `.local/storage` for the filesystem-backed object storage adapter. Production
@@ -90,6 +85,7 @@ Start a process with the Make target for that binary:
 ```bash
 make api
 make worker
+make dequeuer
 make mcp
 ```
 
@@ -104,7 +100,8 @@ make reset-local
 
 `make reset-local` destroys Docker volumes for the local dependency stack and
 recreates the filesystem storage directory. Use it when local dependency state
-needs to be rebuilt.
+needs to be rebuilt or when a schema-squashing change requires a fresh local
+database.
 
 ## Validation
 
@@ -120,21 +117,26 @@ That runs:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 
-The integration tests use Docker-backed Testcontainers for Postgres and
-SpiceDB, so Docker must be available for the full test suite.
+The integration tests use Docker-backed Testcontainers for Postgres and ClamAV,
+so Docker must be available for the full test suite.
 
-When editing SpiceDB schema or validation fixtures, also run:
+Useful focused commands:
 
 ```bash
-make authz-schema-validate
+cargo test --test integration request_auth
+cargo test --test integration evidence_submissions
+cargo test --test integration api_token
+cargo test --test integration repository
 ```
 
 ## Repository Notes
 
 - Application schema migrations live in `migrations/`.
-- SpiceDB schema-as-code lives in `authz/spicedb/`.
-- Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
+- Application code lives under `src/`, grouped by route, service, repository,
+  domain, and external adapter responsibility.
 - MVP planning and tickets live in [`docs/epics/`](docs/epics/).
+- Data-plane HTTP routes authenticate with user-owned PASETO API tokens.
+- Management-plane routes authenticate with Auth0 bearer JWTs.
 
-Do not add generated SpiceDB Rust types to application-facing interfaces.
-Keep generated AuthZed protobuf types behind the authorization adapter.
+Do not commit credentials or production configuration. Use
+`PROOFPLANE_CONFIG=path/to/config.yaml` for local overrides.

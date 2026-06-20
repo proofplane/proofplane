@@ -6,12 +6,16 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::{
-    authentication::{auth0::TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator},
+    authentication::{
+        auth0::TokenVerifier,
+        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        ApiTokenAuthenticator, UserAuthenticator,
+    },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
-        actors::{self, ActorsState},
+        api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
@@ -25,7 +29,7 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        actors::ActorService, attachment_downloads::AttachmentDownloadService,
+        api_tokens::ApiTokenService, attachment_downloads::AttachmentDownloadService,
         controls::ControlService, evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService, user::UserService,
         workspaces::WorkspaceService,
@@ -37,18 +41,32 @@ pub struct AppDependencies<V: TokenVerifier> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub authenticator: ApiKeyAuthenticator,
+    pub api_token_authenticator: ApiTokenAuthenticator,
     pub user_authenticator: UserAuthenticator<V>,
 }
 
 pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
+    let api_token_authenticator = dependencies.api_token_authenticator.clone();
+    let download_grant_encryptor = DownloadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &dependencies.config.paseto.download,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let download_grant_decryptor = DownloadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &dependencies.config.paseto.download,
+    )
+    .map_err(crate::authentication::Error::from)?;
     let attachment_download_service = AttachmentDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
         dependencies.config.server.public_api_base_url.clone(),
-        &dependencies.config.server.download_signing_secret,
+        download_grant_encryptor,
+        download_grant_decryptor,
     );
 
     Ok(Router::new()
@@ -72,7 +90,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
         .merge(evidence_requests::router(EvidenceRequestState {
             service: EvidenceRequestService::new(dependencies.postgres.clone()),
             route_auth: EvidenceRequestRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(evidence_submissions::router(EvidenceSubmissionState {
@@ -82,19 +100,19 @@ pub fn create_app<V: TokenVerifier + 'static>(
             ),
             max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             route_auth: EvidenceSubmissionRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(attachment_downloads::router(AttachmentDownloadState {
             service: attachment_download_service,
             route_auth: AttachmentDownloadRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator.clone(),
             },
         }))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {
-                authenticator: dependencies.authenticator.clone(),
+                authenticator: api_token_authenticator,
             },
         }))
         .merge(me::router(MeState {
@@ -109,10 +127,10 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
-        .merge(actors::router(ActorsState {
-            service: ActorService::new(dependencies.postgres.clone(), ApiKeyManager::new()?),
+        .merge(api_tokens::router(ApiTokensState {
+            service: ApiTokenService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
-                authenticator: dependencies.user_authenticator,
+                authenticator: dependencies.user_authenticator.clone(),
             },
         }))
         .nest("/version", version::router())
@@ -129,7 +147,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        actor_id = tracing::field::Empty,
+                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })

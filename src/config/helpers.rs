@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use pasetors::{keys::SymmetricKey, version4::V4};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
@@ -106,16 +106,12 @@ pub(super) fn public_api_base_url(value: String) -> Result<Url, String> {
     Ok(url)
 }
 
-pub(super) fn download_signing_secret(value: SecretString) -> Result<SecretString, String> {
-    let encoded = secret_value(value)?;
-    let decoded = BASE64_STANDARD
-        .decode(encoded.expose_secret())
-        .map_err(|_| "must be valid base64".to_owned())?;
-    if decoded.len() < 32 {
-        return Err("must decode to at least 32 bytes".into());
-    }
-
-    Ok(encoded)
+pub(super) fn paseto_download_key(value: SecretString) -> Result<SecretString, String> {
+    secret_value(value).and_then(|value| {
+        SymmetricKey::<V4>::try_from(value.expose_secret())
+            .map(|_| value)
+            .map_err(|_| "must be a valid k4.local PASERK".into())
+    })
 }
 
 pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {
@@ -153,11 +149,11 @@ pub(super) fn trim_required(value: String) -> Result<String, String> {
 }
 
 pub(super) trait ConfigValidationExt<T> {
-    fn at(self, path: &'static str) -> Validation<T, ConfigFieldError>;
+    fn at(self, path: impl Into<String>) -> Validation<T, ConfigFieldError>;
 }
 
 impl<T> ConfigValidationExt<T> for Result<T, String> {
-    fn at(self, path: &'static str) -> Validation<T, ConfigFieldError> {
+    fn at(self, path: impl Into<String>) -> Validation<T, ConfigFieldError> {
         match self {
             Ok(value) => Validation::valid(value),
             Err(message) => Validation::invalid(ConfigFieldError::new(path, message)),
@@ -167,9 +163,7 @@ impl<T> ConfigValidationExt<T> for Result<T, String> {
 
 #[cfg(test)]
 mod tests {
-    use secrecy::ExposeSecret;
-
-    use super::{download_signing_secret, public_api_base_url};
+    use super::public_api_base_url;
 
     #[test]
     fn public_api_base_url_requires_https_except_loopback_origins() {
@@ -179,17 +173,5 @@ mod tests {
         assert!(public_api_base_url("http://api.proofplane.com".to_owned()).is_err());
         assert!(public_api_base_url("https://api.proofplane.com/v1".to_owned()).is_err());
         assert!(public_api_base_url("https://user@example.com".to_owned()).is_err());
-    }
-
-    #[test]
-    fn download_signing_secret_requires_valid_base64_with_32_decoded_bytes() {
-        assert!(download_signing_secret("not-base64".into()).is_err());
-        assert!(download_signing_secret("c2hvcnQ=".into()).is_err());
-
-        let secret = download_signing_secret("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=".into())
-            .expect("32-byte secret validates");
-        let debug = format!("{secret:?}");
-        assert!(!debug.contains(secret.expose_secret()));
-        assert!(debug.contains("Secret"));
     }
 }

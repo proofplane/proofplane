@@ -4,9 +4,7 @@ use tokio::net::TcpListener;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies},
-    authentication::{
-        auth0::Auth0TokenVerifier, ApiKeyAuthenticator, ApiKeyManager, UserAuthenticator,
-    },
+    authentication::{auth0::Auth0TokenVerifier, ApiTokenAuthenticator, UserAuthenticator},
     config, object_storage, observability, repository, store,
 };
 use secrecy::ExposeSecret;
@@ -69,7 +67,7 @@ async fn run() -> Result<(), Error> {
     let listener = TcpListener::bind(config.server.api_bind).await.unwrap();
     info!("listening on {}", config.server.api_bind);
 
-    let authenticator = ApiKeyAuthenticator::new(ApiKeyManager::new()?, postgres.clone());
+    let api_token_authenticator = ApiTokenAuthenticator::new(postgres.clone());
     let user_authenticator = UserAuthenticator::new(
         Arc::new(Auth0TokenVerifier::new(&config.auth0)),
         postgres.clone(),
@@ -80,7 +78,7 @@ async fn run() -> Result<(), Error> {
         postgres,
         object_store,
         metrics,
-        authenticator,
+        api_token_authenticator,
         user_authenticator,
     };
 

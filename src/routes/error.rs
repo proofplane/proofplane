@@ -10,7 +10,7 @@ use crate::{
     domain::DomainError,
     object_storage::StorageError,
     repository::{ConflictKind, Error as RepositoryError},
-    services::actors::ActorError,
+    services::api_tokens::ApiTokenError,
     services::controls::ControlMutationError,
     services::workspaces::{CreateWorkspaceError, MemberError},
     services::Error as ServiceError,
@@ -146,16 +146,16 @@ impl From<MemberError> for ApiError {
     }
 }
 
-impl From<ActorError> for ApiError {
-    fn from(error: ActorError) -> Self {
+impl From<ApiTokenError> for ApiError {
+    fn from(error: ApiTokenError) -> Self {
         match error {
-            ActorError::Forbidden => ApiError::NotFound,
-            ActorError::NotFound => ApiError::NotFound,
-            ActorError::KeyIssue(error) => {
-                tracing::error!(%error, "API key issuance failed");
+            ApiTokenError::Invalid(details) => ApiError::BadRequest(details),
+            ApiTokenError::NotFound => ApiError::NotFound,
+            ApiTokenError::Issue(error) => {
+                tracing::error!(%error, "API token issuance failed");
                 ApiError::Internal
             }
-            ActorError::Repository(error) => repository_error(error),
+            ApiTokenError::Repository(error) => repository_error(error),
         }
     }
 }

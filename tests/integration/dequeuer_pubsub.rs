@@ -9,7 +9,6 @@ use google_cloud_pubsub::{
 use proofplane::{
     config::PubSubSubscriptionsConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
-    domain::{ActorId, WorkspaceId},
     pubsub::{
         ensure_worker_subscription, GoogleCloudPublisher, TopicName, MESSAGE_BUS_TOPIC,
         PUBSUB_EMULATOR_HOST, WORKER_DEAD_LETTER_TOPIC,
@@ -234,20 +233,10 @@ async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
         request_id: None,
     };
 
-    let (workspace_id, actor_id) = actor_context();
     postgres
-        .in_actor_context(workspace_id, actor_id, async move |context| {
-            context.append_outbox_message(&message).await
-        })
+        .in_transaction(async move |context| context.append_outbox_message(&message).await)
         .await
         .expect("outbox message appends")
-}
-
-fn actor_context() -> (WorkspaceId, ActorId) {
-    (
-        WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000101").unwrap()),
-        ActorId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000102").unwrap()),
-    )
 }
 
 async fn pull_one(client: &Client, subscription_id: &str) -> ReceivedMessage {

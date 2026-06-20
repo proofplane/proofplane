@@ -44,8 +44,8 @@ Cover externally visible behavior for:
 - GCS and production Pub/Sub adapter failures after those adapters land.
 
 Stable API errors must not expose dependency internals. Logs include request,
-actor, operation, and dependency context without credentials or attachment
-bytes.
+user/API-token or system identity, operation, and dependency context without
+credentials or attachment bytes.
 
 The API owns the initial stream into quarantine storage before creating the
 attachment row. The worker later owns the copy from quarantine to the final
@@ -93,7 +93,7 @@ Postgres rows. Every audit record includes:
 - stable event name and outcome;
 - timestamp and generated event ID;
 - workspace ID when scoped;
-- actor ID, user ID, or identified system client;
+- user ID, API token ID, or identified system client;
 - request/session correlation ID;
 - client type and operation/tool name;
 - affected object type and ID where applicable.
@@ -114,8 +114,8 @@ destination, retention period, access controls, and export/analysis procedures
 are deployment configuration. Proofplane does not expose an audit-history API
 in the MVP.
 
-The unused `audit_events` table is removed in a migration after confirming no
-runtime code writes it.
+The unused `audit_events` table is omitted from the consolidated initial schema;
+no runtime code writes it.
 
 ## Evidence Lifecycle Audit Events
 
@@ -129,18 +129,18 @@ Stable event names are:
 - `evidence_attachment_scan.completed`;
 - `evidence_attachment_finalization.completed`.
 
-Allowed fields include workspace ID, actor ID/user ID/system client, request
-correlation ID, event name, outcome, evidence request ID, submission ID,
-attachment ID, grant ID, and coarse lifecycle status where applicable. Audit
-records must not include raw grant tokens, API keys, authorization headers,
-attachment bytes, storage object keys treated as internals, scanner raw error
-strings, credentials, or unbounded dependency error strings.
+Allowed fields include workspace ID, user ID, API token ID, system client,
+request correlation ID, event name, outcome, evidence request ID, submission
+ID, attachment ID, grant ID, and coarse lifecycle status where applicable.
+Audit records must not include raw grant tokens, API tokens, authorization
+headers, attachment bytes, storage object keys treated as internals, scanner raw
+error strings, credentials, or unbounded dependency error strings.
 
 Submission creation, attachment acceptance, and download-grant issuance success
 records are emitted only after the database transaction commits. Download-grant
 redemption records are emitted only after a grant is validated and the
 attachment remains eligible for streaming. Scan and finalization terminal
-outcomes are attributable to the worker/system actor and must avoid false
+outcomes are attributable to the worker system client and must avoid false
 success records for retryable failures, duplicate delivery, stale delivery, or
 rolled-back mutations; duplicate or stale deliveries may be omitted or logged
 only with an explicit non-success outcome.
@@ -171,3 +171,10 @@ deterministic alone and in the full integration target.
 - 2026-06-16: Added the evidence lifecycle audit-event contract under
   Reliability and Observability so domain lifecycle logs share the structured
   audit foundation.
+- 2026-06-17: Replaced planned actor/API-key audit attribution with user,
+  API-token, legacy-provenance, and system-client fields for the PASETO
+  migration.
+- 2026-06-17: Removed legacy actor provenance because the pre-deployment PASETO
+  cutover does not preserve actor-era data.
+- 2026-06-17: Moved `audit_events` removal into the consolidated initial schema;
+  there is no incremental drop migration.

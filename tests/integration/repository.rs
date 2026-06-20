@@ -1,102 +1,22 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    ActorId, ActorKind, AttachmentUploadStatus, CreateActorPayload, CreateApiCredentialPayload,
-    CreateEvidenceAttachmentPayload, CreateEvidenceRequestPayload, CreateEvidenceSubmissionPayload,
-    CreateWorkspacePayload, EvidenceRequestCadence, EvidenceRequestStatus, EvidenceSubmissionId,
-    UpdateActorPayload, UpdateApiCredentialPayload, UpdateWorkspacePayload, WorkspacePermission,
+    ApiTokenId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
+    CreateEvidenceRequestPayload, CreateEvidenceSubmissionPayload, CreateWorkspacePayload,
+    EvidenceRequestCadence, EvidenceRequestStatus, EvidenceSubmissionId, UpdateWorkspacePayload,
+    UserId,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::support::{TestApp, INTEGRATION_ACTOR_ID};
+use super::support::TestApp;
 
 #[derive(Clone, Copy)]
-struct RepositoryActor {
+struct RepositoryContext {
     workspace_id: proofplane::domain::WorkspaceId,
-    actor_id: ActorId,
-}
-
-#[tokio::test]
-async fn actor_repository_crud_uses_typed_rows() {
-    let app = TestApp::start().await;
-    let postgres = app.postgres();
-    let workspace = postgres
-        .create_workspace(&CreateWorkspacePayload {
-            id: None,
-            slug: None,
-            name: "Repository Actor Workspace".to_owned(),
-        })
-        .await
-        .expect("workspace creates");
-    let actor = postgres
-        .create_actor(&CreateActorPayload {
-            id: Some(ActorId::from(Uuid::new_v4())),
-            kind: ActorKind::HumanUser,
-            display_name: "Repository Human".to_owned(),
-            workspace_id: workspace.id,
-            created_by_user_id: None,
-            permissions: vec![WorkspacePermission::ReadControls],
-        })
-        .await
-        .expect("actor creates");
-    assert_eq!(actor.workspace_id, workspace.id);
-
-    assert_eq!(
-        postgres
-            .get_actor(actor.id)
-            .await
-            .expect("actor reads")
-            .expect("actor exists"),
-        actor
-    );
-    assert!(postgres
-        .list_actors()
-        .await
-        .expect("actors list")
-        .contains(&actor));
-
-    let updated = postgres
-        .update_actor(
-            actor.id,
-            &UpdateActorPayload {
-                kind: ActorKind::ServiceAccount,
-                display_name: "Repository Service".to_owned(),
-                workspace_id: workspace.id,
-            },
-        )
-        .await
-        .expect("actor updates")
-        .expect("actor exists");
-    assert_eq!(updated.kind, ActorKind::ServiceAccount);
-    assert_eq!(updated.display_name, "Repository Service");
-
-    assert!(postgres
-        .update_actor(
-            ActorId::from(Uuid::new_v4()),
-            &UpdateActorPayload {
-                kind: ActorKind::System,
-                display_name: "Missing".to_owned(),
-                workspace_id: workspace.id,
-            },
-        )
-        .await
-        .expect("missing actor update resolves")
-        .is_none());
-    assert!(postgres
-        .delete_actor(actor.id)
-        .await
-        .expect("actor deletes"));
-    assert!(postgres
-        .get_actor(actor.id)
-        .await
-        .expect("deleted actor reads")
-        .is_none());
-    assert!(!postgres
-        .delete_actor(actor.id)
-        .await
-        .expect("second actor delete resolves"));
+    user_id: UserId,
+    api_token_id: ApiTokenId,
 }
 
 #[tokio::test]
@@ -162,118 +82,13 @@ async fn workspace_repository_crud_uses_typed_rows() {
 }
 
 #[tokio::test]
-async fn api_credential_repository_crud_uses_lifecycle_fields() {
-    let app = TestApp::start().await;
-    let postgres = app.postgres();
-    let workspace = postgres
-        .create_workspace(&CreateWorkspacePayload {
-            id: None,
-            slug: None,
-            name: "Repository Credential Workspace".to_owned(),
-        })
-        .await
-        .expect("workspace creates");
-    let actor = postgres
-        .create_actor(&CreateActorPayload {
-            id: None,
-            kind: ActorKind::Integration,
-            display_name: "Credential Actor".to_owned(),
-            workspace_id: workspace.id,
-            created_by_user_id: None,
-            permissions: WorkspacePermission::ALL.to_vec(),
-        })
-        .await
-        .expect("credential actor creates");
-    let credential = postgres
-        .create_api_credential(&CreateApiCredentialPayload {
-            id: "repository-api-key".to_owned(),
-            actor_id: actor.id,
-            name: "Repository API Key".to_owned(),
-            key_id: "first-key-id".to_owned(),
-            credential_hash: "first-credential-hash".to_owned(),
-            expires_at: Some(Utc::now() + Duration::days(1)),
-            revoked_at: None,
-        })
-        .await
-        .expect("API credential creates");
-
-    assert_eq!(
-        postgres
-            .get_api_credential(&credential.id)
-            .await
-            .expect("API credential reads")
-            .expect("API credential exists"),
-        credential
-    );
-
-    let updated = postgres
-        .update_api_credential(
-            &credential.id,
-            &UpdateApiCredentialPayload {
-                name: "Rotated Repository API Key".to_owned(),
-                key_id: "rotated-key-id".to_owned(),
-                credential_hash: "rotated-credential-hash".to_owned(),
-                expires_at: None,
-                revoked_at: Some(Utc::now()),
-            },
-        )
-        .await
-        .expect("API credential updates")
-        .expect("API credential exists");
-    assert_eq!(updated.credential_hash, "rotated-credential-hash");
-    assert_eq!(updated.key_id, "rotated-key-id");
-    assert!(updated.expires_at.is_none());
-    assert!(updated.revoked_at.is_some());
-    let (found_actor, found_credential, found_permissions) = postgres
-        .actor_credential_by_key_id(actor.id, "rotated-key-id")
-        .await
-        .expect("actor credential reads")
-        .expect("actor exists");
-    assert_eq!(found_actor, actor);
-    assert_eq!(found_credential, updated.clone());
-    assert!(found_permissions.has(WorkspacePermission::ReadControls));
-
-    assert!(postgres
-        .update_api_credential(
-            "missing-api-key",
-            &UpdateApiCredentialPayload {
-                name: "Missing API Key".to_owned(),
-                key_id: "missing-key-id".to_owned(),
-                credential_hash: "missing-credential-hash".to_owned(),
-                expires_at: None,
-                revoked_at: None,
-            },
-        )
-        .await
-        .expect("missing API credential update resolves")
-        .is_none());
-    assert!(postgres
-        .delete_api_credential(&credential.id)
-        .await
-        .expect("API credential deletes"));
-    assert!(postgres
-        .get_api_credential(&credential.id)
-        .await
-        .expect("deleted API credential reads")
-        .is_none());
-    assert!(!postgres
-        .delete_api_credential(&credential.id)
-        .await
-        .expect("second API credential delete resolves"));
-    assert!(postgres
-        .delete_actor(actor.id)
-        .await
-        .expect("credential actor deletes"));
-}
-
-#[tokio::test]
 async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_key() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor).await;
-    let submission = create_repository_submission(postgres, actor, request.id).await;
-    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+    let context = repository_workspace_context(&app).await;
+    let request = create_repository_evidence_request(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, request.id).await;
+    let attachment = create_repository_attachment(postgres, context, submission.id).await;
 
     let work = postgres
         .load_pending_attachment_upload_work(attachment.id, &attachment.object_key)
@@ -301,10 +116,10 @@ async fn attachment_scan_work_loads_pending_rows_by_attachment_and_quarantine_ke
 async fn attachment_scan_handoff_is_atomic_idempotent_and_finalization_marks_uploaded() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor).await;
-    let submission = create_repository_submission(postgres, actor, request.id).await;
-    let attachment = create_repository_attachment(postgres, actor, submission.id).await;
+    let context = repository_workspace_context(&app).await;
+    let request = create_repository_evidence_request(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, request.id).await;
+    let attachment = create_repository_attachment(postgres, context, submission.id).await;
     let quarantine_key = attachment.object_key.clone();
     let work = postgres
         .load_pending_attachment_upload_work(attachment.id, &quarantine_key)
@@ -396,7 +211,7 @@ WHERE event_type = 'attachment.finalization_requested'
         .expect("finalization marks uploaded"));
 
     let detail = postgres
-        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
+        .in_workspace_context_read(context.workspace_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -421,16 +236,21 @@ WHERE event_type = 'attachment.finalization_requested'
 async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantined() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
-    let request = create_repository_evidence_request(postgres, actor).await;
-    let submission = create_repository_submission(postgres, actor, request.id).await;
-    let malicious = create_repository_attachment(postgres, actor, submission.id).await;
+    let context = repository_workspace_context(&app).await;
+    let request = create_repository_evidence_request(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, request.id).await;
+    let malicious = create_repository_attachment(postgres, context, submission.id).await;
     let failed = postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .create_evidence_attachment(&attachment_payload(submission.id, "failed-scan"))
-                .await
-        })
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .create_evidence_attachment(&attachment_payload(submission.id, "failed-scan"))
+                    .await
+            },
+        )
         .await
         .expect("second attachment creates");
     let malicious_key = malicious.object_key.clone();
@@ -446,7 +266,7 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
         .expect("failed scan marks"));
 
     let detail = postgres
-        .in_actor_context_read(actor.workspace_id, actor.actor_id, async move |context| {
+        .in_workspace_context_read(context.workspace_id, async move |context| {
             context.get_evidence_submission(submission.id).await
         })
         .await
@@ -485,32 +305,37 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
 async fn outbox_append_commits_atomically_with_domain_write() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
+    let context = repository_workspace_context(&app).await;
 
     let request = postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            let request = context
-                .create_evidence_request(&CreateEvidenceRequestPayload {
-                    title: "Outbox Atomic Request".to_owned(),
-                    description: "Collect atomic evidence.".to_owned(),
-                    collection_instructions: "Upload atomic evidence.".to_owned(),
-                    cadence: EvidenceRequestCadence::Quarterly,
-                    due_at: Utc::now() + Duration::days(7),
-                    schedule_anchor_at: Utc::now(),
-                    freshness_window_days: Some(90),
-                    status: EvidenceRequestStatus::Active,
-                })
-                .await?;
-            context
-                .append_outbox_message(&outbox_payload(
-                    "evidence_request.created",
-                    "evidence_request",
-                    Uuid::from(request.id).to_string(),
-                ))
-                .await?;
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                let request = context
+                    .create_evidence_request(&CreateEvidenceRequestPayload {
+                        title: "Outbox Atomic Request".to_owned(),
+                        description: "Collect atomic evidence.".to_owned(),
+                        collection_instructions: "Upload atomic evidence.".to_owned(),
+                        cadence: EvidenceRequestCadence::Quarterly,
+                        due_at: Utc::now() + Duration::days(7),
+                        schedule_anchor_at: Utc::now(),
+                        freshness_window_days: Some(90),
+                        status: EvidenceRequestStatus::Active,
+                    })
+                    .await?;
+                context
+                    .append_outbox_message(&outbox_payload(
+                        "evidence_request.created",
+                        "evidence_request",
+                        Uuid::from(request.id).to_string(),
+                    ))
+                    .await?;
 
-            Ok(request)
-        })
+                Ok(request)
+            },
+        )
         .await
         .expect("request and outbox commit");
 
@@ -527,34 +352,39 @@ async fn outbox_append_commits_atomically_with_domain_write() {
 async fn outbox_append_rolls_back_with_domain_write() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
+    let context = repository_workspace_context(&app).await;
 
     let result = postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .create_evidence_request(&CreateEvidenceRequestPayload {
-                    title: "Rolled Back Outbox Request".to_owned(),
-                    description: "Collect rollback evidence.".to_owned(),
-                    collection_instructions: "Upload rollback evidence.".to_owned(),
-                    cadence: EvidenceRequestCadence::Quarterly,
-                    due_at: Utc::now() + Duration::days(7),
-                    schedule_anchor_at: Utc::now(),
-                    freshness_window_days: Some(90),
-                    status: EvidenceRequestStatus::Active,
-                })
-                .await?;
-            context
-                .append_outbox_message(&outbox_payload(
-                    "evidence_request.created",
-                    "evidence_request",
-                    "rolled-back",
-                ))
-                .await?;
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .create_evidence_request(&CreateEvidenceRequestPayload {
+                        title: "Rolled Back Outbox Request".to_owned(),
+                        description: "Collect rollback evidence.".to_owned(),
+                        collection_instructions: "Upload rollback evidence.".to_owned(),
+                        cadence: EvidenceRequestCadence::Quarterly,
+                        due_at: Utc::now() + Duration::days(7),
+                        schedule_anchor_at: Utc::now(),
+                        freshness_window_days: Some(90),
+                        status: EvidenceRequestStatus::Active,
+                    })
+                    .await?;
+                context
+                    .append_outbox_message(&outbox_payload(
+                        "evidence_request.created",
+                        "evidence_request",
+                        "rolled-back",
+                    ))
+                    .await?;
 
-            Err::<(), proofplane::repository::Error>(proofplane::repository::Error::Conflict(
-                proofplane::repository::ConflictKind::WorkspaceSlugTaken,
-            ))
-        })
+                Err::<(), proofplane::repository::Error>(proofplane::repository::Error::Conflict(
+                    proofplane::repository::ConflictKind::WorkspaceSlugTaken,
+                ))
+            },
+        )
         .await;
 
     assert!(matches!(
@@ -574,11 +404,11 @@ async fn outbox_append_rolls_back_with_domain_write() {
 async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failures() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
-    let actor = repository_actor_context(&app).await;
+    let context = repository_workspace_context(&app).await;
 
-    let first = append_outbox(postgres, actor, "first").await;
-    let second = append_outbox(postgres, actor, "second").await;
-    let future = append_outbox(postgres, actor, "future").await;
+    let first = append_outbox(postgres, context, "first").await;
+    let second = append_outbox(postgres, context, "second").await;
+    let future = append_outbox(postgres, context, "future").await;
 
     set_outbox_next_available_at(postgres, first.id, Utc::now() - Duration::minutes(5)).await;
     set_outbox_next_available_at(postgres, second.id, Utc::now() - Duration::minutes(1)).await;
@@ -637,7 +467,7 @@ async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failur
     );
 }
 
-async fn repository_actor_context(app: &TestApp) -> RepositoryActor {
+async fn repository_workspace_context(app: &TestApp) -> RepositoryContext {
     let workspace = app
         .postgres()
         .create_workspace(&CreateWorkspacePayload {
@@ -647,48 +477,64 @@ async fn repository_actor_context(app: &TestApp) -> RepositoryActor {
         })
         .await
         .expect("workspace creates");
-    let actor_id = ActorId::from(Uuid::parse_str(INTEGRATION_ACTOR_ID).unwrap());
+    let token = app
+        .issue_api_token(
+            workspace.id.into(),
+            proofplane::domain::WorkspacePermission::ALL.to_vec(),
+        )
+        .await;
 
-    RepositoryActor {
+    RepositoryContext {
         workspace_id: workspace.id,
-        actor_id,
+        user_id: token.user_id,
+        api_token_id: token.token_id,
     }
 }
 
 async fn create_repository_evidence_request(
     postgres: &proofplane::repository::Postgres,
-    actor: RepositoryActor,
+    context: RepositoryContext,
 ) -> proofplane::domain::EvidenceRequest {
     postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .create_evidence_request(&CreateEvidenceRequestPayload {
-                    title: "Repository Evidence Request".to_owned(),
-                    description: "Collect repository evidence.".to_owned(),
-                    collection_instructions: "Upload the export.".to_owned(),
-                    cadence: EvidenceRequestCadence::Quarterly,
-                    due_at: Utc::now() + Duration::days(7),
-                    schedule_anchor_at: Utc::now(),
-                    freshness_window_days: Some(90),
-                    status: EvidenceRequestStatus::Active,
-                })
-                .await
-        })
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .create_evidence_request(&CreateEvidenceRequestPayload {
+                        title: "Repository Evidence Request".to_owned(),
+                        description: "Collect repository evidence.".to_owned(),
+                        collection_instructions: "Upload the export.".to_owned(),
+                        cadence: EvidenceRequestCadence::Quarterly,
+                        due_at: Utc::now() + Duration::days(7),
+                        schedule_anchor_at: Utc::now(),
+                        freshness_window_days: Some(90),
+                        status: EvidenceRequestStatus::Active,
+                    })
+                    .await
+            },
+        )
         .await
         .expect("evidence request creates")
 }
 
 async fn create_repository_submission(
     postgres: &proofplane::repository::Postgres,
-    actor: RepositoryActor,
+    context: RepositoryContext,
     evidence_request_id: proofplane::domain::EvidenceRequestId,
 ) -> proofplane::domain::EvidenceSubmission {
     postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .create_evidence_submission(&submission_payload(evidence_request_id))
-                .await
-        })
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .create_evidence_submission(&submission_payload(evidence_request_id))
+                    .await
+            },
+        )
         .await
         .expect("submission create resolves")
         .expect("submission creates")
@@ -696,45 +542,55 @@ async fn create_repository_submission(
 
 async fn create_repository_attachment(
     postgres: &proofplane::repository::Postgres,
-    actor: RepositoryActor,
+    context: RepositoryContext,
     submission_id: EvidenceSubmissionId,
 ) -> proofplane::domain::EvidenceAttachment {
-    create_repository_attachment_with_suffix(postgres, actor, submission_id, "detail").await
+    create_repository_attachment_with_suffix(postgres, context, submission_id, "detail").await
 }
 
 async fn create_repository_attachment_with_suffix(
     postgres: &proofplane::repository::Postgres,
-    actor: RepositoryActor,
+    context: RepositoryContext,
     submission_id: EvidenceSubmissionId,
     suffix: &str,
 ) -> proofplane::domain::EvidenceAttachment {
     let suffix = suffix.to_owned();
     postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .create_evidence_attachment(&attachment_payload(submission_id, &suffix))
-                .await
-        })
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .create_evidence_attachment(&attachment_payload(submission_id, &suffix))
+                    .await
+            },
+        )
         .await
         .expect("attachment creates")
 }
 
 async fn append_outbox(
     postgres: &proofplane::repository::Postgres,
-    actor: RepositoryActor,
+    context: RepositoryContext,
     aggregate_id: &str,
 ) -> proofplane::repository::OutboxMessage {
     let aggregate_id = aggregate_id.to_owned();
     postgres
-        .in_actor_context(actor.workspace_id, actor.actor_id, async move |context| {
-            context
-                .append_outbox_message(&outbox_payload(
-                    "attachment.scan_requested",
-                    "evidence_attachment",
-                    aggregate_id,
-                ))
-                .await
-        })
+        .in_workspace_context(
+            context.workspace_id,
+            context.user_id,
+            context.api_token_id,
+            async move |context| {
+                context
+                    .append_outbox_message(&outbox_payload(
+                        "attachment.scan_requested",
+                        "evidence_attachment",
+                        aggregate_id,
+                    ))
+                    .await
+            },
+        )
         .await
         .expect("outbox appends")
 }

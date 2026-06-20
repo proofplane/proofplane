@@ -8,8 +8,17 @@ pub enum DomainError {
     #[error("{field} has invalid value {value}")]
     InvalidEnumValue { field: &'static str, value: String },
 
+    #[error("permissions contains duplicate value {permission}")]
+    DuplicatePermission { permission: String },
+
     #[error("freshness_window_days must be positive")]
     InvalidFreshnessWindowDays,
+
+    #[error("expires_at is required")]
+    MissingApiTokenExpiration,
+
+    #[error("expires_at must be in the future")]
+    ApiTokenExpirationNotFuture,
 
     #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
     InvalidCoverageWindow,

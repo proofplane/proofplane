@@ -1,19 +1,17 @@
-use api_keys_simplified::{Environment, ExposeSecret};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream;
+use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
-    authentication::ApiKeyManager,
+    authentication::opaque_token::generate_opaque_token,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        ActorId, ActorKind, CreateActorPayload, CreateApiCredentialPayload,
-        CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
-        EvidenceRequestStatus, ProvisionUserPayload, UpdateActorPayload,
-        UpdateApiCredentialPayload, UpdateEvidenceRequestPayload, UpdateWorkspacePayload,
-        WorkspaceId, WorkspacePermission, WorkspaceRole,
+        ApiTokenId, CreateEvidenceRequestPayload, CreateWorkspacePayload, EvidenceRequestCadence,
+        EvidenceRequestStatus, ProvisionUserPayload, UpdateEvidenceRequestPayload,
+        UpdateWorkspacePayload, UserId, WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
@@ -51,27 +49,22 @@ pub enum Error {
     #[error("seed timestamp parse error")]
     Timestamp(#[from] chrono::ParseError),
 
-    #[error("API key generation error")]
-    ApiKey(#[from] crate::authentication::Error),
+    #[error("API token generation error")]
+    ApiToken(#[from] crate::authentication::opaque_token::OpaqueTokenError),
 
     #[error("object storage error")]
     ObjectStorage(#[from] StorageError),
 }
 
-const LOCAL_HUMAN_USER_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000101";
-const LOCAL_AI_AGENT_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000102";
-const LOCAL_SERVICE_ACCOUNT_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000103";
-const LOCAL_INTEGRATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000104";
-const LOCAL_POLICY_AUTOMATION_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000105";
-const SYSTEM_ACTOR_ID: &str = "00000000-0000-4000-8000-000000000106";
 const LOCAL_OWNER_AUTH0_SUB: &str = "auth0|local-owner";
+const LOCAL_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000301";
 const DEMO_SUBMISSION_FILENAME: &str = "quarterly-access-review.csv";
 const DEMO_SUBMISSION_CONTENT_TYPE: &str = "text/csv";
 const DEMO_SUBMISSION_BYTES: &[u8] = b"user,email,system,reviewer,reviewed_at,decision\nLocal Owner,owner@proofplane.local,Production Console,System,2026-06-14T16:00:00Z,approved\nLocal Service Account,service@proofplane.local,Deployment Pipeline,System,2026-06-14T16:10:00Z,approved\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedSummary {
-    pub api_key: String,
+    pub api_token: String,
     pub demo_attachment: DemoAttachmentSeedStatus,
 }
 
@@ -95,26 +88,18 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let postgres = Postgres::new(pool);
 
     debug!("seeding local data");
-    let api_key = seed_local_data(&postgres).await?;
-    seed_local_owner(&postgres).await?;
+    seed_workspace(&postgres).await?;
+    let owner_id = seed_local_owner(&postgres).await?;
+    let api_token = seed_api_token(&postgres, owner_id).await?;
+    seed_evidence_requests(&postgres, owner_id, local_api_token_id()).await?;
+    seed_frameworks_and_controls(&postgres).await?;
     let demo_attachment = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
     debug!("done seeding local data");
 
     Ok(SeedSummary {
-        api_key,
+        api_token,
         demo_attachment,
     })
-}
-
-async fn seed_local_data(repository: &Postgres) -> Result<String, Error> {
-    seed_workspace(repository).await?;
-    seed_actors(repository).await?;
-    let api_key = seed_api_credential(repository).await?;
-
-    seed_evidence_requests(repository).await?;
-    seed_frameworks_and_controls(repository).await?;
-
-    Ok(api_key)
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
@@ -150,104 +135,7 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
     Ok(())
 }
 
-async fn seed_actors(repository: &Postgres) -> Result<(), Error> {
-    let workspace_id = local_authorized_workspace_id();
-    let permissions = WorkspacePermission::ALL.to_vec();
-    for (id, kind, display_name) in [
-        (
-            actor_id(LOCAL_HUMAN_USER_ACTOR_ID),
-            ActorKind::HumanUser,
-            "Local Human User",
-        ),
-        (
-            actor_id(LOCAL_AI_AGENT_ACTOR_ID),
-            ActorKind::AiAgent,
-            "Local AI Agent",
-        ),
-        (
-            actor_id(LOCAL_SERVICE_ACCOUNT_ACTOR_ID),
-            ActorKind::ServiceAccount,
-            "Local Service Account",
-        ),
-        (
-            actor_id(LOCAL_INTEGRATION_ACTOR_ID),
-            ActorKind::Integration,
-            "Local Integration",
-        ),
-        (
-            actor_id(LOCAL_POLICY_AUTOMATION_ACTOR_ID),
-            ActorKind::PolicyAutomation,
-            "Local Policy Automation",
-        ),
-        (actor_id(SYSTEM_ACTOR_ID), ActorKind::System, "System"),
-    ] {
-        if repository.get_actor(id).await?.is_some() {
-            repository
-                .update_actor(
-                    id,
-                    &UpdateActorPayload {
-                        kind,
-                        display_name: display_name.to_owned(),
-                        workspace_id,
-                    },
-                )
-                .await?;
-        } else {
-            repository
-                .create_actor(&CreateActorPayload {
-                    id: Some(id),
-                    kind,
-                    display_name: display_name.to_owned(),
-                    workspace_id,
-                    created_by_user_id: None,
-                    permissions: permissions.clone(),
-                })
-                .await?;
-        }
-
-        repository.set_actor_permissions(id, &permissions).await?;
-    }
-
-    Ok(())
-}
-
-async fn seed_api_credential(repository: &Postgres) -> Result<String, Error> {
-    let id = "local-api-key";
-    let actor_id = actor_id(SYSTEM_ACTOR_ID);
-    let name = "Local API Key".to_owned();
-    let issued = ApiKeyManager::new()?.issue(Environment::dev())?;
-
-    if repository.get_api_credential(id).await?.is_some() {
-        repository
-            .update_api_credential(
-                id,
-                &UpdateApiCredentialPayload {
-                    name,
-                    key_id: issued.key_id,
-                    credential_hash: issued.credential_hash,
-                    expires_at: None,
-                    revoked_at: None,
-                },
-            )
-            .await?;
-    } else {
-        repository
-            .create_api_credential(&CreateApiCredentialPayload {
-                id: id.to_owned(),
-                actor_id,
-                name,
-                key_id: issued.key_id,
-                credential_hash: issued.credential_hash,
-                expires_at: None,
-                revoked_at: None,
-            })
-            .await?;
-    }
-
-    Ok(issued.raw_key.expose_secret().to_owned())
-}
-
-async fn seed_local_owner(repository: &Postgres) -> Result<(), Error> {
+async fn seed_local_owner(repository: &Postgres) -> Result<UserId, Error> {
     let user = repository
         .upsert_user_by_auth0_sub(&ProvisionUserPayload {
             auth0_sub: LOCAL_OWNER_AUTH0_SUB.to_owned(),
@@ -277,21 +165,73 @@ async fn seed_local_owner(repository: &Postgres) -> Result<(), Error> {
             .await?;
     }
 
-    Ok(())
+    Ok(user.id)
 }
 
-async fn seed_evidence_requests(repository: &Postgres) -> Result<(), Error> {
+async fn seed_api_token(repository: &Postgres, user_id: UserId) -> Result<String, Error> {
+    let workspace_id = local_authorized_workspace_id();
+    let token_id = local_api_token_id();
+    let expires_at = timestamp("2036-01-01T00:00:00Z")?;
+    let permissions = WorkspacePermission::ALL.to_vec();
+    let issued = generate_opaque_token()?;
+    let digest: &[u8] = issued.digest.as_bytes();
+
+    let client = repository.get().await?;
+    client
+        .execute(
+            r#"
+INSERT INTO api_tokens (id, digest, user_id, workspace_id, name, expires_at)
+VALUES ($1, $2, $3, $4, 'Local Owner API Token', $5)
+ON CONFLICT (id) DO UPDATE
+SET digest = EXCLUDED.digest,
+    user_id = EXCLUDED.user_id,
+    workspace_id = EXCLUDED.workspace_id,
+    name = EXCLUDED.name,
+    expires_at = EXCLUDED.expires_at,
+    revoked_at = NULL
+"#,
+            &[
+                &Uuid::from(token_id),
+                &digest,
+                &Uuid::from(user_id),
+                &Uuid::from(workspace_id),
+                &expires_at,
+            ],
+        )
+        .await?;
+    client
+        .execute(
+            "DELETE FROM api_token_permissions WHERE api_token_id = $1",
+            &[&Uuid::from(token_id)],
+        )
+        .await?;
+    for permission in permissions {
+        client
+            .execute(
+                "INSERT INTO api_token_permissions (api_token_id, permission) VALUES ($1, $2)",
+                &[&Uuid::from(token_id), &permission.as_str()],
+            )
+            .await?;
+    }
+
+    Ok(issued.raw_token.expose_secret().to_owned())
+}
+
+async fn seed_evidence_requests(
+    repository: &Postgres,
+    user_id: UserId,
+    token_id: ApiTokenId,
+) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
-    let actor_id = actor_id(SYSTEM_ACTOR_ID);
     let seeds = demo_evidence_requests()?;
     let existing = repository
-        .in_actor_context_read(workspace_id, actor_id, async |context| {
+        .in_workspace_context_read(workspace_id, async |context| {
             context.list_evidence_requests().await
         })
         .await?;
 
     repository
-        .in_actor_context(workspace_id, actor_id, async move |context| {
+        .in_workspace_context(workspace_id, user_id, token_id, async move |context| {
             for seed in seeds {
                 if let Some(existing_request) =
                     existing.iter().find(|request| request.title == seed.title)
@@ -520,7 +460,7 @@ async fn upsert_demo_submission(
 INSERT INTO evidence_submissions (
     id,
     evidence_request_id,
-    submitted_by,
+    submitted_by_api_token_id,
     received_at,
     coverage_start_at,
     coverage_end_at,
@@ -530,7 +470,7 @@ INSERT INTO evidence_submissions (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO UPDATE
 SET evidence_request_id = EXCLUDED.evidence_request_id,
-    submitted_by = EXCLUDED.submitted_by,
+    submitted_by_api_token_id = EXCLUDED.submitted_by_api_token_id,
     received_at = EXCLUDED.received_at,
     coverage_start_at = EXCLUDED.coverage_start_at,
     coverage_end_at = EXCLUDED.coverage_end_at,
@@ -540,7 +480,7 @@ SET evidence_request_id = EXCLUDED.evidence_request_id,
             &[
                 &demo_submission_id(),
                 &request_id,
-                &Uuid::from(actor_id(SYSTEM_ACTOR_ID)),
+                &Uuid::from(local_api_token_id()),
                 &timestamp("2026-06-14T16:30:00Z")?,
                 &timestamp("2026-04-01T00:00:00Z")?,
                 &timestamp("2026-06-30T23:59:59Z")?,
@@ -774,8 +714,8 @@ fn local_unauthorized_workspace_id() -> WorkspaceId {
     WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap())
 }
 
-fn actor_id(value: &str) -> ActorId {
-    ActorId::from(Uuid::parse_str(value).expect("seed actor ID is a UUID"))
+fn local_api_token_id() -> ApiTokenId {
+    ApiTokenId::from(Uuid::parse_str(LOCAL_API_TOKEN_ID).unwrap())
 }
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {

@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, ActorId, DomainError, EvidenceRequestId};
+use super::{ids::uuid_id, ApiTokenId, DomainError, EvidenceRequestId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(EvidenceAttachmentId);
@@ -60,12 +60,18 @@ impl FromStr for AttachmentUploadStatus {
 pub struct EvidenceSubmission {
     pub id: EvidenceSubmissionId,
     pub evidence_request_id: EvidenceRequestId,
-    pub submitted_by: ActorId,
+    pub submitted_by: EvidenceSubmitter,
     pub received_at: DateTime<Utc>,
     pub coverage_start_at: DateTime<Utc>,
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceSubmitter {
+    pub api_token_id: ApiTokenId,
+    pub user_id: UserId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

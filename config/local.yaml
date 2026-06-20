@@ -5,7 +5,6 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://127.0.0.1:3000"
-  download_signing_secret: "cHJvb2ZwbGFuZS1sb2NhbC1kb3dubG9hZC1zaWduaW5nLXNlY3JldC0wMDE="
 
 postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
 
@@ -20,6 +19,13 @@ auth0:
   issuer: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/"
   audience: "https://api.proofplane.com"
   jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
+
+paseto:
+  download:
+    active_key_id: "local-download-001"
+    keys:
+      - id: "local-download-001"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
 
 object_storage:
   backend: "filesystem"

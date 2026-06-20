@@ -7,31 +7,57 @@ CREATE TABLE IF NOT EXISTS workspaces (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS actors (
+CREATE INDEX IF NOT EXISTS idx_workspaces_created_id
+    ON workspaces (created_at, id);
+
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    actor_type TEXT NOT NULL,
-    display_name TEXT NOT NULL,
+    auth0_sub TEXT NOT NULL UNIQUE,
+    email TEXT,
+    name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS api_credentials (
-    id TEXT PRIMARY KEY,
-    actor_id UUID NOT NULL UNIQUE REFERENCES actors(id),
+CREATE TABLE IF NOT EXISTS workspace_memberships (
+    user_id UUID NOT NULL REFERENCES users(id),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    role TEXT NOT NULL CHECK (role IN ('owner', 'admin')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, workspace_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user_id
+    ON workspace_memberships (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_memberships_workspace_role
+    ON workspace_memberships (workspace_id, role);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id UUID PRIMARY KEY,
+    digest BYTEA NOT NULL UNIQUE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
     name TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    credential_hash TEXT NOT NULL,
-    expires_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS audit_events (
-    id BIGSERIAL PRIMARY KEY,
-    workspace_id UUID REFERENCES workspaces(id),
-    actor_id UUID REFERENCES actors(id),
-    event_type TEXT NOT NULL,
-    event_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE INDEX IF NOT EXISTS idx_api_tokens_owner_workspace_created
+    ON api_tokens (user_id, workspace_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS api_token_permissions (
+    api_token_id UUID NOT NULL REFERENCES api_tokens(id) ON DELETE CASCADE,
+    permission TEXT NOT NULL CHECK (permission IN (
+        'read_evidence_requests',
+        'write_evidence_requests',
+        'read_evidence_submissions',
+        'write_evidence_submissions',
+        'read_controls',
+        'write_controls'
+    )),
+    PRIMARY KEY (api_token_id, permission)
 );
 
 CREATE TABLE IF NOT EXISTS outbox_messages (
@@ -65,30 +91,9 @@ CREATE TABLE IF NOT EXISTS evidence_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_evidence_requests_workspace_id
-    ON evidence_requests (workspace_id);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_requests_due_active
-    ON evidence_requests (due_at)
-    WHERE status = 'active';
-
--- Auth resolves the actor's single API credential from the claimed actor ID.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_api_credentials_actor_id
-    ON api_credentials (actor_id);
-
--- Workspace lists are returned in creation order with ID as the stable tie-breaker.
-CREATE INDEX IF NOT EXISTS idx_workspaces_created_id
-    ON workspaces (created_at, id);
-
--- Workspace-scoped Evidence Request lists are ordered by due time and title.
--- The left prefix still supports workspace-only filtering.
-DROP INDEX IF EXISTS idx_evidence_requests_workspace_id;
 CREATE INDEX IF NOT EXISTS idx_evidence_requests_workspace_due_title
     ON evidence_requests (workspace_id, due_at, title);
 
--- Due reads constrain active requests by workspace and then scan due time in
--- response order.
-DROP INDEX IF EXISTS idx_evidence_requests_due_active;
 CREATE INDEX IF NOT EXISTS idx_evidence_requests_active_workspace_due_title
     ON evidence_requests (workspace_id, due_at, title)
     WHERE status = 'active';
@@ -150,7 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_request_control_mappings_control
 CREATE TABLE IF NOT EXISTS evidence_submissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
-    submitted_by UUID NOT NULL REFERENCES actors(id),
+    submitted_by_api_token_id UUID NOT NULL REFERENCES api_tokens(id),
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     coverage_start_at TIMESTAMPTZ NOT NULL,
     coverage_end_at TIMESTAMPTZ NOT NULL,

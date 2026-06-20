@@ -4,12 +4,11 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ActorId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
-        CreateEvidenceSubmissionPayload, EvidenceAttachment, EvidenceAttachmentId,
-        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
-        WorkspaceId,
+        AttachmentUploadStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
+        EvidenceAttachment, EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission,
+        EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
     },
-    repository::{ActorReadContext, ActorTransactionContext},
+    repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
 use super::{Error, Postgres, TransactionContext};
@@ -224,7 +223,7 @@ WHERE id = $1
     }
 }
 
-impl ActorTransactionContext<'_> {
+impl WorkspaceTransactionContext<'_> {
     pub async fn create_evidence_submission(
         &self,
         payload: &CreateEvidenceSubmissionPayload,
@@ -233,31 +232,45 @@ impl ActorTransactionContext<'_> {
             .transaction
             .query(
                 r#"
-INSERT INTO evidence_submissions (
-    evidence_request_id,
-    submitted_by,
-    coverage_start_at,
-    coverage_end_at,
-    source_system,
-    collection_method
+WITH inserted AS (
+    INSERT INTO evidence_submissions (
+        evidence_request_id,
+        submitted_by_api_token_id,
+        coverage_start_at,
+        coverage_end_at,
+        source_system,
+        collection_method
+    )
+    SELECT er.id, $2, $3, $4, $5, $6
+    FROM evidence_requests er
+    WHERE er.id = $1
+      AND er.workspace_id = $7
+    RETURNING
+        id,
+        evidence_request_id,
+        submitted_by_api_token_id,
+        received_at,
+        coverage_start_at,
+        coverage_end_at,
+        source_system,
+        collection_method
 )
-SELECT er.id, $2, $3, $4, $5, $6
-FROM evidence_requests er
-WHERE er.id = $1
-  AND er.workspace_id = $7
-RETURNING
-    id,
-    evidence_request_id,
-    submitted_by,
-    received_at,
-    coverage_start_at,
-    coverage_end_at,
-    source_system,
-    collection_method
+SELECT
+    inserted.id,
+    inserted.evidence_request_id,
+    inserted.submitted_by_api_token_id,
+    t.user_id AS submitted_by_user_id,
+    inserted.received_at,
+    inserted.coverage_start_at,
+    inserted.coverage_end_at,
+    inserted.source_system,
+    inserted.collection_method
+FROM inserted
+JOIN api_tokens t ON t.id = inserted.submitted_by_api_token_id
 "#,
                 &[
                     &Uuid::from(payload.evidence_request_id),
-                    &Uuid::from(self.actor_id),
+                    &Uuid::from(self.api_token_id),
                     &payload.coverage_start_at,
                     &payload.coverage_end_at,
                     &payload.source_system,
@@ -274,7 +287,7 @@ RETURNING
     }
 }
 
-impl ActorReadContext {
+impl WorkspaceReadContext {
     pub async fn get_attachment_for_download_grant(
         &self,
         evidence_submission_id: EvidenceSubmissionId,
@@ -298,14 +311,12 @@ SELECT
 FROM evidence_attachments a
 JOIN evidence_submissions s ON s.id = a.evidence_submission_id
 JOIN evidence_requests er ON er.id = s.evidence_request_id
-JOIN actors actor ON actor.id = $2
 WHERE er.workspace_id = $1
-  AND s.id = $3
-  AND a.id = $4
+  AND s.id = $2
+  AND a.id = $3
 "#,
                 &[
                     &Uuid::from(self.workspace_id),
-                    &Uuid::from(self.actor_id),
                     &Uuid::from(evidence_submission_id),
                     &Uuid::from(evidence_attachment_id),
                 ],
@@ -351,7 +362,8 @@ LIMIT 1
 SELECT
     s.id,
     s.evidence_request_id,
-    s.submitted_by,
+    s.submitted_by_api_token_id,
+    t.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -368,6 +380,7 @@ SELECT
     a.upload_status
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
+JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
 WHERE s.id = $1
   AND er.workspace_id = $2
@@ -400,7 +413,8 @@ WITH latest_submission AS (
 SELECT
     s.id,
     s.evidence_request_id,
-    s.submitted_by,
+    s.submitted_by_api_token_id,
+    t.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -417,6 +431,7 @@ SELECT
     a.upload_status
 FROM latest_submission latest
 JOIN evidence_submissions s ON s.id = latest.id
+JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
 ORDER BY a.filename, a.id
 "#,
@@ -431,7 +446,7 @@ ORDER BY a.filename, a.id
     }
 }
 
-impl ActorTransactionContext<'_> {
+impl WorkspaceTransactionContext<'_> {
     pub async fn create_evidence_attachment(
         &self,
         payload: &CreateEvidenceAttachmentPayload,
@@ -523,7 +538,10 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         evidence_request_id: EvidenceRequestId::from(
             row.try_get::<_, Uuid>("evidence_request_id")?,
         ),
-        submitted_by: ActorId::from(row.try_get::<_, Uuid>("submitted_by")?),
+        submitted_by: EvidenceSubmitter {
+            api_token_id: row.try_get::<_, Uuid>("submitted_by_api_token_id")?.into(),
+            user_id: row.try_get::<_, Uuid>("submitted_by_user_id")?.into(),
+        },
         received_at: row.try_get("received_at")?,
         coverage_start_at: row.try_get("coverage_start_at")?,
         coverage_end_at: row.try_get("coverage_end_at")?,

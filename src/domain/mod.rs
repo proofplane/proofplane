@@ -1,5 +1,4 @@
-mod actor;
-mod api_credential;
+mod api_token;
 mod controls;
 mod error;
 mod evidence_request;
@@ -10,10 +9,9 @@ mod user;
 mod validation;
 mod workspace;
 
-pub use actor::{
-    Actor, ActorId, ActorKind, ActorWithPermissions, CreateActorPayload, UpdateActorPayload,
+pub use api_token::{
+    canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
 };
-pub use api_credential::{ApiCredential, CreateApiCredentialPayload, UpdateApiCredentialPayload};
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload,
     CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, Framework,
@@ -27,9 +25,9 @@ pub use evidence_request::{
 pub use evidence_submission::{
     AttachmentUploadStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
     EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmission, EvidenceSubmissionDetail,
-    EvidenceSubmissionId,
+    EvidenceSubmissionId, EvidenceSubmitter,
 };
-pub use permission::{ActorPermissions, WorkspacePermission};
+pub use permission::{WorkspacePermission, WorkspacePermissions};
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{required_text, validate_attachment_filename, validate_freshness_window_days};
 pub use workspace::{
