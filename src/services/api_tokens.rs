@@ -64,7 +64,7 @@ impl ApiTokenService {
             .repository
             .create_api_token(&CreateApiTokenPayload {
                 id: token_id,
-                token_digest: issued.digest,
+                digest: issued.digest,
                 user_id,
                 workspace_id,
                 name: request.name,

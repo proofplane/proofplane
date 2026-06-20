@@ -100,7 +100,7 @@ async fn far_future_expiration_is_accepted_without_a_maximum_ttl() {
     app.login(owner).await;
     let workspace_id = workspace_uuid(&app.create_workspace_as(owner, "Future Workspace").await);
 
-    create_token(
+    let response = create_token(
         &app,
         owner,
         workspace_id,
@@ -110,8 +110,9 @@ async fn far_future_expiration_is_accepted_without_a_maximum_ttl() {
             "permissions": [],
         }),
     )
-    .await
-    .assert_status_ok();
+    .await;
+    response.assert_status_ok();
+    assert_eq!(response.json::<Value>()["permissions"], json!([]));
 }
 
 #[tokio::test]
@@ -258,7 +259,7 @@ async fn stored_digest_length(app: &TestApp, token_id: Uuid) -> i32 {
     let client = app.postgres().get().await.expect("pool client opens");
     client
         .query_one(
-            "SELECT octet_length(token_digest) AS digest_length FROM api_tokens WHERE id = $1",
+            "SELECT octet_length(digest) AS digest_length FROM api_tokens WHERE id = $1",
             &[&token_id],
         )
         .await

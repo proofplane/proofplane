@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifyError},
+    authentication::opaque_token::parse,
     domain::{
         ApiTokenId, ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission,
         WorkspacePermissions,
@@ -45,7 +46,7 @@ impl ApiTokenAuthenticator {
     }
 
     pub async fn authenticate(&self, raw_token: &str) -> Result<Option<ApiTokenContext>, Error> {
-        let digest = match opaque_token::parse_opaque_token(raw_token) {
+        let digest = match parse(raw_token) {
             Ok(digest) => digest,
             Err(_) => return Ok(None),
         };
@@ -178,13 +179,7 @@ pub enum Error {
     #[error("credential repository error")]
     Repository(#[source] repository::Error),
     #[error("PASETO initialization failed")]
-    Paseto(#[source] paseto::Error),
-}
-
-impl From<paseto::Error> for Error {
-    fn from(error: paseto::Error) -> Self {
-        Self::Paseto(error)
-    }
+    Paseto(#[from] paseto::Error),
 }
 
 #[cfg(test)]

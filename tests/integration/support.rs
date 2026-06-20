@@ -119,7 +119,6 @@ pub struct TestApp {
     _clamav: Option<Arc<TestClamAv>>,
     pub(super) postgres: Arc<Postgres>,
     object_storage_root: PathBuf,
-    app_config: AppConfig,
     server: TestServer,
     api_token: String,
     api_token_id: Uuid,
@@ -217,7 +216,6 @@ impl TestApp {
         };
         let issued = issue_api_token_for_workspace(
             &postgres,
-            &app_config,
             WorkspaceId::from(home_workspace_id),
             WorkspacePermission::ALL.to_vec(),
             Some(ApiTokenId::from(
@@ -234,7 +232,6 @@ impl TestApp {
             _clamav: clamav,
             postgres,
             object_storage_root,
-            app_config,
             server,
             api_token: issued.raw_token,
             api_token_id: Uuid::from(issued.token_id),
@@ -265,7 +262,6 @@ impl TestApp {
     ) -> IssuedTestApiToken {
         issue_api_token_for_workspace(
             &self.postgres,
-            &self.app_config,
             WorkspaceId::from(workspace_id),
             permissions,
             None,
@@ -692,7 +688,6 @@ pub struct IssuedTestApiToken {
 
 async fn issue_api_token_for_workspace(
     postgres: &Postgres,
-    _app_config: &AppConfig,
     workspace_id: WorkspaceId,
     permissions: Vec<WorkspacePermission>,
     token_id: Option<ApiTokenId>,
@@ -726,7 +721,7 @@ async fn issue_api_token_for_workspace(
     let token = postgres
         .create_api_token(&CreateApiTokenPayload {
             id: token_id,
-            token_digest: issued.digest,
+            digest: issued.digest,
             user_id: user.id,
             workspace_id,
             name: "Integration API Token".to_owned(),

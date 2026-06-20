@@ -90,7 +90,7 @@ pub async fn run() -> Result<SeedSummary, Error> {
     debug!("seeding local data");
     seed_workspace(&postgres).await?;
     let owner_id = seed_local_owner(&postgres).await?;
-    let api_token = seed_api_token(&postgres, &config, owner_id).await?;
+    let api_token = seed_api_token(&postgres, owner_id).await?;
     seed_evidence_requests(&postgres, owner_id, local_api_token_id()).await?;
     seed_frameworks_and_controls(&postgres).await?;
     let demo_attachment = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
@@ -168,25 +168,22 @@ async fn seed_local_owner(repository: &Postgres) -> Result<UserId, Error> {
     Ok(user.id)
 }
 
-async fn seed_api_token(
-    repository: &Postgres,
-    _config: &crate::config::AppConfig,
-    user_id: UserId,
-) -> Result<String, Error> {
+async fn seed_api_token(repository: &Postgres, user_id: UserId) -> Result<String, Error> {
     let workspace_id = local_authorized_workspace_id();
     let token_id = local_api_token_id();
     let expires_at = timestamp("2036-01-01T00:00:00Z")?;
     let permissions = WorkspacePermission::ALL.to_vec();
     let issued = generate_opaque_token()?;
+    let digest: &[u8] = issued.digest.as_bytes();
 
     let client = repository.get().await?;
     client
         .execute(
             r#"
-INSERT INTO api_tokens (id, token_digest, user_id, workspace_id, name, expires_at)
+INSERT INTO api_tokens (id, digest, user_id, workspace_id, name, expires_at)
 VALUES ($1, $2, $3, $4, 'Local Owner API Token', $5)
 ON CONFLICT (id) DO UPDATE
-SET token_digest = EXCLUDED.token_digest,
+SET digest = EXCLUDED.digest,
     user_id = EXCLUDED.user_id,
     workspace_id = EXCLUDED.workspace_id,
     name = EXCLUDED.name,
@@ -195,7 +192,7 @@ SET token_digest = EXCLUDED.token_digest,
 "#,
             &[
                 &Uuid::from(token_id),
-                &&issued.digest.as_bytes()[..],
+                &digest,
                 &Uuid::from(user_id),
                 &Uuid::from(workspace_id),
                 &expires_at,

@@ -59,7 +59,7 @@ pub fn generate_opaque_token() -> Result<GeneratedOpaqueToken, OpaqueTokenError>
     })
 }
 
-pub fn parse_opaque_token(raw_token: &str) -> Result<ApiTokenDigest, OpaqueTokenError> {
+pub fn parse(raw_token: &str) -> Result<ApiTokenDigest, OpaqueTokenError> {
     if raw_token.len() != TOKEN_LENGTH || !raw_token.starts_with(PREFIX) {
         return Err(OpaqueTokenError::Malformed);
     }
@@ -133,7 +133,7 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::{
-        encode_checksum_base62, generate_opaque_token, generate_token_body, parse_opaque_token,
+        encode_checksum_base62, generate_opaque_token, generate_token_body, parse,
         OpaqueTokenError, ALPHABET, CHECKSUM_LENGTH, PREFIX, RANDOM_LENGTH, TOKEN_LENGTH,
     };
 
@@ -148,7 +148,7 @@ mod tests {
             .bytes()
             .all(|byte| ALPHABET.contains(&byte)));
 
-        let parsed_digest = parse_opaque_token(raw_token).expect("generated token parses");
+        let parsed_digest = parse(raw_token).expect("generated token parses");
         assert_eq!(parsed_digest, generated.digest);
         assert_eq!(parsed_digest.as_bytes().len(), 32);
     }
@@ -171,7 +171,7 @@ mod tests {
             "v4.public.example",
         ] {
             assert_eq!(
-                parse_opaque_token(raw_token),
+                parse(raw_token),
                 Err(OpaqueTokenError::Malformed),
                 "{raw_token:?} should be malformed"
             );
@@ -190,7 +190,7 @@ mod tests {
             &(replacement as char).to_string(),
         );
         assert_eq!(
-            parse_opaque_token(&altered_random),
+            parse(&altered_random),
             Err(OpaqueTokenError::ChecksumMismatch)
         );
 
@@ -202,7 +202,7 @@ mod tests {
             &(replacement as char).to_string(),
         );
         assert_eq!(
-            parse_opaque_token(&altered_checksum),
+            parse(&altered_checksum),
             Err(OpaqueTokenError::ChecksumMismatch)
         );
     }

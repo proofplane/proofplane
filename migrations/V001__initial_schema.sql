@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_memberships_workspace_role
 
 CREATE TABLE IF NOT EXISTS api_tokens (
     id UUID PRIMARY KEY,
-    token_digest BYTEA NOT NULL UNIQUE,
+    digest BYTEA NOT NULL UNIQUE,
     user_id UUID NOT NULL REFERENCES users(id),
     workspace_id UUID NOT NULL REFERENCES workspaces(id),
     name TEXT NOT NULL,

@@ -143,13 +143,13 @@ issuing a replacement and revoking the old token.
 ### Persistence
 
 Tickets 002 and 004 established these user-owned records and consolidated them
-into `V001`. Ticket 006 adds `token_digest` directly to that undeployed initial
+into `V001`. Ticket 006 adds `digest` directly to that undeployed initial
 schema; there is no incremental migration or digest backfill.
 
 ```text
 api_tokens
 - id UUID PRIMARY KEY
-- token_digest BYTEA NOT NULL UNIQUE          -- SHA-256 of the complete token
+- digest BYTEA NOT NULL UNIQUE                -- SHA-256 of the complete token
 - user_id UUID NOT NULL REFERENCES users(id)
 - workspace_id UUID NOT NULL REFERENCES workspaces(id)
 - name TEXT NOT NULL

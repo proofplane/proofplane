@@ -22,17 +22,18 @@ impl Postgres {
     ) -> Result<ApiTokenWithPermissions, Error> {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
+        let digest: &[u8] = token.digest.as_bytes();
 
         let row = transaction
             .query_one(
                 r#"
-INSERT INTO api_tokens (id, token_digest, user_id, workspace_id, name, expires_at)
+INSERT INTO api_tokens (id, digest, user_id, workspace_id, name, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at, created_at
 "#,
                 &[
                     &Uuid::from(token.id),
-                    &&token.token_digest.as_bytes()[..],
+                    &digest,
                     &Uuid::from(token.user_id),
                     &Uuid::from(token.workspace_id),
                     &token.name,
@@ -40,7 +41,7 @@ RETURNING id, user_id, workspace_id, name, expires_at, revoked_at, last_used_at,
                 ],
             )
             .await?;
-        let created = api_token_from_row(row)?;
+        let created = api_token_from_row(&row)?;
 
         for permission in &token.permissions {
             transaction
@@ -81,7 +82,7 @@ ORDER BY created_at DESC, id DESC
 
         let mut tokens = Vec::with_capacity(rows.len());
         for row in rows {
-            let token = api_token_from_row(row)?;
+            let token = api_token_from_row(&row)?;
             let permissions = permissions_for_token(&client, token.id).await?;
             tokens.push(ApiTokenWithPermissions { token, permissions });
         }
@@ -103,7 +104,7 @@ ORDER BY created_at DESC, id DESC
         let Some(row) = rows.into_iter().next() else {
             return Ok(None);
         };
-        let token = api_token_from_row(row)?;
+        let token = api_token_from_row(&row)?;
         let permissions = permissions_for_token(&client, token.id).await?;
 
         Ok(Some(ApiTokenWithPermissions { token, permissions }))
@@ -114,17 +115,30 @@ ORDER BY created_at DESC, id DESC
         digest: ApiTokenDigest,
     ) -> Result<Option<ApiTokenWithPermissions>, Error> {
         let client = self.get().await?;
+        let digest: &[u8] = digest.as_bytes();
         let rows = client
             .query(
-                &format!("SELECT {API_TOKEN_COLUMNS} FROM api_tokens WHERE token_digest = $1"),
-                &[&&digest.as_bytes()[..]],
+                &format!(
+                    r#"
+SELECT {API_TOKEN_COLUMNS}, api_token_permissions.permission
+FROM api_tokens
+LEFT JOIN api_token_permissions ON api_token_permissions.api_token_id = api_tokens.id
+WHERE digest = $1
+"#
+                ),
+                &[&digest],
             )
             .await?;
-        let Some(row) = rows.into_iter().next() else {
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
             return Ok(None);
         };
-        let token = api_token_from_row(row)?;
-        let permissions = permissions_for_token(&client, token.id).await?;
+        let token = api_token_from_row(&row)?;
+        let mut permissions = Vec::with_capacity(rows.len() + 1);
+        permission_from_joined_row(&row, &mut permissions)?;
+        for row in rows {
+            permission_from_joined_row(&row, &mut permissions)?;
+        }
 
         Ok(Some(ApiTokenWithPermissions { token, permissions }))
     }
@@ -199,7 +213,7 @@ async fn permissions_for_token(
     Ok(values)
 }
 
-fn api_token_from_row(row: Row) -> Result<ApiToken, Error> {
+fn api_token_from_row(row: &Row) -> Result<ApiToken, Error> {
     Ok(ApiToken {
         id: ApiTokenId::from(row.try_get::<_, Uuid>("id")?),
         user_id: UserId::from(row.try_get::<_, Uuid>("user_id")?),
@@ -210,4 +224,21 @@ fn api_token_from_row(row: Row) -> Result<ApiToken, Error> {
         last_used_at: row.try_get("last_used_at")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn permission_from_joined_row(
+    row: &Row,
+    permissions: &mut Vec<WorkspacePermission>,
+) -> Result<(), Error> {
+    let Some(value) = row.try_get::<_, Option<String>>("permission")? else {
+        return Ok(());
+    };
+
+    permissions.push(
+        value
+            .parse::<WorkspacePermission>()
+            .map_err(|_| Error::InvariantViolation("unknown API token permission"))?,
+    );
+
+    Ok(())
 }

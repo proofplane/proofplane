@@ -174,7 +174,7 @@ async fn issue_token(
     app.postgres()
         .create_api_token(&CreateApiTokenPayload {
             id: ApiTokenId::from(token_id),
-            token_digest: generated.digest,
+            digest: generated.digest,
             user_id: UserId::from(user_id),
             workspace_id: WorkspaceId::from(workspace_id),
             name: "Integration auth token".to_owned(),

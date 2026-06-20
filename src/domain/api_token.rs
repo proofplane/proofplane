@@ -27,7 +27,7 @@ pub struct ApiTokenWithPermissions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateApiTokenPayload {
     pub id: ApiTokenId,
-    pub token_digest: ApiTokenDigest,
+    pub digest: ApiTokenDigest,
     pub user_id: UserId,
     pub workspace_id: WorkspaceId,
     pub name: String,
