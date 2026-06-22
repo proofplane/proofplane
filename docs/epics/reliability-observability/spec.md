@@ -3,12 +3,14 @@
 ## Goal
 
 Prove external dependency failure behavior and expose low-cardinality metrics
-for the API, dequeuer, worker, storage, authorization, and MCP runtimes.
+for the API, dequeuer, worker, storage, and MCP runtimes.
 
 ## Existing Baseline
 
 - `/readyz` checks Postgres with a timeout.
-- Authorization uses SpiceDB and fails closed through route middleware.
+- Authentication resolves persisted users, memberships, API tokens, and
+  permissions from Postgres. Authorization is local policy over that context;
+  there is no separate authorization service or synchronization path.
 - Outbox publish retry and worker delivery behavior have integration coverage.
 - Attachment scan/finalization tests already cover concrete Postgres rollback,
   scanner failure, and object-store failure.
@@ -26,7 +28,6 @@ rules against concrete Postgres where those rules are implemented.
 
 Cover externally visible behavior for:
 
-- SpiceDB unavailable while authentication remains ordered first;
 - Pub/Sub publish failure and later outbox recovery;
 - initial quarantine-write failure in the attachment upload API: return a stable
   error and commit no attachment row or scan-request outbox event;
@@ -46,6 +47,11 @@ Cover externally visible behavior for:
 Stable API errors must not expose dependency internals. Logs include request,
 user/API-token or system identity, operation, and dependency context without
 credentials or attachment bytes.
+
+Existing authentication and authorization integration tests are baseline. They
+already cover invalid credentials, workspace mismatch, missing permissions, and
+not-found concealment. Do not create an artificial authorization-dependency
+failure fixture now that authorization is Postgres-sourced application policy.
 
 The API owns the initial stream into quarantine storage before creating the
 attachment row. The worker later owns the copy from quarantine to the final
@@ -179,3 +185,6 @@ deterministic alone and in the full integration target.
   cutover does not preserve actor-era data.
 - 2026-06-17: Moved `audit_events` removal into the consolidated initial schema;
   there is no incremental drop migration.
+- 2026-06-22: Removed obsolete SpiceDB failure scope and its pending ticket.
+  Authorization now uses Postgres-sourced identity and permission context with
+  no separate dependency to interrupt or synchronize.
