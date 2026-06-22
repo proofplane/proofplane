@@ -39,3 +39,4 @@ description is available only when retrieving a submission directly by ID.
   return the description.
 - Full-text search and the previously proposed cross-record source-material
   model remain deferred.
+- The API response-shape revision is recorded in the spec's API Contract.

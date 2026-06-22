@@ -188,6 +188,8 @@ struct EvidenceSubmissionResponse {
     collection_method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,27 +213,23 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
             source_system: submission.source_system,
             collection_method: submission.collection_method,
             summary: submission.summary,
+            description: submission.description,
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-struct DirectEvidenceSubmissionResponse {
+struct EvidenceSubmissionSummaryResponse {
     id: Uuid,
     evidence_request_id: Uuid,
     submitted_by: EvidenceSubmitterResponse,
-    received_at: DateTime<Utc>,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
-    source_system: String,
-    collection_method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
 }
 
-impl From<EvidenceSubmission> for DirectEvidenceSubmissionResponse {
+impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponse {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
@@ -240,13 +238,9 @@ impl From<EvidenceSubmission> for DirectEvidenceSubmissionResponse {
                 api_token_id: Uuid::from(submission.submitted_by.api_token_id),
                 user_id: Uuid::from(submission.submitted_by.user_id),
             },
-            received_at: submission.received_at,
             coverage_start_at: submission.coverage_start_at,
             coverage_end_at: submission.coverage_end_at,
-            source_system: submission.source_system,
-            collection_method: submission.collection_method,
             summary: submission.summary,
-            description: submission.description,
         }
     }
 }
@@ -279,12 +273,12 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct CompactEvidenceSubmissionDetailResponse {
-    submission: EvidenceSubmissionResponse,
+struct EvidenceSubmissionSummaryDetailResponse {
+    submission: EvidenceSubmissionSummaryResponse,
     attachments: Vec<EvidenceAttachmentResponse>,
 }
 
-impl From<EvidenceSubmissionDetail> for CompactEvidenceSubmissionDetailResponse {
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionSummaryDetailResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -294,12 +288,12 @@ impl From<EvidenceSubmissionDetail> for CompactEvidenceSubmissionDetailResponse 
 }
 
 #[derive(Debug, Serialize)]
-struct DirectEvidenceSubmissionDetailResponse {
-    submission: DirectEvidenceSubmissionResponse,
+struct EvidenceSubmissionDetailResponse {
+    submission: EvidenceSubmissionResponse,
     attachments: Vec<EvidenceAttachmentResponse>,
 }
 
-impl From<EvidenceSubmissionDetail> for DirectEvidenceSubmissionDetailResponse {
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -313,7 +307,7 @@ async fn create_evidence_submission(
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<EvidenceSubmissionDTO>,
-) -> Result<Json<EvidenceSubmissionResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionSummaryResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let payload = body
         .into_new(evidence_request_id)
@@ -332,7 +326,7 @@ async fn get_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<DirectEvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
     let detail = state
         .service
         .get(token, EvidenceSubmissionId::from(path.submission_id))
@@ -346,7 +340,7 @@ async fn get_latest_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<CompactEvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionSummaryDetailResponse>, ApiError> {
     let detail = state
         .service
         .latest_for_request(token, EvidenceRequestId::from(path.evidence_request_id))

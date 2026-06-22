@@ -18,7 +18,7 @@ the flow from seeded local data.
 - The latest-submission route and repository query are implemented and tested.
 - Stateless attachment download grants are implemented and tested.
 - A deterministic local submission and filesystem object are seeded.
-- Evidence Submissions do not carry human- or agent-authored context.
+- Evidence Submissions carry optional immutable summary and description context.
 
 ## Evidence Submission Context
 
@@ -35,11 +35,14 @@ record. Omitting either field remains valid for backward compatibility and
 existing rows read with both fields absent. When present, each value is trimmed
 and must be non-blank.
 
-Submission creation accepts both fields but does not echo the description. The
-direct submission-detail endpoint addressed by submission ID returns both. The
-latest-submission endpoint returns the summary but omits the description, so a
-caller must deliberately retrieve that submission by ID to load the larger
-field. Full-text search is not part of this change.
+Submission creation accepts both fields and returns a compact submission summary
+containing its ID, Evidence Request ID, submitter, coverage window, and optional
+summary. The direct submission-detail endpoint addressed by submission ID
+returns every submission field, including provenance, summary, and description.
+The latest-submission endpoint returns the same compact submission summary plus
+the unchanged attachment inventory, so a caller must deliberately retrieve that
+submission by ID to load the full observation. Full-text search is not part of
+this change.
 
 ## API Contract
 
@@ -51,9 +54,16 @@ POST /workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments
 GET /attachment-downloads?token=<JWT>
 ```
 
-The latest endpoint returns the existing submission-detail shape. It orders by
-`received_at DESC, id DESC` and returns `404` when the Evidence Request is
-missing, belongs to another workspace, or has no submissions.
+The latest endpoint returns a summary-detail shape: compact submission fields
+(`id`, `evidence_request_id`, `submitted_by`, `coverage_start_at`,
+`coverage_end_at`, and optional `summary`) plus the existing attachment array.
+It omits `received_at`, `source_system`, `collection_method`, and `description`.
+It orders by `received_at DESC, id DESC` and returns `404` when the Evidence
+Request is missing, belongs to another workspace, or has no submissions.
+
+Revision (PR review): creation and latest reads now share this genuinely compact
+submission contract; direct-by-ID reads retain the full submission contract.
+This replaces the earlier statement that latest reused the full detail shape.
 
 The grant endpoint authenticates and authorizes the workspace actor for evidence
 submission reads, verifies attachment eligibility, and returns an HTTPS URL
