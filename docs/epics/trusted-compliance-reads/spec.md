@@ -114,10 +114,10 @@ issuance require the packet export permission.
 ## Audit Logging
 
 Packet preview, export request/completion/failure, grant issuance, and download
-redemption emit structured `type = "audit_log"` records. Audit logs are
-operational Cloud Logging data and are not embedded in packet responses. They
-never contain grant tokens, URLs, object keys, ZIP bytes, attachment bytes, or
-submission free text.
+redemption emit structured `type = "audit_log"` application records. Audit logs
+are not embedded in packet responses. They never contain grant tokens, URLs,
+object keys, ZIP bytes, attachment bytes, or submission free text. Production
+routing and retention are deferred to deployment planning.
 
 ## Deferred Source Material
 

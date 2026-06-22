@@ -12,7 +12,7 @@ Full failure and metric contracts live in [spec.md](./spec.md).
 | 002. [Messaging And Storage Failures](./tickets/002-messaging-and-storage-failures.md) | Todo | API quarantine-write coverage plus existing worker finalization guarantees. |
 | 003. [HTTP And Access Metrics](./tickets/003-http-and-access-metrics.md) | Todo | API traffic, auth, and readiness metrics. |
 | 004. [Async Pipeline Metrics](./tickets/004-async-pipeline-metrics.md) | Todo | Outbox, worker, scanner, and storage metrics. |
-| 005. [Structured Audit Logging](./tickets/005-structured-audit-logging.md) | Todo | Define fields, remove the dormant table, and configure the sink contract. |
+| 005. [Structured Audit Logging](./tickets/005-structured-audit-logging.md) | Done | Defines the transport-neutral audit event contract and verifies the dormant table is absent. |
 | 006. [MCP Metrics](./tickets/006-mcp-metrics.md) | Todo | Complete instrumentation after the MCP runtime lands. |
 | 007. [Evidence Lifecycle Audit Logs](./tickets/007-evidence-lifecycle-audit-logs.md) | Todo | Domain audit events for evidence submission, attachment, grant, scan, and finalization lifecycle transitions. |
 

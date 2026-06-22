@@ -119,7 +119,8 @@ the MVP.
 - 2026-06-11: Removed approval/rejection and binary-transfer tools from the
   original plan because those behaviors are not in the MVP domain model.
 - 2026-06-11: Removed database audit-history and agent-log tools in favor of
-  structured application audit logs routed to Cloud Logging.
+  structured application audit logs. Production routing is deferred to
+  deployment planning.
 - 2026-06-11: Added attachment download-grant issuance for human inspection;
   attachment bytes do not pass through the MCP connection.
 - 2026-06-17: Replaced the planned actor API-key session with the then-planned

@@ -23,7 +23,7 @@ provenance, and freshness is derived from submitted evidence.
 | Identity and authorization | Auth0 users, workspace membership, user-owned opaque API tokens, actor retirement | Identity audit logs |
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Submission summaries and auditor packet reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
-| Audit | Structured application logging | Stable audit-log fields, Cloud Logging retention, business event coverage |
+| Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
 | Agent interface | MCP binary scaffold | MCP runtime and tools |
 | Launch surface | Product and GTM notes | Minimal sandbox/MCP setup UI and marketing site |
 
@@ -65,7 +65,7 @@ provenance, and freshness is derived from submitted evidence.
 - User-owned API tokens can submit evidence, retrieve only finalized
   attachments, inspect summarized evidence, and perform the supported MCP
   workflows.
-- Structured audit logs are routed to a restricted Cloud Logging sink with the
-  documented retention policy.
+- Structured audit logs use the stable identifier-only field contract and cover
+  the required business events.
 - The launch flow creates a realistic sandbox, connects the customer's agent,
   and produces a useful MCP-backed compliance answer without a sales gate.
