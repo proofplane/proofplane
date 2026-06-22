@@ -1,32 +1,34 @@
 # 004 — Auth & Identity Audit Logs
 
-**Status:** Todo · **Depends on:** 001, 002, paseto-token-migration/006, reliability-observability/005 · **Spec:** [API-token spec](../../paseto-token-migration/spec.md#audit-and-secret-handling)
+**Status:** Done · **Depends on:** 001, 002, paseto-token-migration/006, reliability-observability/005 · **Spec:** [API-token spec](../../paseto-token-migration/spec.md#audit-and-secret-handling)
 
 **Summary** — Emit structured identity and access audit logs for login, workspace
 creation, membership change, and user API-token issue/revoke.
 
 **Acceptance criteria**
 
-- [ ] Given an audited operation, when its log is emitted, then it can be
+- [x] Given an audited operation, when its log is emitted, then it can be
   attributed to a `user_id` and, when applicable, an `api_token_id`.
-- [ ] Given an instrumented mutation, when it commits, then one audit log is
+- [x] Given an instrumented mutation, when it commits, then one audit log is
   emitted after commit; when it rolls back, then no success audit log is emitted.
-- [ ] Given the instrumented operations, when each runs, then the full event set is emitted (`user.logged_in`, `workspace.created`, `workspace.member_added`/`_removed`, `api_token.issued`/`_revoked`).
-- [ ] Given any emitted audit log, when its fields are inspected, then it
+- [x] Given the instrumented operations, when each runs, then the full event set is emitted (`user.logged_in`, `workspace.created`, `workspace.member_added`/`_removed`, `api_token.issued`/`_revoked`).
+- [x] Given any emitted audit log, when its fields are inspected, then it
   contains no raw key/token/hash (credentials referenced by
   `api_token_id`).
-- [ ] Given repeated authenticated requests from one user, when they are processed, then `user.logged_in` is deduplicated (not one row per request).
-- [ ] Given an identity audit log, when it is emitted, then `type = "audit_log"`
+- [x] Given a user calls `POST /login`, when authentication succeeds, then
+  `user.logged_in` is emitted and the user's `last_login_at` is updated every
+  time; `GET /me` remains a profile read and does not emit login audit logs.
+- [x] Given an identity audit log, when it is emitted, then `type = "audit_log"`
   and the shared correlation fields are present.
 
 **Tasks**
 
-- [ ] Integrate the structured fields from `reliability-observability/005`.
-- [ ] Emit workspace/member logs after successful 002 operations.
-- [ ] Emit API-token lifecycle logs after successful
-  `paseto-token-migration/002` operations plus deduped `user.logged_in` from 001
-  middleware.
-- [ ] Tests (attribution, no success log on rollback, no-secrets, dedup).
+- [x] Integrate the structured fields from `reliability-observability/005`.
+- [x] Emit workspace/member logs after successful 002 operations.
+- [x] Emit API-token lifecycle logs after successful
+  `paseto-token-migration/002` operations plus explicit `user.logged_in` from
+  `POST /login`.
+- [x] Tests (attribution, no success log on rollback, no-secrets, explicit login).
 
 **Notes**
 
@@ -39,3 +41,5 @@ creation, membership change, and user API-token issue/revoke.
   PASETO token events from the PASETO Token Migration spec.
 - Revised on 2026-06-19 to depend on the compact opaque API-token pivot; event
   names and identifier-only audit fields remain unchanged.
+- Revised on 2026-06-22 to make `POST /login` the explicit login event, update
+  `users.last_login_at` on every successful login, and keep `GET /me` read-only.

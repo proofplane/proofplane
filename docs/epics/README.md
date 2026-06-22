@@ -20,7 +20,7 @@ provenance, and freshness is derived from submitted evidence.
 | Area | Implemented | Remaining |
 | --- | --- | --- |
 | Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
-| Identity and authorization | Auth0 users, workspace membership, user-owned opaque API tokens, actor retirement | Identity audit logs |
+| Identity and authorization | Auth0 users, workspace membership, user-owned opaque API tokens, actor retirement, identity audit logs |  |
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Submission summaries and auditor packet reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
@@ -31,7 +31,7 @@ provenance, and freshness is derived from submitted evidence.
 
 | Epic | Status | Outcome |
 | --- | --- | --- |
-| [Auth Hierarchy API](./auth-hierarchy-api/README.md) | Doing | Humans manage workspace actors and rotating API keys. |
+| [Auth Hierarchy API](./auth-hierarchy-api/README.md) | Done | Humans self-onboard workspaces and identity actions emit structured audit logs. |
 | [API Token And PASETO Migration](./paseto-token-migration/README.md) | Done | Users authenticate with compact workspace-scoped API tokens and download grants use encrypted PASETO. |
 | [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Done | Evidence can be queried, safely downloaded, and demonstrated end to end. |
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |

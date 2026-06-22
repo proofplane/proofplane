@@ -19,4 +19,8 @@ impl UserService {
     pub async fn get_user(&self, id: UserId) -> Result<Option<User>, Error> {
         Ok(self.repository.get_user(id).await?)
     }
+
+    pub async fn record_login(&self, id: UserId) -> Result<Option<User>, Error> {
+        Ok(self.repository.record_user_login(id).await?)
+    }
 }

@@ -14,10 +14,12 @@ use crate::{
     domain::{
         required_text, CreateWorkspacePayload, UserId, Workspace, WorkspaceId, WorkspaceWithRole,
     },
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authenticate_user,
         error::{domain_errors, ApiError},
         me::UserRouteAuthState,
+        request_context::RequestId,
     },
     services::workspaces::WorkspaceService,
 };
@@ -68,6 +70,7 @@ async fn authenticate_user_route<V: TokenVerifier>(
 async fn create_workspace<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
+    Extension(request_id): Extension<RequestId>,
     Json(body): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<WorkspaceWithRoleResponse>, ApiError> {
     let name = required_text("name", body.name)
@@ -80,6 +83,31 @@ async fn create_workspace<V: TokenVerifier>(
     };
 
     let created = state.service.create_owned(user.user_id, payload).await?;
+    let workspace_id = Uuid::from(created.workspace.id);
+    let user_id = Uuid::from(user.user_id);
+
+    AuditEvent::new(
+        "workspace.created",
+        AuditOutcome::Success,
+        AuditActor::User { user_id },
+        AuditClientType::Rest,
+        "create_workspace",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("workspace", workspace_id))
+    .emit();
+    AuditEvent::new(
+        "workspace.member_added",
+        AuditOutcome::Success,
+        AuditActor::User { user_id },
+        AuditClientType::Rest,
+        "create_workspace_owner_membership",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("user", user_id))
+    .emit();
 
     Ok(Json(created.into()))
 }
@@ -96,14 +124,30 @@ async fn list_workspaces<V: TokenVerifier>(
 async fn remove_member<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
+    Extension(request_id): Extension<RequestId>,
     Path(path): Path<MemberPath>,
 ) -> Result<Response, ApiError> {
     let workspace_id = WorkspaceId::from(path.workspace_id);
+    let target_user_id = UserId::from(path.user_id);
 
     state
         .service
-        .remove_member(workspace_id, user.user_id, UserId::from(path.user_id))
+        .remove_member(workspace_id, user.user_id, target_user_id)
         .await?;
+
+    AuditEvent::new(
+        "workspace.member_removed",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
+        "remove_workspace_member",
+    )
+    .workspace_id(path.workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("user", target_user_id.into()))
+    .emit();
 
     Ok(Response::new(axum::body::Body::empty()))
 }

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     auth0_sub TEXT NOT NULL UNIQUE,
     email TEXT,
     name TEXT,
+    last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

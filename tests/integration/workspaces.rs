@@ -3,7 +3,7 @@ use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{capture_audit_logs, TestApp};
 
 #[tokio::test]
 async fn create_workspace_makes_caller_the_owner() {
@@ -128,6 +128,63 @@ async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn workspace_mutations_emit_success_audit_logs_after_commit() {
+    let app = TestApp::start_without_default_auth().await;
+    let alice = "auth0|alice-workspace-audit";
+    let bob = "auth0|bob-workspace-audit";
+    let alice_id = app.login(alice).await;
+    let bob_id = app.login(bob).await;
+
+    let (created_response, created_logs) = capture_audit_logs(async {
+        create_workspace_with_slug(&app, alice, "Audited Workspace", "audited-workspace").await
+    })
+    .await;
+    created_response.assert_status_ok();
+    let created = created_response.json::<Value>();
+    let workspace_id = workspace_uuid(&created);
+
+    assert_eq!(created_logs.len(), 2);
+    assert_audit_event(
+        &created_logs,
+        "workspace.created",
+        alice_id,
+        workspace_id,
+        "workspace",
+        workspace_id,
+    );
+    assert_audit_event(
+        &created_logs,
+        "workspace.member_added",
+        alice_id,
+        workspace_id,
+        "user",
+        alice_id,
+    );
+
+    let (conflict, conflict_logs) = capture_audit_logs(async {
+        create_workspace_with_slug(&app, alice, "Duplicate Workspace", "audited-workspace").await
+    })
+    .await;
+    assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
+    assert!(conflict_logs.is_empty());
+
+    insert_membership(&app, workspace_id, bob_id, "admin").await;
+    let (removed, removed_logs) =
+        capture_audit_logs(async { remove_member(&app, alice, workspace_id, bob_id).await }).await;
+    removed.assert_status_ok();
+
+    assert_eq!(removed_logs.len(), 1);
+    assert_audit_event(
+        &removed_logs,
+        "workspace.member_removed",
+        alice_id,
+        workspace_id,
+        "user",
+        bob_id,
+    );
+}
+
 async fn create_workspace_with_slug(
     app: &TestApp,
     sub: &str,
@@ -192,4 +249,29 @@ async fn membership_role(app: &TestApp, workspace_id: Uuid, user_id: Uuid) -> Op
 fn workspace_uuid(created: &Value) -> Uuid {
     Uuid::parse_str(created["id"].as_str().expect("workspace id is a string"))
         .expect("workspace id is a UUID")
+}
+
+fn assert_audit_event(
+    records: &[Value],
+    event_name: &str,
+    actor_user_id: Uuid,
+    workspace_id: Uuid,
+    object_type: &str,
+    object_id: Uuid,
+) {
+    let record = records
+        .iter()
+        .find(|record| record["fields"]["event_name"] == event_name)
+        .unwrap_or_else(|| panic!("{event_name} audit record exists"));
+    let fields = &record["fields"];
+
+    assert_eq!(fields["type"], "audit_log");
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["actor_type"], "user");
+    assert_eq!(fields["user_id"], actor_user_id.to_string());
+    assert_eq!(fields["client_type"], "rest");
+    assert_eq!(fields["workspace_id"], workspace_id.to_string());
+    assert_eq!(fields["object_type"], object_type);
+    assert_eq!(fields["object_id"], object_id.to_string());
+    assert!(Uuid::parse_str(fields["request_id"].as_str().expect("request id is set")).is_ok());
 }
