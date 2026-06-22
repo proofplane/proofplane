@@ -177,7 +177,7 @@ impl AttachmentUploadRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionResponse {
+struct EvidenceSubmissionResponseDTO {
     id: Uuid,
     evidence_request_id: Uuid,
     submitted_by: EvidenceSubmitterResponse,
@@ -198,7 +198,7 @@ struct EvidenceSubmitterResponse {
     user_id: Uuid,
 }
 
-impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
+impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
@@ -219,7 +219,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionSummaryResponse {
+struct EvidenceSubmissionSummaryResponseDTO {
     id: Uuid,
     evidence_request_id: Uuid,
     submitted_by: EvidenceSubmitterResponse,
@@ -229,7 +229,9 @@ struct EvidenceSubmissionSummaryResponse {
     summary: Option<String>,
 }
 
-impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponse {
+type CreateEvidenceSubmissionResponse = EvidenceSubmissionSummaryResponseDTO;
+
+impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponseDTO {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
@@ -246,7 +248,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceAttachmentResponse {
+struct EvidenceAttachmentResponseDTO {
     id: Uuid,
     evidence_submission_id: Uuid,
     filename: String,
@@ -257,7 +259,7 @@ struct EvidenceAttachmentResponse {
     upload_status: &'static str,
 }
 
-impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
+impl From<EvidenceAttachment> for EvidenceAttachmentResponseDTO {
     fn from(attachment: EvidenceAttachment) -> Self {
         Self {
             id: Uuid::from(attachment.id),
@@ -273,12 +275,12 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionSummaryDetailResponse {
-    submission: EvidenceSubmissionSummaryResponse,
-    attachments: Vec<EvidenceAttachmentResponse>,
+struct EvidenceSubmissionSummaryResponse {
+    submission: EvidenceSubmissionSummaryResponseDTO,
+    attachments: Vec<EvidenceAttachmentResponseDTO>,
 }
 
-impl From<EvidenceSubmissionDetail> for EvidenceSubmissionSummaryDetailResponse {
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionSummaryResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -288,12 +290,12 @@ impl From<EvidenceSubmissionDetail> for EvidenceSubmissionSummaryDetailResponse 
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionDetailResponse {
-    submission: EvidenceSubmissionResponse,
-    attachments: Vec<EvidenceAttachmentResponse>,
+struct EvidenceSubmissionResponse {
+    submission: EvidenceSubmissionResponseDTO,
+    attachments: Vec<EvidenceAttachmentResponseDTO>,
 }
 
-impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -307,7 +309,7 @@ async fn create_evidence_submission(
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
     Json(body): Json<EvidenceSubmissionDTO>,
-) -> Result<Json<EvidenceSubmissionSummaryResponse>, ApiError> {
+) -> Result<Json<CreateEvidenceSubmissionResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let payload = body
         .into_new(evidence_request_id)
@@ -326,7 +328,7 @@ async fn get_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionResponse>, ApiError> {
     let detail = state
         .service
         .get(token, EvidenceSubmissionId::from(path.submission_id))
@@ -340,7 +342,7 @@ async fn get_latest_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionSummaryDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionSummaryResponse>, ApiError> {
     let detail = state
         .service
         .latest_for_request(token, EvidenceRequestId::from(path.evidence_request_id))
@@ -352,7 +354,7 @@ async fn get_latest_evidence_submission(
 
 #[derive(Debug, Serialize)]
 struct EvidenceAttachmentUploadResponse {
-    attachment: EvidenceAttachmentResponse,
+    attachment: EvidenceAttachmentResponseDTO,
 }
 
 impl From<EvidenceAttachment> for EvidenceAttachmentUploadResponse {
