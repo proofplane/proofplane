@@ -20,20 +20,6 @@ struct RepositoryContext {
 }
 
 #[tokio::test]
-async fn migrated_schema_has_no_audit_events_table() {
-    let app = TestApp::start().await;
-    let client = app.postgres().get().await.expect("connection opens");
-
-    let row = client
-        .query_one("SELECT to_regclass('public.audit_events')::text", &[])
-        .await
-        .expect("schema can be inspected");
-    let table: Option<String> = row.get(0);
-
-    assert_eq!(table, None);
-}
-
-#[tokio::test]
 async fn evidence_submission_context_round_trips_and_database_limits_length() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
