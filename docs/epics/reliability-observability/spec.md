@@ -93,14 +93,17 @@ documentation defines scrape endpoints.
 ## Structured Audit Logs
 
 Audit records are structured application logs emitted through `tracing`, not
-Postgres rows. Every audit record includes:
+Postgres rows. The shared helper accepts only UUID identifiers and static event,
+operation, object-type, and system-client names; it has no free-form payload or
+error field. Every audit record includes:
 
 - `type = "audit_log"`;
 - stable event name and outcome;
 - timestamp and generated event ID;
 - workspace ID when scoped;
-- user ID, API token ID, or identified system client;
-- request/session correlation ID;
+- an actor type plus user ID, user and API-token IDs, or an identified system
+  client;
+- request/session correlation IDs when available;
 - client type and operation/tool name;
 - affected object type and ID where applicable.
 
@@ -109,17 +112,19 @@ hashes, bearer grant tokens or URLs, internal object keys, attachment or packet
 bytes, submission summaries or descriptions, or unbounded error strings.
 Domain tickets define their stable event names and allowed fields.
 
+The helper emits at `info` with no tracing parent. The JSON subscriber supplies
+the timestamp and does not serialize current-span fields, so unrelated request
+or dependency context cannot enter an audit record.
+
 Mutation success logs are emitted only after the database transaction commits.
 This avoids false success records on rollback, but accepts a small crash window
 where the commit succeeds and the process exits before logging. The generated
 event ID and operation/object fields support downstream deduplication and
 reconciliation where necessary.
 
-Production routes `type = "audit_log"` records to a dedicated restricted Cloud
-Logging sink with longer retention than ordinary application logs. Sink
-destination, retention period, access controls, and export/analysis procedures
-are deployment configuration. Proofplane does not expose an audit-history API
-in the MVP.
+Audit delivery is best-effort application logging. Routing, retention, IAM, and
+export or analysis infrastructure are deferred to future production-deployment
+planning. Proofplane does not expose an audit-history API in the MVP.
 
 The unused `audit_events` table is omitted from the consolidated initial schema;
 no runtime code writes it.
@@ -188,3 +193,6 @@ deterministic alone and in the full integration target.
 - 2026-06-22: Removed obsolete SpiceDB failure scope and its pending ticket.
   Authorization now uses Postgres-sourced identity and permission context with
   no separate dependency to interrupt or synchronize.
+- 2026-06-22: Narrowed ticket 005 to a transport-neutral `tracing` audit-event
+  API. Cloud Logging routing, retention, IAM, exports, and analysis
+  infrastructure are deferred to future production-deployment planning.

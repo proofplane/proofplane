@@ -31,8 +31,9 @@ creation, membership change, and user API-token issue/revoke.
 **Notes**
 
 - Audit records are application logs, not Postgres rows or outbox messages.
-- The sink, retention, field contract, and known post-commit crash window are
-  documented in the Reliability and Observability spec.
+- The field contract and known post-commit crash window are documented in the
+  Reliability and Observability spec. Production routing and retention are
+  deferred to deployment planning.
 - There is no Proofplane audit read/query API in the MVP.
 - Revised on 2026-06-17 to replace actor/credential events with user-owned
   PASETO token events from the PASETO Token Migration spec.

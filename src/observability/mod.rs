@@ -5,6 +5,8 @@ use tracing_subscriber::filter::EnvFilter;
 
 use crate::config::{LogFormat, ObservabilityConfig};
 
+pub mod audit;
+
 pub const RUST_LOG: &str = "RUST_LOG";
 pub const PROOFPLANE_CLI_LOG: &str = "PROOFPLANE_CLI_LOG";
 
@@ -18,6 +20,8 @@ pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), Error> {
     match config.log_format {
         LogFormat::Json => tracing_subscriber::fmt()
             .json()
+            .with_current_span(false)
+            .with_span_list(false)
             .with_file(false)
             .with_line_number(false)
             .with_writer(io::stderr)
