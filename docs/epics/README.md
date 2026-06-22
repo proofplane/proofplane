@@ -32,8 +32,8 @@ provenance, and freshness is derived from submitted evidence.
 | Epic | Status | Outcome |
 | --- | --- | --- |
 | [Auth Hierarchy API](./auth-hierarchy-api/README.md) | Doing | Humans manage workspace actors and rotating API keys. |
-| [API Token And PASETO Migration](./paseto-token-migration/README.md) | Todo | Users authenticate with compact workspace-scoped API tokens and download grants use encrypted PASETO. |
-| [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Todo | Evidence can be queried, safely downloaded, and demonstrated end to end. |
+| [API Token And PASETO Migration](./paseto-token-migration/README.md) | Done | Users authenticate with compact workspace-scoped API tokens and download grants use encrypted PASETO. |
+| [Evidence Lifecycle Completion](./evidence-lifecycle-completion/README.md) | Done | Evidence can be queried, safely downloaded, and demonstrated end to end. |
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
@@ -42,18 +42,17 @@ provenance, and freshness is derived from submitted evidence.
 
 ## Preferred Sequence
 
-1. Finish the Evidence Lifecycle Completion epic.
-2. Complete `paseto-token-migration/006` before MCP authentication is built;
-   its attachment-grant ticket can proceed in parallel.
-3. Establish the structured audit-log contract in Reliability and
-   Observability; identity and data-plane emission can then proceed in parallel.
-4. Build production adapters while Trusted Compliance Reads starts on the
-   completed evidence model.
-5. Build MCP after user API-token authentication and trusted-read contracts are
-   stable.
-6. Add reliability coverage and metrics continuously alongside product work.
-7. Build the Sandbox Product Launch on the stable APIs and packet preview.
-8. Create a separate production-deployment epic when deployment planning begins.
+1. Treat API Token And PASETO Migration and Evidence Lifecycle Completion as
+   complete foundations.
+2. Build the MCP runtime and core evidence/control tools while the shared audit
+   contract and evidence audit events land; this produces the core MCP demo.
+3. Build production adapters and the Trusted Compliance Reads packet lane
+   independently of that demo milestone.
+4. Add MCP auditor-packet tools after preview, export jobs, and download grants
+   are stable.
+5. Complete MCP equivalence and metrics, then build the Sandbox Product Launch
+   on the stable APIs and packet workflow.
+6. Create a separate production-deployment epic when deployment planning begins.
 
 ## Definition Of MVP Done
 

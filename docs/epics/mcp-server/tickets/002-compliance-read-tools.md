@@ -1,10 +1,9 @@
 # 002 - Compliance Read Tools
 
-**Status:** Todo · **Depends on:** 001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/004, trusted-compliance-reads/004 · **Spec:** [spec.md](../spec.md#mvp-tools)
+**Status:** Todo · **Depends on:** 001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/004 · **Spec:** [spec.md](../spec.md#core-demo-tools)
 
-**Summary** - Add the MVP read tools for requests, selectively detailed
-submissions, human attachment download grants, controls, and compact packet
-previews.
+**Summary** - Add the core read tools for requests, selectively detailed
+submissions, human attachment download grants, controls, and mappings.
 
 **Acceptance criteria**
 
@@ -24,13 +23,10 @@ previews.
   may be returned but the description is absent.
 - [ ] Given a submission read by ID, when it succeeds, then its optional summary
   and description are returned without duplicated explanatory prose.
-- [ ] Given a packet preview, when it succeeds, then summaries and descriptions
-  are absent from the aggregate result.
 
 **Tasks**
 
 - [ ] Add request, submission, download-grant, control, and mapping read tools.
-- [ ] Add the packet-preview tool.
 - [ ] Map domain problems to stable MCP problem codes.
 - [ ] Add representative integration tests for every read family.
 

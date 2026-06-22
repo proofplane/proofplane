@@ -16,10 +16,15 @@ Neither a summary nor an uploaded attachment marks a submission approved.
 ## Evidence Freshness
 
 For each mapped Evidence Request, packet assembly returns `current`, `stale`,
-`missing`, or `unusable`. Currentness is derived from the request freshness
-window and latest submission. Missing means no submission exists. Unusable
-means the selected submission has attachments but none are uploaded, or a
-referenced attachment is not finalized.
+`missing`, or `unusable`. The selected submission is the existing latest
+submission ordered by `received_at DESC, id DESC`, but freshness is measured
+from its `coverage_end_at`: receiving old evidence today does not make its
+coverage current. When `freshness_window_days` is present, the submission is
+current when `coverage_end_at >= evaluated_at - freshness_window_days`; without
+a configured window, an otherwise usable latest submission is current. Missing
+means no submission exists. Unusable means the selected submission has
+attachments but none are uploaded, or a referenced attachment is not finalized.
+State precedence is `missing`, then `unusable`, then `stale`, then `current`.
 
 Freshness is evaluated against an injected clock so repeated evaluation is
 deterministic.
@@ -135,3 +140,5 @@ submission summaries and existing metadata should be evaluated first.
 - 2026-06-20: Replaced synchronous ZIP streaming with an outbox-backed worker
   export, persisted object, compact status polling, and a short-lived
   human-download grant so agents never mediate packet bytes.
+- 2026-06-22: Defined freshness against `coverage_end_at` rather than receipt
+  time and moved readiness work off the core MCP demo path.
