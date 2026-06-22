@@ -19,6 +19,7 @@ Full schema, freshness, packet, and export decisions live in
 
 ## Sequencing
 
+- This epic is the auditor-packet lane and does not block the core MCP demo.
 - **003** depends on the completed latest-submission and attachment-eligibility
   contracts.
 - **004** depends on Evidence Lifecycle Completion ticket 004 and 003.

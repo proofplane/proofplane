@@ -25,7 +25,7 @@ equivalent REST operations.
 The initial transport accepts the bearer token on the HTTP session. Raw tokens
 must not enter tool arguments, logs, or audit payloads.
 
-## MVP Tools
+## Core Demo Tools
 
 Read tools:
 
@@ -37,16 +37,32 @@ Read tools:
 - `create_attachment_download_grant`
 - `list_controls`
 - `list_evidence_request_control_mappings`
-- `preview_auditor_packet`
-- `get_auditor_packet_export`
-- `create_auditor_packet_download_grant`
 
 Write tools:
 
 - `create_evidence_submission`
 - `map_evidence_request_to_control`
 - `remove_evidence_request_control_mapping`
+
+These tools are sufficient for the core MCP demo: an agent can inspect due
+requests and latest summarized evidence, create a submission, direct a human to
+finalized attachments, and inspect or update control mappings.
+
+## Auditor Packet Tools
+
+Read tools:
+
+- `preview_auditor_packet`
+- `get_auditor_packet_export`
+- `create_auditor_packet_download_grant`
+
+Write tools:
+
 - `request_auditor_packet_export`
+
+The packet tools are an additive workflow built after the core demo. They
+consume the Trusted Compliance Reads packet-read model and are not prerequisites
+for demonstrating the core evidence lifecycle through MCP.
 
 ## Context-Efficient Results
 
@@ -116,3 +132,5 @@ the MVP.
 - 2026-06-20: Added asynchronous packet export request/status/grant tools. The
   worker persists the ZIP and the agent presents a browser grant URL without
   mediating packet bytes.
+- 2026-06-22: Split core evidence tools from additive auditor-packet tools so
+  packet freshness and export work no longer block the core MCP demo.

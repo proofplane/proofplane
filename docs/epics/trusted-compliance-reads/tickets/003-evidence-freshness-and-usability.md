@@ -10,6 +10,8 @@ Evidence Request rules, latest submissions, and finalized attachment state.
 - [ ] Given a request with a fresh latest submission and usable attachments,
   when readiness is evaluated, then its state is `current` with the evaluation
   timestamp.
+- [ ] Given recently received evidence whose coverage end is outside the
+  freshness window, when readiness is evaluated, then its state is `stale`.
 - [ ] Given expired, missing, pending, malicious, or failed evidence, when
   readiness is evaluated, then `stale`, `missing`, or `unusable` is returned as
   specified.
@@ -29,3 +31,5 @@ Evidence Request rules, latest submissions, and finalized attachment state.
 
 - The spec was revised on 2026-06-20 to remove the deferred source-material
   model from this evaluator.
+- Freshness uses `coverage_end_at`, not `received_at`; this ticket serves packet
+  readiness and is not required for the core MCP demo.
