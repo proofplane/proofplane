@@ -20,6 +20,49 @@ struct RepositoryContext {
 }
 
 #[tokio::test]
+async fn evidence_submission_context_round_trips_and_database_limits_length() {
+    let app = TestApp::start().await;
+    let postgres = app.postgres();
+    let context = repository_workspace_context(&app).await;
+    let request = create_repository_evidence_request(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, request.id).await;
+
+    assert_eq!(
+        submission.summary.as_deref(),
+        Some("Repository submission summary")
+    );
+    assert_eq!(
+        submission.description.as_deref(),
+        Some("Repository submission description")
+    );
+
+    let detail = postgres
+        .in_workspace_context_read(context.workspace_id, async move |read| {
+            read.get_evidence_submission(submission.id).await
+        })
+        .await
+        .expect("submission reads")
+        .expect("submission exists");
+    assert_eq!(detail.submission, submission);
+
+    let client = postgres.get().await.expect("connection opens");
+    assert!(client
+        .execute(
+            "UPDATE evidence_submissions SET summary = $2 WHERE id = $1",
+            &[&Uuid::from(submission.id), &"é".repeat(501)],
+        )
+        .await
+        .is_err());
+    assert!(client
+        .execute(
+            "UPDATE evidence_submissions SET description = $2 WHERE id = $1",
+            &[&Uuid::from(submission.id), &"é".repeat(4_001)],
+        )
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn workspace_repository_crud_uses_typed_rows() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
@@ -634,6 +677,8 @@ fn submission_payload(
         coverage_end_at: Utc::now(),
         source_system: "github".to_owned(),
         collection_method: "api_export".to_owned(),
+        summary: Some("Repository submission summary".to_owned()),
+        description: Some("Repository submission description".to_owned()),
     }
 }
 

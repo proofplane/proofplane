@@ -45,8 +45,183 @@ async fn create_returns_the_submission() {
             "user_id": app.user_id().to_string(),
         })
     );
-    assert_submission_matches(&created, &body);
-    assert_timestamp(&created["received_at"]);
+    assert_eq!(created["coverage_start_at"], body["coverage_start_at"]);
+    assert_eq!(created["coverage_end_at"], body["coverage_end_at"]);
+    assert_object_fields(
+        &created,
+        &[
+            "id",
+            "evidence_request_id",
+            "submitted_by",
+            "coverage_start_at",
+            "coverage_end_at",
+        ],
+    );
+}
+
+#[tokio::test]
+async fn submission_context_has_compact_and_direct_visibility() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+    let body = json!({
+        "coverage_start_at": "2026-01-01T00:00:00Z",
+        "coverage_end_at": "2026-03-31T23:59:59Z",
+        "source_system": "okta",
+        "collection_method": "api_export",
+        "summary": "  Quarterly access review  ",
+        "description": "  Reviewer decisions and exceptions.  "
+    });
+
+    let created = app
+        .post(&collection_path(workspace_id, evidence_request_id))
+        .json(&body)
+        .await
+        .json::<Value>();
+    let submission_id = created_id(&created);
+
+    assert_eq!(created["summary"], "Quarterly access review");
+    assert!(created.get("description").is_none());
+    assert_object_fields(
+        &created,
+        &[
+            "id",
+            "evidence_request_id",
+            "submitted_by",
+            "coverage_start_at",
+            "coverage_end_at",
+            "summary",
+        ],
+    );
+
+    let direct = app
+        .get(&item_path(workspace_id, submission_id))
+        .await
+        .json::<Value>();
+    assert_eq!(direct["submission"]["summary"], "Quarterly access review");
+    assert_eq!(
+        direct["submission"]["description"],
+        "Reviewer decisions and exceptions."
+    );
+    assert_eq!(direct["submission"]["source_system"], "okta");
+    assert_eq!(direct["submission"]["collection_method"], "api_export");
+    assert_timestamp(&direct["submission"]["received_at"]);
+    assert_object_fields(
+        &direct["submission"],
+        &[
+            "id",
+            "evidence_request_id",
+            "submitted_by",
+            "received_at",
+            "coverage_start_at",
+            "coverage_end_at",
+            "source_system",
+            "collection_method",
+            "summary",
+            "description",
+        ],
+    );
+
+    let latest = app
+        .get(&latest_path(workspace_id, evidence_request_id))
+        .await
+        .json::<Value>();
+    assert_eq!(latest["submission"]["summary"], "Quarterly access review");
+    assert!(latest["submission"].get("description").is_none());
+    assert_object_fields(
+        &latest["submission"],
+        &[
+            "id",
+            "evidence_request_id",
+            "submitted_by",
+            "coverage_start_at",
+            "coverage_end_at",
+            "summary",
+        ],
+    );
+}
+
+#[tokio::test]
+async fn omitted_and_null_submission_context_is_absent_from_responses() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Absent submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Absent context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+    let mut body = evidence_submission();
+    body["summary"] = Value::Null;
+
+    let created = app
+        .post(&collection_path(workspace_id, evidence_request_id))
+        .json(&body)
+        .await
+        .json::<Value>();
+    assert!(created.get("summary").is_none());
+    assert!(created.get("description").is_none());
+
+    let direct = app
+        .get(&item_path(workspace_id, created_id(&created)))
+        .await
+        .json::<Value>();
+    assert!(direct["submission"].get("summary").is_none());
+    assert!(direct["submission"].get("description").is_none());
+
+    let latest = app
+        .get(&latest_path(workspace_id, evidence_request_id))
+        .await
+        .json::<Value>();
+    assert!(latest["submission"].get("summary").is_none());
+    assert!(latest["submission"].get("description").is_none());
+}
+
+#[tokio::test]
+async fn invalid_submission_context_is_rejected_without_persistence() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Invalid submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Invalid context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+
+    for (field, value) in [
+        ("summary", " \t ".to_owned()),
+        ("summary", "é".repeat(501)),
+        ("description", "é".repeat(4_001)),
+    ] {
+        let mut body = evidence_submission();
+        body[field] = Value::String(value);
+        app.post(&collection_path(workspace_id, evidence_request_id))
+            .json(&body)
+            .await
+            .assert_status_bad_request();
+    }
+
+    let client = app.postgres().get().await.expect("connection opens");
+    let count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM evidence_submissions WHERE evidence_request_id = $1",
+            &[&evidence_request_id],
+        )
+        .await
+        .expect("submission count loads")
+        .get(0);
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -72,7 +247,39 @@ async fn get_returns_submission_detail_with_empty_attachments() {
 
     response.assert_status_ok();
     let detail: Value = response.json();
-    assert_eq!(detail["submission"], created);
+    assert_eq!(detail["submission"]["id"], created["id"]);
+    assert_eq!(
+        detail["submission"]["evidence_request_id"],
+        created["evidence_request_id"]
+    );
+    assert_eq!(
+        detail["submission"]["submitted_by"],
+        created["submitted_by"]
+    );
+    assert_eq!(
+        detail["submission"]["coverage_start_at"],
+        created["coverage_start_at"]
+    );
+    assert_eq!(
+        detail["submission"]["coverage_end_at"],
+        created["coverage_end_at"]
+    );
+    assert_eq!(detail["submission"]["source_system"], "okta");
+    assert_eq!(detail["submission"]["collection_method"], "api_export");
+    assert_timestamp(&detail["submission"]["received_at"]);
+    assert_object_fields(
+        &detail["submission"],
+        &[
+            "id",
+            "evidence_request_id",
+            "submitted_by",
+            "received_at",
+            "coverage_start_at",
+            "coverage_end_at",
+            "source_system",
+            "collection_method",
+        ],
+    );
     assert_eq!(detail["attachments"], json!([]));
 }
 
@@ -99,7 +306,8 @@ async fn latest_returns_newest_submission_with_attachments() {
             "coverage_start_at": "2026-04-01T00:00:00Z",
             "coverage_end_at": "2026-06-30T23:59:59Z",
             "source_system": "github",
-            "collection_method": "api_export"
+            "collection_method": "api_export",
+            "summary": "Quarterly repository evidence"
         }))
         .await
         .json::<Value>();
@@ -120,6 +328,20 @@ async fn latest_returns_newest_submission_with_attachments() {
     response.assert_status_ok();
     let detail = response.json::<Value>();
     assert_eq!(detail["submission"]["id"], latest_id.to_string());
+    assert_eq!(
+        detail["submission"],
+        json!({
+            "id": latest_id,
+            "evidence_request_id": evidence_request_id,
+            "submitted_by": {
+                "api_token_id": app.api_token_id(),
+                "user_id": app.user_id(),
+            },
+            "coverage_start_at": "2026-04-01T00:00:00Z",
+            "coverage_end_at": "2026-06-30T23:59:59Z",
+            "summary": "Quarterly repository evidence",
+        })
+    );
     assert_eq!(detail["attachments"], json!([a_attachment, z_attachment]));
 }
 
@@ -715,15 +937,13 @@ fn evidence_submission() -> Value {
     })
 }
 
-fn assert_submission_matches(response: &Value, request: &Value) {
-    for field in [
-        "coverage_start_at",
-        "coverage_end_at",
-        "source_system",
-        "collection_method",
-    ] {
-        assert_eq!(response[field], request[field], "field {field} differs");
-    }
+fn assert_object_fields(value: &Value, expected: &[&str]) {
+    let object = value.as_object().expect("value is an object");
+    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
 }
 
 fn assert_method_not_allowed(body: &Value, status: StatusCode) {

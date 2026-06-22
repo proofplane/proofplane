@@ -29,7 +29,9 @@ pub use evidence_submission::{
 };
 pub use permission::{WorkspacePermission, WorkspacePermissions};
 pub use user::{ProvisionUserPayload, User, UserId};
-pub use validation::{required_text, validate_attachment_filename, validate_freshness_window_days};
+pub use validation::{
+    optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,
+};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId, WorkspaceMembership,
     WorkspaceRole, WorkspaceWithRole,

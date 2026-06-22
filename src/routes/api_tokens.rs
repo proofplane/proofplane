@@ -74,7 +74,7 @@ async fn create_api_token<V: TokenVerifier>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
     Path(workspace_id): Path<Uuid>,
-    Json(body): Json<CreateApiTokenDTO>,
+    Json(body): Json<CreateApiTokenRequest>,
 ) -> Result<Json<IssuedApiTokenResponse>, ApiError> {
     let request = body.into_new().into_result().map_err(domain_errors)?;
     let issued = state
@@ -89,7 +89,7 @@ async fn list_api_tokens<V: TokenVerifier>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
     Path(workspace_id): Path<Uuid>,
-) -> Result<Json<Vec<ApiTokenResponse>>, ApiError> {
+) -> Result<Json<ListApiTokensResponse>, ApiError> {
     let tokens = state
         .service
         .list_tokens(user.user_id, WorkspaceId::from(workspace_id))
@@ -145,13 +145,13 @@ fn validate_api_token_expiration(
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateApiTokenDTO {
+struct CreateApiTokenRequest {
     name: String,
     expires_at: Option<DateTime<Utc>>,
     permissions: Vec<String>,
 }
 
-impl CreateApiTokenDTO {
+impl CreateApiTokenRequest {
     fn into_new(self) -> Validation<CreateUserApiTokenPayload, DomainError> {
         validate! {
             name <- required_text("name", self.name),
@@ -173,7 +173,7 @@ struct ApiTokenPath {
 }
 
 #[derive(Debug, Serialize)]
-struct ApiTokenResponse {
+struct ApiTokenResponseDTO {
     id: Uuid,
     name: String,
     workspace_id: Uuid,
@@ -184,7 +184,9 @@ struct ApiTokenResponse {
     created_at: DateTime<Utc>,
 }
 
-impl From<ApiTokenWithPermissions> for ApiTokenResponse {
+type ListApiTokensResponse = Vec<ApiTokenResponseDTO>;
+
+impl From<ApiTokenWithPermissions> for ApiTokenResponseDTO {
     fn from(value: ApiTokenWithPermissions) -> Self {
         Self {
             id: Uuid::from(value.token.id),
@@ -218,7 +220,7 @@ struct IssuedApiTokenResponse {
 
 impl From<IssuedUserApiToken> for IssuedApiTokenResponse {
     fn from(value: IssuedUserApiToken) -> Self {
-        let mut metadata = ApiTokenResponse::from(value.token);
+        let mut metadata = ApiTokenResponseDTO::from(value.token);
 
         Self {
             id: metadata.id,
@@ -238,13 +240,13 @@ impl From<IssuedUserApiToken> for IssuedApiTokenResponse {
 mod tests {
     use chrono::{Duration as ChronoDuration, Utc};
 
-    use super::CreateApiTokenDTO;
+    use super::CreateApiTokenRequest;
     use crate::domain::{DomainError, WorkspacePermission};
 
     #[test]
-    fn token_dto_maps_to_create_payload() {
+    fn token_request_maps_to_create_payload() {
         let expires_at = future_expiration();
-        let payload = CreateApiTokenDTO {
+        let payload = CreateApiTokenRequest {
             name: "CI token".to_owned(),
             expires_at: Some(expires_at),
             permissions: vec!["write_controls".to_owned(), "read_controls".to_owned()],
@@ -265,8 +267,8 @@ mod tests {
     }
 
     #[test]
-    fn token_dto_accumulates_blank_name_missing_expiration_and_duplicate_permission() {
-        let errors = CreateApiTokenDTO {
+    fn token_request_accumulates_blank_name_missing_expiration_and_duplicate_permission() {
+        let errors = CreateApiTokenRequest {
             name: " ".to_owned(),
             expires_at: None,
             permissions: vec!["read_controls".to_owned(), "read_controls".to_owned()],
@@ -288,8 +290,8 @@ mod tests {
     }
 
     #[test]
-    fn token_dto_rejects_past_expiration() {
-        let errors = CreateApiTokenDTO {
+    fn token_request_rejects_past_expiration() {
+        let errors = CreateApiTokenRequest {
             name: "CI token".to_owned(),
             expires_at: Some(Utc::now() - ChronoDuration::minutes(1)),
             permissions: vec![],
@@ -302,8 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn token_dto_accumulates_invalid_permissions() {
-        let errors = CreateApiTokenDTO {
+    fn token_request_accumulates_invalid_permissions() {
+        let errors = CreateApiTokenRequest {
             name: "CI token".to_owned(),
             expires_at: Some(future_expiration()),
             permissions: vec!["delete_everything".to_owned(), "unknown".to_owned()],
@@ -328,8 +330,8 @@ mod tests {
     }
 
     #[test]
-    fn token_dto_canonicalizes_permission_order() {
-        let payload = CreateApiTokenDTO {
+    fn token_request_canonicalizes_permission_order() {
+        let payload = CreateApiTokenRequest {
             name: "CI token".to_owned(),
             expires_at: Some(future_expiration()),
             permissions: vec![

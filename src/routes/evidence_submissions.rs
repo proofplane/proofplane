@@ -30,9 +30,9 @@ use crate::{
     authentication::ApiTokenAuthenticator,
     authentication::ApiTokenContext,
     domain::{
-        required_text, validate_attachment_filename, CreateEvidenceSubmissionPayload, DomainError,
-        EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, WorkspacePermission,
+        optional_text, required_text, validate_attachment_filename,
+        CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment, EvidenceRequestId,
+        EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspacePermission,
     },
     object_storage::StorageError,
     routes::{
@@ -108,14 +108,16 @@ async fn authorize_evidence_submission_route(
 }
 
 #[derive(Debug, Deserialize)]
-struct EvidenceSubmissionDTO {
+struct CreateEvidenceSubmissionRequest {
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
+    summary: Option<String>,
+    description: Option<String>,
 }
 
-impl EvidenceSubmissionDTO {
+impl CreateEvidenceSubmissionRequest {
     fn into_new(
         self,
         evidence_request_id: EvidenceRequestId,
@@ -126,6 +128,8 @@ impl EvidenceSubmissionDTO {
         validate! {
             source_system <- required_text("source_system", self.source_system),
             collection_method <- required_text("collection_method", self.collection_method),
+            summary <- optional_text("summary", self.summary, 500),
+            description <- optional_text("description", self.description, 4_000),
             coverage_window <- validate_coverage_window(coverage_start_at, coverage_end_at),
             => CreateEvidenceSubmissionPayload {
                 evidence_request_id,
@@ -133,6 +137,8 @@ impl EvidenceSubmissionDTO {
                 coverage_end_at: coverage_window.1,
                 source_system,
                 collection_method,
+                summary,
+                description,
             },
         }
     }
@@ -171,29 +177,33 @@ impl AttachmentUploadRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionResponse {
+struct EvidenceSubmissionResponseDTO {
     id: Uuid,
     evidence_request_id: Uuid,
-    submitted_by: EvidenceSubmitterResponse,
+    submitted_by: EvidenceSubmitterResponseDTO,
     received_at: DateTime<Utc>,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmitterResponse {
+struct EvidenceSubmitterResponseDTO {
     api_token_id: Uuid,
     user_id: Uuid,
 }
 
-impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
+impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmitterResponse {
+            submitted_by: EvidenceSubmitterResponseDTO {
                 api_token_id: Uuid::from(submission.submitted_by.api_token_id),
                 user_id: Uuid::from(submission.submitted_by.user_id),
             },
@@ -202,12 +212,43 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
             coverage_end_at: submission.coverage_end_at,
             source_system: submission.source_system,
             collection_method: submission.collection_method,
+            summary: submission.summary,
+            description: submission.description,
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceAttachmentResponse {
+struct EvidenceSubmissionSummaryResponseDTO {
+    id: Uuid,
+    evidence_request_id: Uuid,
+    submitted_by: EvidenceSubmitterResponseDTO,
+    coverage_start_at: DateTime<Utc>,
+    coverage_end_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+}
+
+type CreateEvidenceSubmissionResponse = EvidenceSubmissionSummaryResponseDTO;
+
+impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponseDTO {
+    fn from(submission: EvidenceSubmission) -> Self {
+        Self {
+            id: Uuid::from(submission.id),
+            evidence_request_id: Uuid::from(submission.evidence_request_id),
+            submitted_by: EvidenceSubmitterResponseDTO {
+                api_token_id: Uuid::from(submission.submitted_by.api_token_id),
+                user_id: Uuid::from(submission.submitted_by.user_id),
+            },
+            coverage_start_at: submission.coverage_start_at,
+            coverage_end_at: submission.coverage_end_at,
+            summary: submission.summary,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct EvidenceAttachmentResponseDTO {
     id: Uuid,
     evidence_submission_id: Uuid,
     filename: String,
@@ -218,7 +259,7 @@ struct EvidenceAttachmentResponse {
     upload_status: &'static str,
 }
 
-impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
+impl From<EvidenceAttachment> for EvidenceAttachmentResponseDTO {
     fn from(attachment: EvidenceAttachment) -> Self {
         Self {
             id: Uuid::from(attachment.id),
@@ -234,12 +275,27 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionDetailResponse {
-    submission: EvidenceSubmissionResponse,
-    attachments: Vec<EvidenceAttachmentResponse>,
+struct EvidenceSubmissionSummaryResponse {
+    submission: EvidenceSubmissionSummaryResponseDTO,
+    attachments: Vec<EvidenceAttachmentResponseDTO>,
 }
 
-impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionSummaryResponse {
+    fn from(detail: EvidenceSubmissionDetail) -> Self {
+        Self {
+            submission: detail.submission.into(),
+            attachments: detail.attachments.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct EvidenceSubmissionResponse {
+    submission: EvidenceSubmissionResponseDTO,
+    attachments: Vec<EvidenceAttachmentResponseDTO>,
+}
+
+impl From<EvidenceSubmissionDetail> for EvidenceSubmissionResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -252,8 +308,8 @@ async fn create_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<EvidenceSubmissionDTO>,
-) -> Result<Json<EvidenceSubmissionResponse>, ApiError> {
+    Json(body): Json<CreateEvidenceSubmissionRequest>,
+) -> Result<Json<CreateEvidenceSubmissionResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let payload = body
         .into_new(evidence_request_id)
@@ -272,7 +328,7 @@ async fn get_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionResponse>, ApiError> {
     let detail = state
         .service
         .get(token, EvidenceSubmissionId::from(path.submission_id))
@@ -286,7 +342,7 @@ async fn get_latest_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<EvidenceSubmissionSummaryResponse>, ApiError> {
     let detail = state
         .service
         .latest_for_request(token, EvidenceRequestId::from(path.evidence_request_id))
@@ -298,7 +354,7 @@ async fn get_latest_evidence_submission(
 
 #[derive(Debug, Serialize)]
 struct EvidenceAttachmentUploadResponse {
-    attachment: EvidenceAttachmentResponse,
+    attachment: EvidenceAttachmentResponseDTO,
 }
 
 impl From<EvidenceAttachment> for EvidenceAttachmentUploadResponse {
@@ -511,26 +567,33 @@ mod tests {
 
     use super::{
         encode_crc32c_base64, parse_content_digest_crc32c, validate_attachment_upload,
-        EvidenceSubmissionDTO,
+        CreateEvidenceSubmissionRequest,
     };
     use crate::domain::{DomainError, EvidenceRequestId};
 
     #[test]
-    fn submission_dto_maps_to_create_payload() {
-        let payload = valid_dto().into_new(request_id()).into_result().unwrap();
+    fn submission_request_maps_to_create_payload() {
+        let payload = valid_request()
+            .into_new(request_id())
+            .into_result()
+            .unwrap();
 
         assert_eq!(payload.evidence_request_id, request_id());
         assert_eq!(payload.source_system, "okta");
         assert_eq!(payload.collection_method, "api_export");
+        assert_eq!(payload.summary.as_deref(), Some("Quarterly review"));
+        assert_eq!(payload.description.as_deref(), Some("Review details"));
     }
 
     #[test]
-    fn submission_dto_accumulates_validation_errors() {
-        let errors = EvidenceSubmissionDTO {
+    fn submission_request_accumulates_validation_errors() {
+        let errors = CreateEvidenceSubmissionRequest {
             coverage_start_at: instant("2026-04-01T00:00:00Z"),
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: " ".to_owned(),
             collection_method: "\t".to_owned(),
+            summary: Some(" ".to_owned()),
+            description: Some("x".repeat(4_001)),
         }
         .into_new(request_id())
         .into_result()
@@ -544,6 +607,11 @@ mod tests {
                 },
                 DomainError::EmptyRequiredText {
                     field: "collection_method"
+                },
+                DomainError::BlankOptionalText { field: "summary" },
+                DomainError::OptionalTextTooLong {
+                    field: "description",
+                    maximum: 4_000,
                 },
                 DomainError::InvalidCoverageWindow,
             ]
@@ -614,12 +682,14 @@ mod tests {
 
         assert_eq!(error, "checksum_crc32c does not match file content");
     }
-    fn valid_dto() -> EvidenceSubmissionDTO {
-        EvidenceSubmissionDTO {
+    fn valid_request() -> CreateEvidenceSubmissionRequest {
+        CreateEvidenceSubmissionRequest {
             coverage_start_at: instant("2026-01-01T00:00:00Z"),
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: "okta".to_owned(),
             collection_method: "api_export".to_owned(),
+            summary: Some("  Quarterly review  ".to_owned()),
+            description: Some("  Review details  ".to_owned()),
         }
     }
 

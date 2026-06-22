@@ -87,7 +87,7 @@ async fn create_workspace<V: TokenVerifier>(
 async fn list_workspaces<V: TokenVerifier>(
     State(state): State<WorkspacesState<V>>,
     Extension(user): Extension<UserContext>,
-) -> Result<Json<Vec<WorkspaceWithRoleResponse>>, ApiError> {
+) -> Result<Json<ListWorkspacesResponse>, ApiError> {
     let workspaces = state.service.list_for_user(user.user_id).await?;
 
     Ok(Json(workspaces.into_iter().map(Into::into).collect()))
@@ -122,7 +122,7 @@ struct MemberPath {
 }
 
 #[derive(Debug, Serialize)]
-struct WorkspaceWithRoleResponse {
+struct WorkspaceWithRoleResponseDTO {
     id: Uuid,
     slug: Option<String>,
     name: String,
@@ -130,7 +130,10 @@ struct WorkspaceWithRoleResponse {
     created_at: DateTime<Utc>,
 }
 
-impl From<WorkspaceWithRole> for WorkspaceWithRoleResponse {
+type WorkspaceWithRoleResponse = WorkspaceWithRoleResponseDTO;
+type ListWorkspacesResponse = Vec<WorkspaceWithRoleResponseDTO>;
+
+impl From<WorkspaceWithRole> for WorkspaceWithRoleResponseDTO {
     fn from(value: WorkspaceWithRole) -> Self {
         let Workspace {
             id,

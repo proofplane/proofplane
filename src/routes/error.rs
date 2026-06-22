@@ -18,11 +18,11 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
-    error: ErrorBody,
+    error: ErrorResponseDTO,
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorBody {
+struct ErrorResponseDTO {
     code: &'static str,
     message: String,
     details: Vec<String>,
@@ -108,7 +108,7 @@ impl IntoResponse for ApiError {
             _ => Vec::new(),
         };
         let body = ErrorResponse {
-            error: ErrorBody {
+            error: ErrorResponseDTO {
                 code,
                 message,
                 details,

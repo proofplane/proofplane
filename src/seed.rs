@@ -60,6 +60,9 @@ const LOCAL_OWNER_AUTH0_SUB: &str = "auth0|local-owner";
 const LOCAL_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000301";
 const DEMO_SUBMISSION_FILENAME: &str = "quarterly-access-review.csv";
 const DEMO_SUBMISSION_CONTENT_TYPE: &str = "text/csv";
+const DEMO_SUBMISSION_SUMMARY: &str =
+    "Quarterly production access review completed with all entries approved.";
+const DEMO_SUBMISSION_DESCRIPTION: &str = "Export of the Q2 2026 production console access review, including reviewer decisions for the local owner and deployment service account.";
 const DEMO_SUBMISSION_BYTES: &[u8] = b"user,email,system,reviewer,reviewed_at,decision\nLocal Owner,owner@proofplane.local,Production Console,System,2026-06-14T16:00:00Z,approved\nLocal Service Account,service@proofplane.local,Deployment Pipeline,System,2026-06-14T16:10:00Z,approved\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,9 +468,11 @@ INSERT INTO evidence_submissions (
     coverage_start_at,
     coverage_end_at,
     source_system,
-    collection_method
+    collection_method,
+    summary,
+    description
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (id) DO UPDATE
 SET evidence_request_id = EXCLUDED.evidence_request_id,
     submitted_by_api_token_id = EXCLUDED.submitted_by_api_token_id,
@@ -475,7 +480,9 @@ SET evidence_request_id = EXCLUDED.evidence_request_id,
     coverage_start_at = EXCLUDED.coverage_start_at,
     coverage_end_at = EXCLUDED.coverage_end_at,
     source_system = EXCLUDED.source_system,
-    collection_method = EXCLUDED.collection_method
+    collection_method = EXCLUDED.collection_method,
+    summary = EXCLUDED.summary,
+    description = EXCLUDED.description
 "#,
             &[
                 &demo_submission_id(),
@@ -486,6 +493,8 @@ SET evidence_request_id = EXCLUDED.evidence_request_id,
                 &timestamp("2026-06-30T23:59:59Z")?,
                 &"local-demo",
                 &"seed",
+                &DEMO_SUBMISSION_SUMMARY,
+                &DEMO_SUBMISSION_DESCRIPTION,
             ],
         )
         .await?;

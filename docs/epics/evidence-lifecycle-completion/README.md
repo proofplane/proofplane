@@ -13,7 +13,7 @@ technical depth. Tickets below are lean handoff units that link into it.
 | 001. [Latest Submission API](./tickets/001-latest-submission-api.md) | Done | Latest authenticated submission detail API shipped and verified. |
 | 002. [Attachment Download Grants](./tickets/002-attachment-download-grants.md) | Done | Stateless five-minute JWT URLs stream eligible attachments through Proofplane. |
 | 003. [Evidence Demo Seed](./tickets/003-evidence-demo-seed.md) | Done | Deterministic local submission and filesystem-backed uploaded attachment seeded. |
-| 004. [Evidence Submission Context](./tickets/004-evidence-submission-context.md) | Todo | Add token-bounded summary and on-demand description fields. |
+| 004. [Evidence Submission Context](./tickets/004-evidence-submission-context.md) | Done | Compact create/latest and full direct-read response contracts shipped and verified. |
 
 ## Sequencing
 
