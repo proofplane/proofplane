@@ -5,6 +5,12 @@ pub enum DomainError {
     #[error("{field} must not be empty")]
     EmptyRequiredText { field: &'static str },
 
+    #[error("{field} must not be blank when provided")]
+    BlankOptionalText { field: &'static str },
+
+    #[error("{field} must be at most {maximum} characters")]
+    OptionalTextTooLong { field: &'static str, maximum: usize },
+
     #[error("{field} has invalid value {value}")]
     InvalidEnumValue { field: &'static str, value: String },
 

@@ -50,6 +50,124 @@ async fn create_returns_the_submission() {
 }
 
 #[tokio::test]
+async fn submission_context_has_compact_and_direct_visibility() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+    let body = json!({
+        "coverage_start_at": "2026-01-01T00:00:00Z",
+        "coverage_end_at": "2026-03-31T23:59:59Z",
+        "source_system": "okta",
+        "collection_method": "api_export",
+        "summary": "  Quarterly access review  ",
+        "description": "  Reviewer decisions and exceptions.  "
+    });
+
+    let created = app
+        .post(&collection_path(workspace_id, evidence_request_id))
+        .json(&body)
+        .await
+        .json::<Value>();
+    let submission_id = created_id(&created);
+
+    assert_eq!(created["summary"], "Quarterly access review");
+    assert!(created.get("description").is_none());
+
+    let direct = app
+        .get(&item_path(workspace_id, submission_id))
+        .await
+        .json::<Value>();
+    assert_eq!(direct["submission"]["summary"], "Quarterly access review");
+    assert_eq!(
+        direct["submission"]["description"],
+        "Reviewer decisions and exceptions."
+    );
+
+    let latest = app
+        .get(&latest_path(workspace_id, evidence_request_id))
+        .await
+        .json::<Value>();
+    assert_eq!(latest["submission"]["summary"], "Quarterly access review");
+    assert!(latest["submission"].get("description").is_none());
+}
+
+#[tokio::test]
+async fn omitted_and_null_submission_context_is_absent_from_responses() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Absent submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Absent context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+    let mut body = evidence_submission();
+    body["summary"] = Value::Null;
+
+    let created = app
+        .post(&collection_path(workspace_id, evidence_request_id))
+        .json(&body)
+        .await
+        .json::<Value>();
+    assert!(created.get("summary").is_none());
+    assert!(created.get("description").is_none());
+
+    let direct = app
+        .get(&item_path(workspace_id, created_id(&created)))
+        .await
+        .json::<Value>();
+    assert!(direct["submission"].get("summary").is_none());
+    assert!(direct["submission"].get("description").is_none());
+}
+
+#[tokio::test]
+async fn invalid_submission_context_is_rejected_without_persistence() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Invalid submission context workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Invalid context target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+
+    for (field, value) in [
+        ("summary", " \t ".to_owned()),
+        ("summary", "é".repeat(501)),
+        ("description", "é".repeat(4_001)),
+    ] {
+        let mut body = evidence_submission();
+        body[field] = Value::String(value);
+        app.post(&collection_path(workspace_id, evidence_request_id))
+            .json(&body)
+            .await
+            .assert_status_bad_request();
+    }
+
+    let client = app.postgres().get().await.expect("connection opens");
+    let count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM evidence_submissions WHERE evidence_request_id = $1",
+            &[&evidence_request_id],
+        )
+        .await
+        .expect("submission count loads")
+        .get(0);
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn get_returns_submission_detail_with_empty_attachments() {
     let app = TestApp::builder()
         .workspace("workspace", "Submission detail workspace")

@@ -161,7 +161,13 @@ CREATE TABLE IF NOT EXISTS evidence_submissions (
     coverage_end_at TIMESTAMPTZ NOT NULL,
     source_system TEXT NOT NULL,
     collection_method TEXT NOT NULL,
-    CHECK (coverage_end_at >= coverage_start_at)
+    summary TEXT,
+    description TEXT,
+    CHECK (coverage_end_at >= coverage_start_at),
+    CONSTRAINT evidence_submissions_summary_length
+        CHECK (summary IS NULL OR char_length(summary) <= 500),
+    CONSTRAINT evidence_submissions_description_length
+        CHECK (description IS NULL OR char_length(description) <= 4000)
 );
 
 CREATE INDEX IF NOT EXISTS idx_evidence_submissions_request_received

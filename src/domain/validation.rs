@@ -10,6 +10,26 @@ pub fn required_text(field: &'static str, value: String) -> Validation<String, D
     Validation::valid(value)
 }
 
+pub fn optional_text(
+    field: &'static str,
+    value: Option<String>,
+    maximum: usize,
+) -> Validation<Option<String>, DomainError> {
+    let Some(value) = value else {
+        return Validation::valid(None);
+    };
+    let value = value.trim().to_owned();
+
+    if value.is_empty() {
+        return Validation::invalid(DomainError::BlankOptionalText { field });
+    }
+    if value.chars().count() > maximum {
+        return Validation::invalid(DomainError::OptionalTextTooLong { field, maximum });
+    }
+
+    Validation::valid(Some(value))
+}
+
 pub fn validate_freshness_window_days(value: Option<i32>) -> Validation<Option<i32>, DomainError> {
     match value {
         Some(days) if days <= 0 => Validation::invalid(DomainError::InvalidFreshnessWindowDays),
@@ -44,7 +64,9 @@ pub fn validate_attachment_filename(value: String) -> Validation<String, DomainE
 
 #[cfg(test)]
 mod tests {
-    use super::{required_text, validate_attachment_filename, validate_freshness_window_days};
+    use super::{
+        optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,
+    };
     use crate::domain::DomainError;
 
     #[test]
@@ -60,6 +82,38 @@ mod tests {
         assert_eq!(
             required_text("title", "  Quarterly review  ".to_owned()).into_result(),
             Ok("  Quarterly review  ".to_owned())
+        );
+    }
+
+    #[test]
+    fn optional_text_accepts_omitted_and_trims_present_values() {
+        assert_eq!(optional_text("summary", None, 500).into_result(), Ok(None));
+        assert_eq!(
+            optional_text("summary", Some("  Quarterly review  ".to_owned()), 500).into_result(),
+            Ok(Some("Quarterly review".to_owned()))
+        );
+    }
+
+    #[test]
+    fn optional_text_rejects_blank_values() {
+        assert_eq!(
+            optional_text("summary", Some(" \t\n ".to_owned()), 500).into_result(),
+            Err(vec![DomainError::BlankOptionalText { field: "summary" }])
+        );
+    }
+
+    #[test]
+    fn optional_text_limits_unicode_characters_after_trimming() {
+        assert_eq!(
+            optional_text("summary", Some("é".repeat(500)), 500).into_result(),
+            Ok(Some("é".repeat(500)))
+        );
+        assert_eq!(
+            optional_text("summary", Some(format!(" {} ", "é".repeat(501))), 500).into_result(),
+            Err(vec![DomainError::OptionalTextTooLong {
+                field: "summary",
+                maximum: 500,
+            }])
         );
     }
 

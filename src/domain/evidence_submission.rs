@@ -66,6 +66,8 @@ pub struct EvidenceSubmission {
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +83,8 @@ pub struct CreateEvidenceSubmissionPayload {
     pub coverage_end_at: DateTime<Utc>,
     pub source_system: String,
     pub collection_method: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
 }
 
 /**

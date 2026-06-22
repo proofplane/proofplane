@@ -239,12 +239,14 @@ WITH inserted AS (
         coverage_start_at,
         coverage_end_at,
         source_system,
-        collection_method
+        collection_method,
+        summary,
+        description
     )
-    SELECT er.id, $2, $3, $4, $5, $6
+    SELECT er.id, $2, $3, $4, $5, $6, $7, $8
     FROM evidence_requests er
     WHERE er.id = $1
-      AND er.workspace_id = $7
+      AND er.workspace_id = $9
     RETURNING
         id,
         evidence_request_id,
@@ -253,7 +255,9 @@ WITH inserted AS (
         coverage_start_at,
         coverage_end_at,
         source_system,
-        collection_method
+        collection_method,
+        summary,
+        description
 )
 SELECT
     inserted.id,
@@ -264,7 +268,9 @@ SELECT
     inserted.coverage_start_at,
     inserted.coverage_end_at,
     inserted.source_system,
-    inserted.collection_method
+    inserted.collection_method,
+    inserted.summary,
+    inserted.description
 FROM inserted
 JOIN api_tokens t ON t.id = inserted.submitted_by_api_token_id
 "#,
@@ -275,6 +281,8 @@ JOIN api_tokens t ON t.id = inserted.submitted_by_api_token_id
                     &payload.coverage_end_at,
                     &payload.source_system,
                     &payload.collection_method,
+                    &payload.summary,
+                    &payload.description,
                     &Uuid::from(self.workspace_id),
                 ],
             )
@@ -369,6 +377,8 @@ SELECT
     s.coverage_end_at,
     s.source_system,
     s.collection_method,
+    s.summary,
+    s.description,
     a.id AS attachment_id,
     a.evidence_submission_id AS attachment_submission_id,
     a.filename,
@@ -420,6 +430,8 @@ SELECT
     s.coverage_end_at,
     s.source_system,
     s.collection_method,
+    s.summary,
+    s.description,
     a.id AS attachment_id,
     a.evidence_submission_id AS attachment_submission_id,
     a.filename,
@@ -547,6 +559,8 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         coverage_end_at: row.try_get("coverage_end_at")?,
         source_system: row.try_get("source_system")?,
         collection_method: row.try_get("collection_method")?,
+        summary: row.try_get("summary")?,
+        description: row.try_get("description")?,
     })
 }
 

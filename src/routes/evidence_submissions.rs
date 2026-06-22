@@ -30,9 +30,9 @@ use crate::{
     authentication::ApiTokenAuthenticator,
     authentication::ApiTokenContext,
     domain::{
-        required_text, validate_attachment_filename, CreateEvidenceSubmissionPayload, DomainError,
-        EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, WorkspacePermission,
+        optional_text, required_text, validate_attachment_filename,
+        CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment, EvidenceRequestId,
+        EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspacePermission,
     },
     object_storage::StorageError,
     routes::{
@@ -113,6 +113,8 @@ struct EvidenceSubmissionDTO {
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
+    summary: Option<String>,
+    description: Option<String>,
 }
 
 impl EvidenceSubmissionDTO {
@@ -126,6 +128,8 @@ impl EvidenceSubmissionDTO {
         validate! {
             source_system <- required_text("source_system", self.source_system),
             collection_method <- required_text("collection_method", self.collection_method),
+            summary <- optional_text("summary", self.summary, 500),
+            description <- optional_text("description", self.description, 4_000),
             coverage_window <- validate_coverage_window(coverage_start_at, coverage_end_at),
             => CreateEvidenceSubmissionPayload {
                 evidence_request_id,
@@ -133,6 +137,8 @@ impl EvidenceSubmissionDTO {
                 coverage_end_at: coverage_window.1,
                 source_system,
                 collection_method,
+                summary,
+                description,
             },
         }
     }
@@ -180,6 +186,8 @@ struct EvidenceSubmissionResponse {
     coverage_end_at: DateTime<Utc>,
     source_system: String,
     collection_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -202,6 +210,43 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
             coverage_end_at: submission.coverage_end_at,
             source_system: submission.source_system,
             collection_method: submission.collection_method,
+            summary: submission.summary,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DirectEvidenceSubmissionResponse {
+    id: Uuid,
+    evidence_request_id: Uuid,
+    submitted_by: EvidenceSubmitterResponse,
+    received_at: DateTime<Utc>,
+    coverage_start_at: DateTime<Utc>,
+    coverage_end_at: DateTime<Utc>,
+    source_system: String,
+    collection_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+}
+
+impl From<EvidenceSubmission> for DirectEvidenceSubmissionResponse {
+    fn from(submission: EvidenceSubmission) -> Self {
+        Self {
+            id: Uuid::from(submission.id),
+            evidence_request_id: Uuid::from(submission.evidence_request_id),
+            submitted_by: EvidenceSubmitterResponse {
+                api_token_id: Uuid::from(submission.submitted_by.api_token_id),
+                user_id: Uuid::from(submission.submitted_by.user_id),
+            },
+            received_at: submission.received_at,
+            coverage_start_at: submission.coverage_start_at,
+            coverage_end_at: submission.coverage_end_at,
+            source_system: submission.source_system,
+            collection_method: submission.collection_method,
+            summary: submission.summary,
+            description: submission.description,
         }
     }
 }
@@ -234,12 +279,27 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmissionDetailResponse {
+struct CompactEvidenceSubmissionDetailResponse {
     submission: EvidenceSubmissionResponse,
     attachments: Vec<EvidenceAttachmentResponse>,
 }
 
-impl From<EvidenceSubmissionDetail> for EvidenceSubmissionDetailResponse {
+impl From<EvidenceSubmissionDetail> for CompactEvidenceSubmissionDetailResponse {
+    fn from(detail: EvidenceSubmissionDetail) -> Self {
+        Self {
+            submission: detail.submission.into(),
+            attachments: detail.attachments.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DirectEvidenceSubmissionDetailResponse {
+    submission: DirectEvidenceSubmissionResponse,
+    attachments: Vec<EvidenceAttachmentResponse>,
+}
+
+impl From<EvidenceSubmissionDetail> for DirectEvidenceSubmissionDetailResponse {
     fn from(detail: EvidenceSubmissionDetail) -> Self {
         Self {
             submission: detail.submission.into(),
@@ -272,7 +332,7 @@ async fn get_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceSubmissionPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<DirectEvidenceSubmissionDetailResponse>, ApiError> {
     let detail = state
         .service
         .get(token, EvidenceSubmissionId::from(path.submission_id))
@@ -286,7 +346,7 @@ async fn get_latest_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<EvidenceSubmissionDetailResponse>, ApiError> {
+) -> Result<Json<CompactEvidenceSubmissionDetailResponse>, ApiError> {
     let detail = state
         .service
         .latest_for_request(token, EvidenceRequestId::from(path.evidence_request_id))
@@ -522,6 +582,8 @@ mod tests {
         assert_eq!(payload.evidence_request_id, request_id());
         assert_eq!(payload.source_system, "okta");
         assert_eq!(payload.collection_method, "api_export");
+        assert_eq!(payload.summary.as_deref(), Some("Quarterly review"));
+        assert_eq!(payload.description.as_deref(), Some("Review details"));
     }
 
     #[test]
@@ -531,6 +593,8 @@ mod tests {
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: " ".to_owned(),
             collection_method: "\t".to_owned(),
+            summary: Some(" ".to_owned()),
+            description: Some("x".repeat(4_001)),
         }
         .into_new(request_id())
         .into_result()
@@ -544,6 +608,11 @@ mod tests {
                 },
                 DomainError::EmptyRequiredText {
                     field: "collection_method"
+                },
+                DomainError::BlankOptionalText { field: "summary" },
+                DomainError::OptionalTextTooLong {
+                    field: "description",
+                    maximum: 4_000,
                 },
                 DomainError::InvalidCoverageWindow,
             ]
@@ -620,6 +689,8 @@ mod tests {
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: "okta".to_owned(),
             collection_method: "api_export".to_owned(),
+            summary: Some("  Quarterly review  ".to_owned()),
+            description: Some("  Review details  ".to_owned()),
         }
     }
 
