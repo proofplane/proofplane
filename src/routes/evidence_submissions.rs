@@ -108,7 +108,7 @@ async fn authorize_evidence_submission_route(
 }
 
 #[derive(Debug, Deserialize)]
-struct EvidenceSubmissionDTO {
+struct CreateEvidenceSubmissionRequest {
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
     source_system: String,
@@ -117,7 +117,7 @@ struct EvidenceSubmissionDTO {
     description: Option<String>,
 }
 
-impl EvidenceSubmissionDTO {
+impl CreateEvidenceSubmissionRequest {
     fn into_new(
         self,
         evidence_request_id: EvidenceRequestId,
@@ -180,7 +180,7 @@ impl AttachmentUploadRequest {
 struct EvidenceSubmissionResponseDTO {
     id: Uuid,
     evidence_request_id: Uuid,
-    submitted_by: EvidenceSubmitterResponse,
+    submitted_by: EvidenceSubmitterResponseDTO,
     received_at: DateTime<Utc>,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
@@ -193,7 +193,7 @@ struct EvidenceSubmissionResponseDTO {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceSubmitterResponse {
+struct EvidenceSubmitterResponseDTO {
     api_token_id: Uuid,
     user_id: Uuid,
 }
@@ -203,7 +203,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmitterResponse {
+            submitted_by: EvidenceSubmitterResponseDTO {
                 api_token_id: Uuid::from(submission.submitted_by.api_token_id),
                 user_id: Uuid::from(submission.submitted_by.user_id),
             },
@@ -222,7 +222,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
 struct EvidenceSubmissionSummaryResponseDTO {
     id: Uuid,
     evidence_request_id: Uuid,
-    submitted_by: EvidenceSubmitterResponse,
+    submitted_by: EvidenceSubmitterResponseDTO,
     coverage_start_at: DateTime<Utc>,
     coverage_end_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -236,7 +236,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponseDTO {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmitterResponse {
+            submitted_by: EvidenceSubmitterResponseDTO {
                 api_token_id: Uuid::from(submission.submitted_by.api_token_id),
                 user_id: Uuid::from(submission.submitted_by.user_id),
             },
@@ -308,7 +308,7 @@ async fn create_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<EvidenceSubmissionDTO>,
+    Json(body): Json<CreateEvidenceSubmissionRequest>,
 ) -> Result<Json<CreateEvidenceSubmissionResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let payload = body
@@ -567,13 +567,16 @@ mod tests {
 
     use super::{
         encode_crc32c_base64, parse_content_digest_crc32c, validate_attachment_upload,
-        EvidenceSubmissionDTO,
+        CreateEvidenceSubmissionRequest,
     };
     use crate::domain::{DomainError, EvidenceRequestId};
 
     #[test]
-    fn submission_dto_maps_to_create_payload() {
-        let payload = valid_dto().into_new(request_id()).into_result().unwrap();
+    fn submission_request_maps_to_create_payload() {
+        let payload = valid_request()
+            .into_new(request_id())
+            .into_result()
+            .unwrap();
 
         assert_eq!(payload.evidence_request_id, request_id());
         assert_eq!(payload.source_system, "okta");
@@ -583,8 +586,8 @@ mod tests {
     }
 
     #[test]
-    fn submission_dto_accumulates_validation_errors() {
-        let errors = EvidenceSubmissionDTO {
+    fn submission_request_accumulates_validation_errors() {
+        let errors = CreateEvidenceSubmissionRequest {
             coverage_start_at: instant("2026-04-01T00:00:00Z"),
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: " ".to_owned(),
@@ -679,8 +682,8 @@ mod tests {
 
         assert_eq!(error, "checksum_crc32c does not match file content");
     }
-    fn valid_dto() -> EvidenceSubmissionDTO {
-        EvidenceSubmissionDTO {
+    fn valid_request() -> CreateEvidenceSubmissionRequest {
+        CreateEvidenceSubmissionRequest {
             coverage_start_at: instant("2026-01-01T00:00:00Z"),
             coverage_end_at: instant("2026-03-31T23:59:59Z"),
             source_system: "okta".to_owned(),

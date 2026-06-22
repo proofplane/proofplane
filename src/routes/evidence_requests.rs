@@ -99,6 +99,9 @@ struct EvidenceRequestDTO {
     status: String,
 }
 
+type CreateEvidenceRequestRequest = EvidenceRequestDTO;
+type ReplaceEvidenceRequestRequest = EvidenceRequestDTO;
+
 impl EvidenceRequestDTO {
     fn into_new(self) -> Validation<CreateEvidenceRequestPayload, DomainError> {
         validate! {
@@ -160,7 +163,7 @@ struct EvidenceRequestPath {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceRequestResponse {
+struct EvidenceRequestResponseDTO {
     id: Uuid,
     workspace_id: Uuid,
     title: String,
@@ -175,7 +178,10 @@ struct EvidenceRequestResponse {
     updated_at: DateTime<Utc>,
 }
 
-impl From<EvidenceRequest> for EvidenceRequestResponse {
+type EvidenceRequestResponse = EvidenceRequestResponseDTO;
+type ListEvidenceRequestsResponse = Vec<EvidenceRequestResponseDTO>;
+
+impl From<EvidenceRequest> for EvidenceRequestResponseDTO {
     fn from(request: EvidenceRequest) -> Self {
         Self {
             id: Uuid::from(request.id),
@@ -197,7 +203,7 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 async fn create_evidence_request(
     State(state): State<EvidenceRequestState>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<EvidenceRequestDTO>,
+    Json(body): Json<CreateEvidenceRequestRequest>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let request = body.into_new().into_result().map_err(domain_errors)?;
     let request = state.service.create(token, request).await?;
@@ -208,7 +214,7 @@ async fn create_evidence_request(
 async fn list_evidence_requests(
     State(state): State<EvidenceRequestState>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
+) -> Result<Json<ListEvidenceRequestsResponse>, ApiError> {
     let requests = state.service.list_by_workspace(token).await?;
 
     Ok(Json(requests.into_iter().map(Into::into).collect()))
@@ -218,7 +224,7 @@ async fn list_due_evidence_requests(
     State(state): State<EvidenceRequestState>,
     Query(query): Query<DueQuery>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<Vec<EvidenceRequestResponse>>, ApiError> {
+) -> Result<Json<ListEvidenceRequestsResponse>, ApiError> {
     let requests = state
         .service
         .list_due(token, query.now.unwrap_or_else(Utc::now))
@@ -248,7 +254,7 @@ async fn replace_evidence_request(
     State(state): State<EvidenceRequestState>,
     Path(path): Path<EvidenceRequestPath>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<EvidenceRequestDTO>,
+    Json(body): Json<ReplaceEvidenceRequestRequest>,
 ) -> Result<Json<EvidenceRequestResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
     let update = body.into_update().into_result().map_err(domain_errors)?;

@@ -104,6 +104,9 @@ struct ControlDTO {
     framework_requirement_ids: Vec<Uuid>,
 }
 
+type CreateControlRequest = ControlDTO;
+type ReplaceControlRequest = ControlDTO;
+
 impl ControlDTO {
     fn into_new(self) -> Validation<CreateControlPayload, DomainError> {
         validate! {
@@ -137,12 +140,12 @@ impl ControlDTO {
 }
 
 #[derive(Debug, Deserialize)]
-struct MappingDTO {
+struct CreateEvidenceRequestControlMappingRequest {
     control_id: Uuid,
     rationale: String,
 }
 
-impl MappingDTO {
+impl CreateEvidenceRequestControlMappingRequest {
     fn into_new(
         self,
         evidence_request_id: EvidenceRequestId,
@@ -159,14 +162,16 @@ impl MappingDTO {
 }
 
 #[derive(Debug, Serialize)]
-struct FrameworkResponse {
+struct FrameworkResponseDTO {
     id: Uuid,
     code: String,
     name: String,
     description: String,
 }
 
-impl From<Framework> for FrameworkResponse {
+type ListFrameworksResponse = Vec<FrameworkResponseDTO>;
+
+impl From<Framework> for FrameworkResponseDTO {
     fn from(framework: Framework) -> Self {
         Self {
             id: Uuid::from(framework.id),
@@ -178,7 +183,7 @@ impl From<Framework> for FrameworkResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct FrameworkRequirementResponse {
+struct FrameworkRequirementResponseDTO {
     id: Uuid,
     framework_id: Uuid,
     code: String,
@@ -186,7 +191,9 @@ struct FrameworkRequirementResponse {
     description: String,
 }
 
-impl From<FrameworkRequirement> for FrameworkRequirementResponse {
+type ListFrameworkRequirementsResponse = Vec<FrameworkRequirementResponseDTO>;
+
+impl From<FrameworkRequirement> for FrameworkRequirementResponseDTO {
     fn from(requirement: FrameworkRequirement) -> Self {
         Self {
             id: Uuid::from(requirement.id),
@@ -199,18 +206,21 @@ impl From<FrameworkRequirement> for FrameworkRequirementResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ControlResponse {
+struct ControlResponseDTO {
     id: Uuid,
     workspace_id: Uuid,
     code: String,
     title: String,
     description: String,
-    framework_requirements: Vec<FrameworkRequirementResponse>,
+    framework_requirements: Vec<FrameworkRequirementResponseDTO>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl From<Control> for ControlResponse {
+type ControlResponse = ControlResponseDTO;
+type ListControlsResponse = Vec<ControlResponseDTO>;
+
+impl From<Control> for ControlResponseDTO {
     fn from(control: Control) -> Self {
         Self {
             id: Uuid::from(control.id),
@@ -230,7 +240,7 @@ impl From<Control> for ControlResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ControlSummaryResponse {
+struct ControlSummaryResponseDTO {
     id: Uuid,
     code: String,
     title: String,
@@ -238,18 +248,21 @@ struct ControlSummaryResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceRequestControlMappingResponse {
+struct EvidenceRequestControlMappingResponseDTO {
     evidence_request_id: Uuid,
-    control: ControlSummaryResponse,
+    control: ControlSummaryResponseDTO,
     rationale: String,
     created_at: DateTime<Utc>,
 }
 
-impl From<EvidenceRequestControlMapping> for EvidenceRequestControlMappingResponse {
+type EvidenceRequestControlMappingResponse = EvidenceRequestControlMappingResponseDTO;
+type ListEvidenceRequestControlMappingsResponse = Vec<EvidenceRequestControlMappingResponseDTO>;
+
+impl From<EvidenceRequestControlMapping> for EvidenceRequestControlMappingResponseDTO {
     fn from(mapping: EvidenceRequestControlMapping) -> Self {
         Self {
             evidence_request_id: Uuid::from(mapping.evidence_request_id),
-            control: ControlSummaryResponse {
+            control: ControlSummaryResponseDTO {
                 id: Uuid::from(mapping.control.id),
                 code: mapping.control.code,
                 title: mapping.control.title,
@@ -284,7 +297,7 @@ struct EvidenceRequestControlMappingPath {
 
 async fn list_frameworks(
     State(state): State<ControlState>,
-) -> Result<Json<Vec<FrameworkResponse>>, ApiError> {
+) -> Result<Json<ListFrameworksResponse>, ApiError> {
     let frameworks = state.service.list_frameworks().await?;
 
     Ok(Json(frameworks.into_iter().map(Into::into).collect()))
@@ -293,7 +306,7 @@ async fn list_frameworks(
 async fn list_framework_requirements(
     State(state): State<ControlState>,
     Path(path): Path<FrameworkRequirementsPath>,
-) -> Result<Json<Vec<FrameworkRequirementResponse>>, ApiError> {
+) -> Result<Json<ListFrameworkRequirementsResponse>, ApiError> {
     let requirements = state
         .service
         .list_framework_requirements(FrameworkId::from(path.framework_id))
@@ -308,7 +321,7 @@ async fn list_framework_requirements(
 async fn create_control(
     State(state): State<ControlState>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<ControlDTO>,
+    Json(body): Json<CreateControlRequest>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_new().into_result().map_err(domain_errors)?;
     let control = state.service.create_control(token, payload).await?;
@@ -319,7 +332,7 @@ async fn create_control(
 async fn list_controls(
     State(state): State<ControlState>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<Vec<ControlResponse>>, ApiError> {
+) -> Result<Json<ListControlsResponse>, ApiError> {
     let controls = state.service.list_controls(token).await?;
 
     Ok(Json(controls.into_iter().map(Into::into).collect()))
@@ -343,7 +356,7 @@ async fn replace_control(
     State(state): State<ControlState>,
     Path(path): Path<ControlPath>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<ControlDTO>,
+    Json(body): Json<ReplaceControlRequest>,
 ) -> Result<Json<ControlResponse>, ApiError> {
     let payload = body.into_update().into_result().map_err(domain_errors)?;
     let control = state
@@ -359,7 +372,7 @@ async fn create_evidence_request_control_mapping(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingsPath>,
     Extension(token): Extension<ApiTokenContext>,
-    Json(body): Json<MappingDTO>,
+    Json(body): Json<CreateEvidenceRequestControlMappingRequest>,
 ) -> Result<Json<EvidenceRequestControlMappingResponse>, ApiError> {
     let payload = body
         .into_new(EvidenceRequestId::from(path.evidence_request_id))
@@ -378,7 +391,7 @@ async fn list_evidence_request_control_mappings(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingsPath>,
     Extension(token): Extension<ApiTokenContext>,
-) -> Result<Json<Vec<EvidenceRequestControlMappingResponse>>, ApiError> {
+) -> Result<Json<ListEvidenceRequestControlMappingsResponse>, ApiError> {
     let mappings = state
         .service
         .list_evidence_request_control_mappings(
@@ -422,7 +435,7 @@ fn parse_framework_requirement_ids(
 mod tests {
     use uuid::Uuid;
 
-    use super::{ControlDTO, MappingDTO};
+    use super::{ControlDTO, CreateEvidenceRequestControlMappingRequest};
     use crate::domain::{DomainError, EvidenceRequestId};
 
     #[test]
@@ -470,8 +483,8 @@ mod tests {
     }
 
     #[test]
-    fn mapping_dto_requires_rationale() {
-        let errors = MappingDTO {
+    fn mapping_request_requires_rationale() {
+        let errors = CreateEvidenceRequestControlMappingRequest {
             control_id: Uuid::new_v4(),
             rationale: " ".to_owned(),
         }
