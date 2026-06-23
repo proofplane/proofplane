@@ -12,8 +12,16 @@ streamable HTTP bound to `server.mcp_bind`. The binary owns config, tracing,
 migrations, dependency construction, metrics, listener lifecycle, and graceful
 shutdown.
 
-Use an MCP SDK rather than hand-rolling JSON-RPC. Keep MCP DTOs and protocol
-errors in `src/mcp`; tools call services directly.
+Use `rmcp` 1.7.0 rather than hand-rolling JSON-RPC. The fixed protocol endpoint
+is `/mcp`; configured liveness and readiness routes and public `/metrics` share
+the listener. Keep MCP DTOs and protocol errors in `src/mcp`; tools call
+services directly.
+
+The initial runtime uses rmcp's stateful process-local session manager and
+default loopback host protections. It therefore requires a single instance or
+sticky routing until distributed session storage and production ingress hosts
+are configured. On shutdown, the listener stops accepting requests, drains for
+`mcp.shutdown_grace_seconds`, then cancels remaining rmcp sessions and exits.
 
 ## Identity
 
@@ -22,8 +30,25 @@ opaque `ppat_` bearer-token contract as REST and produce the same
 `ApiTokenContext`. Tool authorization uses the same workspace permissions as
 equivalent REST operations.
 
-The initial transport accepts the bearer token on the HTTP session. Raw tokens
-must not enter tool arguments, logs, or audit payloads.
+HTTP MCP authorization is transport-level: the MCP client or agent harness
+supplies credentials as HTTP request metadata, outside MCP tool schemas and
+outside model-visible tool arguments. A Proofplane tool must never accept,
+return, log, audit, or instruct the model to handle a raw `ppat_` token.
+
+Every Streamable HTTP `POST`, `GET`, and `DELETE` request authenticates its
+`Authorization: Bearer ppat_...` credential and derives a fresh
+`ApiTokenContext`; an `Mcp-Session-Id` identifies protocol/session state only
+and never confers authorization. Missing, malformed, unknown, expired, revoked,
+and membership-invalid credentials return a generic bearer challenge.
+Repository failures return a generic server error.
+
+This is a pre-provisioned API-token model for clients that can be configured
+with a Proofplane API token and attach it as the MCP HTTP bearer credential.
+OAuth discovery, Protected Resource Metadata, and interactive MCP OAuth login
+are not part of this PR's runtime; they are deferred to the separate OAuth
+workstream. That workstream may change how MCP clients obtain bearer
+credentials, but it should preserve per-request validation and the prohibition
+on exposing credentials through tool arguments.
 
 ## Core Demo Tools
 
@@ -135,3 +160,10 @@ the MVP.
   mediating packet bytes.
 - 2026-06-22: Split core evidence tools from additive auditor-packet tools so
   packet freshness and export work no longer block the core MCP demo.
+- 2026-06-22: Fixed Streamable HTTP at `/mcp`, selected rmcp 1.7.0 with local
+  stateful sessions and loopback host protection, required authentication on
+  every transport request, and defined the bounded shutdown deadline.
+- 2026-06-23: Clarified that MCP credentials are client/harness-managed HTTP
+  metadata, not tool arguments or model-visible data; Proofplane's initial
+  runtime deliberately uses pre-provisioned API tokens while OAuth interop is
+  deferred to the separate OAuth workstream.

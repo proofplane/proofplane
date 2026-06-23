@@ -4,7 +4,7 @@ use std::{
     io::{self, Write},
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex as StdMutex, Weak},
+    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
 };
 
 use async_trait::async_trait;
@@ -21,14 +21,15 @@ use proofplane::{
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, HealthConfig, LogFormat, ObjectStorageConfig, ObservabilityConfig,
-        PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
+        AppConfig, Auth0Config, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
+        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
         PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
         WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
+    mcp::{create_app as create_mcp_app, McpAppDependencies},
     repository::{NewWorkspaceMembership, Postgres},
     routes::authentication::AUTHORIZATION_HEADER,
     scanner::ClamAvMalwareScanner,
@@ -44,7 +45,8 @@ use testcontainers::{
 };
 use testcontainers_modules::postgres;
 use tokio::sync::{Mutex, OnceCell};
-use tracing::instrument::WithSubscriber;
+use tokio_util::sync::CancellationToken;
+use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 
@@ -54,9 +56,7 @@ pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201
 // starts; Weak permits reuse without keeping the container alive. Each TestApp holds
 // a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
-// ponytail: tracing subscriber capture is not isolated across overlapping request tasks.
-// Only serialize capture windows; the rest of each integration test still runs in parallel.
-static AUDIT_LOG_CAPTURE: Mutex<()> = Mutex::const_new(());
+static AUDIT_LOG_SINK: OnceLock<Arc<StdMutex<Vec<u8>>>> = OnceLock::new();
 
 pub async fn upload_attachment(
     app: &TestApp,
@@ -92,31 +92,52 @@ pub async fn set_submission_received_at(
         .expect("submission received_at updates");
 }
 
-pub async fn capture_audit_logs<Fut, T>(future: Fut) -> (T, Vec<Value>)
+// TODO: make this a method on TestApp that takes &Self
+pub async fn capture_audit_logs<F, Fut, T>(capture: F) -> (T, Vec<Value>)
 where
+    F: FnOnce(Uuid) -> Fut,
     Fut: Future<Output = T>,
 {
-    let _guard = AUDIT_LOG_CAPTURE.lock().await;
-    let sink = Arc::new(StdMutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_file(false)
-        .with_line_number(false)
-        .with_writer(SharedWriter(sink.clone()))
-        .finish();
-    let output = future.with_subscriber(subscriber).await;
+    let sink = audit_log_sink();
+    let request_id = Uuid::new_v4();
+    let start = sink.lock().expect("audit log sink locks").len();
 
-    let bytes = sink.lock().expect("audit log sink locks").clone();
+    let output = capture(request_id).await;
+
+    let request_id = request_id.to_string();
+    let bytes = sink.lock().expect("audit log sink locks")[start..].to_vec();
     let records = String::from_utf8(bytes)
         .expect("audit logs are UTF-8")
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|record| record["fields"]["type"] == "audit_log")
+        .filter(|record| {
+            record["fields"]["type"] == "audit_log"
+                && record["fields"]["request_id"].as_str() == Some(request_id.as_str())
+        })
         .collect();
 
     (output, records)
+}
+
+fn audit_log_sink() -> Arc<StdMutex<Vec<u8>>> {
+    AUDIT_LOG_SINK
+        .get_or_init(|| {
+            let sink = Arc::new(StdMutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_file(false)
+                .with_line_number(false)
+                .with_writer(SharedWriter(sink.clone()))
+                .with_env_filter(EnvFilter::new("proofplane::audit=info"))
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("integration audit tracing subscriber installs");
+
+            sink
+        })
+        .clone()
 }
 
 #[derive(Clone)]
@@ -186,6 +207,7 @@ pub struct TestApp {
     api_token: String,
     api_token_id: Uuid,
     user_id: Uuid,
+    home_workspace_id: Uuid,
     workspace_ids: HashMap<String, Uuid>,
     control_ids: HashMap<String, HashMap<String, Uuid>>,
 }
@@ -299,6 +321,7 @@ impl TestApp {
             api_token: issued.raw_token,
             api_token_id: Uuid::from(issued.token_id),
             user_id: Uuid::from(issued.user_id),
+            home_workspace_id,
             workspace_ids,
             control_ids,
         }
@@ -439,12 +462,31 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         self.api_token_id
     }
 
+    pub fn home_workspace_id(&self) -> Uuid {
+        self.home_workspace_id
+    }
+
     pub fn user_id(&self) -> Uuid {
         self.user_id
     }
 
     pub fn bearer_token(&self) -> String {
         format!("Bearer {}", self.api_token)
+    }
+
+    pub fn mcp_server(&self) -> TestServer {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        TestServer::new(create_mcp_app(McpAppDependencies {
+            postgres: self.postgres.clone(),
+            metrics: recorder.handle(),
+            authenticator: Arc::new(ApiTokenAuthenticator::new(self.postgres.clone())),
+            health: HealthConfig {
+                live_path: "/livez".to_owned(),
+                ready_path: "/readyz".to_owned(),
+                dependency_timeout_ms: 1000,
+            },
+            cancellation_token: CancellationToken::new(),
+        }))
     }
 
     pub fn get(&self, path: &str) -> TestRequest {
@@ -908,6 +950,9 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
         worker: WorkerConfig {
             concurrency: 1,
             retry_attempts: 0,
+            shutdown_grace_seconds: 1,
+        },
+        mcp: McpConfig {
             shutdown_grace_seconds: 1,
         },
         health: HealthConfig {

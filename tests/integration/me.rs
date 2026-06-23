@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use futures_util::future::join_all;
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
+use proofplane::routes::request_context::REQUEST_ID_HEADER;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -45,11 +46,15 @@ async fn login_updates_last_login_and_emits_audit_event_every_time() {
     let app = TestApp::start_without_default_auth().await;
     let sub = "auth0|login-audit";
 
-    let (first, first_logs) = capture_audit_logs(async {
-        app.server()
-            .post("/login")
-            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-            .await
+    let (first, first_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        async move {
+            app.server()
+                .post("/login")
+                .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .await
+        }
     })
     .await;
     first.assert_status_ok();
@@ -64,11 +69,15 @@ async fn login_updates_last_login_and_emits_audit_event_every_time() {
     assert_eq!(first_logs[0]["fields"]["object_type"], "user");
     assert_eq!(first_logs[0]["fields"]["object_id"], user_id);
 
-    let (second, second_logs) = capture_audit_logs(async {
-        app.server()
-            .post("/login")
-            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-            .await
+    let (second, second_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        async move {
+            app.server()
+                .post("/login")
+                .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .await
+        }
     })
     .await;
     second.assert_status_ok();
@@ -97,11 +106,15 @@ async fn me_does_not_update_last_login_or_emit_login_audit_event() {
         .await
         .expect("login timestamp exists");
 
-    let (me, logs) = capture_audit_logs(async {
-        app.server()
-            .get("/me")
-            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-            .await
+    let (me, logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        async move {
+            app.server()
+                .get("/me")
+                .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .await
+        }
     })
     .await;
     me.assert_status_ok();

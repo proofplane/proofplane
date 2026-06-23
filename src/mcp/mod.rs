@@ -1,13 +1,8 @@
-pub fn startup_message() -> &'static str {
-    "proofplane mcp scaffold ready"
-}
+mod auth;
+mod context;
+mod server;
+mod transport;
 
-#[cfg(test)]
-mod tests {
-    use super::startup_message;
-
-    #[test]
-    fn has_startup_message() {
-        assert_eq!(startup_message(), "proofplane mcp scaffold ready");
-    }
-}
+pub use context::{McpRequestContext, SESSION_ID_HEADER};
+pub use server::ProofplaneMcp;
+pub use transport::{create_app, protocol_router, McpAppDependencies, ENDPOINT};

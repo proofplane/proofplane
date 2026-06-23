@@ -13,9 +13,9 @@ use super::{
         public_api_base_url as validate_public_api_base_url, string_url, string_value,
         ConfigValidationExt,
     },
-    Auth0Config, GcsObjectStorageConfig, HealthConfig, ObjectStorageConfig, ObservabilityConfig,
-    PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    Auth0Config, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
+    PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +30,7 @@ pub(super) struct RawAppConfig {
     pub(super) uploads: RawUploadsConfig,
     pub(super) observability: RawObservabilityConfig,
     pub(super) worker: RawWorkerConfig,
+    pub(super) mcp: RawMcpConfig,
     pub(super) health: RawHealthConfig,
 }
 
@@ -383,6 +384,21 @@ impl RawWorkerConfig {
                 shutdown_grace_seconds,
             },
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawMcpConfig {
+    shutdown_grace_seconds: u64,
+}
+
+impl RawMcpConfig {
+    pub(super) fn validate(self) -> Validation<McpConfig, ConfigFieldError> {
+        nonzero_u64(self.shutdown_grace_seconds)
+            .at("mcp.shutdown_grace_seconds")
+            .map(|shutdown_grace_seconds| McpConfig {
+                shutdown_grace_seconds,
+            })
     }
 }
 

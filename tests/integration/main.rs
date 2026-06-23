@@ -5,6 +5,7 @@ mod controls;
 mod dequeuer_pubsub;
 mod evidence_requests;
 mod evidence_submissions;
+mod mcp;
 mod me;
 mod repository;
 mod request_auth;

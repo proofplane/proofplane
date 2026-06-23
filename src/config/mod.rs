@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub uploads: UploadsConfig,
     pub observability: ObservabilityConfig,
     pub worker: WorkerConfig,
+    pub mcp: McpConfig,
     pub health: HealthConfig,
 }
 
@@ -127,6 +128,11 @@ pub struct WorkerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfig {
+    pub shutdown_grace_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthConfig {
     pub live_path: String,
     pub ready_path: String,
@@ -215,6 +221,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         uploads <- raw.uploads.validate(),
         observability <- raw.observability.validate(),
         worker <- raw.worker.validate(),
+        mcp <- raw.mcp.validate(),
         health <- raw.health.validate(),
         => AppConfig {
             server,
@@ -227,6 +234,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             uploads,
             observability,
             worker,
+            mcp,
             health,
         },
     }
@@ -275,6 +283,7 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
+        assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert_eq!(config.paseto.download.active_key_id, "local-download-001");
         assert_eq!(config.paseto.download.keys.len(), 1);
     }
@@ -381,6 +390,8 @@ worker:
   concurrency: 0
   retry_attempts: 0
   shutdown_grace_seconds: 0
+mcp:
+  shutdown_grace_seconds: 0
 health:
   live_path: "livez"
   ready_path: "/readyz"
@@ -417,6 +428,7 @@ health:
                 assert!(paths.contains(&"observability.log_format"));
                 assert!(paths.contains(&"worker.concurrency"));
                 assert!(paths.contains(&"worker.shutdown_grace_seconds"));
+                assert!(paths.contains(&"mcp.shutdown_grace_seconds"));
                 assert!(paths.contains(&"health.live_path"));
                 assert!(paths.contains(&"health.dependency_timeout_ms"));
             }
