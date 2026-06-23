@@ -4,7 +4,7 @@ use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{capture_audit_logs, TestApp};
 
 #[tokio::test]
 async fn me_returns_authenticated_user_and_provisions_once() {
@@ -22,6 +22,7 @@ async fn me_returns_authenticated_user_and_provisions_once() {
     assert_eq!(first_body["auth0_sub"], sub);
     assert_eq!(first_body["email"], format!("{sub}@example.com"));
     assert_eq!(first_body["name"], "Integration Human");
+    assert_eq!(first_body["last_login_at"], Value::Null);
     let user_id = first_body["id"]
         .as_str()
         .expect("id is a string")
@@ -37,6 +38,76 @@ async fn me_returns_authenticated_user_and_provisions_once() {
     assert_eq!(second.json::<Value>()["id"], user_id);
 
     assert_eq!(count_users_with_sub(&app, sub).await, 1);
+}
+
+#[tokio::test]
+async fn login_updates_last_login_and_emits_audit_event_every_time() {
+    let app = TestApp::start_without_default_auth().await;
+    let sub = "auth0|login-audit";
+
+    let (first, first_logs) = capture_audit_logs(async {
+        app.server()
+            .post("/login")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .await
+    })
+    .await;
+    first.assert_status_ok();
+    let first_body = first.json::<Value>();
+    let user_id = first_body["id"].as_str().expect("id is a string");
+    let first_login_at = first_body["last_login_at"]
+        .as_str()
+        .expect("last_login_at is set");
+
+    assert_eq!(first_logs.len(), 1);
+    assert_audit_event(&first_logs[0], "user.logged_in", user_id, "login");
+    assert_eq!(first_logs[0]["fields"]["object_type"], "user");
+    assert_eq!(first_logs[0]["fields"]["object_id"], user_id);
+
+    let (second, second_logs) = capture_audit_logs(async {
+        app.server()
+            .post("/login")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .await
+    })
+    .await;
+    second.assert_status_ok();
+    let second_body = second.json::<Value>();
+    let second_login_at = second_body["last_login_at"]
+        .as_str()
+        .expect("last_login_at is set");
+
+    assert_eq!(second_body["id"], user_id);
+    assert!(second_login_at >= first_login_at);
+    assert_eq!(second_logs.len(), 1);
+    assert_audit_event(&second_logs[0], "user.logged_in", user_id, "login");
+}
+
+#[tokio::test]
+async fn me_does_not_update_last_login_or_emit_login_audit_event() {
+    let app = TestApp::start_without_default_auth().await;
+    let sub = "auth0|me-not-login";
+
+    app.server()
+        .post("/login")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+        .await
+        .assert_status_ok();
+    let before = last_login_at(&app, sub)
+        .await
+        .expect("login timestamp exists");
+
+    let (me, logs) = capture_audit_logs(async {
+        app.server()
+            .get("/me")
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+            .await
+    })
+    .await;
+    me.assert_status_ok();
+
+    assert_eq!(last_login_at(&app, sub).await, Some(before));
+    assert!(logs.is_empty());
 }
 
 #[tokio::test]
@@ -154,6 +225,31 @@ async fn count_users_with_sub(app: &TestApp, sub: &str) -> i64 {
         .expect("user count query runs");
 
     row.get(0)
+}
+
+async fn last_login_at(app: &TestApp, sub: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let client = app.postgres().get().await.expect("pool client opens");
+    let row = client
+        .query_one(
+            "SELECT last_login_at FROM users WHERE auth0_sub = $1",
+            &[&sub],
+        )
+        .await
+        .expect("user query runs");
+
+    row.get("last_login_at")
+}
+
+fn assert_audit_event(record: &Value, event_name: &str, user_id: &str, operation: &str) {
+    let fields = &record["fields"];
+    assert_eq!(fields["type"], "audit_log");
+    assert_eq!(fields["event_name"], event_name);
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["actor_type"], "user");
+    assert_eq!(fields["user_id"], user_id);
+    assert_eq!(fields["client_type"], "rest");
+    assert_eq!(fields["operation"], operation);
+    assert!(Uuid::parse_str(fields["request_id"].as_str().expect("request id is set")).is_ok());
 }
 
 fn assert_unauthorized(body: &Value, status: StatusCode) {

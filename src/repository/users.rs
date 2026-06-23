@@ -25,6 +25,7 @@ RETURNING
     auth0_sub,
     email,
     name,
+    last_login_at,
     created_at
 "#,
                 &[&payload.auth0_sub, &payload.email, &payload.name],
@@ -44,9 +45,33 @@ SELECT
     auth0_sub,
     email,
     name,
+    last_login_at,
     created_at
 FROM users
 WHERE id = $1
+"#,
+                &[&Uuid::from(id)],
+            )
+            .await?;
+
+        rows.into_iter().next().map(user_from_row).transpose()
+    }
+
+    pub async fn record_user_login(&self, id: UserId) -> Result<Option<User>, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .query(
+                r#"
+UPDATE users
+SET last_login_at = now()
+WHERE id = $1
+RETURNING
+    id,
+    auth0_sub,
+    email,
+    name,
+    last_login_at,
+    created_at
 "#,
                 &[&Uuid::from(id)],
             )
@@ -62,6 +87,7 @@ fn user_from_row(row: Row) -> Result<User, Error> {
         auth0_sub: row.try_get("auth0_sub")?,
         email: row.try_get("email")?,
         name: row.try_get("name")?,
+        last_login_at: row.try_get("last_login_at")?,
         created_at: row.try_get("created_at")?,
     })
 }

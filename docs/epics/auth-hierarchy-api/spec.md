@@ -224,7 +224,9 @@ authorization.
    create/list actors, issue/revoke keys, multi-credential auth change, and
    removal of SpiceDB (data-plane authz moves to Postgres).
 4. **Audit logs** — emit structured `type = "audit_log"` application logs for
-   login / workspace / member / key operations after successful commits.
+   explicit `POST /login`, workspace, member, and API-token operations after
+   successful commits. `POST /login` updates `users.last_login_at` on every
+   successful login; `GET /me` remains a profile read.
 
 ## Concerns addressed
 

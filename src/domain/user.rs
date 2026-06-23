@@ -14,6 +14,7 @@ pub struct User {
     pub auth0_sub: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 

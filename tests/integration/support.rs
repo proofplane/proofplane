@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    io::{self, Write},
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex as StdMutex, Weak},
 };
 
 use async_trait::async_trait;
@@ -42,6 +44,8 @@ use testcontainers::{
 };
 use testcontainers_modules::postgres;
 use tokio::sync::{Mutex, OnceCell};
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 
 const CLAMAV_IMAGE_TAG: &str = "1.4.3";
@@ -50,6 +54,9 @@ pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201
 // starts; Weak permits reuse without keeping the container alive. Each TestApp holds
 // a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
+// ponytail: tracing subscriber capture is not isolated across overlapping request tasks.
+// Only serialize capture windows; the rest of each integration test still runs in parallel.
+static AUDIT_LOG_CAPTURE: Mutex<()> = Mutex::const_new(());
 
 pub async fn upload_attachment(
     app: &TestApp,
@@ -83,6 +90,62 @@ pub async fn set_submission_received_at(
         )
         .await
         .expect("submission received_at updates");
+}
+
+pub async fn capture_audit_logs<Fut, T>(future: Fut) -> (T, Vec<Value>)
+where
+    Fut: Future<Output = T>,
+{
+    let _guard = AUDIT_LOG_CAPTURE.lock().await;
+    let sink = Arc::new(StdMutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_file(false)
+        .with_line_number(false)
+        .with_writer(SharedWriter(sink.clone()))
+        .finish();
+    let output = future.with_subscriber(subscriber).await;
+
+    let bytes = sink.lock().expect("audit log sink locks").clone();
+    let records = String::from_utf8(bytes)
+        .expect("audit logs are UTF-8")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["fields"]["type"] == "audit_log")
+        .collect();
+
+    (output, records)
+}
+
+#[derive(Clone)]
+struct SharedWriter(Arc<StdMutex<Vec<u8>>>);
+
+impl<'a> MakeWriter<'a> for SharedWriter {
+    type Writer = SharedWriterGuard;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedWriterGuard(self.0.clone())
+    }
+}
+
+struct SharedWriterGuard(Arc<StdMutex<Vec<u8>>>);
+
+impl Write for SharedWriterGuard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("audit log sink poisoned"))?
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("audit log sink poisoned"))?
+            .flush()
+    }
 }
 
 /// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,

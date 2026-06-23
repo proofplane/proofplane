@@ -17,10 +17,12 @@ use crate::{
         canonical_permissions, required_text, ApiTokenId, ApiTokenWithPermissions, DomainError,
         WorkspaceId, WorkspacePermission,
     },
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authenticate_user,
         error::{domain_errors, ApiError},
         me::UserRouteAuthState,
+        request_context::RequestId,
     },
     services::api_tokens::{ApiTokenService, CreateUserApiTokenPayload, IssuedUserApiToken},
     validate,
@@ -73,6 +75,7 @@ async fn authenticate_user_route<V: TokenVerifier>(
 async fn create_api_token<V: TokenVerifier>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
+    Extension(request_id): Extension<RequestId>,
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<CreateApiTokenRequest>,
 ) -> Result<Json<IssuedApiTokenResponse>, ApiError> {
@@ -81,6 +84,21 @@ async fn create_api_token<V: TokenVerifier>(
         .service
         .create_token(user.user_id, WorkspaceId::from(workspace_id), request)
         .await?;
+    let api_token_id = Uuid::from(issued.token.token.id);
+
+    AuditEvent::new(
+        "api_token.issued",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
+        "create_api_token",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("api_token", api_token_id))
+    .emit();
 
     Ok(Json(issued.into()))
 }
@@ -101,6 +119,7 @@ async fn list_api_tokens<V: TokenVerifier>(
 async fn revoke_api_token<V: TokenVerifier>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
+    Extension(request_id): Extension<RequestId>,
     Path(path): Path<ApiTokenPath>,
 ) -> Result<StatusCode, ApiError> {
     state
@@ -111,6 +130,20 @@ async fn revoke_api_token<V: TokenVerifier>(
             ApiTokenId::from(path.token_id),
         )
         .await?;
+
+    AuditEvent::new(
+        "api_token.revoked",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
+        "revoke_api_token",
+    )
+    .workspace_id(path.workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("api_token", path.token_id))
+    .emit();
 
     Ok(StatusCode::NO_CONTENT)
 }
