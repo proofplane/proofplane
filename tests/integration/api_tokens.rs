@@ -5,7 +5,7 @@ use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{capture_audit_logs, TestApp};
 
 #[tokio::test]
 async fn workspace_member_issues_lists_and_revokes_own_api_token() {
@@ -17,7 +17,7 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     let workspace_id = workspace_uuid(&app.create_workspace_as(owner, "API Token Workspace").await);
     insert_membership(&app, workspace_id, member_id, "admin").await;
 
-    let issued = create_token(
+    let (issued, issued_logs) = capture_audit_logs(create_token(
         &app,
         member,
         workspace_id,
@@ -26,7 +26,7 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
             "expires_at": future_timestamp(30),
             "permissions": ["write_controls", "read_evidence_requests", "read_controls"],
         }),
-    )
+    ))
     .await;
     issued.assert_status_ok();
     let issued = issued.json::<Value>();
@@ -34,9 +34,22 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     let raw = issued["api_token"]
         .as_str()
         .expect("api_token is returned once");
+    let serialized_issued_logs = serde_json::to_string(&issued_logs).expect("audit logs serialize");
 
     assert_eq!(raw.len(), 41);
     assert!(raw.starts_with("ppat_"));
+    assert_eq!(issued_logs.len(), 1);
+    assert_api_token_audit_event(
+        &issued_logs[0],
+        "api_token.issued",
+        "create_api_token",
+        member_id,
+        workspace_id,
+        token_id,
+    );
+    assert!(!serialized_issued_logs.contains(raw));
+    assert!(!serialized_issued_logs.contains("digest"));
+    assert!(!serialized_issued_logs.contains("authorization"));
     assert_eq!(issued["name"], "CI token");
     assert_eq!(issued["workspace_id"], workspace_id.to_string());
     assert_eq!(
@@ -77,9 +90,18 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     );
     assert_eq!(listed[0]["last_used_at"], Value::Null);
 
-    revoke_token(&app, member, workspace_id, token_id)
-        .await
-        .assert_status(StatusCode::NO_CONTENT);
+    let (revoked, revoked_logs) =
+        capture_audit_logs(revoke_token(&app, member, workspace_id, token_id)).await;
+    revoked.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(revoked_logs.len(), 1);
+    assert_api_token_audit_event(
+        &revoked_logs[0],
+        "api_token.revoked",
+        "revoke_api_token",
+        member_id,
+        workspace_id,
+        token_id,
+    );
     revoke_token(&app, member, workspace_id, token_id)
         .await
         .assert_status(StatusCode::NO_CONTENT);
@@ -275,6 +297,28 @@ fn workspace_uuid(created: &Value) -> Uuid {
 fn token_uuid(created: &Value) -> Uuid {
     Uuid::parse_str(created["id"].as_str().expect("token id is a string"))
         .expect("token id is a UUID")
+}
+
+fn assert_api_token_audit_event(
+    record: &Value,
+    event_name: &str,
+    operation: &str,
+    actor_user_id: Uuid,
+    workspace_id: Uuid,
+    token_id: Uuid,
+) {
+    let fields = &record["fields"];
+    assert_eq!(fields["type"], "audit_log");
+    assert_eq!(fields["event_name"], event_name);
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["actor_type"], "user");
+    assert_eq!(fields["user_id"], actor_user_id.to_string());
+    assert_eq!(fields["client_type"], "rest");
+    assert_eq!(fields["operation"], operation);
+    assert_eq!(fields["workspace_id"], workspace_id.to_string());
+    assert_eq!(fields["object_type"], "api_token");
+    assert_eq!(fields["object_id"], token_id.to_string());
+    assert!(Uuid::parse_str(fields["request_id"].as_str().expect("request id is set")).is_ok());
 }
 
 fn future_timestamp(minutes: i64) -> String {

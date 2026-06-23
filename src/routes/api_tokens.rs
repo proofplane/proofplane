@@ -86,14 +86,18 @@ async fn create_api_token<V: TokenVerifier>(
         .await?;
     let api_token_id = Uuid::from(issued.token.token.id);
 
-    api_token_audit_event(
+    AuditEvent::new(
         "api_token.issued",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
         "create_api_token",
-        user.user_id.into(),
-        workspace_id,
-        api_token_id,
-        request_id.0,
     )
+    .workspace_id(workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("api_token", api_token_id))
     .emit();
 
     Ok(Json(issued.into()))
@@ -127,37 +131,21 @@ async fn revoke_api_token<V: TokenVerifier>(
         )
         .await?;
 
-    api_token_audit_event(
+    AuditEvent::new(
         "api_token.revoked",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
         "revoke_api_token",
-        user.user_id.into(),
-        path.workspace_id,
-        path.token_id,
-        request_id.0,
     )
+    .workspace_id(path.workspace_id)
+    .request_id(request_id.0)
+    .object(AuditObject::new("api_token", path.token_id))
     .emit();
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn api_token_audit_event(
-    event_name: &'static str,
-    operation: &'static str,
-    user_id: Uuid,
-    workspace_id: Uuid,
-    api_token_id: Uuid,
-    request_id: Uuid,
-) -> AuditEvent {
-    AuditEvent::new(
-        event_name,
-        AuditOutcome::Success,
-        AuditActor::User { user_id },
-        AuditClientType::Rest,
-        operation,
-    )
-    .workspace_id(workspace_id)
-    .request_id(request_id)
-    .object(AuditObject::new("api_token", api_token_id))
 }
 
 fn validate_permissions(values: Vec<String>) -> Validation<Vec<WorkspacePermission>, DomainError> {
@@ -283,18 +271,9 @@ impl From<IssuedUserApiToken> for IssuedApiTokenResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{self, Write},
-        sync::{Arc, Mutex},
-    };
-
     use chrono::{Duration as ChronoDuration, Utc};
-    use serde_json::Value;
-    use tracing::subscriber::with_default;
-    use tracing_subscriber::fmt::MakeWriter;
-    use uuid::Uuid;
 
-    use super::{api_token_audit_event, CreateApiTokenRequest};
+    use super::CreateApiTokenRequest;
     use crate::domain::{DomainError, WorkspacePermission};
 
     #[test]
@@ -408,90 +387,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn api_token_audit_events_use_identifier_only_fields() {
-        let user_id = Uuid::new_v4();
-        let workspace_id = Uuid::new_v4();
-        let api_token_id = Uuid::new_v4();
-        let request_id = Uuid::new_v4();
-
-        let record = capture(|| {
-            api_token_audit_event(
-                "api_token.issued",
-                "create_api_token",
-                user_id,
-                workspace_id,
-                api_token_id,
-                request_id,
-            )
-            .emit();
-        });
-        let serialized = serde_json::to_string(&record).expect("audit record serializes");
-        let fields = &record["fields"];
-
-        assert_eq!(fields["type"], "audit_log");
-        assert_eq!(fields["event_name"], "api_token.issued");
-        assert_eq!(fields["outcome"], "success");
-        assert_eq!(fields["actor_type"], "user");
-        assert_eq!(fields["user_id"], user_id.to_string());
-        assert_eq!(fields["client_type"], "rest");
-        assert_eq!(fields["operation"], "create_api_token");
-        assert_eq!(fields["workspace_id"], workspace_id.to_string());
-        assert_eq!(fields["request_id"], request_id.to_string());
-        assert_eq!(fields["object_type"], "api_token");
-        assert_eq!(fields["object_id"], api_token_id.to_string());
-        assert!(!serialized.contains("ppat_"));
-        assert!(!serialized.contains("digest"));
-        assert!(!serialized.contains("authorization"));
-    }
-
     fn future_expiration() -> chrono::DateTime<Utc> {
         Utc::now() + ChronoDuration::days(1)
-    }
-
-    fn capture(emit: impl FnOnce()) -> Value {
-        let sink = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_current_span(false)
-            .with_span_list(false)
-            .with_file(false)
-            .with_line_number(false)
-            .with_writer(SharedWriter(sink.clone()))
-            .finish();
-
-        with_default(subscriber, emit);
-        let bytes = sink.lock().expect("audit log sink locks").clone();
-
-        serde_json::from_slice(&bytes).expect("audit event is JSON")
-    }
-
-    #[derive(Clone)]
-    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl<'a> MakeWriter<'a> for SharedWriter {
-        type Writer = SharedWriterGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            SharedWriterGuard(self.0.clone())
-        }
-    }
-
-    struct SharedWriterGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for SharedWriterGuard {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .map_err(|_| io::Error::other("audit log sink poisoned"))?
-                .write(buf)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.0
-                .lock()
-                .map_err(|_| io::Error::other("audit log sink poisoned"))?
-                .flush()
-        }
     }
 }

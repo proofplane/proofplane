@@ -40,7 +40,7 @@ async fn me_returns_authenticated_user_and_provisions_once() {
     assert_eq!(count_users_with_sub(&app, sub).await, 1);
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn login_updates_last_login_and_emits_audit_event_every_time() {
     let app = TestApp::start_without_default_auth().await;
     let sub = "auth0|login-audit";
@@ -83,7 +83,7 @@ async fn login_updates_last_login_and_emits_audit_event_every_time() {
     assert_audit_event(&second_logs[0], "user.logged_in", user_id, "login");
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn me_does_not_update_last_login_or_emit_login_audit_event() {
     let app = TestApp::start_without_default_auth().await;
     let sub = "auth0|me-not-login";

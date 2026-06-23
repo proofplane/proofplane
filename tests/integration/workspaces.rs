@@ -128,7 +128,7 @@ async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn workspace_mutations_emit_success_audit_logs_after_commit() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-workspace-audit";

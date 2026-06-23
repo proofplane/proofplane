@@ -54,6 +54,9 @@ pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201
 // starts; Weak permits reuse without keeping the container alive. Each TestApp holds
 // a strong Arc, so the last app drop stops it and a later failed upgrade starts fresh.
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
+// ponytail: tracing subscriber capture is not isolated across overlapping request tasks.
+// Only serialize capture windows; the rest of each integration test still runs in parallel.
+static AUDIT_LOG_CAPTURE: Mutex<()> = Mutex::const_new(());
 
 pub async fn upload_attachment(
     app: &TestApp,
@@ -93,6 +96,7 @@ pub async fn capture_audit_logs<Fut, T>(future: Fut) -> (T, Vec<Value>)
 where
     Fut: Future<Output = T>,
 {
+    let _guard = AUDIT_LOG_CAPTURE.lock().await;
     let sink = Arc::new(StdMutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()
         .json()
