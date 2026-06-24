@@ -46,7 +46,7 @@ The seed output prints a local owner bearer API token. Use that token for
 data-plane API calls:
 
 ```bash
-export PROOFPLANE_API_TOKEN=v4.public-replace-with-latest-seed-output
+export PROOFPLANE_API_TOKEN=ppat_replace_with_latest_seed_output
 curl --fail-with-body \
   --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
   http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
@@ -90,6 +90,57 @@ make mcp
 ```
 
 The local API listens on `127.0.0.1:3000` with the default config.
+
+### Testing MCP With The Inspector
+
+The local MCP server uses Streamable HTTP. Start the local
+dependencies and seed data, then run the MCP server:
+
+```bash
+make up
+make health
+make seed
+make mcp
+```
+
+Copy the fresh `ppat_...` token printed by `make seed` from the line:
+
+```text
+local owner bearer API token (reissued by this seed run): ppat_...
+```
+
+The seed command reissues this token each time it runs. If you rerun
+`make seed`, update any MCP client or Inspector configuration with the new
+token.
+
+In another terminal, start the MCP Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Open the Inspector URL printed by that command, including its proxy token query
+parameter. Configure the connection as:
+
+- Transport Type: `Streamable HTTP`
+- URL: `http://127.0.0.1:3002/mcp`
+- Connection Type: `Proxy`
+- Custom header enabled:
+  - Name: `Authorization`
+  - Value: `Bearer ppat_...`
+
+**Make sure you use the "Proxy" connection type.** It won't work with "Direct"
+because of CORS.
+
+Optionally, to verify the server and token outside the Inspector:
+
+```bash
+curl --fail-with-body -i http://127.0.0.1:3002/mcp \
+  --header "Authorization: Bearer $PROOFPLANE_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --header "Accept: application/json, text/event-stream" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+```
 
 Stop or reset local Docker state with:
 
