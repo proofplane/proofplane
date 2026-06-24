@@ -17,19 +17,19 @@ test("renders the app shell", async ({ page }) => {
   );
 });
 
-test("scrolling reveals the auditor packet section", async ({ page }) => {
+test("scrolling reveals the final setup card", async ({ page }) => {
   await page.goto("/");
 
   await page
-    .getByRole("heading", { name: /Simplify the work, keep the audit trail/i })
+    .getByRole("heading", { name: /See what an auditor still needs/i })
     .scrollIntoViewIfNeeded();
 
   await expect(
     page.getByRole("heading", {
-      name: /Simplify the work, keep the audit trail/i,
+      name: /See what an auditor still needs/i,
     }),
   ).toBeVisible();
-  await expect(page.getByText("Evidence gap identified")).toBeVisible();
+  await expect(page.getByText("Missing latest evidence")).toBeVisible();
 });
 
 test("unknown routes show a recoverable not-found state", async ({ page }) => {

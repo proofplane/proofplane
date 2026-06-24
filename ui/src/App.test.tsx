@@ -42,9 +42,10 @@ it("renders the long-scroll homepage", () => {
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /Simplify the work, keep the audit trail/i,
+      name: /Four steps from setup to packet clarity/i,
     }),
   ).toBeInTheDocument();
+  expect(screen.getByText("Token preset")).toBeInTheDocument();
   expect(container.textContent).not.toMatch(
     /without starting from an empty dashboard/i,
   );

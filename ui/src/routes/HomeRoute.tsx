@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   Bot,
-  ClipboardCheck,
   FileCheck2,
   KeyRound,
   Layers3,
@@ -15,28 +14,40 @@ const sections = [
     title: "Create the workspace.",
     body: "Start with a tenant boundary, starter SOC 2 controls, and a place where compliance work has an owner.",
     icon: Layers3,
-    visual: <WorkspaceVisual />,
+    artifact: "Workspace boundary",
+    result: "Starter controls loaded",
+    summary: "Tenant and controls",
+    visual: <WorkspaceStepVisual />,
   },
   {
     eyebrow: "Step 02",
     title: "Pick the job the token should do.",
     body: "Use permission presets for real work: read compliance data, submit evidence, manage mappings, or run the sandbox demo.",
     icon: KeyRound,
-    visual: <PermissionVisual />,
+    artifact: "Scoped token",
+    result: "5 permissions selected",
+    summary: "Permission preset",
+    visual: <PermissionStepVisual />,
   },
   {
     eyebrow: "Step 03",
     title: "Let agents inspect the right records.",
     body: "MCP setup stays explicit: the token belongs to the session, not the prompt, and preview labels stay honest.",
     icon: Bot,
-    visual: <McpVisual />,
+    artifact: "MCP setup preview",
+    result: "Agent prompt ready",
+    summary: "Agent context",
+    visual: <McpStepVisual />,
   },
   {
     eyebrow: "Step 04",
     title: "See what an auditor still needs.",
     body: "Packet readiness connects controls, evidence requests, latest submissions, provenance, and gaps in one readable artifact.",
     icon: FileCheck2,
-    visual: <PacketVisual />,
+    artifact: "Auditor packet",
+    result: "Evidence gaps ranked",
+    summary: "Gap analysis",
+    visual: <PacketStepVisual />,
   },
 ];
 
@@ -69,47 +80,42 @@ export function HomeRoute() {
           </div>
         </section>
 
-        {sections.map(({ body, eyebrow, icon: Icon, title, visual }) => (
-          <section
-            className="scroll-section feature-section"
-            data-step={eyebrow.replace("Step ", "")}
-            key={title}
-          >
-            <div className="section-copy">
-              <p className="eyebrow">{eyebrow}</p>
-              <Icon className="section-icon" aria-hidden="true" size={28} />
-              <h2>{title}</h2>
-              <p>{body}</p>
-            </div>
-            <div className="sticky-visual" aria-hidden="true">
-              {visual}
-            </div>
-          </section>
-        ))}
-
-        <section
-          className="final-section scroll-section"
-          data-step="05"
-          aria-labelledby="final-title"
-        >
-          <div className="section-copy">
-            <p className="eyebrow">Ready path</p>
-            <ClipboardCheck className="section-icon" aria-hidden="true" size={28} />
-            <h2 id="final-title">Simplify the work, keep the audit trail.</h2>
-            <p>
-              Every setup step produces something concrete: a workspace, a
-              permissioned token, MCP guidance, and a packet view that points to
-              the next evidence task.
-            </p>
-            <div className="actions">
-              <Link className="button button-primary" to="/app">
-                Start SOC 2 Sandbox
-                <ArrowRight aria-hidden="true" size={16} />
-              </Link>
+        <section className="step-card-flow" aria-labelledby="step-card-flow-title">
+          <div className="step-card-heading">
+            <div>
+              <p className="eyebrow">How it works</p>
+              <h2 id="step-card-flow-title">Four steps from setup to packet clarity.</h2>
             </div>
           </div>
-          <div className="sticky-visual" aria-hidden="true">
-            <ChecklistVisual />
+          <div className="step-card-list">
+            {sections.map(
+              ({ artifact, body, eyebrow, icon: Icon, result, title, visual }, index) => {
+                const step = eyebrow.replace("Step ", "");
+
+                return (
+                  <article
+                    className="step-card"
+                    data-step={step}
+                    key={title}
+                    style={{ zIndex: index + 1 }}
+                  >
+                    <div className="step-card-copy" data-step={step}>
+                      <p className="eyebrow">{eyebrow}</p>
+                      <Icon className="section-icon" aria-hidden="true" size={28} />
+                      <h3>{title}</h3>
+                      <p>{body}</p>
+                      <div className="step-result">
+                        <span>{artifact}</span>
+                        <strong>{result}</strong>
+                      </div>
+                    </div>
+                    <div className="step-card-mock" aria-hidden="true">
+                      {visual}
+                    </div>
+                  </article>
+                );
+              },
+            )}
           </div>
         </section>
       </article>
@@ -155,128 +161,78 @@ function HeroVisual() {
   );
 }
 
-function WorkspaceVisual() {
+function WorkspaceStepVisual() {
   return (
-    <div className="cinematic-frame workspace-artifact">
-      <div className="frame-chrome">
-        <span>Workspace</span>
-        <span>Owner</span>
-      </div>
-      <div className="workspace-card stage-card">
-        <strong>Acme Security</strong>
-        <span>SOC 2 starter controls loaded</span>
-      </div>
-      <div className="artifact-row">
-        <span>MFA</span>
-        <strong>Control ready</strong>
-      </div>
-      <div className="artifact-row">
-        <span>Access review</span>
-        <strong>Evidence due</strong>
+    <div className="step-mock-shell">
+      <div className="mock-window-bar" />
+      <div className="mock-document-stack">
+        <div className="mock-upload-card">
+          <span>Workspace</span>
+          <strong>Acme Security</strong>
+          <small>SOC 2 starter controls loaded</small>
+        </div>
+        <div className="mock-upload-row">
+          <span>MFA enforced</span>
+          <strong>Control ready</strong>
+        </div>
+        <div className="mock-upload-row">
+          <span>Access review</span>
+          <strong>Evidence due</strong>
+        </div>
       </div>
     </div>
   );
 }
 
-function PermissionVisual() {
+function PermissionStepVisual() {
   return (
-    <div className="cinematic-frame permission-artifact">
-      <div className="frame-chrome">
-        <span>Token preset</span>
-        <span>Scoped</span>
-      </div>
-      <div className="permission-grid">
-        <div>
-          <span>Preset</span>
-          <strong>Read compliance data</strong>
-        </div>
-        <div>
-          <span>Evidence</span>
-          <strong>Submit evidence</strong>
-        </div>
-        <div>
-          <span>Demo</span>
-          <strong>Sandbox access</strong>
-        </div>
-      </div>
-      <div className="permission-code">
-        <span>Granted permissions</span>
-        <code>read_controls, read_evidence_requests</code>
+    <div className="step-mock-shell">
+      <div className="mock-window-bar" />
+      <div className="mock-strategy-panel">
+        <h4>Token preset</h4>
+        {["Read compliance data", "Submit evidence", "Sandbox access"].map((label) => (
+          <div className="mock-strategy-row" key={label}>
+            <span>{label}</span>
+            <strong>Scoped</strong>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function McpVisual() {
+function McpStepVisual() {
   return (
-    <div className="cinematic-frame code-artifact">
-      <div className="frame-chrome">
+    <div className="step-mock-shell">
+      <div className="mock-window-bar" />
+      <div className="mock-terminal-panel">
         <span>MCP setup preview</span>
-        <span>Preview</span>
+        <code>{`request: quarterly_access_review
+scope: read_controls + submit_evidence
+status: packet_gap_visible`}</code>
       </div>
-      <div className="mcp-terminal">
-        <span>Install command</span>
-        <code>{`PROOFPLANE_TOKEN=ppat_...
-proofplane mcp --workspace acme`}</code>
-      </div>
-      <div className="mcp-flow" aria-hidden="true">
-        <div>
-          <span>Session token</span>
-          <strong>Scoped</strong>
-        </div>
-        <div>
-          <span>Tool access</span>
-          <strong>Controls + evidence</strong>
-        </div>
-        <div>
-          <span>Agent prompt</span>
-          <strong>SOC 2 gaps</strong>
-        </div>
-      </div>
-      <div className="prompt-card">
-        <span>Suggested prompt</span>
-        <p>What evidence is missing for SOC 2?</p>
-      </div>
+      <div className="mock-prompt-card">What evidence is missing for SOC 2?</div>
     </div>
   );
 }
 
-function PacketVisual() {
+function PacketStepVisual() {
   return (
-    <div className="cinematic-frame packet-artifact">
-      <div className="frame-chrome">
-        <span>Auditor packet</span>
-        <span>Gaps</span>
+    <div className="step-mock-shell">
+      <div className="mock-window-bar" />
+      <div className="mock-packet-panel">
+        <h4>Auditor packet</h4>
+        {[
+          ["MFA enforced", "Current"],
+          ["Access review", "Missing latest evidence"],
+          ["Vendor review", "Mapped"],
+        ].map(([label, status]) => (
+          <div className="mock-packet-row" key={label}>
+            <span>{label}</span>
+            <strong>{status}</strong>
+          </div>
+        ))}
       </div>
-      <div className="artifact-row">
-        <span>MFA enforced</span>
-        <strong>Current</strong>
-      </div>
-      <div className="artifact-row signal-row">
-        <span>Access review</span>
-        <strong>Missing latest evidence</strong>
-      </div>
-      <div className="artifact-row">
-        <span>Vendor review</span>
-        <strong>Mapped</strong>
-      </div>
-    </div>
-  );
-}
-
-function ChecklistVisual() {
-  return (
-    <div className="cinematic-frame checklist-artifact">
-      <div className="frame-chrome">
-        <span>Next actions</span>
-        <span>Clear</span>
-      </div>
-      <ol className="checklist">
-        <li>Workspace created</li>
-        <li>Token permissioned</li>
-        <li>MCP guidance visible</li>
-        <li>Evidence gap identified</li>
-      </ol>
     </div>
   );
 }
