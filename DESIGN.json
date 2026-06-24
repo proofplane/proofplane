@@ -1,38 +1,113 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-06-23T00:00:00-04:00",
+  "generatedAt": "2026-06-24T00:00:00-04:00",
   "title": "Design System: Proofplane",
   "extensions": {
     "colorMeta": {
       "ink": {
         "role": "neutral",
         "displayName": "Proof Ink",
-        "canonical": "oklch(21% 0.018 165)",
-        "tonalRamp": ["oklch(15% 0.018 165)", "oklch(25% 0.018 165)", "oklch(35% 0.018 165)", "oklch(45% 0.018 165)", "oklch(58% 0.014 165)", "oklch(72% 0.010 165)", "oklch(86% 0.008 165)", "oklch(95% 0.006 165)"]
+        "canonical": "oklch(95% 0.006 165)",
+        "tonalRamp": [
+          "oklch(15% 0.018 165)",
+          "oklch(25% 0.018 165)",
+          "oklch(35% 0.018 165)",
+          "oklch(45% 0.018 165)",
+          "oklch(58% 0.014 165)",
+          "oklch(72% 0.010 165)",
+          "oklch(86% 0.008 165)",
+          "oklch(95% 0.006 165)"
+        ]
       },
       "canvas": {
         "role": "neutral",
-        "displayName": "Warm Canvas",
-        "canonical": "oklch(96% 0.014 82)",
-        "tonalRamp": ["oklch(18% 0.014 82)", "oklch(30% 0.014 82)", "oklch(42% 0.014 82)", "oklch(55% 0.014 82)", "oklch(68% 0.014 82)", "oklch(80% 0.014 82)", "oklch(90% 0.014 82)", "oklch(96% 0.014 82)"]
+        "displayName": "Operations Void",
+        "canonical": "oklch(18% 0.018 165)",
+        "tonalRamp": [
+          "oklch(13% 0.018 165)",
+          "oklch(18% 0.018 165)",
+          "oklch(25% 0.018 165)",
+          "oklch(34% 0.018 165)",
+          "oklch(48% 0.014 165)",
+          "oklch(64% 0.010 165)",
+          "oklch(80% 0.008 165)",
+          "oklch(94% 0.006 165)"
+        ]
       },
       "primary": {
         "role": "primary",
-        "displayName": "Workbench Green",
-        "canonical": "oklch(48% 0.080 170)",
-        "tonalRamp": ["oklch(17% 0.080 170)", "oklch(27% 0.080 170)", "oklch(37% 0.080 170)", "oklch(48% 0.080 170)", "oklch(60% 0.070 170)", "oklch(72% 0.052 170)", "oklch(84% 0.036 170)", "oklch(94% 0.020 170)"]
+        "displayName": "Proofplane Mint",
+        "canonical": "oklch(78% 0.090 170)",
+        "tonalRamp": [
+          "oklch(18% 0.090 170)",
+          "oklch(30% 0.090 170)",
+          "oklch(42% 0.090 170)",
+          "oklch(56% 0.085 170)",
+          "oklch(68% 0.080 170)",
+          "oklch(78% 0.090 170)",
+          "oklch(88% 0.055 170)",
+          "oklch(95% 0.030 170)"
+        ]
       },
       "signal": {
         "role": "secondary",
         "displayName": "Clay Signal",
-        "canonical": "oklch(56% 0.112 45)",
-        "tonalRamp": ["oklch(18% 0.112 45)", "oklch(28% 0.112 45)", "oklch(39% 0.112 45)", "oklch(56% 0.112 45)", "oklch(66% 0.092 45)", "oklch(76% 0.065 45)", "oklch(86% 0.040 45)", "oklch(94% 0.022 45)"]
+        "canonical": "oklch(76% 0.065 45)",
+        "tonalRamp": [
+          "oklch(18% 0.112 45)",
+          "oklch(28% 0.112 45)",
+          "oklch(39% 0.112 45)",
+          "oklch(56% 0.112 45)",
+          "oklch(66% 0.092 45)",
+          "oklch(76% 0.065 45)",
+          "oklch(86% 0.040 45)",
+          "oklch(94% 0.022 45)"
+        ]
       },
       "code-bg": {
         "role": "neutral",
         "displayName": "Code Slate",
         "canonical": "oklch(25% 0.018 165)",
-        "tonalRamp": ["oklch(15% 0.018 165)", "oklch(25% 0.018 165)", "oklch(35% 0.018 165)", "oklch(45% 0.018 165)", "oklch(58% 0.014 165)", "oklch(72% 0.010 165)", "oklch(86% 0.008 165)", "oklch(95% 0.006 165)"]
+        "tonalRamp": [
+          "oklch(15% 0.018 165)",
+          "oklch(25% 0.018 165)",
+          "oklch(35% 0.018 165)",
+          "oklch(45% 0.018 165)",
+          "oklch(58% 0.014 165)",
+          "oklch(72% 0.010 165)",
+          "oklch(86% 0.008 165)",
+          "oklch(95% 0.006 165)"
+        ]
+      },
+      "landing-bg": {
+        "role": "neutral",
+        "displayName": "Landing Void",
+        "canonical": "oklch(18% 0.018 165)",
+        "tonalRamp": [
+          "oklch(13% 0.018 165)",
+          "oklch(18% 0.018 165)",
+          "oklch(25% 0.018 165)",
+          "oklch(34% 0.018 165)",
+          "oklch(48% 0.014 165)",
+          "oklch(64% 0.010 165)",
+          "oklch(80% 0.008 165)",
+          "oklch(94% 0.006 165)"
+        ]
+      },
+      "landing-accent": {
+        "role": "primary",
+        "displayName": "Landing Accent",
+        "canonical": "oklch(78% 0.090 170)",
+        "tonalRamp": [
+          "oklch(18% 0.090 170)",
+          "oklch(30% 0.090 170)",
+          "oklch(42% 0.090 170)",
+          "oklch(56% 0.085 170)",
+          "oklch(68% 0.080 170)",
+          "oklch(78% 0.090 170)",
+          "oklch(88% 0.055 170)",
+          "oklch(95% 0.030 170)"
+        ]
       }
     },
     "typographyMeta": {
@@ -64,12 +139,12 @@
     "shadows": [
       {
         "name": "floating-low",
-        "value": "0 10px 28px rgba(23, 32, 29, 0.10)",
+        "value": "0 10px 28px rgba(5, 10, 8, 0.22)",
         "purpose": "Dropdown menus, popovers, and focused copy surfaces."
       },
       {
         "name": "floating-high",
-        "value": "0 22px 60px rgba(23, 32, 29, 0.16)",
+        "value": "0 22px 60px rgba(5, 10, 8, 0.30)",
         "purpose": "Rare confirmation panels or narrow overlays."
       }
     ],
@@ -88,6 +163,11 @@
         "name": "standard-state",
         "value": "220ms",
         "purpose": "Panels, menus, and progressive onboarding transitions."
+      },
+      {
+        "name": "landing-scroll",
+        "value": "sticky sections plus transform/opacity transitions",
+        "purpose": "Perplexity-inspired landing page pacing without adding an animation dependency."
       }
     ],
     "breakpoints": [
@@ -103,7 +183,25 @@
         "name": "lg",
         "value": "1200px"
       }
-    ]
+    ],
+    "palette": {
+      "strategy": "Restrained dark operational palette for product screens, cinematic use of the same palette for landing sections.",
+      "tokens": {
+        "ink": "#edf3ec",
+        "inkMuted": "#aeb9b3",
+        "canvas": "#101715",
+        "surface": "#19211f",
+        "surfaceQuiet": "#24302c",
+        "line": "#3b4842",
+        "primary": "#7bd0bb",
+        "primaryDeep": "#5fbba6",
+        "primarySoft": "#243f39",
+        "signal": "#e6aa8d",
+        "signalSoft": "#3b2f2a",
+        "codeBg": "#0f1715",
+        "codeText": "#edf3ec"
+      }
+    }
   },
   "components": [
     {
@@ -112,7 +210,7 @@
       "refersTo": "button-primary",
       "description": "Primary action for sandbox creation, token creation, and setup continuation.",
       "html": "<button class=\"ds-btn-primary\">Create sandbox</button>",
-      "css": ".ds-btn-primary { background: #2f6f5e; color: #fcfaf4; border: 1px solid #2f6f5e; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-primary:hover { background: #1f5145; border-color: #1f5145; } .ds-btn-primary:focus-visible { outline: 2px solid #b45f3a; outline-offset: 2px; }"
+      "css": ".ds-btn-primary { background: #7bd0bb; color: #101715; border: 1px solid #7bd0bb; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-primary:hover { background: #5fbba6; border-color: #5fbba6; } .ds-btn-primary:focus-visible { outline: 2px solid #e6aa8d; outline-offset: 2px; }"
     },
     {
       "name": "Secondary Button",
@@ -120,7 +218,7 @@
       "refersTo": "button-secondary",
       "description": "Secondary action for viewing docs, copying examples, or stepping back.",
       "html": "<button class=\"ds-btn-secondary\">View MCP preview</button>",
-      "css": ".ds-btn-secondary { background: #fcfaf4; color: #17201d; border: 1px solid #d8cebd; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-secondary:hover { background: #eee7da; border-color: #52615b; } .ds-btn-secondary:focus-visible { outline: 2px solid #2f6f5e; outline-offset: 2px; }"
+      "css": ".ds-btn-secondary { background: #19211f; color: #edf3ec; border: 1px solid #3b4842; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-secondary:hover { background: #24302c; border-color: #7bd0bb; } .ds-btn-secondary:focus-visible { outline: 2px solid #7bd0bb; outline-offset: 2px; }"
     },
     {
       "name": "Permission Chip",
@@ -128,7 +226,7 @@
       "refersTo": "chip",
       "description": "Compact selected permission or capability label.",
       "html": "<span class=\"ds-chip\">read_controls</span>",
-      "css": ".ds-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #dbe9e3; color: #1f5145; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
+      "css": ".ds-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #243f39; color: #7bd0bb; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
     },
     {
       "name": "Preview Chip",
@@ -136,7 +234,7 @@
       "refersTo": "chip",
       "description": "Low-emphasis label for MCP preview or coming-soon states.",
       "html": "<span class=\"ds-chip-preview\">MCP setup preview</span>",
-      "css": ".ds-chip-preview { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #f0dfd4; color: #8c482b; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
+      "css": ".ds-chip-preview { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #3b2f2a; color: #e6aa8d; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
     },
     {
       "name": "Text Field",
@@ -144,7 +242,7 @@
       "refersTo": "input",
       "description": "Standard field for workspace name, actor name, and account setup.",
       "html": "<label class=\"ds-field\"><span>Workspace name</span><input value=\"Acme Security\" /></label>",
-      "css": ".ds-field { display: grid; gap: 6px; color: #17201d; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-field input { width: 280px; background: #fcfaf4; color: #17201d; border: 1px solid #d8cebd; border-radius: 6px; padding: 10px 12px; font: 400 16px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; } .ds-field input:focus { outline: none; border-color: #2f6f5e; box-shadow: 0 0 0 3px #dbe9e3; }"
+      "css": ".ds-field { display: grid; gap: 6px; color: #edf3ec; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-field input { width: 280px; background: #19211f; color: #edf3ec; border: 1px solid #3b4842; border-radius: 6px; padding: 10px 12px; font: 400 16px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; } .ds-field input:focus { outline: none; border-color: #7bd0bb; box-shadow: 0 0 0 3px #243f39; }"
     },
     {
       "name": "Token Copy Panel",
@@ -152,7 +250,7 @@
       "refersTo": "token-success-panel",
       "description": "One-time token display with copyable code content.",
       "html": "<section class=\"ds-token-panel\"><div><strong>Token shown once</strong><p>Save this token before continuing. Proofplane cannot show it again.</p></div><code>ppat_live_xxxxxxxxxxxxxxxxxxxx</code><button>Copy token</button></section>",
-      "css": ".ds-token-panel { display: grid; gap: 12px; max-width: 520px; padding: 16px; border: 1px solid #d8cebd; border-radius: 8px; background: #fcfaf4; color: #17201d; } .ds-token-panel strong { font: 640 18px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel p { margin: 4px 0 0; color: #52615b; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel code { display: block; padding: 12px; border-radius: 6px; background: #1f2623; color: #edf3ec; font: 500 14px/1.45 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace; overflow-wrap: anywhere; } .ds-token-panel button { justify-self: start; background: #2f6f5e; color: #fcfaf4; border: 1px solid #2f6f5e; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel button:focus-visible { outline: 2px solid #b45f3a; outline-offset: 2px; }"
+      "css": ".ds-token-panel { display: grid; gap: 12px; max-width: 520px; padding: 16px; border: 1px solid #3b4842; border-radius: 8px; background: #19211f; color: #edf3ec; } .ds-token-panel strong { font: 640 18px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel p { margin: 4px 0 0; color: #aeb9b3; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel code { display: block; padding: 12px; border-radius: 6px; background: #0f1715; color: #edf3ec; font: 500 14px/1.45 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace; overflow-wrap: anywhere; } .ds-token-panel button { justify-self: start; background: #7bd0bb; color: #101715; border: 1px solid #7bd0bb; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel button:focus-visible { outline: 2px solid #e6aa8d; outline-offset: 2px; }"
     },
     {
       "name": "Auditor Packet Row",
@@ -160,23 +258,32 @@
       "refersTo": "auditor-packet-preview",
       "description": "Inspectable packet row connecting a control, evidence request, latest status, and gap.",
       "html": "<div class=\"ds-packet-row\"><div><strong>MFA enforced</strong><span>Mapped to quarterly access review</span></div><span class=\"ds-status\">Missing latest evidence</span></div>",
-      "css": ".ds-packet-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #d8cebd; color: #17201d; } .ds-packet-row strong { display: block; font: 640 16px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row span { display: block; margin-top: 3px; color: #52615b; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row .ds-status { margin: 0; padding: 5px 8px; border-radius: 4px; background: #f0dfd4; color: #8c482b; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }"
+      "css": ".ds-packet-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #3b4842; color: #edf3ec; } .ds-packet-row strong { display: block; font: 640 16px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row span { display: block; margin-top: 3px; color: #aeb9b3; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row .ds-status { margin: 0; padding: 5px 8px; border-radius: 4px; background: #3b2f2a; color: #e6aa8d; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }"
+    },
+    {
+      "name": "Landing Scroll Section",
+      "kind": "custom",
+      "refersTo": "landing-scroll-section",
+      "description": "Full-height landing section with short copy and a sticky product artifact.",
+      "html": "<section class=\"ds-landing-section\"><div><p>STEP 01</p><h2>Create the workspace.</h2><span>Turn SOC 2 setup into the first visible action.</span></div><aside>Workspace artifact</aside></section>",
+      "css": ".ds-landing-section { min-height: 100svh; display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1fr); gap: 64px; align-items: center; background: #101715; color: #edf3ec; } .ds-landing-section p { color: #7bd0bb; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-landing-section h2 { margin: 0 0 16px; max-width: 12ch; font: 650 clamp(2.5rem, 6vw, 5rem)/0.98 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; } .ds-landing-section span { color: #aeb9b3; font: 400 18px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-landing-section aside { position: sticky; top: 104px; padding: 32px; border: 1px solid #3b4842; border-radius: 8px; background: #19211f; color: #edf3ec; }"
     }
   ],
   "narrative": {
     "northStar": "The Audit Workbench",
-    "overview": "Proofplane should feel like a well-lit operations bench for compliance work: a place where evidence, permissions, and agent activity are laid out with enough structure to act on them immediately. The system should be calm and precise, with dense information when useful, but never a wall of undifferentiated compliance noise.",
+    "overview": "Proofplane should feel like a dark operational workbench for authenticated compliance work: dense, legible, and calm, with evidence, permissions, and agent activity staged on green-black product surfaces. The landing page uses the same palette with more cinematic scale, long scroll pacing, sticky calls to action, short section copy, and immersive product artifacts that show compliance tasks becoming simpler.",
     "keyCharacteristics": [
-      "Dense but readable product surfaces.",
-      "Warm neutral canvas with exact, restrained operational color.",
+      "Dense but readable product surfaces on a dark green-black canvas.",
+      "Mint action color used for selection, progress, and primary commands.",
       "Clear separation between human management actions and actor data-plane work.",
       "Token, permission, and packet states that are explicit and recoverable.",
-      "Honest in-progress labeling for MCP and export capabilities that are not ready."
+      "Honest in-progress labeling for MCP and export capabilities that are not ready.",
+      "Cinematic long-scroll storytelling on the landing page using the same palette."
     ],
     "rules": [
       {
         "name": "The Operational Accent Rule",
-        "body": "Workbench Green should mark action, selection, and progress. Do not use it as decorative wash across the page.",
+        "body": "Proofplane Mint should mark action, selection, and progress. Do not use it as decorative wash across the page.",
         "section": "colors"
       },
       {
@@ -193,6 +300,16 @@
         "name": "The Flat Workbench Rule",
         "body": "Primary product surfaces stay flat at rest. Use border, tone, and hierarchy before shadow.",
         "section": "elevation"
+      },
+      {
+        "name": "The Single Palette Rule",
+        "body": "Product and landing surfaces share the same dark operational palette. The landing page may scale the drama through layout, scrolling, type size, and staging, not through a separate color system.",
+        "section": "colors"
+      },
+      {
+        "name": "The Scroll Caption Rule",
+        "body": "Landing page sections use short, declarative headlines and compact captions. One scroll section, one simplified task.",
+        "section": "typography"
       }
     ],
     "dos": [
@@ -200,14 +317,19 @@
       "Do give token creation job-based presets and show the granular permissions underneath.",
       "Do use Code Slate for config snippets and make copy actions obvious.",
       "Do label MCP branch-preview or coming-soon states with Clay Signal and plain language.",
-      "Do prioritize evidence requests, control mappings, packet gaps, timestamps, and provenance over abstract dashboard metrics."
+      "Do prioritize evidence requests, control mappings, packet gaps, timestamps, and provenance over abstract dashboard metrics.",
+      "Do use the Perplexity-style long-scroll pattern for the landing page: full-height sections, sticky visuals, short copy, and a persistent CTA.",
+      "Do use the dark operational palette for authenticated product screens, onboarding, settings, token creation, packet previews, and empty states.",
+      "Do let the landing page use a dark cinematic palette when it makes compliance tasks feel simpler and more focused."
     ],
     "donts": [
       "Don't make Proofplane look like a cheaper clone of Vanta, Drata, or a broad enterprise GRC suite.",
       "Don't force Book a Demo before the user can create a sandbox workspace.",
-      "Don't use purple gradients, glass panels, glowing decorative orbs, neon prompt boxes, or vague AI automation claims.",
+      "Don't use decorative prompt boxes or vague AI automation claims.",
       "Don't build a dense compliance spreadsheet with no guided first-run path.",
-      "Don't hide token permissions behind unclear full access labels."
+      "Don't hide token permissions behind unclear full access labels.",
+      "Don't reintroduce the beige canvas or paper-card palette for new product screens.",
+      "Don't carry the landing page's oversized type, scroll drama, or staged composition into routine authenticated workflows."
     ]
   }
 }

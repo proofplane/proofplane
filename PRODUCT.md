@@ -32,10 +32,31 @@ submissions, map controls, and prepare auditor-ready packets. Success means a
 founder can create a workspace, issue a scoped token, connect an agent, and see a
 real SOC 2 evidence workflow take shape within minutes.
 
-The first-run experience should produce a real artifact, not an empty dashboard:
-a starter workspace, starter controls, a scoped API token, MCP setup guidance,
-suggested prompts, and a visible auditor packet preview with gaps and
-provenance.
+The first-run experience should produce a real artifact: a starter workspace,
+starter controls, a scoped API token, MCP setup guidance, suggested prompts, and
+a visible auditor packet preview with gaps and provenance.
+
+## Landing Page Direction
+
+The landing page is the brand surface and may use a more cinematic presentation
+mode than the authenticated product UI. Its reference is the Perplexity Computer
+landing page: a cinematic, long-scrolling product narrative with full-viewport
+sections, sticky calls to action, immersive product visuals, short copy, and
+scroll-driven progression. The product and landing page should share the same
+dark green-black color system; the landing page earns more drama through scale,
+spacing, and scroll behavior rather than a separate palette.
+
+Proofplane should adapt that pattern to compliance. The landing page should make
+compliance tasks feel simpler by showing a sequence of reduced actions:
+
+- create the workspace;
+- pick the token's job;
+- connect agent access when MCP is ready;
+- see evidence gaps;
+- prepare an auditor packet.
+
+The visitor should not feel like they are reading a compliance brochure. They
+should feel the product turning a vague SOC 2 burden into visible steps.
 
 ## Brand Personality
 
@@ -55,13 +76,18 @@ Proofplane should not look or sound like:
 
 - A cheaper clone of Vanta, Drata, or any broad enterprise GRC suite.
 - A marketing site that forces "Book a Demo" before product access.
-- A generic AI SaaS landing page with purple gradients, glass panels, glowing
-  orbs, prompt boxes, and vague automation claims.
+- A generic AI SaaS page with vague automation claims and decorative prompt
+  boxes.
 - A dense compliance spreadsheet with no guided first-run path.
-- A dashboard full of vanity charts before the user has connected real evidence
-  workflows.
+- A chart-led dashboard that hides the next compliance task.
 - A security product that uses fear, panic, or breach imagery to sell urgency.
 - A developer tool that hides permissions behind unclear "full access" tokens.
+
+For the landing page specifically, do not reject cinematic presentation, scroll
+effects, sticky calls to action, or staged product visuals just because the app
+UI is calmer. Use those moves when they simplify the story. For authenticated
+screens, keep the same dark operational color scheme but reduce the drama:
+smaller type, denser layouts, and direct task surfaces.
 
 ## Design Principles
 
@@ -82,6 +108,9 @@ Proofplane should not look or sound like:
 5. Be honest about readiness. If MCP or packet export work is not production
    ready yet, label it clearly as setup preview, coming soon, or branch work
    instead of implying completion.
+
+6. Let the landing page unfold through scroll. Each section should carry one
+   simplification, one visual artifact, and one clear next action.
 
 ## Accessibility & Inclusion
 

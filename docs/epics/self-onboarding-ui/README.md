@@ -13,7 +13,7 @@ are lean handoff units that link into those sources of technical depth.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [UI App Scaffold](./tickets/001-ui-app-scaffold.md) | Todo | Create the Vite React app, design tokens, routing shell, and test harness. |
+| 001. [UI App Scaffold](./tickets/001-ui-app-scaffold.md) | Done | Create the Vite React app, design tokens, routing shell, and test harness. |
 | 002. [Public Explainer And Auth Entry](./tickets/002-public-explainer-and-auth-entry.md) | Todo | Explain Proofplane and route users into Auth0 signup/login. |
 | 003. [Workspace Onboarding Flow](./tickets/003-workspace-onboarding-flow.md) | Todo | Create or resume workspace setup with sandbox default. |
 | 004. [Scoped Token Creation Flow](./tickets/004-scoped-token-creation-flow.md) | Todo | Create a one-time token with job-based permission presets. |

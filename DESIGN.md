@@ -2,19 +2,25 @@
 name: Proofplane
 description: SOC 2 compliance infrastructure for AI-native startups.
 colors:
-  ink: "#17201d"
-  ink-muted: "#52615b"
-  canvas: "#f7f3ea"
-  surface: "#fcfaf4"
-  surface-quiet: "#eee7da"
-  line: "#d8cebd"
-  primary: "#2f6f5e"
-  primary-deep: "#1f5145"
-  primary-soft: "#dbe9e3"
-  signal: "#b45f3a"
-  signal-soft: "#f0dfd4"
-  code-bg: "#1f2623"
+  ink: "#edf3ec"
+  ink-muted: "#aeb9b3"
+  canvas: "#101715"
+  surface: "#19211f"
+  surface-quiet: "#24302c"
+  line: "#3b4842"
+  primary: "#7bd0bb"
+  primary-deep: "#5fbba6"
+  primary-soft: "#243f39"
+  signal: "#e6aa8d"
+  signal-soft: "#3b2f2a"
+  code-bg: "#0f1715"
   code-text: "#edf3ec"
+  landing-bg: "#101715"
+  landing-surface: "#19211f"
+  landing-surface-raised: "#24302c"
+  landing-text: "#edf3ec"
+  landing-text-muted: "#aeb9b3"
+  landing-accent: "#7bd0bb"
 typography:
   display:
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -66,13 +72,13 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.primary}"
-    textColor: "{colors.surface}"
+    textColor: "{colors.canvas}"
     typography: "{typography.label}"
     rounded: "{rounded.md}"
     padding: "10px 16px"
   button-primary-hover:
     backgroundColor: "{colors.primary-deep}"
-    textColor: "{colors.surface}"
+    textColor: "{colors.canvas}"
     rounded: "{rounded.md}"
     padding: "10px 16px"
   button-secondary:
@@ -89,7 +95,7 @@ components:
     padding: "10px 12px"
   chip:
     backgroundColor: "{colors.primary-soft}"
-    textColor: "{colors.primary-deep}"
+    textColor: "{colors.primary}"
     typography: "{typography.label}"
     rounded: "{rounded.sm}"
     padding: "5px 8px"
@@ -103,7 +109,7 @@ components:
 
 **Creative North Star: "The Audit Workbench"**
 
-Proofplane should feel like a well-lit operations bench for compliance work: a
+Proofplane should feel like a dark operational workbench for compliance work: a
 place where evidence, permissions, and agent activity are laid out with enough
 structure to act on them immediately. The system should be calm and precise,
 with dense information when useful, but never a wall of undifferentiated
@@ -114,60 +120,81 @@ self-serve. It should make the workspace boundary, token permissions, MCP setup,
 and auditor packet status visible without turning every concept into an
 explanation panel.
 
-The system rejects generic AI styling: no purple gradients, glass panels, neon
-prompt boxes, glowing decorative orbs, or fake automation theater. It also
-rejects enterprise GRC heaviness: no dead dashboards full of vanity charts before
-the user has real evidence workflows.
+The landing page has a more cinematic brand mode inspired by the Perplexity
+Computer reference: long scrolling, full-viewport pacing, sticky calls to
+action, staged product artifacts, and short section copy. It uses the same dark
+operational palette as the authenticated product, but with larger type, more
+negative space, and stronger scroll pacing.
+
+The system rejects fake automation theater and enterprise GRC heaviness. Landing
+sections should dramatize simplification, not decorate complexity.
 
 **Key Characteristics:**
 
 - Dense but readable product surfaces.
-- Warm neutral canvas with exact, restrained operational color.
+- Dark green-black canvas with exact, restrained operational color.
 - Clear separation between human management actions and actor data-plane work.
 - Token, permission, and packet states that are explicit and recoverable.
 - Honest in-progress labeling for MCP and export capabilities that are not ready.
+- Cinematic long-scroll storytelling on the landing page only.
 
 ## 2. Colors
 
-The palette is a warm workbench neutral system with green as the operational
-action color and clay as the caution or branch-readiness signal.
+The palette is a dark green-black operational system with mint as the action
+color and warm clay as the caution or branch-readiness signal. This is the
+default for both the public landing page and authenticated app. The landing page
+may be more cinematic, but it should not introduce a separate beige or light
+theme.
 
 ### Primary
 
-- **Workbench Green** (`#2f6f5e`): Primary actions, selected permission presets,
+- **Proofplane Mint** (`#7bd0bb`): Primary actions, selected permission presets,
   successful setup progress, and active workspace indicators.
-- **Deep Workbench Green** (`#1f5145`): Hover states, strong selected states, and
+- **Deep Proofplane Mint** (`#5fbba6`): Hover states, strong selected states, and
   high-contrast icon fills.
-- **Soft Workbench Green** (`#dbe9e3`): Selected chips, low-emphasis success
-  states, and scoped permission backgrounds.
+- **Soft Proofplane Mint** (`#243f39`): Selected chips, low-emphasis success
+  states, and scoped permission backgrounds on dark surfaces.
 
 ### Secondary
 
-- **Clay Signal** (`#b45f3a`): Pending, coming soon, branch-preview, or careful
+- **Clay Signal** (`#e6aa8d`): Pending, coming soon, branch-preview, or careful
   attention states. Use it to be honest, not alarmist.
-- **Soft Clay Signal** (`#f0dfd4`): Low-emphasis warning surfaces and MCP preview
-  annotations.
+- **Soft Clay Signal** (`#3b2f2a`): Low-emphasis warning surfaces and MCP preview
+  annotations on dark surfaces.
 
 ### Neutral
 
-- **Proof Ink** (`#17201d`): Primary text and icon color.
-- **Muted Proof Ink** (`#52615b`): Secondary text, metadata, timestamps, and
+- **Proof Ink** (`#edf3ec`): Primary text and icon color.
+- **Muted Proof Ink** (`#aeb9b3`): Secondary text, metadata, timestamps, and
   helper copy.
-- **Warm Canvas** (`#f7f3ea`): App and marketing page background.
-- **Paper Surface** (`#fcfaf4`): Forms, repeated rows, packet previews, and
+- **Operations Void** (`#101715`): App and marketing page background.
+- **Product Surface** (`#19211f`): Forms, repeated rows, packet previews, and
   contained tool surfaces.
-- **Quiet Surface** (`#eee7da`): Subtle bands, inactive tabs, and table headers.
-- **Ledger Line** (`#d8cebd`): Borders, dividers, input strokes, and table rules.
-- **Code Slate** (`#1f2623`) and **Code Text** (`#edf3ec`): Token, environment
+- **Raised Surface** (`#24302c`): Subtle bands, inactive tabs, selected rows, and
+  table headers.
+- **Ledger Line** (`#3b4842`): Borders, dividers, input strokes, and table rules.
+- **Code Slate** (`#0f1715`) and **Code Text** (`#edf3ec`): Token, environment
   variable, and MCP config snippets.
+- **Landing Void** (`#101715`): Public landing page background for the
+  Perplexity-inspired scroll narrative. It intentionally matches Operations Void.
+- **Landing Surface** (`#19211f`) and **Landing Raised Surface** (`#24302c`):
+  Product frames, sticky visuals, and staged landing artifacts.
+- **Landing Text** (`#edf3ec`) and **Landing Muted Text** (`#aeb9b3`): Text
+  color pair for dark landing sections.
+- **Landing Accent** (`#7bd0bb`): Fine highlights, progress markers, and product
+  diagram emphasis on the landing page.
 
 ### Named Rules
 
-**The Operational Accent Rule.** Workbench Green should mark action, selection,
+**The Operational Accent Rule.** Proofplane Mint should mark action, selection,
 and progress. Do not use it as decorative wash across the page.
 
 **The Honest Signal Rule.** Clay Signal means pending, preview, caution, or
 "not production ready yet." It should never become a fear color.
+
+**The Single Palette Rule.** Product and landing surfaces share the same dark
+operational palette. The landing page may scale the drama through layout,
+scrolling, type size, and staging, not through a separate color system.
 
 ## 3. Typography
 
@@ -201,17 +228,22 @@ should still sound like a system being explained rather than a campaign.
 marketing abstraction. Data rows, packet gaps, and permission names should be
 easier to scan than surrounding copy.
 
+**The Scroll Caption Rule.** Landing page sections use short, declarative
+headlines and compact captions. One scroll section, one simplified task.
+
 ## 4. Elevation
 
 Proofplane is flat by default and uses tonal layering, borders, and compact
 state changes before shadows. Shadows are reserved for transient overlays,
 focused menus, and raised copy panels where the user needs to preserve context.
+The landing page may use deeper contrast, sticky layers, and contained
+translucency to make product artifacts feel suspended in the scroll narrative.
 
 ### Shadow Vocabulary
 
-- **Floating Low** (`0 10px 28px rgba(23, 32, 29, 0.10)`): Dropdown menus,
+- **Floating Low** (`0 10px 28px rgba(5, 10, 8, 0.22)`): Dropdown menus,
   popovers, and focused copy surfaces.
-- **Floating High** (`0 22px 60px rgba(23, 32, 29, 0.16)`): Rare confirmation
+- **Floating High** (`0 22px 60px rgba(5, 10, 8, 0.30)`): Rare confirmation
   panels or narrow overlays. Avoid using this on page sections.
 
 ### Named Rules
@@ -219,55 +251,71 @@ focused menus, and raised copy panels where the user needs to preserve context.
 **The Flat Workbench Rule.** Primary product surfaces stay flat at rest. Use
 border, tone, and hierarchy before shadow.
 
+**The Landing Depth Rule.** On `/`, depth can be cinematic when it supports the
+scroll story. Prefer layered surfaces, restrained highlights, and masked product
+frames over decorative blobs.
+
 ## 5. Components
 
 ### Buttons
 
 - **Shape:** Small-radius rectangles (`6px`) with stable height and clear icon
   affordances when an action has a familiar symbol.
-- **Primary:** Workbench Green background, Paper Surface text, `10px 16px`
+- **Primary:** Proofplane Mint background, Operations Void text, `10px 16px`
   padding, label typography.
-- **Hover / Focus:** Deep Workbench Green on hover; `2px` focus ring using
-  Clay Signal or Workbench Green depending on context.
-- **Secondary / Ghost:** Paper Surface or transparent background, Proof Ink text,
-  Ledger Line border, no decorative fill.
+- **Hover / Focus:** Deep Proofplane Mint on hover; `2px` focus ring using
+  Clay Signal or Proofplane Mint depending on context.
+- **Secondary / Ghost:** Product Surface or transparent background, Proof Ink
+  text, Ledger Line border, no decorative fill.
 
 ### Chips
 
 - **Style:** Compact permission and status chips use soft tonal fills, not
   saturated badges.
-- **State:** Selected permission chips use Soft Workbench Green and Deep
-  Workbench Green text. Preview or pending chips use Soft Clay Signal and Clay
+- **State:** Selected permission chips use Soft Proofplane Mint and Proofplane
+  Mint text. Preview or pending chips use Soft Clay Signal and Clay
   Signal text.
 
 ### Cards / Containers
 
 - **Corner Style:** `8px` maximum. Cards are for repeated objects, packet
   summaries, token success blocks, and compact setup panels.
-- **Background:** Paper Surface on Warm Canvas, Quiet Surface for table headers
-  and inactive areas.
+- **Background:** Product Surface on Operations Void, Raised Surface for table
+  headers, selected rows, and inactive areas.
 - **Shadow Strategy:** Flat by default with Ledger Line borders. Use Floating Low
   only for popovers or focused copy controls.
-- **Border:** `1px solid #d8cebd`.
+- **Border:** `1px solid #3b4842`.
 - **Internal Padding:** `16px` for compact product panels, `24px` for onboarding
   and setup surfaces.
 
 ### Inputs / Fields
 
-- **Style:** Paper Surface background, Ledger Line stroke, `6px` radius, body
+- **Style:** Product Surface background, Ledger Line stroke, `6px` radius, body
   typography.
-- **Focus:** Workbench Green border and a subtle `0 0 0 3px #dbe9e3` focus ring.
-- **Error / Disabled:** Clay Signal for actionable issues; muted text and Quiet
+- **Focus:** Proofplane Mint border and a subtle `0 0 0 3px #243f39` focus ring.
+- **Error / Disabled:** Clay Signal for actionable issues; muted text and Raised
   Surface for disabled controls.
 
 ### Navigation
 
 - **Style:** Product navigation should be quiet and persistent, with workspace
-  identity visible. Active states use Soft Workbench Green backgrounds and Deep
-  Workbench Green text.
+  identity visible. Active states use Soft Proofplane Mint backgrounds and
+  Proofplane Mint text.
 - **Mobile:** Collapse to a top bar with workspace switcher, setup progress, and
   a compact menu. Do not hide token safety or permission status behind deep
   navigation.
+
+### Landing Scroll Sections
+
+- **Shape:** Full-viewport or near-full-viewport bands with one dominant
+  message and one product artifact.
+- **Visual:** Sticky product frames on desktop; stacked visuals on mobile.
+- **CTA:** A persistent sticky CTA is allowed on desktop. On mobile, repeat CTAs
+  inline instead of using a fixed bottom bar.
+- **Motion:** Use CSS-native sticky positioning, opacity, transform, and subtle
+  parallax. Respect `prefers-reduced-motion`.
+- **Copy:** Emphasize simplification: create the workspace, pick the token job,
+  connect agent access, see evidence gaps, prepare the packet.
 
 ### Token Success Panel
 
@@ -297,19 +345,28 @@ provenance, and gaps. Missing evidence is a clear work item, not a vague warning
   and provenance over abstract dashboard metrics.
 - **Do** keep cards to `8px` radius or less and use them for real objects, not
   decorative page sections.
+- **Do** use the dark operational palette for authenticated product screens,
+  onboarding, settings, token creation, packet previews, and empty states.
+- **Do** use the Perplexity-style long-scroll pattern for the landing page:
+  full-height sections, sticky visuals, short copy, and a persistent CTA.
+- **Do** let the landing page use a dark cinematic palette when it makes
+  compliance tasks feel simpler and more focused.
 
 ### Don't:
 
 - **Don't** make Proofplane look like a cheaper clone of Vanta, Drata, or a broad
   enterprise GRC suite.
 - **Don't** force "Book a Demo" before the user can create a sandbox workspace.
-- **Don't** use purple gradients, glass panels, glowing decorative orbs, neon
-  prompt boxes, or vague AI automation claims.
+- **Don't** use decorative prompt boxes or vague AI automation claims.
 - **Don't** build a dense compliance spreadsheet with no guided first-run path.
-- **Don't** lead with vanity charts before the user has connected real evidence
-  workflows.
+- **Don't** lead with vanity charts or abstract metrics when a task, token,
+  evidence gap, or packet row would explain the workflow better.
 - **Don't** use fear, panic, breach imagery, or alarmist red as the main sales
   language.
 - **Don't** hide token permissions behind unclear "full access" labels.
 - **Don't** use colored side-stripe borders, gradient text, decorative
   glassmorphism, or nested cards.
+- **Don't** reintroduce the beige canvas or paper-card palette for new product
+  screens.
+- **Don't** carry the landing page's oversized type, scroll drama, or staged
+  composition into routine authenticated workflows.
