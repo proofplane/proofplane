@@ -42,9 +42,11 @@ futures-core = "0.3"
 futures-util = "0.3"
 getrandom = "0.4.3"
 hex = "0.4"
+http = "1"
 jwtk = { version = "0.5", features = ["openssl"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
+rmcp = { version = "1.7.0", features = ["server", "transport-streamable-http-server"] }
 prost-types = "0.14"
 refinery = { version = "0.9.1", features = ["tokio-postgres"] }
 secrecy = { version = "0.10", features = ["serde"] }
@@ -53,6 +55,7 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-util = "0.7"
 tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.10", features = ["trace"] }
@@ -69,5 +72,6 @@ pasetors = "=0.7.8"
 
 [dev-dependencies]
 axum-test = "20"
+reqwest = "0.13"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }

@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
+use proofplane::routes::request_context::REQUEST_ID_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -136,8 +137,14 @@ async fn workspace_mutations_emit_success_audit_logs_after_commit() {
     let alice_id = app.login(alice).await;
     let bob_id = app.login(bob).await;
 
-    let (created_response, created_logs) = capture_audit_logs(async {
-        create_workspace_with_slug(&app, alice, "Audited Workspace", "audited-workspace").await
+    let (created_response, created_logs) = capture_audit_logs(|request_id| {
+        create_workspace_with_slug_and_request_id(
+            &app,
+            alice,
+            "Audited Workspace",
+            "audited-workspace",
+            request_id,
+        )
     })
     .await;
     created_response.assert_status_ok();
@@ -162,16 +169,24 @@ async fn workspace_mutations_emit_success_audit_logs_after_commit() {
         alice_id,
     );
 
-    let (conflict, conflict_logs) = capture_audit_logs(async {
-        create_workspace_with_slug(&app, alice, "Duplicate Workspace", "audited-workspace").await
+    let (conflict, conflict_logs) = capture_audit_logs(|request_id| {
+        create_workspace_with_slug_and_request_id(
+            &app,
+            alice,
+            "Duplicate Workspace",
+            "audited-workspace",
+            request_id,
+        )
     })
     .await;
     assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
     assert!(conflict_logs.is_empty());
 
     insert_membership(&app, workspace_id, bob_id, "admin").await;
-    let (removed, removed_logs) =
-        capture_audit_logs(async { remove_member(&app, alice, workspace_id, bob_id).await }).await;
+    let (removed, removed_logs) = capture_audit_logs(|request_id| {
+        remove_member_with_request_id(&app, alice, workspace_id, bob_id, request_id)
+    })
+    .await;
     removed.assert_status_ok();
 
     assert_eq!(removed_logs.len(), 1);
@@ -191,11 +206,35 @@ async fn create_workspace_with_slug(
     name: &str,
     slug: &str,
 ) -> axum_test::TestResponse {
-    app.server()
+    create_workspace_with_slug_request(app, sub, name, slug, None).await
+}
+
+async fn create_workspace_with_slug_and_request_id(
+    app: &TestApp,
+    sub: &str,
+    name: &str,
+    slug: &str,
+    request_id: Uuid,
+) -> axum_test::TestResponse {
+    create_workspace_with_slug_request(app, sub, name, slug, Some(request_id)).await
+}
+
+async fn create_workspace_with_slug_request(
+    app: &TestApp,
+    sub: &str,
+    name: &str,
+    slug: &str,
+    request_id: Option<Uuid>,
+) -> axum_test::TestResponse {
+    let mut request = app
+        .server()
         .post("/workspaces")
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-        .json(&json!({ "name": name, "slug": slug }))
-        .await
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
+    if let Some(request_id) = request_id {
+        request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());
+    }
+
+    request.json(&json!({ "name": name, "slug": slug })).await
 }
 
 async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
@@ -225,10 +264,35 @@ async fn remove_member(
     workspace_id: Uuid,
     user_id: Uuid,
 ) -> axum_test::TestResponse {
-    app.server()
+    remove_member_request(app, sub, workspace_id, user_id, None).await
+}
+
+async fn remove_member_with_request_id(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    user_id: Uuid,
+    request_id: Uuid,
+) -> axum_test::TestResponse {
+    remove_member_request(app, sub, workspace_id, user_id, Some(request_id)).await
+}
+
+async fn remove_member_request(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    user_id: Uuid,
+    request_id: Option<Uuid>,
+) -> axum_test::TestResponse {
+    let mut request = app
+        .server()
         .delete(&format!("/workspaces/{workspace_id}/members/{user_id}"))
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-        .await
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
+    if let Some(request_id) = request_id {
+        request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());
+    }
+
+    request.await
 }
 
 async fn membership_role(app: &TestApp, workspace_id: Uuid, user_id: Uuid) -> Option<String> {

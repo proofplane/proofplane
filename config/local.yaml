@@ -48,6 +48,9 @@ worker:
   retry_attempts: 3
   shutdown_grace_seconds: 30
 
+mcp:
+  shutdown_grace_seconds: 30
+
 health:
   live_path: "/livez"
   ready_path: "/readyz"

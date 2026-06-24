@@ -1,12 +1,23 @@
-use proofplane::{config, mcp, observability, store, VERSION};
+use std::{future::Future, sync::Arc, time::Duration};
+
+use axum::Router;
+use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
+use proofplane::{
+    authentication::ApiTokenAuthenticator,
+    config,
+    mcp::{self, McpAppDependencies},
+    observability, repository, store,
+};
 use secrecy::ExposeSecret;
 use thiserror::Error;
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
-        error!("{}", e);
+    if let Err(error) = run().await {
+        error!(%error, "MCP server failed");
         std::process::exit(1);
     }
 }
@@ -15,9 +26,12 @@ async fn main() {
 enum Error {
     #[error("postgres connection error")]
     StoreConnection(#[from] store::conn::Error),
-
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
+    #[error("prometheus initialization error")]
+    PrometheusInit(#[from] BuildError),
+    #[error("MCP listener error")]
+    Listener(#[from] std::io::Error),
 }
 
 async fn run() -> Result<(), Error> {
@@ -35,17 +49,201 @@ async fn run() -> Result<(), Error> {
     }
 
     let mut client = store::conn(config.postgres.expose_secret()).await?;
-
     debug!("running migrations");
     store::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    info!(
-        binary = "mcp",
-        version = VERSION,
-        "{}",
-        mcp::startup_message()
-    );
+    let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let postgres = Arc::new(repository::Postgres::new(pool));
+    let metrics = PrometheusBuilder::new().install_recorder()?;
+    let authenticator = Arc::new(ApiTokenAuthenticator::new(postgres.clone()));
+    let sessions = CancellationToken::new();
+    let app = mcp::create_app(McpAppDependencies {
+        postgres,
+        metrics,
+        authenticator,
+        health: config.health.clone(),
+        cancellation_token: sessions.clone(),
+    });
 
+    // All fallible dependency construction is complete before the socket accepts traffic.
+    let listener = TcpListener::bind(config.server.mcp_bind).await?;
+    info!(address = %config.server.mcp_bind, "MCP server listening");
+
+    serve_until_shutdown(
+        listener,
+        app,
+        async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to listen for ctrl-c");
+            info!("received shutdown signal");
+        },
+        Duration::from_secs(config.mcp.shutdown_grace_seconds),
+        sessions,
+    )
+    .await?;
+
+    info!("MCP server shutdown complete");
     Ok(())
+}
+
+async fn serve_until_shutdown(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    grace: Duration,
+    sessions: CancellationToken,
+) -> std::io::Result<()> {
+    let stop_accepting = CancellationToken::new();
+    let mut server = tokio::spawn({
+        let stop_accepting = stop_accepting.clone();
+        async move {
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(stop_accepting.cancelled_owned())
+                .await
+        }
+    });
+
+    shutdown.await;
+    stop_accepting.cancel();
+
+    match tokio::time::timeout(grace, &mut server).await {
+        Ok(result) => {
+            result.map_err(std::io::Error::other)??;
+        }
+        Err(_) => {
+            sessions.cancel();
+            if tokio::time::timeout(Duration::from_millis(100), &mut server)
+                .await
+                .is_err()
+            {
+                server.abort();
+                let _ = server.await;
+            }
+            return Ok(());
+        }
+    }
+
+    sessions.cancel();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tokio::sync::{oneshot, Notify};
+
+    #[tokio::test]
+    async fn graceful_shutdown_drains_a_request_within_the_deadline() {
+        let started = Arc::new(Notify::new());
+        let app = Router::new().route(
+            "/slow",
+            get({
+                let started = started.clone();
+                move || {
+                    let started = started.clone();
+                    async move {
+                        started.notify_one();
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        "complete"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let sessions = CancellationToken::new();
+        let serving = tokio::spawn(serve_until_shutdown(
+            listener,
+            app,
+            async move {
+                let _ = shutdown_rx.await;
+            },
+            Duration::from_secs(1),
+            sessions.clone(),
+        ));
+        let request = tokio::spawn(reqwest::get(format!("http://{address}/slow")));
+        started.notified().await;
+        shutdown_tx.send(()).expect("shutdown sends");
+
+        let response = request
+            .await
+            .expect("request task joins")
+            .expect("request completes");
+        assert_eq!(response.text().await.expect("body reads"), "complete");
+        serving
+            .await
+            .expect("server task joins")
+            .expect("server stops");
+        assert!(sessions.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_cancels_a_request_after_the_deadline() {
+        struct CancellationGuard(Arc<AtomicBool>);
+        impl Drop for CancellationGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let started = Arc::new(Notify::new());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let sessions = CancellationToken::new();
+        let app = Router::new().route(
+            "/blocked",
+            get({
+                let started = started.clone();
+                let cancelled = cancelled.clone();
+                let sessions = sessions.clone();
+                move || {
+                    let started = started.clone();
+                    let cancelled = cancelled.clone();
+                    let sessions = sessions.clone();
+                    async move {
+                        let _guard = CancellationGuard(cancelled);
+                        started.notify_one();
+                        sessions.cancelled().await;
+                        "cancelled"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let serving = tokio::spawn(serve_until_shutdown(
+            listener,
+            app,
+            async move {
+                let _ = shutdown_rx.await;
+            },
+            Duration::from_millis(20),
+            sessions.clone(),
+        ));
+        let request = tokio::spawn(reqwest::get(format!("http://{address}/blocked")));
+        started.notified().await;
+        let shutdown_started = std::time::Instant::now();
+        shutdown_tx.send(()).expect("shutdown sends");
+
+        serving
+            .await
+            .expect("server task joins")
+            .expect("server stops");
+        assert!(shutdown_started.elapsed() < Duration::from_secs(1));
+        assert!(sessions.is_cancelled());
+        assert!(cancelled.load(Ordering::SeqCst));
+        request.abort();
+    }
 }

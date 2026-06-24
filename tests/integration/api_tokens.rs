@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, Utc};
 use proofplane::domain::WorkspacePermission;
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
+use proofplane::routes::request_context::REQUEST_ID_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -17,16 +18,19 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     let workspace_id = workspace_uuid(&app.create_workspace_as(owner, "API Token Workspace").await);
     insert_membership(&app, workspace_id, member_id, "admin").await;
 
-    let (issued, issued_logs) = capture_audit_logs(create_token(
-        &app,
-        member,
-        workspace_id,
-        json!({
-            "name": "CI token",
-            "expires_at": future_timestamp(30),
-            "permissions": ["write_controls", "read_evidence_requests", "read_controls"],
-        }),
-    ))
+    let (issued, issued_logs) = capture_audit_logs(|request_id| {
+        create_token_with_request_id(
+            &app,
+            member,
+            workspace_id,
+            json!({
+                "name": "CI token",
+                "expires_at": future_timestamp(30),
+                "permissions": ["write_controls", "read_evidence_requests", "read_controls"],
+            }),
+            request_id,
+        )
+    })
     .await;
     issued.assert_status_ok();
     let issued = issued.json::<Value>();
@@ -90,8 +94,10 @@ async fn workspace_member_issues_lists_and_revokes_own_api_token() {
     );
     assert_eq!(listed[0]["last_used_at"], Value::Null);
 
-    let (revoked, revoked_logs) =
-        capture_audit_logs(revoke_token(&app, member, workspace_id, token_id)).await;
+    let (revoked, revoked_logs) = capture_audit_logs(|request_id| {
+        revoke_token_with_request_id(&app, member, workspace_id, token_id, request_id)
+    })
+    .await;
     revoked.assert_status(StatusCode::NO_CONTENT);
     assert_eq!(revoked_logs.len(), 1);
     assert_api_token_audit_event(
@@ -240,11 +246,35 @@ async fn create_token(
     workspace_id: Uuid,
     body: Value,
 ) -> axum_test::TestResponse {
-    app.server()
+    create_token_request(app, sub, workspace_id, body, None).await
+}
+
+async fn create_token_with_request_id(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    body: Value,
+    request_id: Uuid,
+) -> axum_test::TestResponse {
+    create_token_request(app, sub, workspace_id, body, Some(request_id)).await
+}
+
+async fn create_token_request(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    body: Value,
+    request_id: Option<Uuid>,
+) -> axum_test::TestResponse {
+    let mut request = app
+        .server()
         .post(&format!("/workspaces/{workspace_id}/api-tokens"))
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-        .json(&body)
-        .await
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
+    if let Some(request_id) = request_id {
+        request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());
+    }
+
+    request.json(&body).await
 }
 
 async fn list_tokens(app: &TestApp, sub: &str, workspace_id: Uuid) -> axum_test::TestResponse {
@@ -260,10 +290,35 @@ async fn revoke_token(
     workspace_id: Uuid,
     token_id: Uuid,
 ) -> axum_test::TestResponse {
-    app.server()
+    revoke_token_request(app, sub, workspace_id, token_id, None).await
+}
+
+async fn revoke_token_with_request_id(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    token_id: Uuid,
+    request_id: Uuid,
+) -> axum_test::TestResponse {
+    revoke_token_request(app, sub, workspace_id, token_id, Some(request_id)).await
+}
+
+async fn revoke_token_request(
+    app: &TestApp,
+    sub: &str,
+    workspace_id: Uuid,
+    token_id: Uuid,
+    request_id: Option<Uuid>,
+) -> axum_test::TestResponse {
+    let mut request = app
+        .server()
         .delete(&format!("/workspaces/{workspace_id}/api-tokens/{token_id}"))
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
-        .await
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
+    if let Some(request_id) = request_id {
+        request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());
+    }
+
+    request.await
 }
 
 async fn insert_membership(app: &TestApp, workspace_id: Uuid, user_id: Uuid, role: &str) {
