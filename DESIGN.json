@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-23T00:00:00-04:00",
+  "title": "Design System: Proofplane",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "neutral",
+        "displayName": "Proof Ink",
+        "canonical": "oklch(21% 0.018 165)",
+        "tonalRamp": ["oklch(15% 0.018 165)", "oklch(25% 0.018 165)", "oklch(35% 0.018 165)", "oklch(45% 0.018 165)", "oklch(58% 0.014 165)", "oklch(72% 0.010 165)", "oklch(86% 0.008 165)", "oklch(95% 0.006 165)"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Warm Canvas",
+        "canonical": "oklch(96% 0.014 82)",
+        "tonalRamp": ["oklch(18% 0.014 82)", "oklch(30% 0.014 82)", "oklch(42% 0.014 82)", "oklch(55% 0.014 82)", "oklch(68% 0.014 82)", "oklch(80% 0.014 82)", "oklch(90% 0.014 82)", "oklch(96% 0.014 82)"]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Workbench Green",
+        "canonical": "oklch(48% 0.080 170)",
+        "tonalRamp": ["oklch(17% 0.080 170)", "oklch(27% 0.080 170)", "oklch(37% 0.080 170)", "oklch(48% 0.080 170)", "oklch(60% 0.070 170)", "oklch(72% 0.052 170)", "oklch(84% 0.036 170)", "oklch(94% 0.020 170)"]
+      },
+      "signal": {
+        "role": "secondary",
+        "displayName": "Clay Signal",
+        "canonical": "oklch(56% 0.112 45)",
+        "tonalRamp": ["oklch(18% 0.112 45)", "oklch(28% 0.112 45)", "oklch(39% 0.112 45)", "oklch(56% 0.112 45)", "oklch(66% 0.092 45)", "oklch(76% 0.065 45)", "oklch(86% 0.040 45)", "oklch(94% 0.022 45)"]
+      },
+      "code-bg": {
+        "role": "neutral",
+        "displayName": "Code Slate",
+        "canonical": "oklch(25% 0.018 165)",
+        "tonalRamp": ["oklch(15% 0.018 165)", "oklch(25% 0.018 165)", "oklch(35% 0.018 165)", "oklch(45% 0.018 165)", "oklch(58% 0.014 165)", "oklch(72% 0.010 165)", "oklch(86% 0.008 165)", "oklch(95% 0.006 165)"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Public explainer hero and rare first-run milestones."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Onboarding steps, page titles, and packet summary screens."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel headings and compact product sections."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Primary reading text and product explanation."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, tabs, chips, labels, and compact metadata."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Tokens, IDs, endpoints, permissions, and MCP config snippets."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating-low",
+        "value": "0 10px 28px rgba(23, 32, 29, 0.10)",
+        "purpose": "Dropdown menus, popovers, and focused copy surfaces."
+      },
+      {
+        "name": "floating-high",
+        "value": "0 22px 60px rgba(23, 32, 29, 0.16)",
+        "purpose": "Rare confirmation panels or narrow overlays."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out-quart",
+        "value": "cubic-bezier(0.25, 1, 0.5, 1)",
+        "purpose": "Default easing for hover, focus, and reveal transitions."
+      },
+      {
+        "name": "fast-state",
+        "value": "140ms",
+        "purpose": "Buttons, chips, and simple state transitions."
+      },
+      {
+        "name": "standard-state",
+        "value": "220ms",
+        "purpose": "Panels, menus, and progressive onboarding transitions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "900px"
+      },
+      {
+        "name": "lg",
+        "value": "1200px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary action for sandbox creation, token creation, and setup continuation.",
+      "html": "<button class=\"ds-btn-primary\">Create sandbox</button>",
+      "css": ".ds-btn-primary { background: #2f6f5e; color: #fcfaf4; border: 1px solid #2f6f5e; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-primary:hover { background: #1f5145; border-color: #1f5145; } .ds-btn-primary:focus-visible { outline: 2px solid #b45f3a; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Secondary action for viewing docs, copying examples, or stepping back.",
+      "html": "<button class=\"ds-btn-secondary\">View MCP preview</button>",
+      "css": ".ds-btn-secondary { background: #fcfaf4; color: #17201d; border: 1px solid #d8cebd; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; transition: background-color 140ms cubic-bezier(0.25, 1, 0.5, 1), border-color 140ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-secondary:hover { background: #eee7da; border-color: #52615b; } .ds-btn-secondary:focus-visible { outline: 2px solid #2f6f5e; outline-offset: 2px; }"
+    },
+    {
+      "name": "Permission Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Compact selected permission or capability label.",
+      "html": "<span class=\"ds-chip\">read_controls</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #dbe9e3; color: #1f5145; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
+    },
+    {
+      "name": "Preview Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Low-emphasis label for MCP preview or coming-soon states.",
+      "html": "<span class=\"ds-chip-preview\">MCP setup preview</span>",
+      "css": ".ds-chip-preview { display: inline-flex; align-items: center; min-height: 24px; padding: 5px 8px; border-radius: 4px; background: #f0dfd4; color: #8c482b; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Standard field for workspace name, actor name, and account setup.",
+      "html": "<label class=\"ds-field\"><span>Workspace name</span><input value=\"Acme Security\" /></label>",
+      "css": ".ds-field { display: grid; gap: 6px; color: #17201d; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-field input { width: 280px; background: #fcfaf4; color: #17201d; border: 1px solid #d8cebd; border-radius: 6px; padding: 10px 12px; font: 400 16px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; } .ds-field input:focus { outline: none; border-color: #2f6f5e; box-shadow: 0 0 0 3px #dbe9e3; }"
+    },
+    {
+      "name": "Token Copy Panel",
+      "kind": "card",
+      "refersTo": "token-success-panel",
+      "description": "One-time token display with copyable code content.",
+      "html": "<section class=\"ds-token-panel\"><div><strong>Token shown once</strong><p>Save this token before continuing. Proofplane cannot show it again.</p></div><code>ppat_live_xxxxxxxxxxxxxxxxxxxx</code><button>Copy token</button></section>",
+      "css": ".ds-token-panel { display: grid; gap: 12px; max-width: 520px; padding: 16px; border: 1px solid #d8cebd; border-radius: 8px; background: #fcfaf4; color: #17201d; } .ds-token-panel strong { font: 640 18px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel p { margin: 4px 0 0; color: #52615b; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel code { display: block; padding: 12px; border-radius: 6px; background: #1f2623; color: #edf3ec; font: 500 14px/1.45 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace; overflow-wrap: anywhere; } .ds-token-panel button { justify-self: start; background: #2f6f5e; color: #fcfaf4; border: 1px solid #2f6f5e; border-radius: 6px; padding: 10px 16px; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-token-panel button:focus-visible { outline: 2px solid #b45f3a; outline-offset: 2px; }"
+    },
+    {
+      "name": "Auditor Packet Row",
+      "kind": "custom",
+      "refersTo": "auditor-packet-preview",
+      "description": "Inspectable packet row connecting a control, evidence request, latest status, and gap.",
+      "html": "<div class=\"ds-packet-row\"><div><strong>MFA enforced</strong><span>Mapped to quarterly access review</span></div><span class=\"ds-status\">Missing latest evidence</span></div>",
+      "css": ".ds-packet-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #d8cebd; color: #17201d; } .ds-packet-row strong { display: block; font: 640 16px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row span { display: block; margin-top: 3px; color: #52615b; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row .ds-status { margin: 0; padding: 5px 8px; border-radius: 4px; background: #f0dfd4; color: #8c482b; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Audit Workbench",
+    "overview": "Proofplane should feel like a well-lit operations bench for compliance work: a place where evidence, permissions, and agent activity are laid out with enough structure to act on them immediately. The system should be calm and precise, with dense information when useful, but never a wall of undifferentiated compliance noise.",
+    "keyCharacteristics": [
+      "Dense but readable product surfaces.",
+      "Warm neutral canvas with exact, restrained operational color.",
+      "Clear separation between human management actions and actor data-plane work.",
+      "Token, permission, and packet states that are explicit and recoverable.",
+      "Honest in-progress labeling for MCP and export capabilities that are not ready."
+    ],
+    "rules": [
+      {
+        "name": "The Operational Accent Rule",
+        "body": "Workbench Green should mark action, selection, and progress. Do not use it as decorative wash across the page.",
+        "section": "colors"
+      },
+      {
+        "name": "The Honest Signal Rule",
+        "body": "Clay Signal means pending, preview, caution, or not production ready yet. It should never become a fear color.",
+        "section": "colors"
+      },
+      {
+        "name": "The Artifact-First Type Rule",
+        "body": "Large type introduces a workflow, not a marketing abstraction. Data rows, packet gaps, and permission names should be easier to scan than surrounding copy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Workbench Rule",
+        "body": "Primary product surfaces stay flat at rest. Use border, tone, and hierarchy before shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do make the workspace, actor, token, and permission boundaries visible in onboarding and settings.",
+      "Do give token creation job-based presets and show the granular permissions underneath.",
+      "Do use Code Slate for config snippets and make copy actions obvious.",
+      "Do label MCP branch-preview or coming-soon states with Clay Signal and plain language.",
+      "Do prioritize evidence requests, control mappings, packet gaps, timestamps, and provenance over abstract dashboard metrics."
+    ],
+    "donts": [
+      "Don't make Proofplane look like a cheaper clone of Vanta, Drata, or a broad enterprise GRC suite.",
+      "Don't force Book a Demo before the user can create a sandbox workspace.",
+      "Don't use purple gradients, glass panels, glowing decorative orbs, neon prompt boxes, or vague AI automation claims.",
+      "Don't build a dense compliance spreadsheet with no guided first-run path.",
+      "Don't hide token permissions behind unclear full access labels."
+    ]
+  }
+}
