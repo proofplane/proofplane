@@ -25,6 +25,8 @@ use crate::{
         evidence_submissions::EvidenceSubmissionService,
         Error as ServiceError,
     },
+    validate,
+    validation::Validation,
     VERSION,
 };
 
@@ -561,6 +563,13 @@ struct FieldIssue {
     message: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpArgumentError {
+    Missing { field: &'static str },
+    InvalidUuid { field: &'static str },
+    InvalidTimestamp { field: &'static str },
+}
+
 fn authorize(
     ctx: &RequestContext<RoleServer>,
     workspace_id: WorkspaceId,
@@ -577,55 +586,39 @@ fn authorize(
 fn parse_evidence_request_args(
     args: EvidenceRequestArgs,
 ) -> Result<(WorkspaceId, EvidenceRequestId), rmcp::ErrorData> {
-    let mut issues = Vec::new();
-    let workspace_id =
-        parse_uuid_issue("workspace_id", args.workspace_id, &mut issues).map(WorkspaceId::from);
-    let evidence_request_id =
-        parse_uuid_issue("evidence_request_id", args.evidence_request_id, &mut issues)
-            .map(EvidenceRequestId::from);
-    finish_args(issues)?;
-    Ok((
-        workspace_id.expect("validated"),
-        evidence_request_id.expect("validated"),
-    ))
+    validate! {
+        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+        evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
+            .map(EvidenceRequestId::from),
+        => (workspace_id, evidence_request_id),
+    }
+    .into_result()
+    .map_err(argument_errors)
 }
 
 fn parse_due_args(
     args: ListDueEvidenceRequestsArgs,
 ) -> Result<(WorkspaceId, Option<DateTime<Utc>>), rmcp::ErrorData> {
-    let mut issues = Vec::new();
-    let workspace_id =
-        parse_uuid_issue("workspace_id", args.workspace_id, &mut issues).map(WorkspaceId::from);
-    let now = match args.now {
-        Some(value) => match DateTime::parse_from_rfc3339(&value) {
-            Ok(parsed) => Some(parsed.with_timezone(&Utc)),
-            Err(_) => {
-                issues.push(FieldIssue {
-                    field: "now",
-                    message: "must be an RFC 3339 timestamp",
-                });
-                None
-            }
-        },
-        None => None,
-    };
-    finish_args(issues)?;
-    Ok((workspace_id.expect("validated"), now))
+    validate! {
+        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+        now <- optional_rfc3339("now", args.now),
+        => (workspace_id, now),
+    }
+    .into_result()
+    .map_err(argument_errors)
 }
 
 fn parse_submission_args(
     args: EvidenceSubmissionArgs,
 ) -> Result<(WorkspaceId, EvidenceSubmissionId), rmcp::ErrorData> {
-    let mut issues = Vec::new();
-    let workspace_id =
-        parse_uuid_issue("workspace_id", args.workspace_id, &mut issues).map(WorkspaceId::from);
-    let submission_id = parse_uuid_issue("submission_id", args.submission_id, &mut issues)
-        .map(EvidenceSubmissionId::from);
-    finish_args(issues)?;
-    Ok((
-        workspace_id.expect("validated"),
-        submission_id.expect("validated"),
-    ))
+    validate! {
+        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+        submission_id <- required_uuid("submission_id", args.submission_id)
+            .map(EvidenceSubmissionId::from),
+        => (workspace_id, submission_id),
+    }
+    .into_result()
+    .map_err(argument_errors)
 }
 
 fn parse_download_grant_args(
@@ -638,60 +631,49 @@ fn parse_download_grant_args(
     ),
     rmcp::ErrorData,
 > {
-    let mut issues = Vec::new();
-    let workspace_id =
-        parse_uuid_issue("workspace_id", args.workspace_id, &mut issues).map(WorkspaceId::from);
-    let submission_id = parse_uuid_issue("submission_id", args.submission_id, &mut issues)
-        .map(EvidenceSubmissionId::from);
-    let attachment_id = parse_uuid_issue("attachment_id", args.attachment_id, &mut issues)
-        .map(crate::domain::EvidenceAttachmentId::from);
-    finish_args(issues)?;
-    Ok((
-        workspace_id.expect("validated"),
-        submission_id.expect("validated"),
-        attachment_id.expect("validated"),
-    ))
+    validate! {
+        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+        submission_id <- required_uuid("submission_id", args.submission_id)
+            .map(EvidenceSubmissionId::from),
+        attachment_id <- required_uuid("attachment_id", args.attachment_id)
+            .map(crate::domain::EvidenceAttachmentId::from),
+        => (workspace_id, submission_id, attachment_id),
+    }
+    .into_result()
+    .map_err(argument_errors)
 }
 
 fn parse_uuid_arg(field: &'static str, value: Option<String>) -> Result<Uuid, rmcp::ErrorData> {
-    let mut issues = Vec::new();
-    let id = parse_uuid_issue(field, value, &mut issues);
-    finish_args(issues)?;
-    Ok(id.expect("validated"))
+    required_uuid(field, value)
+        .into_result()
+        .map_err(argument_errors)
 }
 
-fn parse_uuid_issue(
+fn required_uuid(field: &'static str, value: Option<String>) -> Validation<Uuid, McpArgumentError> {
+    match value {
+        Some(value) => Uuid::parse_str(&value)
+            .map(Validation::valid)
+            .unwrap_or_else(|_| Validation::invalid(McpArgumentError::InvalidUuid { field })),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
+}
+
+fn optional_rfc3339(
     field: &'static str,
     value: Option<String>,
-    issues: &mut Vec<FieldIssue>,
-) -> Option<Uuid> {
+) -> Validation<Option<DateTime<Utc>>, McpArgumentError> {
     match value {
-        Some(value) => match Uuid::parse_str(&value) {
-            Ok(id) => Some(id),
-            Err(_) => {
-                issues.push(FieldIssue {
-                    field,
-                    message: "must be a UUID",
-                });
-                None
-            }
-        },
-        None => {
-            issues.push(FieldIssue {
-                field,
-                message: "is required",
-            });
-            None
-        }
+        Some(value) => DateTime::parse_from_rfc3339(&value)
+            .map(|parsed| Validation::valid(Some(parsed.with_timezone(&Utc))))
+            .unwrap_or_else(|_| Validation::invalid(McpArgumentError::InvalidTimestamp { field })),
+        None => Validation::valid(None),
     }
 }
 
-fn finish_args(issues: Vec<FieldIssue>) -> Result<(), rmcp::ErrorData> {
-    if issues.is_empty() {
-        return Ok(());
-    }
+fn argument_errors(errors: Vec<McpArgumentError>) -> rmcp::ErrorData {
+    let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
 
-    Err(rmcp::ErrorData::invalid_params(
+    rmcp::ErrorData::invalid_params(
         "tool argument validation failed",
         Some(json!({
             "problem": {
@@ -700,7 +682,26 @@ fn finish_args(issues: Vec<FieldIssue>) -> Result<(), rmcp::ErrorData> {
                 "field_issues": issues,
             }
         })),
-    ))
+    )
+}
+
+impl From<McpArgumentError> for FieldIssue {
+    fn from(error: McpArgumentError) -> Self {
+        match error {
+            McpArgumentError::Missing { field } => Self {
+                field,
+                message: "is required",
+            },
+            McpArgumentError::InvalidUuid { field } => Self {
+                field,
+                message: "must be a UUID",
+            },
+            McpArgumentError::InvalidTimestamp { field } => Self {
+                field,
+                message: "must be an RFC 3339 timestamp",
+            },
+        }
+    }
 }
 
 fn not_found() -> rmcp::ErrorData {
@@ -777,4 +778,140 @@ fn download_error(error: DownloadError) -> rmcp::ErrorData {
 
 fn format_datetime(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        argument_errors, optional_rfc3339, parse_download_grant_args, parse_due_args,
+        AttachmentDownloadGrantArgs, FieldIssue, ListDueEvidenceRequestsArgs, McpArgumentError,
+    };
+    use rmcp::model::ErrorCode;
+
+    fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
+        error.data.as_ref().expect("error data")["problem"]["field_issues"]
+            .as_array()
+            .expect("field issues")
+            .iter()
+            .map(|issue| {
+                (
+                    issue["field"].as_str().expect("field").to_owned(),
+                    issue["message"].as_str().expect("message").to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn download_grant_args_accumulate_multiple_invalid_uuid_fields() {
+        let error = parse_download_grant_args(AttachmentDownloadGrantArgs {
+            workspace_id: Some("not-workspace".to_owned()),
+            submission_id: Some("not-submission".to_owned()),
+            attachment_id: Some("not-attachment".to_owned()),
+        })
+        .expect_err("invalid args");
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(error.message, "tool argument validation failed");
+        assert_eq!(
+            field_issues(&error),
+            [
+                ("workspace_id".to_owned(), "must be a UUID".to_owned()),
+                ("submission_id".to_owned(), "must be a UUID".to_owned()),
+                ("attachment_id".to_owned(), "must be a UUID".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_required_uuid_fields_map_to_required_message() {
+        let error = parse_download_grant_args(AttachmentDownloadGrantArgs {
+            workspace_id: None,
+            submission_id: None,
+            attachment_id: None,
+        })
+        .expect_err("missing args");
+
+        assert_eq!(
+            field_issues(&error),
+            [
+                ("workspace_id".to_owned(), "is required".to_owned()),
+                ("submission_id".to_owned(), "is required".to_owned()),
+                ("attachment_id".to_owned(), "is required".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn due_args_accept_missing_optional_now() {
+        let (_, now) = parse_due_args(ListDueEvidenceRequestsArgs {
+            workspace_id: Some("018f5a06-935b-7b5d-9e78-6d3f2f86d6f1".to_owned()),
+            now: None,
+        })
+        .expect("valid args");
+
+        assert_eq!(now, None);
+    }
+
+    #[test]
+    fn invalid_now_maps_to_rfc3339_timestamp_message() {
+        let error = optional_rfc3339("now", Some("not-a-date".to_owned()))
+            .into_result()
+            .map_err(argument_errors)
+            .expect_err("invalid timestamp");
+
+        assert_eq!(
+            field_issues(&error),
+            [("now".to_owned(), "must be an RFC 3339 timestamp".to_owned())]
+        );
+    }
+
+    #[test]
+    fn argument_errors_preserve_mcp_validation_problem_shape() {
+        let error = argument_errors(vec![
+            McpArgumentError::Missing {
+                field: "workspace_id",
+            },
+            McpArgumentError::InvalidUuid {
+                field: "submission_id",
+            },
+            McpArgumentError::InvalidTimestamp { field: "now" },
+        ]);
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(error.message, "tool argument validation failed");
+        let problem = &error.data.as_ref().expect("error data")["problem"];
+        assert_eq!(problem["code"], "validation_failed");
+        assert_eq!(problem["message"], "tool argument validation failed");
+        assert_eq!(
+            field_issues(&error),
+            [
+                ("workspace_id".to_owned(), "is required".to_owned()),
+                ("submission_id".to_owned(), "must be a UUID".to_owned()),
+                ("now".to_owned(), "must be an RFC 3339 timestamp".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn argument_error_maps_to_field_issue_messages() {
+        assert_eq!(
+            FieldIssue::from(McpArgumentError::Missing {
+                field: "workspace_id"
+            })
+            .message,
+            "is required"
+        );
+        assert_eq!(
+            FieldIssue::from(McpArgumentError::InvalidUuid {
+                field: "workspace_id"
+            })
+            .message,
+            "must be a UUID"
+        );
+        assert_eq!(
+            FieldIssue::from(McpArgumentError::InvalidTimestamp { field: "now" }).message,
+            "must be an RFC 3339 timestamp"
+        );
+    }
 }
