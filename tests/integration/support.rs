@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::Router;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -479,7 +480,7 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         format!("Bearer {}", self.api_token)
     }
 
-    pub fn mcp_server(&self) -> TestServer {
+    fn mcp_app(&self) -> Router {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             "proofplane-attachment-download",
@@ -493,7 +494,7 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         )
         .expect("download grant decryptor initializes");
         let recorder = PrometheusBuilder::new().build_recorder();
-        TestServer::new(create_mcp_app(McpAppDependencies {
+        create_mcp_app(McpAppDependencies {
             postgres: self.postgres.clone(),
             object_store: self.object_store.clone(),
             metrics: recorder.handle(),
@@ -507,7 +508,11 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
                 dependency_timeout_ms: 1000,
             },
             cancellation_token: CancellationToken::new(),
-        }))
+        })
+    }
+
+    pub fn mcp_http_server(&self) -> TestServer {
+        TestServer::builder().http_transport().build(self.mcp_app())
     }
 
     pub fn get(&self, path: &str) -> TestRequest {

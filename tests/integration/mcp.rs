@@ -4,6 +4,14 @@ use proofplane::{
     mcp::SESSION_ID_HEADER,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
 };
+use rmcp::{
+    model::{CallToolRequestParams, ClientInfo, JsonObject},
+    service::{RoleClient, RunningService},
+    transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+    },
+    ServiceError, ServiceExt,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -15,7 +23,7 @@ const MCP: &str = "/mcp";
 #[tokio::test]
 async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() {
     let app = TestApp::start_without_default_auth().await;
-    let server = app.mcp_server();
+    let server = app.mcp_http_server();
     let client = app
         .postgres
         .get()
@@ -27,17 +35,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     initialized.assert_status_ok();
     assert!(initialized.text().contains("proofplane"));
     let session_id = initialized.header(SESSION_ID_HEADER);
-    let tools = rpc_body(
-        &tools_list(
-            &server,
-            app.api_token(),
-            session_id.to_str().expect("session id is text"),
-        )
-        .await,
-    );
-    let tool_list = tools["result"]["tools"]
-        .as_array()
-        .expect("tools list is an array");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let tool_list = mcp_client.list_tools().await;
     let tool_names = tool_list
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool has a name"))
@@ -56,47 +55,47 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     .collect::<BTreeSet<_>>();
     assert_eq!(tool_names, expected_tool_names);
     assert_schema_has_property(
-        &find_tool(tool_list, "list_due_evidence_requests")["inputSchema"],
+        &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
         "workspace_id",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "list_due_evidence_requests")["inputSchema"],
+        &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
         "now",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "get_evidence_submission")["inputSchema"],
+        &find_tool(&tool_list, "get_evidence_submission")["inputSchema"],
         "submission_id",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "create_attachment_download_grant")["inputSchema"],
+        &find_tool(&tool_list, "create_attachment_download_grant")["inputSchema"],
         "attachment_id",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "list_evidence_requests")["outputSchema"],
+        &find_tool(&tool_list, "list_evidence_requests")["outputSchema"],
         "evidence_requests",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "get_evidence_submission")["outputSchema"],
+        &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
         "submission",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "get_evidence_submission")["outputSchema"],
+        &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
         "attachments",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "list_controls")["outputSchema"],
+        &find_tool(&tool_list, "list_controls")["outputSchema"],
         "controls",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "list_evidence_request_control_mappings")["outputSchema"],
+        &find_tool(&tool_list, "list_evidence_request_control_mappings")["outputSchema"],
         "mappings",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "create_attachment_download_grant")["outputSchema"],
+        &find_tool(&tool_list, "create_attachment_download_grant")["outputSchema"],
         "url_secret_type",
     );
     assert_schema_has_property(
-        &find_tool(tool_list, "create_attachment_download_grant")["outputSchema"],
+        &find_tool(&tool_list, "create_attachment_download_grant")["outputSchema"],
         "expires_at",
     );
 
@@ -158,7 +157,8 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .without_membership()
         .build()
         .await;
-    let server = app.mcp_server();
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
     let other_workspace_id = app.workspace_id("other");
     let due = app
@@ -175,19 +175,13 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .await;
     app.insert_evidence_request_row(other_workspace_id, "Hidden request")
         .await;
-    let session = session_id(&initialize(&server, app.api_token()).await);
 
-    let listed = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            2,
+    let listed = mcp_client
+        .call_tool(
             "list_evidence_requests",
             json!({ "workspace_id": workspace_id }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(
         listed["evidence_requests"]
             .as_array()
@@ -200,66 +194,46 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         workspace_id.to_string()
     );
 
-    let got = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            3,
+    let got = mcp_client
+        .call_tool(
             "get_evidence_request",
             json!({
                 "workspace_id": workspace_id,
                 "evidence_request_id": due["id"],
             }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(got["evidence_request"]["title"], "Due request");
 
-    let due_only = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            4,
+    let due_only = mcp_client
+        .call_tool(
             "list_due_evidence_requests",
             json!({
                 "workspace_id": workspace_id,
                 "now": "2026-02-01T00:00:00Z",
             }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(due_only["evidence_requests"][0]["id"], due["id"]);
     assert_ne!(due_only["evidence_requests"][0]["id"], later["id"]);
 
-    let concealed = rpc_error(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            5,
+    let concealed = mcp_client
+        .call_tool_error(
             "list_evidence_requests",
             json!({ "workspace_id": other_workspace_id }),
         )
-        .await,
-    );
-    assert_eq!(concealed["code"], -32002);
-    assert_eq!(concealed["data"]["problem"]["code"], "not_found");
+        .await;
+    assert_eq!(concealed.code.0, -32002);
+    assert_eq!(concealed.data["problem"]["code"], "not_found");
 
-    let invalid = rpc_error(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            6,
+    let invalid = mcp_client
+        .call_tool_error(
             "list_due_evidence_requests",
             json!({ "workspace_id": "nope", "now": "not-a-date" }),
         )
-        .await,
-    );
-    assert_eq!(invalid["code"], -32602);
-    let fields: Vec<_> = invalid["data"]["problem"]["field_issues"]
+        .await;
+    assert_eq!(invalid.code.0, -32602);
+    let fields: Vec<_> = invalid.data["problem"]["field_issues"]
         .as_array()
         .expect("field issues")
         .iter()
@@ -275,7 +249,8 @@ async fn mcp_submission_tools_preserve_selective_context() {
         .with_default_membership()
         .build()
         .await;
-    let server = app.mcp_server();
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
     let request = app
         .create_evidence_request(
@@ -299,19 +274,13 @@ async fn mcp_submission_tools_preserve_selective_context() {
         .await
         .json::<Value>();
     let submission_id = uuid_from(&created["id"]);
-    let session = session_id(&initialize(&server, app.api_token()).await);
 
-    let direct = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            2,
+    let direct = mcp_client
+        .call_tool(
             "get_evidence_submission",
             json!({ "workspace_id": workspace_id, "submission_id": submission_id }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(direct["submission"]["summary"], "Quarterly access review");
     assert_eq!(
         direct["submission"]["description"],
@@ -319,17 +288,12 @@ async fn mcp_submission_tools_preserve_selective_context() {
     );
     assert_eq!(direct["submission"]["source_system"], "okta");
 
-    let latest = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            3,
+    let latest = mcp_client
+        .call_tool(
             "get_latest_evidence_submission",
             json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(latest["submission"]["summary"], "Quarterly access review");
     assert!(latest["submission"].get("description").is_none());
     assert!(latest["submission"].get("source_system").is_none());
@@ -342,20 +306,16 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
         .with_default_membership()
         .build()
         .await;
-    let server = app.mcp_server();
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
     let attachment =
         upload_attachment(&app, workspace_id, submission_id, "grant.txt", b"grant").await;
     let attachment_id = uuid_from(&attachment["id"]);
-    let session = session_id(&initialize(&server, app.api_token()).await);
 
-    let pending = rpc_error(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            2,
+    let pending = mcp_client
+        .call_tool_error(
             "create_attachment_download_grant",
             json!({
                 "workspace_id": workspace_id,
@@ -363,17 +323,12 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
                 "attachment_id": attachment_id,
             }),
         )
-        .await,
-    );
-    assert_eq!(pending["data"]["problem"]["code"], "attachment_not_ready");
+        .await;
+    assert_eq!(pending.data["problem"]["code"], "attachment_not_ready");
 
     finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
-    let grant = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            3,
+    let grant = mcp_client
+        .call_tool(
             "create_attachment_download_grant",
             json!({
                 "workspace_id": workspace_id,
@@ -381,8 +336,7 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
                 "attachment_id": attachment_id,
             }),
         )
-        .await,
-    );
+        .await;
     let url = grant["url"].as_str().expect("grant URL");
     assert!(url.starts_with("https://api.proofplane.test/attachment-downloads?token="));
     assert_eq!(grant["url_secret_type"], "bearer_secret");
@@ -398,7 +352,8 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
         .with_default_membership()
         .build()
         .await;
-    let server = app.mcp_server();
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-01");
     let request = app
@@ -417,32 +372,18 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     }))
     .await
     .assert_status_ok();
-    let session = session_id(&initialize(&server, app.api_token()).await);
 
-    let controls = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            2,
-            "list_controls",
-            json!({ "workspace_id": workspace_id }),
-        )
-        .await,
-    );
+    let controls = mcp_client
+        .call_tool("list_controls", json!({ "workspace_id": workspace_id }))
+        .await;
     assert_eq!(controls["controls"][0]["code"], "PP-AC-01");
 
-    let mappings = tool_result(
-        &tools_call(
-            &server,
-            app.api_token(),
-            &session,
-            3,
+    let mappings = mcp_client
+        .call_tool(
             "list_evidence_request_control_mappings",
             json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
         )
-        .await,
-    );
+        .await;
     assert_eq!(
         mappings["mappings"][0]["control"]["id"],
         control_id.to_string()
@@ -454,19 +395,83 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
             vec![WorkspacePermission::ReadEvidenceRequests],
         )
         .await;
-    let limited_session = session_id(&initialize(&server, &limited.raw_token).await);
-    let denied = rpc_error(
-        &tools_call(
-            &server,
-            &limited.raw_token,
-            &limited_session,
-            4,
-            "list_controls",
-            json!({ "workspace_id": workspace_id }),
-        )
-        .await,
-    );
-    assert_eq!(denied["data"]["problem"]["code"], "not_found");
+    let limited_client = McpClient::connect(&server, &limited.raw_token).await;
+    let denied = limited_client
+        .call_tool_error("list_controls", json!({ "workspace_id": workspace_id }))
+        .await;
+    assert_eq!(denied.data["problem"]["code"], "not_found");
+}
+
+struct McpClient {
+    service: RunningService<RoleClient, ClientInfo>,
+}
+
+impl McpClient {
+    async fn connect(server: &axum_test::TestServer, raw_token: &str) -> Self {
+        let uri = server
+            .server_url(MCP)
+            .expect("MCP server exposes HTTP URL")
+            .to_string();
+        let transport = StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(uri).auth_header(raw_token),
+        );
+        let service = ClientInfo::default()
+            .serve(transport)
+            .await
+            .expect("MCP client initializes");
+        Self { service }
+    }
+
+    async fn list_tools(&self) -> Vec<Value> {
+        self.service
+            .list_tools(None)
+            .await
+            .expect("tools list succeeds")
+            .tools
+            .into_iter()
+            .map(|tool| serde_json::to_value(tool).expect("tool serializes"))
+            .collect()
+    }
+
+    async fn call_tool(&self, name: &'static str, arguments: Value) -> Value {
+        self.service
+            .call_tool(call_tool_params(name, arguments))
+            .await
+            .unwrap_or_else(|error| panic!("{name} succeeds: {error:?}"))
+            .structured_content
+            .expect("tool returns structured content")
+    }
+
+    async fn call_tool_error(&self, name: &'static str, arguments: Value) -> McpError {
+        match self
+            .service
+            .call_tool(call_tool_params(name, arguments))
+            .await
+        {
+            Ok(result) => panic!("{name} fails, got success: {result:?}"),
+            Err(ServiceError::McpError(error)) => McpError {
+                code: error.code,
+                data: error.data.expect("MCP error has problem data"),
+            },
+            Err(error) => panic!("{name} fails with MCP error, got: {error:?}"),
+        }
+    }
+}
+
+struct McpError {
+    code: rmcp::model::ErrorCode,
+    data: Value,
+}
+
+fn call_tool_params(name: &'static str, arguments: Value) -> CallToolRequestParams {
+    CallToolRequestParams::new(name).with_arguments(arguments_object(arguments))
+}
+
+fn arguments_object(arguments: Value) -> JsonObject {
+    match arguments {
+        Value::Object(arguments) => arguments,
+        other => panic!("tool arguments must be a JSON object: {other}"),
+    }
 }
 
 async fn initialize(server: &axum_test::TestServer, raw_token: &str) -> axum_test::TestResponse {
@@ -486,90 +491,6 @@ async fn initialize(server: &axum_test::TestServer, raw_token: &str) -> axum_tes
             }
         }))
         .await
-}
-
-async fn tools_call(
-    server: &axum_test::TestServer,
-    raw_token: &str,
-    session_id: &str,
-    id: u64,
-    name: &str,
-    arguments: Value,
-) -> axum_test::TestResponse {
-    server
-        .post(MCP)
-        .add_header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
-        .add_header(SESSION_ID_HEADER, session_id)
-        .add_header(header::CONTENT_TYPE, "application/json")
-        .add_header(header::ACCEPT, "application/json, text/event-stream")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": arguments,
-            }
-        }))
-        .await
-}
-
-async fn tools_list(
-    server: &axum_test::TestServer,
-    raw_token: &str,
-    session_id: &str,
-) -> axum_test::TestResponse {
-    server
-        .post(MCP)
-        .add_header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
-        .add_header(SESSION_ID_HEADER, session_id)
-        .add_header(header::CONTENT_TYPE, "application/json")
-        .add_header(header::ACCEPT, "application/json, text/event-stream")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        }))
-        .await
-}
-
-fn session_id(response: &axum_test::TestResponse) -> String {
-    response.assert_status_ok();
-    response
-        .header(SESSION_ID_HEADER)
-        .to_str()
-        .expect("session header is text")
-        .to_owned()
-}
-
-fn tool_result(response: &axum_test::TestResponse) -> Value {
-    response.assert_status_ok();
-    let body = rpc_body(response);
-    body["result"]["structuredContent"].clone()
-}
-
-fn rpc_error(response: &axum_test::TestResponse) -> Value {
-    response.assert_status_ok();
-    rpc_body(response)["error"].clone()
-}
-
-fn rpc_body(response: &axum_test::TestResponse) -> Value {
-    let text = response.text();
-    if let Ok(value) = serde_json::from_str(&text) {
-        return value;
-    }
-
-    let data = text
-        .lines()
-        .filter_map(|line| {
-            line.strip_prefix("data:")
-                .map(str::trim_start)
-                .filter(|data| !data.is_empty())
-        })
-        .next()
-        .unwrap_or_else(|| panic!("SSE response has non-empty data line: {text:?}"));
-    serde_json::from_str(data).expect("SSE data is JSON")
 }
 
 fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
