@@ -1,11 +1,6 @@
-import {
-  ArrowRight,
-  Bot,
-  FileCheck2,
-  KeyRound,
-  Layers3,
-} from "lucide-react";
+import { Bot, FileCheck2, KeyRound, Layers3 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { StartSandboxButton } from "../auth/StartSandboxButton";
 import { Shell } from "../components/Shell";
 
 const sections = [
@@ -54,10 +49,7 @@ const sections = [
 export function HomeRoute() {
   return (
     <Shell>
-      <Link className="scroll-cta" to="/app">
-        Start SOC 2 Sandbox
-        <ArrowRight aria-hidden="true" size={16} />
-      </Link>
+      <StartSandboxButton className="scroll-cta" />
 
       <article className="landing-scroll">
         <section className="landing-hero scroll-section" aria-labelledby="home-title">
@@ -69,9 +61,12 @@ export function HomeRoute() {
               and auditor packet progress into a guided SOC 2 flow.
             </p>
             <div className="actions">
-              <Link className="button button-primary" to="/app">
-                Start SOC 2 Sandbox
-                <ArrowRight aria-hidden="true" size={16} />
+              <StartSandboxButton />
+              <Link className="button button-secondary" to="/pricing">
+                Pricing philosophy
+              </Link>
+              <Link className="button button-secondary" to="/docs">
+                Docs
               </Link>
             </div>
           </div>

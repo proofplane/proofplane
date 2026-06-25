@@ -10,10 +10,16 @@ test("renders the app shell", async ({ page }) => {
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: /Start SOC 2 Sandbox/i }).first(),
+    page.getByRole("button", { name: /Start SOC 2 Sandbox/i }).first(),
   ).toBeVisible();
-  await expect(page.getByText(/without starting from an empty dashboard/i)).toHaveCount(
-    0,
+  await expect(page.getByText(/Book a Demo/i)).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Pricing philosophy/i })).toHaveAttribute(
+    "href",
+    "/pricing",
+  );
+  await expect(page.getByRole("link", { name: "Docs" })).toHaveAttribute(
+    "href",
+    "/docs",
   );
 });
 
@@ -38,6 +44,20 @@ test("unknown routes show a recoverable not-found state", async ({ page }) => {
   await expect(
     page.getByRole("heading", {
       name: /This page is not part of the workspace yet/i,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /Back to Proofplane/i })).toHaveAttribute(
+    "href",
+    "/",
+  );
+});
+
+test("callback errors are recoverable", async ({ page }) => {
+  await page.goto("/auth/callback?error=access_denied&error_description=Access%20denied");
+
+  await expect(
+    page.getByRole("heading", {
+      name: /Sign in did not finish|Auth0 is not configured/i,
     }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: /Back to Proofplane/i })).toHaveAttribute(

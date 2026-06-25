@@ -18,3 +18,12 @@ The UI runs separately from the Rust API. By default it calls
 ## Environment
 
 Copy `.env.example` to `.env.local` to override local values.
+
+Auth0 local setup uses:
+
+- `VITE_AUTH0_DOMAIN`
+- `VITE_AUTH0_CLIENT_ID`
+- `VITE_AUTH0_AUDIENCE`
+
+Configure the Auth0 application callback URL as
+`http://127.0.0.1:5173/auth/callback`.
