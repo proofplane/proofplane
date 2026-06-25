@@ -15,7 +15,7 @@ agent prompts.
 - [ ] Given a copy action fails, when the browser denies clipboard access, then
   the UI shows a fallback without hiding the snippet.
 - [ ] Given a user skips MCP setup, when they continue, then they can still reach
-  the sandbox home.
+  the workspace home.
 
 **Tasks**
 

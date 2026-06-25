@@ -1,8 +1,8 @@
-# 006 - Sandbox Home And Packet Preview
+# 006 - Workspace Home And Packet Preview
 
-**Status:** Todo · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#sandbox-home)
+**Status:** Todo · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#workspace-home)
 
-**Summary** - Build the authenticated sandbox home that shows setup progress,
+**Summary** - Build the authenticated workspace home that shows setup progress,
 starter controls, evidence request status, token/MCP readiness, suggested
 prompts, and packet preview or unavailable states.
 
@@ -22,10 +22,10 @@ prompts, and packet preview or unavailable states.
 **Tasks**
 
 - [ ] Add typed reads for the currently available controls/evidence/packet APIs.
-- [ ] Build sandbox home layout and setup progress.
+- [ ] Build workspace home layout and setup progress.
 - [ ] Build starter controls/evidence status sections.
 - [ ] Build auditor packet preview, unavailable, and sample states.
-- [ ] Add Playwright first-run smoke coverage through sandbox home.
+- [ ] Add Playwright first-run smoke coverage through workspace home.
 
 **Notes**
 

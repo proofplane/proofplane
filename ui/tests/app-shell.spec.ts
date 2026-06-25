@@ -10,7 +10,7 @@ test("renders the app shell", async ({ page }) => {
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Start SOC 2 Sandbox/i }).first(),
+    page.getByRole("button", { name: /Start workspace setup/i }).first(),
   ).toBeVisible();
   await expect(page.getByText(/Book a Demo/i)).toHaveCount(0);
   await expect(page.getByRole("link", { name: /Pricing philosophy/i })).toHaveAttribute(
@@ -27,15 +27,16 @@ test("scrolling reveals the final setup card", async ({ page }) => {
   await page.goto("/");
 
   await page
-    .getByRole("heading", { name: /See what an auditor still needs/i })
+    .getByRole("heading", { name: /Packet and MCP views are placeholders/i })
     .scrollIntoViewIfNeeded();
 
   await expect(
     page.getByRole("heading", {
-      name: /See what an auditor still needs/i,
+      name: /Packet and MCP views are placeholders/i,
     }),
   ).toBeVisible();
-  await expect(page.getByText("Missing latest evidence")).toBeVisible();
+  await expect(page.getByText("Auditor packet preview", { exact: true })).toBeVisible();
+  await expect(page.getByText("Placeholder").first()).toBeVisible();
 });
 
 test("unknown routes show a recoverable not-found state", async ({ page }) => {

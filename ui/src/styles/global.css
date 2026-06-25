@@ -681,14 +681,12 @@ button.scroll-cta {
   margin-bottom: var(--space-xxl);
 }
 
-.field,
-.setup-options {
+.field {
   display: grid;
   gap: var(--space-sm);
 }
 
-.field span,
-.setup-options legend {
+.field span {
   color: var(--color-ink-muted);
   font-size: var(--font-size-label);
   font-weight: 620;
@@ -704,13 +702,6 @@ button.scroll-cta {
   color: var(--color-ink);
 }
 
-.setup-options {
-  margin: 0;
-  border: 0;
-  padding: 0;
-}
-
-.setup-option,
 .workspace-row {
   display: grid;
   gap: var(--space-md);
@@ -720,23 +711,6 @@ button.scroll-cta {
   background: var(--color-surface);
 }
 
-.setup-option {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  cursor: pointer;
-}
-
-.setup-option input {
-  margin-top: 4px;
-}
-
-.setup-option span,
-.setup-option small {
-  display: grid;
-  gap: var(--space-xs);
-}
-
-.setup-option small,
 .workspace-row p {
   color: var(--color-ink-muted);
 }

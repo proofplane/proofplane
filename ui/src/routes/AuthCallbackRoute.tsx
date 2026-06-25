@@ -5,6 +5,19 @@ import { Shell } from "../components/Shell";
 import { getAuthConfig } from "../auth/config";
 
 export function AuthCallbackRoute() {
+  const callbackError = new URLSearchParams(window.location.search).get("error_description");
+
+  if (callbackError) {
+    return (
+      <AuthState
+        eyebrow="Auth callback"
+        title="Sign in did not finish."
+        body={callbackError}
+        retry={false}
+      />
+    );
+  }
+
   const config = getAuthConfig();
 
   if (!config) {
@@ -12,7 +25,7 @@ export function AuthCallbackRoute() {
       <AuthState
         eyebrow="Auth setup"
         title="Auth0 is not configured."
-        body="Add the Auth0 Vite environment variables, then start the sandbox again."
+        body="Add the Auth0 Vite environment variables, then start workspace setup again."
         retry={false}
       />
     );

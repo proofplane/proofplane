@@ -2,7 +2,7 @@
 
 ## Goal
 
-The UI should let a founder understand Proofplane and reach a useful sandbox
+The UI should let a founder understand Proofplane and reach a useful workspace
 state in minutes: workspace created, scoped token issued, MCP setup preview
 visible, and a clear picture of evidence and packet readiness.
 
@@ -25,14 +25,12 @@ charts, and unclear full-access tokens.
 1. Public explainer page.
 2. Auth0 signup/login.
 3. Workspace creation.
-4. Sandbox vs blank workspace choice.
-5. Token permission preset selection.
-6. One-time token success state.
-7. MCP setup preview.
-8. Sandbox home.
+4. Token permission preset selection.
+5. One-time token success state.
+6. MCP setup preview.
+7. Workspace home.
 
-The default path should be sandbox creation. Blank workspace can exist, but it
-must not strand a new user in an empty app.
+Do not show setup-mode choices until the backend supports them.
 
 ## Public Explainer
 
@@ -40,19 +38,18 @@ The public page should answer three questions quickly:
 
 - What is Proofplane?
 - Why is it different from a GRC dashboard?
-- What happens when I start a sandbox?
+- What happens when I start workspace setup?
 
-Primary CTA: `Start SOC 2 Sandbox`.
+Primary CTA: `Start workspace setup`.
 
 Secondary actions can point to pricing philosophy or docs, but should not
 replace the self-serve CTA.
 
 ## Workspace Creation
 
-The workspace step should ask only for the minimum:
+The workspace step should ask only for backend-supported fields:
 
-- workspace name;
-- sandbox or blank setup.
+- workspace name.
 
 After creation, show the workspace ID in a compact metadata area. Users who
 belong to multiple workspaces should see the active workspace boundary clearly.
@@ -87,7 +84,7 @@ Suggested prompts should be concrete:
 - `Create an evidence submission for the quarterly access review.`
 - `Preview an auditor packet and list the gaps.`
 
-## Sandbox Home
+## Workspace Home
 
 The home screen should be an operational snapshot, not analytics:
 

@@ -56,27 +56,27 @@ it("renders the public explainer without a demo gate", () => {
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /Pick the job the token should do/i,
+      name: /Issue a scoped API token/i,
     }),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /Let agents inspect the right records/i,
+      name: /Use the data APIs/i,
     }),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /See what an auditor still needs/i,
+      name: /Packet and MCP views are placeholders/i,
     }),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /Four steps from setup to packet clarity/i,
+      name: /What works now, and what is placeholder/i,
     }),
   ).toBeInTheDocument();
-  expect(screen.getByText("Token preset")).toBeInTheDocument();
+  expect(screen.getByText("Token permissions")).toBeInTheDocument();
   expect(
-    screen.getAllByRole("button", { name: /Start SOC 2 Sandbox/i }),
+    screen.getAllByRole("button", { name: /Start workspace setup/i }),
   ).toHaveLength(2);
   expect(screen.getByRole("link", { name: /Pricing philosophy/i })).toHaveAttribute(
     "href",
@@ -90,7 +90,7 @@ it("renders the public explainer without a demo gate", () => {
 it("sends the primary CTA to Auth0 signup/login", () => {
   renderAt("/");
 
-  fireEvent.click(screen.getAllByRole("button", { name: /Start SOC 2 Sandbox/i })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Start workspace setup/i })[0]);
 
   expect(auth0State.loginWithRedirect).toHaveBeenCalledWith({
     appState: { returnTo: "/app" },
@@ -106,7 +106,7 @@ it("shows a recoverable CTA error when Auth0 is not configured", () => {
   import.meta.env.VITE_AUTH0_CLIENT_ID = "";
   renderAt("/");
 
-  fireEvent.click(screen.getAllByRole("button", { name: /Start SOC 2 Sandbox/i })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Start workspace setup/i })[0]);
 
   expect(screen.getByRole("alert")).toHaveTextContent(
     /Auth0 is not configured/i,
@@ -160,7 +160,7 @@ it("routes authenticated users without workspaces to onboarding", async () => {
   expect(
     await screen.findByRole("heading", { name: /Create a workspace/i }),
   ).toBeInTheDocument();
-  expect(screen.getByLabelText(/SOC 2 sandbox/i)).toBeChecked();
+  expect(screen.getByLabelText(/Workspace name/i)).toBeInTheDocument();
 });
 
 it("creates a workspace and routes to token creation", async () => {
@@ -212,14 +212,12 @@ it("preserves workspace input when creation fails", async () => {
   fireEvent.change(screen.getByLabelText(/Workspace name/i), {
     target: { value: "Acme" },
   });
-  fireEvent.click(screen.getByLabelText(/Blank workspace/i));
   fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     /workspace with this slug already exists/i,
   );
   expect(screen.getByLabelText(/Workspace name/i)).toHaveValue("Acme");
-  expect(screen.getByLabelText(/Blank workspace/i)).toBeChecked();
 });
 
 it("lets authenticated users resume existing workspaces", async () => {

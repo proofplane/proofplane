@@ -8,7 +8,7 @@ export function DocsRoute() {
         <p className="eyebrow">Docs</p>
         <h1 id="docs-title">Proofplane setup notes are coming into the UI.</h1>
         <p>
-          The first self-serve path starts with the sandbox. API and MCP setup
+          The first self-serve path starts with workspace setup. API and MCP setup
           guidance appears inside onboarding as the next tickets land.
         </p>
         <Link className="button button-primary" to="/">

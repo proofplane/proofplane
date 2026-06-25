@@ -3,32 +3,32 @@ import { ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { getAuthConfig } from "./config";
 
-type StartSandboxButtonProps = {
+type StartWorkspaceButtonProps = {
   className?: string;
 };
 
-export function StartSandboxButton({ className }: StartSandboxButtonProps) {
+export function StartWorkspaceButton({ className }: StartWorkspaceButtonProps) {
   const config = getAuthConfig();
 
   if (!config) {
     return <MissingAuthConfigButton className={className} />;
   }
 
-  return <ConfiguredStartSandboxButton className={className} config={config} />;
+  return <ConfiguredStartWorkspaceButton className={className} config={config} />;
 }
 
-type ConfiguredStartSandboxButtonProps = StartSandboxButtonProps & {
+type ConfiguredStartWorkspaceButtonProps = StartWorkspaceButtonProps & {
   config: NonNullable<ReturnType<typeof getAuthConfig>>;
 };
 
-function ConfiguredStartSandboxButton({
+function ConfiguredStartWorkspaceButton({
   className,
   config,
-}: ConfiguredStartSandboxButtonProps) {
+}: ConfiguredStartWorkspaceButtonProps) {
   const { isLoading, loginWithRedirect } = useAuth0();
   const [error, setError] = useState<string>();
 
-  async function startSandbox() {
+  async function startWorkspaceSetup() {
     setError(undefined);
 
     try {
@@ -49,10 +49,10 @@ function ConfiguredStartSandboxButton({
       <button
         className={className ?? "button button-primary"}
         disabled={isLoading}
-        onClick={startSandbox}
+        onClick={startWorkspaceSetup}
         type="button"
       >
-        {isLoading ? "Preparing Auth0" : "Start SOC 2 Sandbox"}
+        {isLoading ? "Preparing Auth0" : "Start workspace setup"}
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (
@@ -64,7 +64,7 @@ function ConfiguredStartSandboxButton({
   );
 }
 
-function MissingAuthConfigButton({ className }: StartSandboxButtonProps) {
+function MissingAuthConfigButton({ className }: StartWorkspaceButtonProps) {
   const [error, setError] = useState<string>();
 
   return (
@@ -74,7 +74,7 @@ function MissingAuthConfigButton({ className }: StartSandboxButtonProps) {
         onClick={() => setError("Auth0 is not configured for this environment.")}
         type="button"
       >
-        Start SOC 2 Sandbox
+        Start workspace setup
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (

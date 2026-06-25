@@ -4,7 +4,7 @@
 
 Build the minimal Proofplane web UI that lets a founder understand the product,
 sign in, create a workspace, issue a scoped API token, and see how MCP-backed
-agent workflows will connect to a realistic SOC 2 sandbox.
+agent workflows will connect to Proofplane data.
 
 This epic is frontend-first. It does not implement Auth0, workspace, token, MCP,
 or auditor-packet backend behavior. It consumes the existing management APIs and
@@ -18,7 +18,7 @@ must preserve these principles:
 
 - humans manage workspaces and credentials;
 - actors and agents use scoped credentials for data-plane work;
-- the first-run path should produce a visible artifact, not an empty dashboard;
+- the first-run path should produce a visible workspace, not an empty dashboard;
 - permission choices must be understandable before a token is issued;
 - MCP work that is not production-ready must be labeled honestly.
 
@@ -71,14 +71,14 @@ No secrets belong in the browser bundle.
 
 Public routes:
 
-- `/` explains Proofplane and offers the primary sandbox CTA.
+- `/` explains Proofplane and offers the primary workspace setup CTA.
 - `/pricing` may be a simple placeholder with public pricing philosophy if
   detailed pricing is not ready.
 
 Authenticated routes:
 
 - `/app/onboarding` creates or resumes first-run setup.
-- `/app/workspaces/:workspaceId` shows the sandbox home.
+- `/app/workspaces/:workspaceId` shows the workspace home.
 - `/app/workspaces/:workspaceId/tokens` lists issued tokens and supports revoke.
 - `/app/workspaces/:workspaceId/settings` shows workspace identity and members
   when APIs exist.
@@ -111,7 +111,6 @@ Initial presets:
 - **Submit evidence:** read evidence requests and write evidence submissions.
 - **Manage mappings:** read/write controls and read/write evidence requests when
   supported by the API contract.
-- **Sandbox demo access:** all available sandbox-safe read/write grants.
 - **Custom:** granular permission selection.
 
 The UI must make clear that the raw token is shown once. It must not persist the
@@ -120,7 +119,7 @@ raw token outside the in-memory response and the visible one-time success state.
 ## MCP Setup Preview
 
 MCP is still being worked on in a separate branch. The UI should include an MCP
-setup preview after token creation and in the sandbox home. It should explain:
+setup preview after token creation and in the workspace home. It should explain:
 
 - what MCP will let agents do;
 - that the bearer token is supplied to the MCP session, not tool arguments;
@@ -130,9 +129,9 @@ setup preview after token creation and in the sandbox home. It should explain:
 The preview may include copyable config snippets, but it must not claim that MCP
 is production-ready until the MCP Server epic says so.
 
-## Sandbox Home
+## Workspace Home
 
-The sandbox home should not be an empty dashboard. It should show:
+The workspace home should not be an empty dashboard. It should show:
 
 - workspace identity and setup progress;
 - starter SOC 2 controls;
@@ -142,8 +141,8 @@ The sandbox home should not be an empty dashboard. It should show:
 - an auditor packet preview area with a clear unavailable or preview state until
   Trusted Compliance Reads is ready.
 
-Use real API data where available. Use explicitly labeled sample or preview data
-only where backend support is pending.
+Use real API data where available. Do not show sample setup modes until the
+backend supports them.
 
 ## Error And Empty States
 

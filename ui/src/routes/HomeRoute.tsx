@@ -1,55 +1,55 @@
 import { Bot, FileCheck2, KeyRound, Layers3 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { StartSandboxButton } from "../auth/StartSandboxButton";
+import { StartWorkspaceButton } from "../auth/StartWorkspaceButton";
 import { Shell } from "../components/Shell";
 
 const sections = [
   {
     eyebrow: "Step 01",
     title: "Create the workspace.",
-    body: "Start with a tenant boundary, starter SOC 2 controls, and a place where compliance work has an owner.",
+    body: "Start with a tenant boundary and a place where compliance work has an owner.",
     icon: Layers3,
     artifact: "Workspace boundary",
-    result: "Starter controls loaded",
-    summary: "Tenant and controls",
+    result: "Workspace created",
+    summary: "Tenant boundary",
     visual: <WorkspaceStepVisual />,
   },
   {
     eyebrow: "Step 02",
-    title: "Pick the job the token should do.",
-    body: "Use permission presets for real work: read compliance data, submit evidence, manage mappings, or run the sandbox demo.",
+    title: "Issue a scoped API token.",
+    body: "Create a workspace-bound token with explicit permission strings. The backend can list and revoke those tokens later.",
     icon: KeyRound,
     artifact: "Scoped token",
-    result: "5 permissions selected",
-    summary: "Permission preset",
+    result: "Token endpoint ready",
+    summary: "Token API",
     visual: <PermissionStepVisual />,
   },
   {
     eyebrow: "Step 03",
-    title: "Let agents inspect the right records.",
-    body: "MCP setup stays explicit: the token belongs to the session, not the prompt, and preview labels stay honest.",
+    title: "Use the data APIs.",
+    body: "Controls, evidence requests, submissions, attachments, and mappings are backend routes today.",
     icon: Bot,
-    artifact: "MCP setup preview",
-    result: "Agent prompt ready",
-    summary: "Agent context",
-    visual: <McpStepVisual />,
+    artifact: "Compliance records",
+    result: "REST APIs available",
+    summary: "Data APIs",
+    visual: <DataApiStepVisual />,
   },
   {
     eyebrow: "Step 04",
-    title: "See what an auditor still needs.",
-    body: "Packet readiness connects controls, evidence requests, latest submissions, provenance, and gaps in one readable artifact.",
+    title: "Packet and MCP views are placeholders.",
+    body: "The backend does not yet provide a production MCP workflow or auditor packet preview, so the UI should label those areas as placeholders.",
     icon: FileCheck2,
-    artifact: "Auditor packet",
-    result: "Evidence gaps ranked",
-    summary: "Gap analysis",
-    visual: <PacketStepVisual />,
+    artifact: "Placeholder views",
+    result: "Not implemented yet",
+    summary: "Future UI",
+    visual: <PlaceholderStepVisual />,
   },
 ];
 
 export function HomeRoute() {
   return (
     <Shell>
-      <StartSandboxButton className="scroll-cta" />
+      <StartWorkspaceButton className="scroll-cta" />
 
       <article className="landing-scroll">
         <section className="landing-hero scroll-section" aria-labelledby="home-title">
@@ -57,11 +57,11 @@ export function HomeRoute() {
             <p className="eyebrow">SOC 2 compliance infrastructure</p>
             <h1 id="home-title">Compliance tasks, reduced to the next action.</h1>
             <p className="lede">
-              Proofplane turns workspace setup, scoped credentials, agent access,
-              and auditor packet progress into a guided SOC 2 flow.
+              Proofplane currently supports workspace setup, scoped tokens, and
+              backend APIs for controls, evidence requests, submissions, and attachments.
             </p>
             <div className="actions">
-              <StartSandboxButton />
+              <StartWorkspaceButton />
               <Link className="button button-secondary" to="/pricing">
                 Pricing philosophy
               </Link>
@@ -79,7 +79,7 @@ export function HomeRoute() {
           <div className="step-card-heading">
             <div>
               <p className="eyebrow">How it works</p>
-              <h2 id="step-card-flow-title">Four steps from setup to packet clarity.</h2>
+              <h2 id="step-card-flow-title">What works now, and what is placeholder.</h2>
             </div>
           </div>
           <div className="step-card-list">
@@ -123,34 +123,34 @@ function HeroVisual() {
     <div className="cinematic-frame hero-frame">
       <div className="frame-chrome">
         <span>Proofplane workspace</span>
-        <span>SOC 2 sandbox</span>
+        <span>Workspace setup</span>
       </div>
       <div className="stage-grid">
         <div className="stage-panel stage-panel-primary">
           <span>Next action</span>
-          <strong>Create access review evidence</strong>
+          <strong>Create a workspace</strong>
           <small>Owner: workspace admin</small>
         </div>
         <div className="stage-panel">
           <span>Token</span>
-          <strong>Sandbox demo access</strong>
-          <small>5 scoped grants</small>
+          <strong>Scoped API access</strong>
+          <small>Explicit permission strings</small>
         </div>
         <div className="stage-panel">
-          <span>Packet gap</span>
-          <strong>Quarterly review missing</strong>
-          <small>Ready for agent prompt</small>
+          <span>Placeholder</span>
+          <strong>MCP and packet views</strong>
+          <small>Not implemented yet</small>
         </div>
       </div>
       <div className="stage-command">
-        <span>Ask Proofplane</span>
-        <code>What evidence is missing for SOC 2?</code>
+        <span>API surface</span>
+        <code>POST /workspaces/{"{workspace_id}"}/api-tokens</code>
       </div>
       <div className="stage-footer">
         <span>Workspace</span>
         <span>Token</span>
-        <span>MCP</span>
-        <span>Packet</span>
+        <span>Evidence</span>
+        <span>Controls</span>
       </div>
     </div>
   );
@@ -164,16 +164,10 @@ function WorkspaceStepVisual() {
         <div className="mock-upload-card">
           <span>Workspace</span>
           <strong>Acme Security</strong>
-          <small>SOC 2 starter controls loaded</small>
+          <small>Workspace created</small>
         </div>
-        <div className="mock-upload-row">
-          <span>MFA enforced</span>
-          <strong>Control ready</strong>
-        </div>
-        <div className="mock-upload-row">
-          <span>Access review</span>
-          <strong>Evidence due</strong>
-        </div>
+        <PlaceholderRow />
+        <PlaceholderRow />
       </div>
     </div>
   );
@@ -184,8 +178,8 @@ function PermissionStepVisual() {
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-strategy-panel">
-        <h4>Token preset</h4>
-        {["Read compliance data", "Submit evidence", "Sandbox access"].map((label) => (
+        <h4>Token permissions</h4>
+        {["read_controls", "write_evidence_submissions", "read_evidence_requests"].map((label) => (
           <div className="mock-strategy-row" key={label}>
             <span>{label}</span>
             <strong>Scoped</strong>
@@ -196,31 +190,31 @@ function PermissionStepVisual() {
   );
 }
 
-function McpStepVisual() {
+function DataApiStepVisual() {
   return (
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-terminal-panel">
-        <span>MCP setup preview</span>
-        <code>{`request: quarterly_access_review
-scope: read_controls + submit_evidence
-status: packet_gap_visible`}</code>
+        <span>Backend routes</span>
+        <code>{`GET /workspaces/{id}/controls
+GET /workspaces/{id}/evidence-requests
+POST /workspaces/{id}/evidence-requests/{request_id}/submissions`}</code>
       </div>
-      <div className="mock-prompt-card">What evidence is missing for SOC 2?</div>
+      <div className="mock-prompt-card">Placeholder UI copy goes here.</div>
     </div>
   );
 }
 
-function PacketStepVisual() {
+function PlaceholderStepVisual() {
   return (
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-packet-panel">
-        <h4>Auditor packet</h4>
+        <h4>Future screen</h4>
         {[
-          ["MFA enforced", "Current"],
-          ["Access review", "Missing latest evidence"],
-          ["Vendor review", "Mapped"],
+          ["MCP workflow", "Placeholder"],
+          ["Auditor packet preview", "Placeholder"],
+          ["Gap summary", "Placeholder"],
         ].map(([label, status]) => (
           <div className="mock-packet-row" key={label}>
             <span>{label}</span>
@@ -228,6 +222,15 @@ function PacketStepVisual() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function PlaceholderRow() {
+  return (
+    <div className="mock-upload-row">
+      <span>Placeholder</span>
+      <strong>Not loaded</strong>
     </div>
   );
 }

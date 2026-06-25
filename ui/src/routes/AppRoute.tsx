@@ -6,7 +6,7 @@ import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-rou
 import { ApiError, createApiClient } from "../api/client";
 import { createWorkspace, listWorkspaces, type Workspace } from "../api/workspaces";
 import { getAuthConfig } from "../auth/config";
-import { StartSandboxButton } from "../auth/StartSandboxButton";
+import { StartWorkspaceButton } from "../auth/StartWorkspaceButton";
 import { Button } from "../components/Button";
 import { Shell } from "../components/Shell";
 import { StatusPanel } from "../components/StatusPanel";
@@ -52,7 +52,7 @@ function ConfiguredAppRoute() {
           <h1 id="app-title">Start with Auth0.</h1>
           <p>Proofplane needs an authenticated user before creating or resuming a workspace.</p>
           <div className="actions">
-            <StartSandboxButton />
+            <StartWorkspaceButton />
           </div>
         </section>
       </Shell>
@@ -96,7 +96,6 @@ function WorkspaceOnboarding({ apiClient }: WorkspaceRouteProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
-  const [setup, setSetup] = useState<"sandbox" | "blank">("sandbox");
 
   const create = useMutation({
     mutationFn: () => createWorkspace(apiClient, { name: name.trim() }),
@@ -116,9 +115,7 @@ function WorkspaceOnboarding({ apiClient }: WorkspaceRouteProps) {
       <section className="page-heading onboarding-heading" aria-labelledby="app-title">
         <p className="eyebrow">Workspace setup</p>
         <h1 id="app-title">Create a workspace.</h1>
-        <p>
-          Start with the SOC 2 sandbox unless you already have real evidence ready.
-        </p>
+        <p>Name the workspace. Proofplane will create it and make you the owner.</p>
       </section>
 
       <form className="onboarding-form" onSubmit={submit}>
@@ -132,36 +129,6 @@ function WorkspaceOnboarding({ apiClient }: WorkspaceRouteProps) {
             value={name}
           />
         </label>
-
-        <fieldset className="setup-options">
-          <legend>Initial setup</legend>
-          <label className="setup-option">
-            <input
-              checked={setup === "sandbox"}
-              name="setup"
-              onChange={() => setSetup("sandbox")}
-              type="radio"
-              value="sandbox"
-            />
-            <span>
-              <strong>SOC 2 sandbox</strong>
-              <small>Default. Uses sample or preview-only data until sandbox seeding ships.</small>
-            </span>
-          </label>
-          <label className="setup-option">
-            <input
-              checked={setup === "blank"}
-              name="setup"
-              onChange={() => setSetup("blank")}
-              type="radio"
-              value="blank"
-            />
-            <span>
-              <strong>Blank workspace</strong>
-              <small>Creates only the workspace shell.</small>
-            </span>
-          </label>
-        </fieldset>
 
         {create.isError ? <FormError error={create.error} /> : null}
 
