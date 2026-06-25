@@ -49,8 +49,6 @@ const sections = [
 export function HomeRoute() {
   return (
     <Shell>
-      <StartWorkspaceButton className="scroll-cta" />
-
       <article className="landing-scroll">
         <section className="landing-hero scroll-section" aria-labelledby="home-title">
           <div className="section-copy">
@@ -144,7 +142,7 @@ function HeroVisual() {
       </div>
       <div className="stage-command">
         <span>API surface</span>
-        <code>POST /workspaces/{"{workspace_id}"}/api-tokens</code>
+        <code>Create token for Acme Security</code>
       </div>
       <div className="stage-footer">
         <span>Workspace</span>
@@ -196,9 +194,9 @@ function DataApiStepVisual() {
       <div className="mock-window-bar" />
       <div className="mock-terminal-panel">
         <span>Backend routes</span>
-        <code>{`GET /workspaces/{id}/controls
-GET /workspaces/{id}/evidence-requests
-POST /workspaces/{id}/evidence-requests/{request_id}/submissions`}</code>
+        <code>{`List Acme Security controls
+List access review evidence requests
+Submit evidence for quarterly access review`}</code>
       </div>
       <div className="mock-prompt-card">Detailed UI views are not built yet.</div>
     </div>

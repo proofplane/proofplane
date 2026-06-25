@@ -52,7 +52,7 @@ function ConfiguredStartWorkspaceButton({
         onClick={startWorkspaceSetup}
         type="button"
       >
-        {isLoading ? "Preparing Auth0" : "Start workspace setup"}
+        Log in or sign up
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (
@@ -74,7 +74,7 @@ function MissingAuthConfigButton({ className }: StartWorkspaceButtonProps) {
         onClick={() => setError("Auth0 is not configured for this environment.")}
         type="button"
       >
-        Start workspace setup
+        Log in or sign up
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (

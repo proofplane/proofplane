@@ -10,17 +10,14 @@ test("renders the app shell", async ({ page }) => {
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Start workspace setup/i }).first(),
+    page.getByRole("button", { name: /Log in or sign up/i }).first(),
   ).toBeVisible();
   await expect(page.getByText(/Book a Demo/i)).toHaveCount(0);
-  await expect(page.getByRole("link", { name: /Pricing/i })).toHaveAttribute(
-    "href",
-    "/pricing",
-  );
-  await expect(page.getByRole("link", { name: "Docs" })).toHaveAttribute(
-    "href",
-    "/docs",
-  );
+  const headerNav = page.getByRole("navigation", { name: "Primary navigation" });
+  await expect(headerNav.getByRole("button", { name: /Log in or sign up/i })).toBeVisible();
+  await expect(headerNav.getByRole("link", { name: "Home", exact: true })).toHaveCount(0);
+  await expect(headerNav.getByRole("link", { name: "Pricing" })).toHaveCount(0);
+  await expect(headerNav.getByRole("link", { name: "Docs" })).toHaveCount(0);
 });
 
 test("scrolling reveals the final setup card", async ({ page }) => {

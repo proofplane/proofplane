@@ -7,8 +7,10 @@ import { ApiError, createApiClient } from "../api/client";
 import { createWorkspace, listWorkspaces, type Workspace } from "../api/workspaces";
 import { getAuthConfig } from "../auth/config";
 import { StartWorkspaceButton } from "../auth/StartWorkspaceButton";
+import { AuthLoading } from "../components/AuthLoading";
 import { Button } from "../components/Button";
 import { Shell } from "../components/Shell";
+import { Skeleton } from "../components/Skeleton";
 import { StatusPanel } from "../components/StatusPanel";
 
 export function AppRoute() {
@@ -39,7 +41,7 @@ function ConfiguredAppRoute() {
   if (isLoading) {
     return (
       <Shell>
-        <StatusPanel title="Opening workspace setup">Checking your Auth0 session.</StatusPanel>
+        <AuthLoading />
       </Shell>
     );
   }
@@ -64,7 +66,10 @@ function ConfiguredAppRoute() {
       <Routes>
         <Route index element={<WorkspaceGate apiClient={apiClient} />} />
         <Route path="onboarding" element={<WorkspaceOnboarding apiClient={apiClient} />} />
-        <Route path="workspaces/:workspaceId/tokens" element={<TokenRoutePlaceholder />} />
+        <Route
+          path="workspaces/:workspaceId/tokens"
+          element={<TokenRoutePlaceholder apiClient={apiClient} />}
+        />
       </Routes>
     </Shell>
   );
@@ -78,7 +83,7 @@ function WorkspaceGate({ apiClient }: WorkspaceRouteProps) {
   const workspaces = useWorkspaces(apiClient);
 
   if (workspaces.isLoading) {
-    return <StatusPanel title="Loading workspaces">Checking for existing workspaces.</StatusPanel>;
+    return <WorkspaceListSkeleton />;
   }
 
   if (workspaces.isError) {
@@ -155,9 +160,7 @@ function WorkspaceResume({ workspaces }: { workspaces: Workspace[] }) {
           <article className="workspace-row" key={workspace.id}>
             <div>
               <h2>{workspace.name}</h2>
-              <p>
-                {workspace.role} · {workspace.id}
-              </p>
+              <p>Role: {workspace.role}</p>
             </div>
             <Link className="button button-primary" to={`/app/workspaces/${workspace.id}/tokens`}>
               Resume setup
@@ -174,14 +177,33 @@ function WorkspaceResume({ workspaces }: { workspaces: Workspace[] }) {
   );
 }
 
-function TokenRoutePlaceholder() {
+function TokenRoutePlaceholder({ apiClient }: WorkspaceRouteProps) {
   const { workspaceId } = useParams();
+  const workspaces = useWorkspaces(apiClient);
+
+  if (workspaces.isLoading) {
+    return <TokenSetupSkeleton />;
+  }
+
+  if (workspaces.isError) {
+    return <WorkspaceError error={workspaces.error} />;
+  }
+
+  const workspace = workspaces.data?.find((candidate) => candidate.id === workspaceId);
+
+  if (!workspace) {
+    return (
+      <StatusPanel title="Workspace not found" tone="preview">
+        <p>You do not have access to this workspace.</p>
+      </StatusPanel>
+    );
+  }
 
   return (
     <section className="page-heading" aria-labelledby="tokens-title">
       <p className="eyebrow">Token setup</p>
       <h1 id="tokens-title">Token creation is next.</h1>
-      <p>Workspace {workspaceId} is ready for token setup.</p>
+      <p>{workspace.name} is ready for token setup.</p>
     </section>
   );
 }
@@ -191,6 +213,45 @@ function WorkspaceError({ error }: { error: Error }) {
     <StatusPanel title="Workspaces did not load" tone="preview">
       <p>{friendlyError(error)}</p>
     </StatusPanel>
+  );
+}
+
+function WorkspaceListSkeleton() {
+  return (
+    <>
+      <section className="page-heading onboarding-heading" aria-label="Loading workspaces">
+        <Skeleton className="skeleton-eyebrow" />
+        <Skeleton className="skeleton-heading" />
+        <Skeleton className="skeleton-copy" />
+      </section>
+
+      <div className="workspace-list" aria-hidden="true">
+        <SkeletonWorkspaceRow />
+        <SkeletonWorkspaceRow />
+      </div>
+    </>
+  );
+}
+
+function TokenSetupSkeleton() {
+  return (
+    <section className="page-heading" aria-label="Loading token setup">
+      <Skeleton className="skeleton-eyebrow" />
+      <Skeleton className="skeleton-heading skeleton-heading-short" />
+      <Skeleton className="skeleton-copy" />
+    </section>
+  );
+}
+
+function SkeletonWorkspaceRow() {
+  return (
+    <article className="workspace-row skeleton-row">
+      <div>
+        <Skeleton className="skeleton-title" />
+        <Skeleton className="skeleton-meta" />
+      </div>
+      <Skeleton className="skeleton-button" />
+    </article>
   );
 }
 

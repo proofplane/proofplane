@@ -1,6 +1,7 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { ArrowRight } from "lucide-react";
 import { Link, Navigate } from "react-router-dom";
+import { AuthLoading } from "../components/AuthLoading";
 import { Shell } from "../components/Shell";
 import { getAuthConfig } from "../auth/config";
 
@@ -44,12 +45,9 @@ function ConfiguredAuthCallbackRoute({ config }: ConfiguredAuthCallbackRouteProp
 
   if (isLoading) {
     return (
-      <AuthState
-        eyebrow="Auth callback"
-        title="Finishing sign in."
-        body="Proofplane is checking the Auth0 response before opening workspace setup."
-        retry={false}
-      />
+      <Shell>
+        <AuthLoading />
+      </Shell>
     );
   }
 

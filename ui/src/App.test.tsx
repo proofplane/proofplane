@@ -10,6 +10,7 @@ const auth0State = vi.hoisted(() => ({
   isLoading: false,
   getAccessTokenSilently: vi.fn(async () => "access-token"),
   loginWithRedirect: vi.fn(),
+  logout: vi.fn(),
 }));
 
 vi.mock("@auth0/auth0-react", () => ({
@@ -36,6 +37,7 @@ beforeEach(() => {
   auth0State.getAccessTokenSilently.mockReset();
   auth0State.getAccessTokenSilently.mockResolvedValue("access-token");
   auth0State.loginWithRedirect.mockReset();
+  auth0State.logout.mockReset();
   vi.unstubAllGlobals();
   import.meta.env.VITE_AUTH0_DOMAIN = "proofplane.auth0.com";
   import.meta.env.VITE_AUTH0_CLIENT_ID = "client_123";
@@ -76,21 +78,21 @@ it("renders the public explainer without a demo gate", () => {
   ).toBeInTheDocument();
   expect(screen.getByText("Token permissions")).toBeInTheDocument();
   expect(
-    screen.getAllByRole("button", { name: /Start workspace setup/i }),
+    screen.getAllByRole("button", { name: /Log in or sign up/i }),
   ).toHaveLength(2);
-  expect(screen.getByRole("link", { name: /Pricing/i })).toHaveAttribute(
-    "href",
-    "/pricing",
-  );
+  expect(screen.queryByRole("link", { name: "Home" })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("link", { name: "Pricing" })).toHaveLength(1);
+  expect(screen.getAllByRole("link", { name: "Docs" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: /Log out/i })).not.toBeInTheDocument();
   expect(container.textContent).not.toMatch(
-    /Book a Demo|without starting from an empty dashboard/i,
+    /Book a Demo|without starting from an empty dashboard|workspace_id|request_id|\/workspaces\/\{id\}/i,
   );
 });
 
 it("sends the primary CTA to Auth0 signup/login", () => {
   renderAt("/");
 
-  fireEvent.click(screen.getAllByRole("button", { name: /Start workspace setup/i })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Log in or sign up/i })[0]);
 
   expect(auth0State.loginWithRedirect).toHaveBeenCalledWith({
     appState: { returnTo: "/app" },
@@ -101,12 +103,23 @@ it("sends the primary CTA to Auth0 signup/login", () => {
   });
 });
 
+it("keeps the CTA label stable while Auth0 initializes", () => {
+  auth0State.isLoading = true;
+  renderAt("/");
+
+  const buttons = screen.getAllByRole("button", { name: /Log in or sign up/i });
+
+  expect(buttons).toHaveLength(2);
+  expect(screen.queryByText(/Preparing Auth0/i)).not.toBeInTheDocument();
+  buttons.forEach((button) => expect(button).toBeDisabled());
+});
+
 it("shows a recoverable CTA error when Auth0 is not configured", () => {
   import.meta.env.VITE_AUTH0_DOMAIN = "";
   import.meta.env.VITE_AUTH0_CLIENT_ID = "";
   renderAt("/");
 
-  fireEvent.click(screen.getAllByRole("button", { name: /Start workspace setup/i })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: /Log in or sign up/i })[0]);
 
   expect(screen.getByRole("alert")).toHaveTextContent(
     /Auth0 is not configured/i,
@@ -138,6 +151,24 @@ it("renders callback errors with retry and public page recovery", () => {
   });
 });
 
+it("uses a centered spinner while Auth0 is finishing sign in", () => {
+  auth0State.isLoading = true;
+  renderAt("/auth/callback");
+
+  expect(screen.getByRole("status")).toHaveTextContent(/Finishing sign in/i);
+  expect(
+    screen.queryByRole("heading", { name: /Finishing sign in/i }),
+  ).not.toBeInTheDocument();
+});
+
+it("uses a centered spinner while opening the app session", () => {
+  auth0State.isLoading = true;
+  renderAt("/app");
+
+  expect(screen.getByRole("status")).toHaveTextContent(/Finishing sign in/i);
+  expect(screen.queryByText(/Checking your Auth0 session/i)).not.toBeInTheDocument();
+});
+
 it("renders a recoverable not-found route", () => {
   renderAt("/missing");
 
@@ -163,24 +194,63 @@ it("routes authenticated users without workspaces to onboarding", async () => {
   expect(screen.getByLabelText(/Workspace name/i)).toBeInTheDocument();
 });
 
+it("renders authenticated navigation and logs out through Auth0", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([]);
+
+  renderAt("/app");
+
+  expect(await screen.findByRole("link", { name: "Workspaces" })).toHaveAttribute(
+    "href",
+    "/app",
+  );
+  expect(screen.queryByRole("link", { name: "New workspace" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "/docs");
+
+  fireEvent.click(screen.getByRole("button", { name: /Log out/i }));
+
+  expect(auth0State.logout).toHaveBeenCalledWith({
+    logoutParams: { returnTo: "http://localhost:3000" },
+  });
+});
+
+it("uses skeleton rows while loading workspaces", () => {
+  auth0State.isAuthenticated = true;
+  mockFetchPending();
+  const { container } = renderAt("/app");
+
+  expect(container.querySelectorAll(".skeleton-row")).toHaveLength(2);
+  expect(screen.queryByText(/Checking for existing workspaces/i)).not.toBeInTheDocument();
+});
+
 it("creates a workspace and routes to token creation", async () => {
   auth0State.isAuthenticated = true;
-  const fetchMock = mockFetchJson({
-    id: "workspace-123",
-    slug: null,
-    name: "Acme",
-    role: "owner",
-    created_at: "2026-06-24T00:00:00Z",
-  });
-
-  renderAt("/app/onboarding");
+  const fetchMock = mockFetchSequence([
+    {
+      id: "workspace-123",
+      slug: null,
+      name: "Acme",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+    [
+      {
+        id: "workspace-123",
+        slug: null,
+        name: "Acme",
+        role: "owner",
+        created_at: "2026-06-24T00:00:00Z",
+      },
+    ],
+  ]);
+  const { container } = renderAt("/app/onboarding");
 
   fireEvent.change(screen.getByLabelText(/Workspace name/i), {
     target: { value: "Acme" },
   });
   fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
 
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   expect(fetchMock.mock.calls[0][0].toString()).toBe(
     "http://127.0.0.1:3000/workspaces",
   );
@@ -191,7 +261,8 @@ it("creates a workspace and routes to token creation", async () => {
   expect(
     await screen.findByRole("heading", { name: /Token creation is next/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/workspace-123/i)).toBeInTheDocument();
+  expect(screen.getByText(/Acme is ready for token setup/i)).toBeInTheDocument();
+  expect(container.textContent).not.toMatch(/workspace-123/i);
 });
 
 it("preserves workspace input when creation fails", async () => {
@@ -232,16 +303,48 @@ it("lets authenticated users resume existing workspaces", async () => {
     },
   ]);
 
-  renderAt("/app");
+  const { container } = renderAt("/app");
 
   expect(
     await screen.findByRole("heading", { name: /Resume a workspace/i }),
   ).toBeInTheDocument();
   expect(screen.getByText("Existing Workspace")).toBeInTheDocument();
+  expect(screen.getByText("Role: owner")).toBeInTheDocument();
+  expect(container.textContent).not.toMatch(/workspace-456/i);
   expect(screen.getByRole("link", { name: /Resume setup/i })).toHaveAttribute(
     "href",
     "/app/workspaces/workspace-456/tokens",
   );
+});
+
+it("shows the workspace name on token setup routes", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([
+    {
+      id: "workspace-789",
+      slug: null,
+      name: "Named Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ]);
+
+  const { container } = renderAt("/app/workspaces/workspace-789/tokens");
+
+  expect(
+    await screen.findByRole("heading", { name: /Token creation is next/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Named Workspace is ready for token setup/i)).toBeInTheDocument();
+  expect(container.textContent).not.toMatch(/workspace-789/i);
+});
+
+it("uses skeleton content while loading token setup", () => {
+  auth0State.isAuthenticated = true;
+  mockFetchPending();
+  const { container } = renderAt("/app/workspaces/workspace-789/tokens");
+
+  expect(container.querySelector(".skeleton-heading-short")).toBeInTheDocument();
+  expect(screen.queryByText(/Checking workspace access/i)).not.toBeInTheDocument();
 });
 
 function mockFetchJson(body: unknown, init: ResponseInit = {}) {
@@ -250,6 +353,29 @@ function mockFetchJson(body: unknown, init: ResponseInit = {}) {
       headers: { "Content-Type": "application/json" },
       status: init.status ?? 200,
       statusText: init.statusText,
+    });
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  return fetchMock;
+}
+
+function mockFetchPending() {
+  const fetchMock = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  return fetchMock;
+}
+
+function mockFetchSequence(bodies: unknown[]) {
+  const fetchMock = vi.fn<typeof fetch>(async () => {
+    const body = bodies.shift();
+
+    return new Response(JSON.stringify(body), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
     });
   });
 
