@@ -5,6 +5,7 @@ use proofplane::{
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
 };
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use super::support::{upload_attachment, TestApp};
@@ -34,13 +35,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         )
         .await,
     );
-    let tool_names = tools["result"]["tools"]
+    let tool_list = tools["result"]["tools"]
         .as_array()
-        .expect("tools list is an array")
+        .expect("tools list is an array");
+    let tool_names = tool_list
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool has a name"))
-        .collect::<Vec<_>>();
-    for expected in [
+        .collect::<BTreeSet<_>>();
+    let expected_tool_names = [
         "list_evidence_requests",
         "get_evidence_request",
         "list_due_evidence_requests",
@@ -49,9 +51,54 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "create_attachment_download_grant",
         "list_controls",
         "list_evidence_request_control_mappings",
-    ] {
-        assert!(tool_names.contains(&expected), "{expected} is registered");
-    }
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(tool_names, expected_tool_names);
+    assert_schema_has_property(
+        &find_tool(tool_list, "list_due_evidence_requests")["inputSchema"],
+        "workspace_id",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "list_due_evidence_requests")["inputSchema"],
+        "now",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "get_evidence_submission")["inputSchema"],
+        "submission_id",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "create_attachment_download_grant")["inputSchema"],
+        "attachment_id",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "list_evidence_requests")["outputSchema"],
+        "evidence_requests",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "get_evidence_submission")["outputSchema"],
+        "submission",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "get_evidence_submission")["outputSchema"],
+        "attachments",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "list_controls")["outputSchema"],
+        "controls",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "list_evidence_request_control_mappings")["outputSchema"],
+        "mappings",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "create_attachment_download_grant")["outputSchema"],
+        "url_secret_type",
+    );
+    assert_schema_has_property(
+        &find_tool(tool_list, "create_attachment_download_grant")["outputSchema"],
+        "expires_at",
+    );
 
     client
         .execute(
@@ -523,6 +570,38 @@ fn rpc_body(response: &axum_test::TestResponse) -> Value {
         .next()
         .unwrap_or_else(|| panic!("SSE response has non-empty data line: {text:?}"));
     serde_json::from_str(data).expect("SSE data is JSON")
+}
+
+fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| panic!("{name} tool is registered"))
+}
+
+fn assert_schema_has_property(schema: &Value, property: &str) {
+    assert!(
+        schema_has_property(schema, property),
+        "schema exposes {property}: {schema}"
+    );
+}
+
+fn schema_has_property(value: &Value, property: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key(property))
+                || object
+                    .values()
+                    .any(|nested| schema_has_property(nested, property))
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|nested| schema_has_property(nested, property)),
+        _ => false,
+    }
 }
 
 fn assert_unauthorized(response: &axum_test::TestResponse) {
