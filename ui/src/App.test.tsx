@@ -71,14 +71,14 @@ it("renders the public explainer without a demo gate", () => {
   ).toBeInTheDocument();
   expect(
     screen.getByRole("heading", {
-      name: /What works now, and what is placeholder/i,
+      name: /What works now, and what comes later/i,
     }),
   ).toBeInTheDocument();
   expect(screen.getByText("Token permissions")).toBeInTheDocument();
   expect(
     screen.getAllByRole("button", { name: /Start workspace setup/i }),
   ).toHaveLength(2);
-  expect(screen.getByRole("link", { name: /Pricing philosophy/i })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: /Pricing/i })).toHaveAttribute(
     "href",
     "/pricing",
   );

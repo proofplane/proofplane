@@ -8,8 +8,7 @@ export function NotFoundRoute() {
         <p className="eyebrow">Route not found</p>
         <h1 id="not-found-title">This page is not part of the workspace yet.</h1>
         <p>
-          Return to the Proofplane entry point and continue from the available
-          setup path.
+          Return to the Proofplane entry point and continue from workspace setup.
         </p>
         <Link className="button button-secondary" to="/">
           Back to Proofplane

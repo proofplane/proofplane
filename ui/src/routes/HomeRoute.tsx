@@ -37,11 +37,11 @@ const sections = [
   {
     eyebrow: "Step 04",
     title: "Packet and MCP views are placeholders.",
-    body: "The backend does not yet provide a production MCP workflow or auditor packet preview, so the UI should label those areas as placeholders.",
+    body: "The backend does not yet provide production MCP tools or auditor packet previews. The UI marks both as not built yet.",
     icon: FileCheck2,
-    artifact: "Placeholder views",
+    artifact: "Later screens",
     result: "Not implemented yet",
-    summary: "Future UI",
+    summary: "Later UI",
     visual: <PlaceholderStepVisual />,
   },
 ];
@@ -63,7 +63,7 @@ export function HomeRoute() {
             <div className="actions">
               <StartWorkspaceButton />
               <Link className="button button-secondary" to="/pricing">
-                Pricing philosophy
+                Pricing
               </Link>
               <Link className="button button-secondary" to="/docs">
                 Docs
@@ -79,7 +79,7 @@ export function HomeRoute() {
           <div className="step-card-heading">
             <div>
               <p className="eyebrow">How it works</p>
-              <h2 id="step-card-flow-title">What works now, and what is placeholder.</h2>
+              <h2 id="step-card-flow-title">What works now, and what comes later.</h2>
             </div>
           </div>
           <div className="step-card-list">
@@ -200,7 +200,7 @@ function DataApiStepVisual() {
 GET /workspaces/{id}/evidence-requests
 POST /workspaces/{id}/evidence-requests/{request_id}/submissions`}</code>
       </div>
-      <div className="mock-prompt-card">Placeholder UI copy goes here.</div>
+      <div className="mock-prompt-card">Detailed UI views are not built yet.</div>
     </div>
   );
 }
@@ -210,11 +210,11 @@ function PlaceholderStepVisual() {
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-packet-panel">
-        <h4>Future screen</h4>
+        <h4>Later screen</h4>
         {[
-          ["MCP workflow", "Placeholder"],
-          ["Auditor packet preview", "Placeholder"],
-          ["Gap summary", "Placeholder"],
+          ["MCP tools", "Later"],
+          ["Auditor packet preview", "Later"],
+          ["Gap summary", "Later"],
         ].map(([label, status]) => (
           <div className="mock-packet-row" key={label}>
             <span>{label}</span>

@@ -20,7 +20,7 @@ export function AppRoute() {
         <section className="page-heading" aria-labelledby="app-title">
           <p className="eyebrow">Auth setup</p>
           <h1 id="app-title">Auth0 is not configured.</h1>
-          <p>Add the Auth0 Vite environment variables before opening the workspace flow.</p>
+          <p>Add the Auth0 Vite environment variables before opening workspace setup.</p>
         </section>
       </Shell>
     );
@@ -39,7 +39,7 @@ function ConfiguredAppRoute() {
   if (isLoading) {
     return (
       <Shell>
-        <StatusPanel title="Opening workspace flow">Checking your Auth0 session.</StatusPanel>
+        <StatusPanel title="Opening workspace setup">Checking your Auth0 session.</StatusPanel>
       </Shell>
     );
   }
@@ -181,7 +181,7 @@ function TokenRoutePlaceholder() {
     <section className="page-heading" aria-labelledby="tokens-title">
       <p className="eyebrow">Token setup</p>
       <h1 id="tokens-title">Token creation is next.</h1>
-      <p>Workspace {workspaceId} is ready for the scoped token flow.</p>
+      <p>Workspace {workspaceId} is ready for token setup.</p>
     </section>
   );
 }

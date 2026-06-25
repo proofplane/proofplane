@@ -6,10 +6,10 @@ export function DocsRoute() {
     <Shell>
       <section className="page-heading" aria-labelledby="docs-title">
         <p className="eyebrow">Docs</p>
-        <h1 id="docs-title">Proofplane setup notes are coming into the UI.</h1>
+        <h1 id="docs-title">Setup docs are not in the UI yet.</h1>
         <p>
-          The first self-serve path starts with workspace setup. API and MCP setup
-          guidance appears inside onboarding as the next tickets land.
+          Workspace setup is live. API and MCP setup notes stay in the repo until
+          those screens ship.
         </p>
         <Link className="button button-primary" to="/">
           Start from the public page

@@ -13,7 +13,7 @@ test("renders the app shell", async ({ page }) => {
     page.getByRole("button", { name: /Start workspace setup/i }).first(),
   ).toBeVisible();
   await expect(page.getByText(/Book a Demo/i)).toHaveCount(0);
-  await expect(page.getByRole("link", { name: /Pricing philosophy/i })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /Pricing/i })).toHaveAttribute(
     "href",
     "/pricing",
   );

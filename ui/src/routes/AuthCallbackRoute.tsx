@@ -47,7 +47,7 @@ function ConfiguredAuthCallbackRoute({ config }: ConfiguredAuthCallbackRouteProp
       <AuthState
         eyebrow="Auth callback"
         title="Finishing sign in."
-        body="Proofplane is checking the Auth0 response before opening the workspace flow."
+        body="Proofplane is checking the Auth0 response before opening workspace setup."
         retry={false}
       />
     );

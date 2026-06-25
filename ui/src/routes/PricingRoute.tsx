@@ -9,7 +9,7 @@ export function PricingRoute() {
         <h1 id="pricing-title">Self-serve first, sales later.</h1>
         <p>
           Proofplane starts with workspace setup so teams can inspect the scoped
-          token model and evidence workflow before a sales conversation.
+          token model and evidence APIs before a sales conversation.
         </p>
         <Link className="button button-primary" to="/">
           Start from the public page
