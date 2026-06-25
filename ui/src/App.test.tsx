@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, vi } from "vitest";
 import { App } from "./App";
@@ -8,6 +8,7 @@ const auth0State = vi.hoisted(() => ({
   error: undefined as Error | undefined,
   isAuthenticated: false,
   isLoading: false,
+  getAccessTokenSilently: vi.fn(async () => "access-token"),
   loginWithRedirect: vi.fn(),
 }));
 
@@ -32,7 +33,10 @@ beforeEach(() => {
   auth0State.error = undefined;
   auth0State.isAuthenticated = false;
   auth0State.isLoading = false;
+  auth0State.getAccessTokenSilently.mockReset();
+  auth0State.getAccessTokenSilently.mockResolvedValue("access-token");
   auth0State.loginWithRedirect.mockReset();
+  vi.unstubAllGlobals();
   import.meta.env.VITE_AUTH0_DOMAIN = "proofplane.auth0.com";
   import.meta.env.VITE_AUTH0_CLIENT_ID = "client_123";
   import.meta.env.VITE_AUTH0_AUDIENCE = "https://api.proofplane.com";
@@ -146,3 +150,112 @@ it("renders a recoverable not-found route", () => {
     screen.getByRole("link", { name: /Back to Proofplane/i }),
   ).toHaveAttribute("href", "/");
 });
+
+it("routes authenticated users without workspaces to onboarding", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([]);
+
+  renderAt("/app");
+
+  expect(
+    await screen.findByRole("heading", { name: /Create a workspace/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText(/SOC 2 sandbox/i)).toBeChecked();
+});
+
+it("creates a workspace and routes to token creation", async () => {
+  auth0State.isAuthenticated = true;
+  const fetchMock = mockFetchJson({
+    id: "workspace-123",
+    slug: null,
+    name: "Acme",
+    role: "owner",
+    created_at: "2026-06-24T00:00:00Z",
+  });
+
+  renderAt("/app/onboarding");
+
+  fireEvent.change(screen.getByLabelText(/Workspace name/i), {
+    target: { value: "Acme" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  expect(fetchMock.mock.calls[0][0].toString()).toBe(
+    "http://127.0.0.1:3000/workspaces",
+  );
+  expect(fetchMock.mock.calls[0][1]).toMatchObject({
+    body: JSON.stringify({ name: "Acme" }),
+    method: "POST",
+  });
+  expect(
+    await screen.findByRole("heading", { name: /Token creation is next/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/workspace-123/i)).toBeInTheDocument();
+});
+
+it("preserves workspace input when creation fails", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson(
+    {
+      error: {
+        code: "slug_taken",
+        message: "a workspace with this slug already exists",
+        details: [],
+      },
+    },
+    { status: 409 },
+  );
+
+  renderAt("/app/onboarding");
+
+  fireEvent.change(screen.getByLabelText(/Workspace name/i), {
+    target: { value: "Acme" },
+  });
+  fireEvent.click(screen.getByLabelText(/Blank workspace/i));
+  fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /workspace with this slug already exists/i,
+  );
+  expect(screen.getByLabelText(/Workspace name/i)).toHaveValue("Acme");
+  expect(screen.getByLabelText(/Blank workspace/i)).toBeChecked();
+});
+
+it("lets authenticated users resume existing workspaces", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([
+    {
+      id: "workspace-456",
+      slug: null,
+      name: "Existing Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ]);
+
+  renderAt("/app");
+
+  expect(
+    await screen.findByRole("heading", { name: /Resume a workspace/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Existing Workspace")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Resume setup/i })).toHaveAttribute(
+    "href",
+    "/app/workspaces/workspace-456/tokens",
+  );
+});
+
+function mockFetchJson(body: unknown, init: ResponseInit = {}) {
+  const fetchMock = vi.fn<typeof fetch>(async () => {
+    return new Response(JSON.stringify(body), {
+      headers: { "Content-Type": "application/json" },
+      status: init.status ?? 200,
+      statusText: init.statusText,
+    });
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  return fetchMock;
+}

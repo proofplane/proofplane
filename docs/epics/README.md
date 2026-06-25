@@ -60,7 +60,7 @@ provenance, and freshness is derived from submitted evidence.
   shipped.
 - `make check` passes, and Docker-backed integration tests cover the release
   flow and external dependency failures.
-- Production configuration supports Postgres, SpiceDB, Google Pub/Sub, GCS,
+- Production configuration supports Postgres, Google Pub/Sub, GCS,
   Auth0, and ClamAV without local emulator requirements.
 - User-owned API tokens can submit evidence, retrieve only finalized
   attachments, inspect summarized evidence, and perform the supported MCP

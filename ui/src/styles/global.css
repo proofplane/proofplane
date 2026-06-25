@@ -664,6 +664,110 @@ button.scroll-cta {
   border-color: var(--color-signal);
 }
 
+.onboarding-heading {
+  padding-bottom: var(--space-xl);
+}
+
+.onboarding-heading h1,
+.auth-state h1 {
+  max-width: 8ch;
+}
+
+.onboarding-form,
+.workspace-list {
+  display: grid;
+  gap: var(--space-lg);
+  max-width: 760px;
+  margin-bottom: var(--space-xxl);
+}
+
+.field,
+.setup-options {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.field span,
+.setup-options legend {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-label);
+  font-weight: 620;
+}
+
+.field input {
+  min-height: 44px;
+  width: 100%;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.setup-options {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.setup-option,
+.workspace-row {
+  display: grid;
+  gap: var(--space-md);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  background: var(--color-surface);
+}
+
+.setup-option {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  cursor: pointer;
+}
+
+.setup-option input {
+  margin-top: 4px;
+}
+
+.setup-option span,
+.setup-option small {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.setup-option small,
+.workspace-row p {
+  color: var(--color-ink-muted);
+}
+
+.workspace-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-row h2 {
+  margin-bottom: var(--space-xs);
+  font-size: var(--font-size-title);
+  line-height: 1.25;
+}
+
+.workspace-row p {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.form-error {
+  margin: 0;
+  color: var(--color-signal);
+  font-size: var(--font-size-label);
+  font-weight: 620;
+}
+
+.onboarding-secondary-action {
+  margin-bottom: var(--space-xxl);
+}
+
 @media (max-width: 680px) {
   .shell-header {
     padding: 0 var(--space-md);
@@ -773,6 +877,10 @@ button.scroll-cta {
     max-width: 8ch;
     font-size: clamp(3rem, 14vw, 4rem);
     line-height: 0.94;
+  }
+
+  .workspace-row {
+    grid-template-columns: 1fr;
   }
 }
 

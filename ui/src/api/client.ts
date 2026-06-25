@@ -68,6 +68,10 @@ function parseJson(text: string): unknown {
 }
 
 function errorMessage(body: unknown): string | undefined {
+  if (body && typeof body === "object" && "error" in body) {
+    return errorMessage((body as { error?: unknown }).error);
+  }
+
   if (body && typeof body === "object" && "message" in body) {
     const message = (body as { message?: unknown }).message;
     return typeof message === "string" ? message : undefined;
