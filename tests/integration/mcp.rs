@@ -1,4 +1,4 @@
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use proofplane::{
     domain::WorkspacePermission,
     mcp::SESSION_ID_HEADER,
@@ -14,7 +14,7 @@ use rmcp::{
     ServiceError, ServiceExt,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 use super::support::{capture_audit_logs, upload_attachment, TestApp};
@@ -348,30 +348,28 @@ async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() 
         .await;
     let evidence_request_id = uuid_from(&request["id"]);
 
-    let session_id = initialize(&server, app.api_token())
-        .await
-        .header(SESSION_ID_HEADER)
-        .to_str()
-        .expect("session id is text")
-        .to_owned();
+    let token = app.api_token().to_owned();
     let (created, logs) = capture_audit_logs(|request_id| {
-        raw_call_tool(
-            &server,
-            app.api_token(),
-            &session_id,
-            request_id,
-            "create_evidence_submission",
-            json!({
-                "workspace_id": workspace_id,
-                "evidence_request_id": evidence_request_id,
-                "coverage_start_at": "2026-01-01T00:00:00Z",
-                "coverage_end_at": "2026-03-31T23:59:59Z",
-                "source_system": "okta",
-                "collection_method": "api_export",
-                "summary": "Quarterly access review",
-                "description": "Reviewer decisions and exceptions."
-            }),
-        )
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "create_evidence_submission",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "evidence_request_id": evidence_request_id,
+                        "coverage_start_at": "2026-01-01T00:00:00Z",
+                        "coverage_end_at": "2026-03-31T23:59:59Z",
+                        "source_system": "okta",
+                        "collection_method": "api_export",
+                        "summary": "Quarterly access review",
+                        "description": "Reviewer decisions and exceptions."
+                    }),
+                )
+                .await
+        }
     })
     .await;
     let submission_id = uuid_from(&created["submission_id"]);
@@ -706,12 +704,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .await;
     assert_eq!(missing.data["problem"]["code"], "not_found");
 
-    let session_id = initialize(&server, app.api_token())
-        .await
-        .header(SESSION_ID_HEADER)
-        .to_str()
-        .expect("session id is text")
-        .to_owned();
     let second_control_id = app
         .post(&format!("/workspaces/{workspace_id}/controls"))
         .json(&json!({
@@ -726,20 +718,24 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .expect("control id")
         .parse::<Uuid>()
         .expect("control id parses");
+    let token = app.api_token().to_owned();
     let (audited, logs) = capture_audit_logs(|request_id| {
-        raw_call_tool(
-            &server,
-            app.api_token(),
-            &session_id,
-            request_id,
-            "map_evidence_request_to_control",
-            json!({
-                "workspace_id": workspace_id,
-                "evidence_request_id": evidence_request_id,
-                "control_id": second_control_id,
-                "rationale": "Audited mapping"
-            }),
-        )
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "map_evidence_request_to_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "evidence_request_id": evidence_request_id,
+                        "control_id": second_control_id,
+                        "rationale": "Audited mapping"
+                    }),
+                )
+                .await
+        }
     })
     .await;
     assert_eq!(audited["control"]["id"], second_control_id.to_string());
@@ -764,26 +760,26 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
             vec![WorkspacePermission::ReadEvidenceRequests],
         )
         .await;
-    let limited_session = initialize(&server, &limited.raw_token)
-        .await
-        .header(SESSION_ID_HEADER)
-        .to_str()
-        .expect("session id is text")
-        .to_owned();
+    let limited_token = limited.raw_token.clone();
     let (denied, denied_logs) = capture_audit_logs(|request_id| {
-        raw_call_tool_error(
-            &server,
-            &limited.raw_token,
-            &limited_session,
-            request_id,
-            "map_evidence_request_to_control",
-            json!({
-                "workspace_id": workspace_id,
-                "evidence_request_id": evidence_request_id,
-                "control_id": control_id,
-                "rationale": "Denied mapping"
-            }),
-        )
+        let server = &server;
+        let limited_token = limited_token.clone();
+        async move {
+            let limited_client =
+                McpClient::connect_with_request_id(server, &limited_token, request_id).await;
+            limited_client
+                .call_tool_error(
+                    "map_evidence_request_to_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "evidence_request_id": evidence_request_id,
+                        "control_id": control_id,
+                        "rationale": "Denied mapping"
+                    }),
+                )
+                .await
+                .data
+        }
     })
     .await;
     assert_eq!(denied["problem"]["code"], "not_found");
@@ -796,12 +792,35 @@ struct McpClient {
 
 impl McpClient {
     async fn connect(server: &axum_test::TestServer, raw_token: &str) -> Self {
+        Self::connect_with_headers(server, raw_token, HashMap::new()).await
+    }
+
+    async fn connect_with_request_id(
+        server: &axum_test::TestServer,
+        raw_token: &str,
+        request_id: Uuid,
+    ) -> Self {
+        let mut headers = HashMap::new();
+        headers.insert(
+            REQUEST_ID_HEADER,
+            HeaderValue::from_str(&request_id.to_string()).expect("request id is a header value"),
+        );
+        Self::connect_with_headers(server, raw_token, headers).await
+    }
+
+    async fn connect_with_headers(
+        server: &axum_test::TestServer,
+        raw_token: &str,
+        headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Self {
         let uri = server
             .server_url(MCP)
             .expect("MCP server exposes HTTP URL")
             .to_string();
         let transport = StreamableHttpClientTransport::from_config(
-            StreamableHttpClientTransportConfig::with_uri(uri).auth_header(raw_token),
+            StreamableHttpClientTransportConfig::with_uri(uri)
+                .auth_header(raw_token)
+                .custom_headers(headers),
         );
         let service = ClientInfo::default()
             .serve(transport)
@@ -879,73 +898,6 @@ async fn initialize(server: &axum_test::TestServer, raw_token: &str) -> axum_tes
             }
         }))
         .await
-}
-
-async fn raw_call_tool(
-    server: &axum_test::TestServer,
-    raw_token: &str,
-    session_id: &str,
-    request_id: Uuid,
-    name: &'static str,
-    arguments: Value,
-) -> Value {
-    let response =
-        raw_call_tool_response(server, raw_token, session_id, request_id, name, arguments).await;
-    if let Some(error) = response.get("error") {
-        panic!("{name} succeeds, got error: {error}");
-    }
-
-    response["result"]["structuredContent"].clone()
-}
-
-async fn raw_call_tool_error(
-    server: &axum_test::TestServer,
-    raw_token: &str,
-    session_id: &str,
-    request_id: Uuid,
-    name: &'static str,
-    arguments: Value,
-) -> Value {
-    let response =
-        raw_call_tool_response(server, raw_token, session_id, request_id, name, arguments).await;
-    response["error"]["data"].clone()
-}
-
-async fn raw_call_tool_response(
-    server: &axum_test::TestServer,
-    raw_token: &str,
-    session_id: &str,
-    request_id: Uuid,
-    name: &'static str,
-    arguments: Value,
-) -> Value {
-    let response = server
-        .post(MCP)
-        .add_header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
-        .add_header(header::CONTENT_TYPE, "application/json")
-        .add_header(header::ACCEPT, "application/json, text/event-stream")
-        .add_header(SESSION_ID_HEADER, session_id)
-        .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": arguments
-            }
-        }))
-        .await;
-    response.assert_status_ok();
-    let body = response.text();
-    body.lines()
-        .rev()
-        .find_map(|line| {
-            line.strip_prefix("data: ")
-                .filter(|data| data.starts_with('{'))
-        })
-        .map(|data| serde_json::from_str(data).expect("SSE data is JSON"))
-        .unwrap_or_else(|| panic!("MCP response includes JSON data event: {body}"))
 }
 
 fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {

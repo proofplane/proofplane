@@ -59,7 +59,7 @@ pub(super) fn required_uuid(
     }
 }
 
-pub(super) fn optional_rfc3339(
+pub(super) fn optional_timestamp(
     field: &'static str,
     value: Option<String>,
 ) -> Validation<Option<DateTime<Utc>>, McpArgumentError> {
@@ -71,7 +71,7 @@ pub(super) fn optional_rfc3339(
     }
 }
 
-pub(super) fn required_rfc3339(
+pub(super) fn required_timestamp(
     field: &'static str,
     value: Option<String>,
 ) -> Validation<DateTime<Utc>, McpArgumentError> {
@@ -279,7 +279,7 @@ pub(super) fn format_datetime(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        argument_errors, domain_errors, optional_rfc3339, required_rfc3339, required_uuid,
+        argument_errors, domain_errors, optional_timestamp, required_timestamp, required_uuid,
         FieldIssue, McpArgumentError,
     };
     use crate::domain::DomainError;
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn invalid_now_maps_to_rfc3339_timestamp_message() {
-        let error = optional_rfc3339("now", Some("not-a-date".to_owned()))
+        let error = optional_timestamp("now", Some("not-a-date".to_owned()))
             .into_result()
             .map_err(argument_errors)
             .expect_err("invalid timestamp");
@@ -362,8 +362,8 @@ mod tests {
     }
 
     #[test]
-    fn required_rfc3339_maps_missing_and_invalid_values() {
-        let missing = required_rfc3339("coverage_start_at", None)
+    fn required_timestamp_maps_missing_and_invalid_values() {
+        let missing = required_timestamp("coverage_start_at", None)
             .into_result()
             .map_err(argument_errors)
             .expect_err("missing timestamp");
@@ -372,7 +372,7 @@ mod tests {
             [("coverage_start_at".to_owned(), "is required".to_owned())]
         );
 
-        let invalid = required_rfc3339("coverage_start_at", Some("nope".to_owned()))
+        let invalid = required_timestamp("coverage_start_at", Some("nope".to_owned()))
             .into_result()
             .map_err(argument_errors)
             .expect_err("invalid timestamp");

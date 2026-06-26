@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize, format_datetime, not_found, optional_rfc3339, parse_uuid_arg,
+        argument_errors, authorize, format_datetime, not_found, optional_timestamp, parse_uuid_arg,
         required_uuid, service_error,
     },
     ProofplaneMcp,
@@ -180,7 +180,7 @@ fn parse_due_evidence_requests_request(
 ) -> Result<(WorkspaceId, Option<DateTime<Utc>>), rmcp::ErrorData> {
     validate! {
         workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
-        now <- optional_rfc3339("now", args.now),
+        now <- optional_timestamp("now", args.now),
         => (workspace_id, now),
     }
     .into_result()

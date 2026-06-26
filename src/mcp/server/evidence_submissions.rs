@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize, domain_errors, format_datetime, not_found, required_rfc3339,
+        argument_errors, authorize, domain_errors, format_datetime, not_found, required_timestamp,
         required_uuid, service_error,
     },
     evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest},
@@ -310,8 +310,8 @@ fn parse_create_submission_request(
         workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
             .map(EvidenceRequestId::from),
-        coverage_start_at <- required_rfc3339("coverage_start_at", args.coverage_start_at),
-        coverage_end_at <- required_rfc3339("coverage_end_at", args.coverage_end_at),
+        coverage_start_at <- required_timestamp("coverage_start_at", args.coverage_start_at),
+        coverage_end_at <- required_timestamp("coverage_end_at", args.coverage_end_at),
         => (workspace_id, evidence_request_id, coverage_start_at, coverage_end_at),
     }
     .into_result()
