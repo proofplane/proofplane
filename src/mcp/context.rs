@@ -3,6 +3,7 @@ use crate::{
     domain::{WorkspaceId, WorkspacePermission},
     routes::request_context::RequestId,
 };
+use serde_json::json;
 
 #[cfg(test)]
 use crate::domain::{ApiTokenId, UserId, WorkspacePermissions};
@@ -33,10 +34,7 @@ impl McpRequestContext {
             .ok_or_else(internal_context_error)?;
 
         if !token.allows(workspace_id, required_permission) {
-            return Err(rmcp::ErrorData::resource_not_found(
-                "resource not found",
-                None,
-            ));
+            return Err(not_found());
         }
 
         Ok(Self {
@@ -52,6 +50,18 @@ impl McpRequestContext {
 
 fn internal_context_error() -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error("request context unavailable", None)
+}
+
+fn not_found() -> rmcp::ErrorData {
+    rmcp::ErrorData::resource_not_found(
+        "resource not found",
+        Some(json!({
+            "problem": {
+                "code": "not_found",
+                "message": "resource not found",
+            }
+        })),
+    )
 }
 
 #[cfg(test)]

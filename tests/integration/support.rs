@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::Router;
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -18,6 +19,7 @@ use proofplane::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
         opaque_token::generate_opaque_token,
+        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
@@ -202,6 +204,8 @@ pub struct TestApp {
     _postgres_container: ContainerAsync<postgres::Postgres>,
     _clamav: Option<Arc<TestClamAv>>,
     pub(super) postgres: Arc<Postgres>,
+    app_config: AppConfig,
+    object_store: Arc<proofplane::object_storage::FilesystemObjectStore>,
     object_storage_root: PathBuf,
     server: TestServer,
     api_token: String,
@@ -277,7 +281,7 @@ impl TestApp {
         let dependencies = AppDependencies {
             config: app_config.clone(),
             postgres: postgres.clone(),
-            object_store,
+            object_store: object_store.clone(),
             metrics: recorder.handle(),
             api_token_authenticator,
             user_authenticator,
@@ -316,6 +320,8 @@ impl TestApp {
             _postgres_container: postgres_container,
             _clamav: clamav,
             postgres,
+            app_config,
+            object_store,
             object_storage_root,
             server,
             api_token: issued.raw_token,
@@ -474,19 +480,39 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         format!("Bearer {}", self.api_token)
     }
 
-    pub fn mcp_server(&self) -> TestServer {
+    fn mcp_app(&self) -> Router {
+        let download_grant_encryptor = DownloadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-download",
+            &self.app_config.paseto.download,
+        )
+        .expect("download grant encryptor initializes");
+        let download_grant_decryptor = DownloadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-download",
+            &self.app_config.paseto.download,
+        )
+        .expect("download grant decryptor initializes");
         let recorder = PrometheusBuilder::new().build_recorder();
-        TestServer::new(create_mcp_app(McpAppDependencies {
+        create_mcp_app(McpAppDependencies {
             postgres: self.postgres.clone(),
+            object_store: self.object_store.clone(),
             metrics: recorder.handle(),
             authenticator: Arc::new(ApiTokenAuthenticator::new(self.postgres.clone())),
+            public_api_base_url: self.app_config.server.public_api_base_url.clone(),
+            download_grant_encryptor,
+            download_grant_decryptor,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),
                 dependency_timeout_ms: 1000,
             },
             cancellation_token: CancellationToken::new(),
-        }))
+        })
+    }
+
+    pub fn mcp_http_server(&self) -> TestServer {
+        TestServer::builder().http_transport().build(self.mcp_app())
     }
 
     pub fn get(&self, path: &str) -> TestRequest {

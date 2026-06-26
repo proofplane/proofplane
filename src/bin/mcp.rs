@@ -3,10 +3,13 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    authentication::ApiTokenAuthenticator,
+    authentication::{
+        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        ApiTokenAuthenticator,
+    },
     config,
     mcp::{self, McpAppDependencies},
-    observability, repository, store,
+    object_storage, observability, repository, store,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -30,6 +33,10 @@ enum Error {
     Migrations(#[from] refinery::Error),
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
+    #[error("object storage initialization error")]
+    ObjectStorage(#[from] object_storage::StorageError),
+    #[error("download grant token initialization error")]
+    DownloadGrantToken(#[from] proofplane::authentication::paseto::Error),
     #[error("MCP listener error")]
     Listener(#[from] std::io::Error),
 }
@@ -55,13 +62,28 @@ async fn run() -> Result<(), Error> {
 
     let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
     let postgres = Arc::new(repository::Postgres::new(pool));
+    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let download_grant_encryptor = DownloadGrantEncryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &config.paseto.download,
+    )?;
+    let download_grant_decryptor = DownloadGrantDecryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        "proofplane-attachment-download",
+        &config.paseto.download,
+    )?;
     let metrics = PrometheusBuilder::new().install_recorder()?;
     let authenticator = Arc::new(ApiTokenAuthenticator::new(postgres.clone()));
     let sessions = CancellationToken::new();
     let app = mcp::create_app(McpAppDependencies {
         postgres,
+        object_store,
         metrics,
         authenticator,
+        public_api_base_url: config.server.public_api_base_url.clone(),
+        download_grant_encryptor,
+        download_grant_decryptor,
         health: config.health.clone(),
         cancellation_token: sessions.clone(),
     });
