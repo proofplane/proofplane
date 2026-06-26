@@ -4,6 +4,8 @@
 //! returns successfully. This intentionally leaves a best-effort delivery gap
 //! if the process exits after commit but before [`AuditEvent::emit`] runs.
 
+use std::{collections::BTreeMap, fmt};
+
 use uuid::Uuid;
 
 /// The identity responsible for an audited operation.
@@ -98,7 +100,32 @@ impl AuditObject {
 }
 
 /// A bounded audit record builder containing only UUID identifiers and static names.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct AuditMetadata(BTreeMap<&'static str, String>);
+
+impl AuditMetadata {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn insert(&mut self, key: &'static str, value: String) {
+        self.0.insert(key, value);
+    }
+}
+
+impl fmt::Display for AuditMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            return f.write_str("{}");
+        }
+
+        let metadata = serde_json::to_string(&self.0)
+            .expect("audit metadata contains only string keys and values");
+        f.write_str(&metadata)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuditEvent {
     event_id: Uuid,
     event_name: &'static str,
@@ -109,10 +136,7 @@ pub struct AuditEvent {
     workspace_id: Option<Uuid>,
     request_id: Option<Uuid>,
     session_id: Option<Uuid>,
-    evidence_request_id: Option<Uuid>,
-    evidence_submission_id: Option<Uuid>,
-    evidence_attachment_id: Option<Uuid>,
-    lifecycle_status: Option<&'static str>,
+    metadata: AuditMetadata,
     object: Option<AuditObject>,
 }
 
@@ -134,10 +158,7 @@ impl AuditEvent {
             workspace_id: None,
             request_id: None,
             session_id: None,
-            evidence_request_id: None,
-            evidence_submission_id: None,
-            evidence_attachment_id: None,
-            lifecycle_status: None,
+            metadata: AuditMetadata::default(),
             object: None,
         }
     }
@@ -157,23 +178,8 @@ impl AuditEvent {
         self
     }
 
-    pub const fn evidence_request_id(mut self, evidence_request_id: Uuid) -> Self {
-        self.evidence_request_id = Some(evidence_request_id);
-        self
-    }
-
-    pub const fn evidence_submission_id(mut self, evidence_submission_id: Uuid) -> Self {
-        self.evidence_submission_id = Some(evidence_submission_id);
-        self
-    }
-
-    pub const fn evidence_attachment_id(mut self, evidence_attachment_id: Uuid) -> Self {
-        self.evidence_attachment_id = Some(evidence_attachment_id);
-        self
-    }
-
-    pub const fn lifecycle_status(mut self, lifecycle_status: &'static str) -> Self {
-        self.lifecycle_status = Some(lifecycle_status);
+    pub fn metadata(mut self, key: &'static str, value: impl ToString) -> Self {
+        self.metadata.insert(key, value.to_string());
         self
     }
 
@@ -203,10 +209,7 @@ impl AuditEvent {
             workspace_id = self.workspace_id.map(|id| id.to_string()),
             request_id = self.request_id.map(|id| id.to_string()),
             session_id = self.session_id.map(|id| id.to_string()),
-            evidence_request_id = self.evidence_request_id.map(|id| id.to_string()),
-            evidence_submission_id = self.evidence_submission_id.map(|id| id.to_string()),
-            evidence_attachment_id = self.evidence_attachment_id.map(|id| id.to_string()),
-            lifecycle_status = self.lifecycle_status,
+            metadata = %self.metadata,
             object_type,
             object_id = object_id.map(|id| id.to_string()),
         );
@@ -254,10 +257,10 @@ mod tests {
             .workspace_id(workspace_id)
             .request_id(request_id)
             .session_id(session_id)
-            .evidence_request_id(evidence_request_id)
-            .evidence_submission_id(evidence_submission_id)
-            .evidence_attachment_id(evidence_attachment_id)
-            .lifecycle_status("uploaded")
+            .metadata("evidence_request_id", evidence_request_id)
+            .metadata("evidence_submission_id", evidence_submission_id)
+            .metadata("evidence_attachment_id", evidence_attachment_id)
+            .metadata("lifecycle_status", "uploaded")
             .object(AuditObject::new("evidence_submission", object_id))
             .emit();
         });
@@ -278,18 +281,31 @@ mod tests {
         assert_eq!(fields["request_id"], request_id.to_string());
         assert_eq!(fields["session_id"], session_id.to_string());
         assert_eq!(
-            fields["evidence_request_id"],
+            fields["metadata"],
+            format!(
+                r#"{{"evidence_attachment_id":"{}","evidence_request_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
+                evidence_attachment_id, evidence_request_id, evidence_submission_id
+            )
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_str(fields["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            metadata["evidence_request_id"],
             evidence_request_id.to_string()
         );
         assert_eq!(
-            fields["evidence_submission_id"],
+            metadata["evidence_submission_id"],
             evidence_submission_id.to_string()
         );
         assert_eq!(
-            fields["evidence_attachment_id"],
+            metadata["evidence_attachment_id"],
             evidence_attachment_id.to_string()
         );
-        assert_eq!(fields["lifecycle_status"], "uploaded");
+        assert_eq!(metadata["lifecycle_status"], "uploaded");
+        assert!(fields.get("evidence_request_id").is_none());
+        assert!(fields.get("evidence_submission_id").is_none());
+        assert!(fields.get("evidence_attachment_id").is_none());
+        assert!(fields.get("lifecycle_status").is_none());
         assert_eq!(fields["object_type"], "evidence_submission");
         assert_eq!(fields["object_id"], object_id.to_string());
         assert!(fields.get("system_name").is_none());

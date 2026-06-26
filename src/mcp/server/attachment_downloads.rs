@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use rmcp::{
     handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
     tool, tool_router, Json, RoleServer,
@@ -51,8 +53,14 @@ impl ProofplaneMcp {
         )
         .workspace_id(workspace_id.into())
         .request_id(context.request_id.0)
-        .evidence_submission_id(grant.audit.submission_id.into())
-        .evidence_attachment_id(grant.audit.attachment_id.into())
+        .metadata(
+            "evidence_submission_id",
+            Uuid::from(grant.audit.submission_id),
+        )
+        .metadata(
+            "evidence_attachment_id",
+            Uuid::from(grant.audit.attachment_id),
+        )
         .object(AuditObject::new(
             "evidence_attachment",
             grant.audit.attachment_id.into(),

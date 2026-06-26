@@ -106,13 +106,31 @@ impl AttachmentScanHandler {
         let object = match self.object_store.get_object(&quarantine_key).await {
             Ok(object) => object,
             Err(StorageError::NotFound) => {
-                self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON, message.request_id)
+                let updated = self
+                    .mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
                     .await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             Err(error) if final_delivery => {
-                self.mark_failed(&work, error.to_string(), message.request_id)
-                    .await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             Err(error) => return Err(retryable(error)),
@@ -126,8 +144,16 @@ impl AttachmentScanHandler {
                 reason: "stored object metadata does not match attachment metadata".to_owned(),
             };
             if final_delivery {
-                self.mark_failed(&work, error.to_string(), message.request_id)
-                    .await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             return Err(scan_error(error));
@@ -144,8 +170,16 @@ impl AttachmentScanHandler {
         let scan_result = match scan_result {
             Ok(scan_result) => scan_result,
             Err(error) if final_delivery => {
-                self.mark_failed(&work, error.to_string(), message.request_id)
-                    .await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 // TODO: don't ack here, let the message fail so it can be dead-lettered
                 return Ok(());
             }
@@ -193,11 +227,31 @@ impl AttachmentScanHandler {
             }
             MalwareScanOutcome::Malicious { reason } => {
                 tracing::debug!("scan found a virus, marking attachment as malicious");
-                self.mark_malicious(&work, reason, request_id).await
+                let updated = self.mark_malicious(&work, reason).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        request_id,
+                        "contains_virus",
+                    );
+                }
+                Ok(())
             }
             MalwareScanOutcome::Failed { reason } => {
                 tracing::debug!("scan failed");
-                self.mark_failed(&work, reason, request_id).await
+                let updated = self.mark_failed(&work, reason).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        request_id,
+                        "failed_upload",
+                    );
+                }
+                Ok(())
             }
         }
     }
@@ -206,8 +260,7 @@ impl AttachmentScanHandler {
         &self,
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
-        request_id: Option<Uuid>,
-    ) -> Result<(), RetryableWorkerError> {
+    ) -> Result<bool, RetryableWorkerError> {
         let reason = reason.as_ref();
         let updated = self
             .repository
@@ -220,25 +273,14 @@ impl AttachmentScanHandler {
             scanner_reason = reason,
             "attachment scan detected malicious content"
         );
-        if updated {
-            emit_worker_attachment_audit(
-                "evidence_attachment_scan.completed",
-                AuditOutcome::Failure,
-                work,
-                request_id,
-                "contains_virus",
-            );
-        }
-
-        Ok(())
+        Ok(updated)
     }
 
     async fn mark_failed(
         &self,
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
-        request_id: Option<Uuid>,
-    ) -> Result<(), RetryableWorkerError> {
+    ) -> Result<bool, RetryableWorkerError> {
         let reason = reason.as_ref();
         let updated = self
             .repository
@@ -251,16 +293,7 @@ impl AttachmentScanHandler {
             scanner_reason = reason,
             "attachment scan failed terminally"
         );
-        if updated {
-            emit_worker_attachment_audit(
-                "evidence_attachment_scan.completed",
-                AuditOutcome::Failure,
-                work,
-                request_id,
-                "failed_upload",
-            );
-        }
-        Ok(())
+        Ok(updated)
     }
 }
 
@@ -279,9 +312,15 @@ fn emit_worker_attachment_audit(
         "handle_attachment_scan",
     )
     .workspace_id(work.workspace_id.into())
-    .evidence_submission_id(work.evidence_submission_id.into())
-    .evidence_attachment_id(work.evidence_attachment_id.into())
-    .lifecycle_status(lifecycle_status)
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(work.evidence_submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(work.evidence_attachment_id),
+    )
+    .metadata("lifecycle_status", lifecycle_status)
     .object(AuditObject::new(
         "evidence_attachment",
         work.evidence_attachment_id.into(),

@@ -119,9 +119,15 @@ fn emit_worker_finalization_audit(work: &FinalizingAttachmentUploadWork, request
         "handle_attachment_finalization",
     )
     .workspace_id(work.workspace_id.into())
-    .evidence_submission_id(work.evidence_submission_id.into())
-    .evidence_attachment_id(work.evidence_attachment_id.into())
-    .lifecycle_status("uploaded")
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(work.evidence_submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(work.evidence_attachment_id),
+    )
+    .metadata("lifecycle_status", "uploaded")
     .object(AuditObject::new(
         "evidence_attachment",
         work.evidence_attachment_id.into(),

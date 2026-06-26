@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     authentication::{ApiTokenAuthenticator, ApiTokenContext},
     domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspacePermission},
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authorize_workspace_route, error::ApiError, request_context::RequestId,
     },
@@ -126,21 +127,27 @@ async fn issue_download_grant(
         .await
         .map_err(download_error)?;
 
-    crate::observability::audit::AuditEvent::new(
+    AuditEvent::new(
         "evidence_attachment_download_grant.issued",
-        crate::observability::audit::AuditOutcome::Success,
-        crate::observability::audit::AuditActor::ApiToken {
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
             user_id: token.user_id.into(),
             api_token_id: token.api_token_id.into(),
         },
-        crate::observability::audit::AuditClientType::Rest,
+        AuditClientType::Rest,
         "issue_attachment_download_grant",
     )
     .workspace_id(path.workspace_id)
     .request_id(request_id.0)
-    .evidence_submission_id(grant.audit.submission_id.into())
-    .evidence_attachment_id(grant.audit.attachment_id.into())
-    .object(crate::observability::audit::AuditObject::new(
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(grant.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(grant.audit.attachment_id),
+    )
+    .object(AuditObject::new(
         "evidence_attachment",
         grant.audit.attachment_id.into(),
     ))
@@ -164,21 +171,27 @@ async fn redeem_download_grant(
         .redeem(&query.token)
         .await
         .map_err(download_error)?;
-    crate::observability::audit::AuditEvent::new(
+    AuditEvent::new(
         "evidence_attachment_download_grant.redeemed",
-        crate::observability::audit::AuditOutcome::Success,
-        crate::observability::audit::AuditActor::ApiToken {
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
             user_id: downloaded.audit.issued_by_user_id.into(),
             api_token_id: downloaded.audit.issued_via_api_token_id.into(),
         },
-        crate::observability::audit::AuditClientType::Rest,
+        AuditClientType::Rest,
         "redeem_attachment_download_grant",
     )
     .workspace_id(downloaded.audit.workspace_id.into())
     .request_id(request_id.0)
-    .evidence_submission_id(downloaded.audit.submission_id.into())
-    .evidence_attachment_id(downloaded.audit.attachment_id.into())
-    .object(crate::observability::audit::AuditObject::new(
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(downloaded.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(downloaded.audit.attachment_id),
+    )
+    .object(AuditObject::new(
         "evidence_attachment",
         downloaded.audit.attachment_id.into(),
     ))
