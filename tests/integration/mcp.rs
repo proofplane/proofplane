@@ -3,6 +3,7 @@ use proofplane::{
     domain::WorkspacePermission,
     mcp::SESSION_ID_HEADER,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
+    routes::request_context::REQUEST_ID_HEADER,
 };
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo, JsonObject},
@@ -16,7 +17,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-use super::support::{upload_attachment, TestApp};
+use super::support::{capture_audit_logs, upload_attachment, TestApp};
 
 const MCP: &str = "/mcp";
 
@@ -47,9 +48,12 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "list_due_evidence_requests",
         "get_evidence_submission",
         "get_latest_evidence_submission",
+        "create_evidence_submission",
         "create_attachment_download_grant",
         "list_controls",
         "list_evidence_request_control_mappings",
+        "map_evidence_request_to_control",
+        "remove_evidence_request_control_mapping",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -67,8 +71,24 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "submission_id",
     );
     assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_submission")["inputSchema"],
+        "coverage_start_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_submission")["inputSchema"],
+        "source_system",
+    );
+    assert_schema_has_property(
         &find_tool(&tool_list, "create_attachment_download_grant")["inputSchema"],
         "attachment_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "map_evidence_request_to_control")["inputSchema"],
+        "rationale",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "remove_evidence_request_control_mapping")["inputSchema"],
+        "control_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "list_evidence_requests")["outputSchema"],
@@ -83,12 +103,24 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "attachments",
     );
     assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_submission")["outputSchema"],
+        "attachment_upload",
+    );
+    assert_schema_has_property(
         &find_tool(&tool_list, "list_controls")["outputSchema"],
         "controls",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "list_evidence_request_control_mappings")["outputSchema"],
         "mappings",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "map_evidence_request_to_control")["outputSchema"],
+        "control",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "remove_evidence_request_control_mapping")["outputSchema"],
+        "removed",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_attachment_download_grant")["outputSchema"],
@@ -300,6 +332,179 @@ async fn mcp_submission_tools_preserve_selective_context() {
 }
 
 #[tokio::test]
+async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP submission create workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Create submission request", "2026-04-01T00:00:00Z"),
+        )
+        .await;
+    let evidence_request_id = uuid_from(&request["id"]);
+
+    let session_id = initialize(&server, app.api_token())
+        .await
+        .header(SESSION_ID_HEADER)
+        .to_str()
+        .expect("session id is text")
+        .to_owned();
+    let (created, logs) = capture_audit_logs(|request_id| {
+        raw_call_tool(
+            &server,
+            app.api_token(),
+            &session_id,
+            request_id,
+            "create_evidence_submission",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "coverage_start_at": "2026-01-01T00:00:00Z",
+                "coverage_end_at": "2026-03-31T23:59:59Z",
+                "source_system": "okta",
+                "collection_method": "api_export",
+                "summary": "Quarterly access review",
+                "description": "Reviewer decisions and exceptions."
+            }),
+        )
+    })
+    .await;
+    let submission_id = uuid_from(&created["submission_id"]);
+
+    assert_eq!(
+        created["evidence_request_id"],
+        evidence_request_id.to_string()
+    );
+    assert_eq!(created["attachment_upload"]["method"], "POST");
+    assert_eq!(
+        created["attachment_upload"]["path"],
+        format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments")
+    );
+    assert_eq!(created["attachment_upload"]["multipart_file_field"], "file");
+    assert_eq!(
+        created["attachment_upload"]["required_file_part_header"],
+        "Content-Digest"
+    );
+    assert_eq!(created["attachment_upload"]["transfer_mode"], "rest_only");
+    assert!(created.get("summary").is_none());
+    assert!(created.get("description").is_none());
+    assert!(created.get("token").is_none());
+
+    let persisted = app
+        .get(&format!(
+            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}"
+        ))
+        .await
+        .json::<Value>();
+    assert_eq!(persisted["submission"]["source_system"], "okta");
+    assert_eq!(persisted["submission"]["collection_method"], "api_export");
+    assert_eq!(
+        persisted["submission"]["summary"],
+        "Quarterly access review"
+    );
+    assert_eq!(
+        persisted["submission"]["description"],
+        "Reviewer decisions and exceptions."
+    );
+
+    assert_eq!(logs.len(), 1);
+    assert_audit_event(
+        &logs[0],
+        "evidence_submission.created",
+        "create_evidence_submission",
+        "mcp",
+        workspace_id,
+        app.user_id(),
+        app.api_token_id(),
+        "evidence_submission",
+        submission_id,
+    );
+    let metadata = audit_metadata(&logs[0]);
+    assert_eq!(
+        metadata["evidence_request_id"],
+        evidence_request_id.to_string()
+    );
+    assert_eq!(
+        metadata["evidence_submission_id"],
+        submission_id.to_string()
+    );
+    let serialized = serde_json::to_string(&logs).expect("logs serialize");
+    assert!(!serialized.contains(app.api_token()));
+    assert!(!serialized.contains("Quarterly access review"));
+    assert!(!serialized.contains("Reviewer decisions and exceptions."));
+}
+
+#[tokio::test]
+async fn mcp_create_evidence_submission_reports_structured_validation_errors() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP submission validation workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Validation request", "2026-04-01T00:00:00Z"),
+        )
+        .await;
+    let evidence_request_id = uuid_from(&request["id"]);
+
+    let invalid_args = mcp_client
+        .call_tool_error(
+            "create_evidence_submission",
+            json!({
+                "workspace_id": "not-a-uuid",
+                "evidence_request_id": evidence_request_id,
+                "coverage_start_at": "not-a-date",
+                "coverage_end_at": "2026-03-31T23:59:59Z",
+                "source_system": "okta",
+                "collection_method": "api_export"
+            }),
+        )
+        .await;
+    assert_eq!(invalid_args.data["problem"]["code"], "validation_failed");
+    assert_eq!(
+        field_issue_names(&invalid_args.data),
+        ["workspace_id", "coverage_start_at"]
+    );
+
+    let invalid_domain = mcp_client
+        .call_tool_error(
+            "create_evidence_submission",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "coverage_start_at": "2026-04-01T00:00:00Z",
+                "coverage_end_at": "2026-03-31T23:59:59Z",
+                "source_system": " ",
+                "collection_method": "\t",
+                "summary": " ",
+                "description": "x".repeat(4_001)
+            }),
+        )
+        .await;
+    assert_eq!(invalid_domain.data["problem"]["code"], "validation_failed");
+    assert_eq!(
+        field_issue_names(&invalid_domain.data),
+        [
+            "source_system",
+            "collection_method",
+            "summary",
+            "description",
+            "coverage_end_at"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mapping() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP grant workspace")
@@ -402,6 +607,185 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     assert_eq!(denied.data["problem"]["code"], "not_found");
 }
 
+#[tokio::test]
+async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP mapping write workspace")
+        .with_control("PP-AC-04", "Access review", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-04");
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Mapping write request", "2026-05-01T00:00:00Z"),
+        )
+        .await;
+    let evidence_request_id = uuid_from(&request["id"]);
+
+    let created = mcp_client
+        .call_tool(
+            "map_evidence_request_to_control",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": control_id,
+                "rationale": "Maps access evidence to the access review control."
+            }),
+        )
+        .await;
+    assert_eq!(
+        created["evidence_request_id"],
+        evidence_request_id.to_string()
+    );
+    assert_eq!(created["control"]["id"], control_id.to_string());
+    assert_eq!(
+        created["rationale"],
+        "Maps access evidence to the access review control."
+    );
+
+    let listed = mcp_client
+        .call_tool(
+            "list_evidence_request_control_mappings",
+            json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
+        )
+        .await;
+    assert_eq!(
+        listed["mappings"][0]["control"]["id"],
+        control_id.to_string()
+    );
+
+    let duplicate = mcp_client
+        .call_tool_error(
+            "map_evidence_request_to_control",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": control_id,
+                "rationale": "Duplicate mapping"
+            }),
+        )
+        .await;
+    assert_eq!(
+        duplicate.data["problem"]["code"],
+        "evidence_request_control_mapping_exists"
+    );
+
+    let removed = mcp_client
+        .call_tool(
+            "remove_evidence_request_control_mapping",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": control_id
+            }),
+        )
+        .await;
+    assert_eq!(removed["removed"], true);
+    assert_eq!(
+        removed["evidence_request_id"],
+        evidence_request_id.to_string()
+    );
+    assert_eq!(removed["control_id"], control_id.to_string());
+
+    let missing = mcp_client
+        .call_tool_error(
+            "remove_evidence_request_control_mapping",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": control_id
+            }),
+        )
+        .await;
+    assert_eq!(missing.data["problem"]["code"], "not_found");
+
+    let session_id = initialize(&server, app.api_token())
+        .await
+        .header(SESSION_ID_HEADER)
+        .to_str()
+        .expect("session id is text")
+        .to_owned();
+    let second_control_id = app
+        .post(&format!("/workspaces/{workspace_id}/controls"))
+        .json(&json!({
+            "code": "PP-AC-05",
+            "title": "Second access review",
+            "description": "Control description for second access review.",
+            "framework_requirement_ids": []
+        }))
+        .await
+        .json::<Value>()["id"]
+        .as_str()
+        .expect("control id")
+        .parse::<Uuid>()
+        .expect("control id parses");
+    let (audited, logs) = capture_audit_logs(|request_id| {
+        raw_call_tool(
+            &server,
+            app.api_token(),
+            &session_id,
+            request_id,
+            "map_evidence_request_to_control",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": second_control_id,
+                "rationale": "Audited mapping"
+            }),
+        )
+    })
+    .await;
+    assert_eq!(audited["control"]["id"], second_control_id.to_string());
+    assert_eq!(logs.len(), 1);
+    assert_audit_event(
+        &logs[0],
+        "evidence_request_control_mapping.created",
+        "map_evidence_request_to_control",
+        "mcp",
+        workspace_id,
+        app.user_id(),
+        app.api_token_id(),
+        "evidence_request_control_mapping",
+        second_control_id,
+    );
+
+    let limited = app
+        .issue_api_token(
+            workspace_id,
+            vec![WorkspacePermission::ReadEvidenceRequests],
+        )
+        .await;
+    let limited_session = initialize(&server, &limited.raw_token)
+        .await
+        .header(SESSION_ID_HEADER)
+        .to_str()
+        .expect("session id is text")
+        .to_owned();
+    let (denied, denied_logs) = capture_audit_logs(|request_id| {
+        raw_call_tool_error(
+            &server,
+            &limited.raw_token,
+            &limited_session,
+            request_id,
+            "map_evidence_request_to_control",
+            json!({
+                "workspace_id": workspace_id,
+                "evidence_request_id": evidence_request_id,
+                "control_id": control_id,
+                "rationale": "Denied mapping"
+            }),
+        )
+    })
+    .await;
+    assert_eq!(denied["problem"]["code"], "not_found");
+    assert!(denied_logs.is_empty());
+}
+
 struct McpClient {
     service: RunningService<RoleClient, ClientInfo>,
 }
@@ -491,6 +875,71 @@ async fn initialize(server: &axum_test::TestServer, raw_token: &str) -> axum_tes
             }
         }))
         .await
+}
+
+async fn raw_call_tool(
+    server: &axum_test::TestServer,
+    raw_token: &str,
+    session_id: &str,
+    request_id: Uuid,
+    name: &'static str,
+    arguments: Value,
+) -> Value {
+    let response =
+        raw_call_tool_response(server, raw_token, session_id, request_id, name, arguments).await;
+    if let Some(error) = response.get("error") {
+        panic!("{name} succeeds, got error: {error}");
+    }
+
+    response["result"]["structuredContent"].clone()
+}
+
+async fn raw_call_tool_error(
+    server: &axum_test::TestServer,
+    raw_token: &str,
+    session_id: &str,
+    request_id: Uuid,
+    name: &'static str,
+    arguments: Value,
+) -> Value {
+    let response =
+        raw_call_tool_response(server, raw_token, session_id, request_id, name, arguments).await;
+    response["error"]["data"].clone()
+}
+
+async fn raw_call_tool_response(
+    server: &axum_test::TestServer,
+    raw_token: &str,
+    session_id: &str,
+    request_id: Uuid,
+    name: &'static str,
+    arguments: Value,
+) -> Value {
+    let response = server
+        .post(MCP)
+        .add_header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
+        .add_header(header::CONTENT_TYPE, "application/json")
+        .add_header(header::ACCEPT, "application/json, text/event-stream")
+        .add_header(SESSION_ID_HEADER, session_id)
+        .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments
+            }
+        }))
+        .await;
+    response.assert_status_ok();
+    let body = response.text();
+    body.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| data.starts_with('{'))
+        .last()
+        .map(|data| serde_json::from_str(data).expect("SSE data is JSON"))
+        .unwrap_or_else(|| panic!("MCP response includes JSON data event: {body}"))
 }
 
 fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
@@ -604,6 +1053,50 @@ async fn finalize_attachment(
         )
         .await
         .expect("attachment finalizes");
+}
+
+fn field_issue_names(data: &Value) -> Vec<&str> {
+    data["problem"]["field_issues"]
+        .as_array()
+        .expect("field issues")
+        .iter()
+        .map(|issue| issue["field"].as_str().expect("field"))
+        .collect()
+}
+
+fn assert_audit_event(
+    record: &Value,
+    event_name: &str,
+    operation: &str,
+    client_type: &str,
+    workspace_id: Uuid,
+    user_id: Uuid,
+    api_token_id: Uuid,
+    object_type: &str,
+    object_id: Uuid,
+) {
+    let fields = &record["fields"];
+
+    assert_eq!(fields["type"], "audit_log");
+    assert_eq!(fields["event_name"], event_name);
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["actor_type"], "api_token");
+    assert_eq!(fields["user_id"], user_id.to_string());
+    assert_eq!(fields["api_token_id"], api_token_id.to_string());
+    assert_eq!(fields["client_type"], client_type);
+    assert_eq!(fields["operation"], operation);
+    assert_eq!(fields["workspace_id"], workspace_id.to_string());
+    assert_eq!(fields["object_type"], object_type);
+    assert_eq!(fields["object_id"], object_id.to_string());
+}
+
+fn audit_metadata(record: &Value) -> Value {
+    serde_json::from_str(
+        record["fields"]["metadata"]
+            .as_str()
+            .expect("metadata is text"),
+    )
+    .expect("metadata parses")
 }
 
 fn uuid_from(value: &Value) -> Uuid {

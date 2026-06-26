@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use super::super::context::McpRequestContext;
 use crate::{
-    domain::{WorkspaceId, WorkspacePermission},
+    domain::{DomainError, WorkspaceId, WorkspacePermission},
+    repository::{ConflictKind, Error as RepositoryError},
     services::{attachment_downloads::DownloadError, Error as ServiceError},
     validation::Validation,
 };
@@ -14,7 +15,7 @@ use crate::{
 #[derive(Debug, Serialize)]
 struct FieldIssue {
     field: &'static str,
-    message: &'static str,
+    message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +71,34 @@ pub(super) fn optional_rfc3339(
     }
 }
 
+pub(super) fn required_rfc3339(
+    field: &'static str,
+    value: Option<String>,
+) -> Validation<DateTime<Utc>, McpArgumentError> {
+    match value {
+        Some(value) => DateTime::parse_from_rfc3339(&value)
+            .map(|parsed| Validation::valid(parsed.with_timezone(&Utc)))
+            .unwrap_or_else(|_| Validation::invalid(McpArgumentError::InvalidTimestamp { field })),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
+}
+
 pub(super) fn argument_errors(errors: Vec<McpArgumentError>) -> rmcp::ErrorData {
+    let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
+
+    rmcp::ErrorData::invalid_params(
+        "tool argument validation failed",
+        Some(json!({
+            "problem": {
+                "code": "validation_failed",
+                "message": "tool argument validation failed",
+                "field_issues": issues,
+            }
+        })),
+    )
+}
+
+pub(super) fn domain_errors(errors: Vec<DomainError>) -> rmcp::ErrorData {
     let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
 
     rmcp::ErrorData::invalid_params(
@@ -90,15 +118,75 @@ impl From<McpArgumentError> for FieldIssue {
         match error {
             McpArgumentError::Missing { field } => Self {
                 field,
-                message: "is required",
+                message: "is required".to_owned(),
             },
             McpArgumentError::InvalidUuid { field } => Self {
                 field,
-                message: "must be a UUID",
+                message: "must be a UUID".to_owned(),
             },
             McpArgumentError::InvalidTimestamp { field } => Self {
                 field,
-                message: "must be an RFC 3339 timestamp",
+                message: "must be an RFC 3339 timestamp".to_owned(),
+            },
+        }
+    }
+}
+
+impl From<DomainError> for FieldIssue {
+    fn from(error: DomainError) -> Self {
+        match error {
+            DomainError::EmptyRequiredText { field } => Self {
+                field,
+                message: format!("{field} must not be empty"),
+            },
+            DomainError::BlankOptionalText { field } => Self {
+                field,
+                message: format!("{field} must not be blank when provided"),
+            },
+            DomainError::OptionalTextTooLong { field, maximum } => Self {
+                field,
+                message: format!("{field} must be at most {maximum} characters"),
+            },
+            DomainError::InvalidCoverageWindow => Self {
+                field: "coverage_end_at",
+                message: "coverage_end_at must be greater than or equal to coverage_start_at"
+                    .to_owned(),
+            },
+            DomainError::InvalidFreshnessWindowDays => Self {
+                field: "freshness_window_days",
+                message: "freshness_window_days must be positive".to_owned(),
+            },
+            DomainError::MissingApiTokenExpiration => Self {
+                field: "expires_at",
+                message: "expires_at is required".to_owned(),
+            },
+            DomainError::ApiTokenExpirationNotFuture => Self {
+                field: "expires_at",
+                message: "expires_at must be in the future".to_owned(),
+            },
+            DomainError::DuplicatePermission { permission } => Self {
+                field: "permissions",
+                message: format!("permissions contains duplicate value {permission}"),
+            },
+            DomainError::InvalidEnumValue { field, value } => Self {
+                field,
+                message: format!("{field} has invalid value {value}"),
+            },
+            DomainError::EmptyAttachmentFilename => Self {
+                field: "filename",
+                message: "attachment filename must not be empty".to_owned(),
+            },
+            DomainError::AttachmentFilenameTooLong => Self {
+                field: "filename",
+                message: "attachment filename must be at most 255 bytes".to_owned(),
+            },
+            DomainError::InvalidAttachmentFilenameCharacters => Self {
+                field: "filename",
+                message: "attachment filename contains unsupported characters".to_owned(),
+            },
+            DomainError::ReservedAttachmentFilename => Self {
+                field: "filename",
+                message: "attachment filename must not be . or ..".to_owned(),
             },
         }
     }
@@ -130,6 +218,10 @@ pub(super) fn conflict(code: &'static str, message: &'static str) -> rmcp::Error
 }
 
 pub(super) fn service_error(error: ServiceError) -> rmcp::ErrorData {
+    if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
+        return repository_conflict(kind);
+    }
+
     tracing::error!(%error, "MCP service failure");
     rmcp::ErrorData::internal_error(
         "dependency failure",
@@ -140,6 +232,10 @@ pub(super) fn service_error(error: ServiceError) -> rmcp::ErrorData {
             }
         })),
     )
+}
+
+fn repository_conflict(kind: ConflictKind) -> rmcp::ErrorData {
+    conflict(kind.code(), kind.message())
 }
 
 pub(super) fn download_error(error: DownloadError) -> rmcp::ErrorData {
@@ -182,7 +278,11 @@ pub(super) fn format_datetime(value: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{argument_errors, optional_rfc3339, required_uuid, FieldIssue, McpArgumentError};
+    use super::{
+        argument_errors, domain_errors, optional_rfc3339, required_rfc3339, required_uuid,
+        FieldIssue, McpArgumentError,
+    };
+    use crate::domain::DomainError;
     use rmcp::model::ErrorCode;
 
     fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
@@ -258,6 +358,63 @@ mod tests {
         assert_eq!(
             FieldIssue::from(McpArgumentError::InvalidTimestamp { field: "now" }).message,
             "must be an RFC 3339 timestamp"
+        );
+    }
+
+    #[test]
+    fn required_rfc3339_maps_missing_and_invalid_values() {
+        let missing = required_rfc3339("coverage_start_at", None)
+            .into_result()
+            .map_err(argument_errors)
+            .expect_err("missing timestamp");
+        assert_eq!(
+            field_issues(&missing),
+            [("coverage_start_at".to_owned(), "is required".to_owned())]
+        );
+
+        let invalid = required_rfc3339("coverage_start_at", Some("nope".to_owned()))
+            .into_result()
+            .map_err(argument_errors)
+            .expect_err("invalid timestamp");
+        assert_eq!(
+            field_issues(&invalid),
+            [(
+                "coverage_start_at".to_owned(),
+                "must be an RFC 3339 timestamp".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn domain_errors_map_to_validation_field_issues() {
+        let error = domain_errors(vec![
+            DomainError::EmptyRequiredText {
+                field: "source_system",
+            },
+            DomainError::OptionalTextTooLong {
+                field: "description",
+                maximum: 4_000,
+            },
+            DomainError::InvalidCoverageWindow,
+        ]);
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            field_issues(&error),
+            [
+                (
+                    "source_system".to_owned(),
+                    "source_system must not be empty".to_owned()
+                ),
+                (
+                    "description".to_owned(),
+                    "description must be at most 4000 characters".to_owned()
+                ),
+                (
+                    "coverage_end_at".to_owned(),
+                    "coverage_end_at must be greater than or equal to coverage_start_at".to_owned()
+                ),
+            ]
         );
     }
 
