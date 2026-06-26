@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspaceId, WorkspacePermission},
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::attachment_downloads::IssuedDownloadGrant,
     validate,
 };
@@ -37,6 +38,26 @@ impl ProofplaneMcp {
             .issue(&context.token, submission_id, attachment_id)
             .await
             .map_err(download_error)?;
+
+        AuditEvent::new(
+            "evidence_attachment_download_grant.issued",
+            AuditOutcome::Success,
+            AuditActor::ApiToken {
+                user_id: context.token.user_id.into(),
+                api_token_id: context.token.api_token_id.into(),
+            },
+            AuditClientType::Mcp,
+            "create_attachment_download_grant",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .evidence_submission_id(grant.audit.submission_id.into())
+        .evidence_attachment_id(grant.audit.attachment_id.into())
+        .object(AuditObject::new(
+            "evidence_attachment",
+            grant.audit.attachment_id.into(),
+        ))
+        .emit();
 
         Ok(Json(grant.into()))
     }

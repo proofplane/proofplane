@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
     object_storage::{ObjectKey, ObjectStore},
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     repository::{FinalizingAttachmentUploadWork, Postgres},
     worker::{RetryableWorkerError, WorkerMessage},
 };
@@ -92,6 +93,7 @@ where
         tracing::debug!("attaachment marked as uploaded in repository");
 
         if updated {
+            emit_worker_finalization_audit(&work, message.request_id);
             self.object_store
                 .delete_object(&payload.object_key)
                 .await
@@ -106,6 +108,28 @@ where
 
         Ok(())
     }
+}
+
+fn emit_worker_finalization_audit(work: &FinalizingAttachmentUploadWork, request_id: Option<Uuid>) {
+    let mut event = AuditEvent::new(
+        "evidence_attachment_finalization.completed",
+        AuditOutcome::Success,
+        AuditActor::System { name: "worker" },
+        AuditClientType::Worker,
+        "handle_attachment_finalization",
+    )
+    .workspace_id(work.workspace_id.into())
+    .evidence_submission_id(work.evidence_submission_id.into())
+    .evidence_attachment_id(work.evidence_attachment_id.into())
+    .lifecycle_status("uploaded")
+    .object(AuditObject::new(
+        "evidence_attachment",
+        work.evidence_attachment_id.into(),
+    ));
+    if let Some(request_id) = request_id {
+        event = event.request_id(request_id);
+    }
+    event.emit();
 }
 
 struct FinalizationRequestedPayload {

@@ -109,6 +109,10 @@ pub struct AuditEvent {
     workspace_id: Option<Uuid>,
     request_id: Option<Uuid>,
     session_id: Option<Uuid>,
+    evidence_request_id: Option<Uuid>,
+    evidence_submission_id: Option<Uuid>,
+    evidence_attachment_id: Option<Uuid>,
+    lifecycle_status: Option<&'static str>,
     object: Option<AuditObject>,
 }
 
@@ -130,6 +134,10 @@ impl AuditEvent {
             workspace_id: None,
             request_id: None,
             session_id: None,
+            evidence_request_id: None,
+            evidence_submission_id: None,
+            evidence_attachment_id: None,
+            lifecycle_status: None,
             object: None,
         }
     }
@@ -146,6 +154,26 @@ impl AuditEvent {
 
     pub const fn session_id(mut self, session_id: Uuid) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+
+    pub const fn evidence_request_id(mut self, evidence_request_id: Uuid) -> Self {
+        self.evidence_request_id = Some(evidence_request_id);
+        self
+    }
+
+    pub const fn evidence_submission_id(mut self, evidence_submission_id: Uuid) -> Self {
+        self.evidence_submission_id = Some(evidence_submission_id);
+        self
+    }
+
+    pub const fn evidence_attachment_id(mut self, evidence_attachment_id: Uuid) -> Self {
+        self.evidence_attachment_id = Some(evidence_attachment_id);
+        self
+    }
+
+    pub const fn lifecycle_status(mut self, lifecycle_status: &'static str) -> Self {
+        self.lifecycle_status = Some(lifecycle_status);
         self
     }
 
@@ -175,6 +203,10 @@ impl AuditEvent {
             workspace_id = self.workspace_id.map(|id| id.to_string()),
             request_id = self.request_id.map(|id| id.to_string()),
             session_id = self.session_id.map(|id| id.to_string()),
+            evidence_request_id = self.evidence_request_id.map(|id| id.to_string()),
+            evidence_submission_id = self.evidence_submission_id.map(|id| id.to_string()),
+            evidence_attachment_id = self.evidence_attachment_id.map(|id| id.to_string()),
+            lifecycle_status = self.lifecycle_status,
             object_type,
             object_id = object_id.map(|id| id.to_string()),
         );
@@ -203,6 +235,9 @@ mod tests {
         let workspace_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
+        let evidence_request_id = Uuid::new_v4();
+        let evidence_submission_id = Uuid::new_v4();
+        let evidence_attachment_id = Uuid::new_v4();
         let object_id = Uuid::new_v4();
 
         let record = capture(|| {
@@ -219,6 +254,10 @@ mod tests {
             .workspace_id(workspace_id)
             .request_id(request_id)
             .session_id(session_id)
+            .evidence_request_id(evidence_request_id)
+            .evidence_submission_id(evidence_submission_id)
+            .evidence_attachment_id(evidence_attachment_id)
+            .lifecycle_status("uploaded")
             .object(AuditObject::new("evidence_submission", object_id))
             .emit();
         });
@@ -238,6 +277,19 @@ mod tests {
         assert_eq!(fields["workspace_id"], workspace_id.to_string());
         assert_eq!(fields["request_id"], request_id.to_string());
         assert_eq!(fields["session_id"], session_id.to_string());
+        assert_eq!(
+            fields["evidence_request_id"],
+            evidence_request_id.to_string()
+        );
+        assert_eq!(
+            fields["evidence_submission_id"],
+            evidence_submission_id.to_string()
+        );
+        assert_eq!(
+            fields["evidence_attachment_id"],
+            evidence_attachment_id.to_string()
+        );
+        assert_eq!(fields["lifecycle_status"], "uploaded");
         assert_eq!(fields["object_type"], "evidence_submission");
         assert_eq!(fields["object_id"], object_id.to_string());
         assert!(fields.get("system_name").is_none());

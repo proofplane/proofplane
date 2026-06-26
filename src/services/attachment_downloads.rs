@@ -49,11 +49,22 @@ pub struct IssuedDownloadGrant {
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,
+    pub audit: DownloadGrantAuditContext,
 }
 
 pub struct DownloadedAttachment {
     pub attachment: EvidenceAttachment,
     pub object: ObjectStream,
+    pub audit: DownloadGrantAuditContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadGrantAuditContext {
+    pub workspace_id: WorkspaceId,
+    pub submission_id: EvidenceSubmissionId,
+    pub attachment_id: EvidenceAttachmentId,
+    pub issued_by_user_id: UserId,
+    pub issued_via_api_token_id: ApiTokenId,
 }
 
 #[derive(Clone)]
@@ -142,6 +153,13 @@ impl AttachmentDownloadService {
             filename: candidate.attachment.filename,
             content_type: candidate.attachment.content_type,
             content_length: candidate.attachment.content_length,
+            audit: DownloadGrantAuditContext {
+                workspace_id: token.workspace_id,
+                submission_id,
+                attachment_id: candidate.attachment.id,
+                issued_by_user_id: token.user_id,
+                issued_via_api_token_id: token.api_token_id,
+            },
         })
     }
 
@@ -180,6 +198,13 @@ impl AttachmentDownloadService {
         Ok(DownloadedAttachment {
             attachment: candidate.attachment,
             object,
+            audit: DownloadGrantAuditContext {
+                workspace_id: grant.workspace_id,
+                submission_id: grant.submission_id,
+                attachment_id: grant.attachment_id,
+                issued_by_user_id: grant.issued_by_user_id,
+                issued_via_api_token_id: grant.issued_via_api_token_id,
+            },
         })
     }
 
