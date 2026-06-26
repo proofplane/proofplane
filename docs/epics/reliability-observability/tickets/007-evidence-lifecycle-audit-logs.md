@@ -1,6 +1,6 @@
 # 007 - Evidence Lifecycle Audit Logs
 
-**Status:** Todo · **Depends on:** 005, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003, evidence-lifecycle-completion/004 · **Spec:**
+**Status:** Done · **Depends on:** 005, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003, evidence-lifecycle-completion/004 · **Spec:**
 [spec.md](../spec.md#evidence-lifecycle-audit-events)
 
 **Summary** - Emit structured audit logs for evidence submission creation,

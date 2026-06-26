@@ -4,6 +4,8 @@
 //! returns successfully. This intentionally leaves a best-effort delivery gap
 //! if the process exits after commit but before [`AuditEvent::emit`] runs.
 
+use std::{collections::BTreeMap, fmt};
+
 use uuid::Uuid;
 
 /// The identity responsible for an audited operation.
@@ -98,7 +100,32 @@ impl AuditObject {
 }
 
 /// A bounded audit record builder containing only UUID identifiers and static names.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct AuditMetadata(BTreeMap<&'static str, String>);
+
+impl AuditMetadata {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn insert(&mut self, key: &'static str, value: String) {
+        self.0.insert(key, value);
+    }
+}
+
+impl fmt::Display for AuditMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            return f.write_str("{}");
+        }
+
+        let metadata = serde_json::to_string(&self.0)
+            .expect("audit metadata contains only string keys and values");
+        f.write_str(&metadata)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuditEvent {
     event_id: Uuid,
     event_name: &'static str,
@@ -109,6 +136,7 @@ pub struct AuditEvent {
     workspace_id: Option<Uuid>,
     request_id: Option<Uuid>,
     session_id: Option<Uuid>,
+    metadata: AuditMetadata,
     object: Option<AuditObject>,
 }
 
@@ -130,6 +158,7 @@ impl AuditEvent {
             workspace_id: None,
             request_id: None,
             session_id: None,
+            metadata: AuditMetadata::default(),
             object: None,
         }
     }
@@ -146,6 +175,11 @@ impl AuditEvent {
 
     pub const fn session_id(mut self, session_id: Uuid) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+
+    pub fn metadata(mut self, key: &'static str, value: impl ToString) -> Self {
+        self.metadata.insert(key, value.to_string());
         self
     }
 
@@ -175,6 +209,7 @@ impl AuditEvent {
             workspace_id = self.workspace_id.map(|id| id.to_string()),
             request_id = self.request_id.map(|id| id.to_string()),
             session_id = self.session_id.map(|id| id.to_string()),
+            metadata = %self.metadata,
             object_type,
             object_id = object_id.map(|id| id.to_string()),
         );
@@ -203,6 +238,9 @@ mod tests {
         let workspace_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
+        let evidence_request_id = Uuid::new_v4();
+        let evidence_submission_id = Uuid::new_v4();
+        let evidence_attachment_id = Uuid::new_v4();
         let object_id = Uuid::new_v4();
 
         let record = capture(|| {
@@ -219,6 +257,10 @@ mod tests {
             .workspace_id(workspace_id)
             .request_id(request_id)
             .session_id(session_id)
+            .metadata("evidence_request_id", evidence_request_id)
+            .metadata("evidence_submission_id", evidence_submission_id)
+            .metadata("evidence_attachment_id", evidence_attachment_id)
+            .metadata("lifecycle_status", "uploaded")
             .object(AuditObject::new("evidence_submission", object_id))
             .emit();
         });
@@ -238,6 +280,32 @@ mod tests {
         assert_eq!(fields["workspace_id"], workspace_id.to_string());
         assert_eq!(fields["request_id"], request_id.to_string());
         assert_eq!(fields["session_id"], session_id.to_string());
+        assert_eq!(
+            fields["metadata"],
+            format!(
+                r#"{{"evidence_attachment_id":"{}","evidence_request_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
+                evidence_attachment_id, evidence_request_id, evidence_submission_id
+            )
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_str(fields["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            metadata["evidence_request_id"],
+            evidence_request_id.to_string()
+        );
+        assert_eq!(
+            metadata["evidence_submission_id"],
+            evidence_submission_id.to_string()
+        );
+        assert_eq!(
+            metadata["evidence_attachment_id"],
+            evidence_attachment_id.to_string()
+        );
+        assert_eq!(metadata["lifecycle_status"], "uploaded");
+        assert!(fields.get("evidence_request_id").is_none());
+        assert!(fields.get("evidence_submission_id").is_none());
+        assert!(fields.get("evidence_attachment_id").is_none());
+        assert!(fields.get("lifecycle_status").is_none());
         assert_eq!(fields["object_type"], "evidence_submission");
         assert_eq!(fields["object_id"], object_id.to_string());
         assert!(fields.get("system_name").is_none());

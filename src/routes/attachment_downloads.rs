@@ -18,7 +18,10 @@ use uuid::Uuid;
 use crate::{
     authentication::{ApiTokenAuthenticator, ApiTokenContext},
     domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspacePermission},
-    routes::{authentication::authorize_workspace_route, error::ApiError},
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    routes::{
+        authentication::authorize_workspace_route, error::ApiError, request_context::RequestId,
+    },
     services::attachment_downloads::{
         AttachmentDownloadService, DownloadError, IssuedDownloadGrant,
     },
@@ -77,6 +80,7 @@ async fn authorize_download_grant_route(
 
 #[derive(Debug, Deserialize)]
 struct DownloadGrantPath {
+    workspace_id: Uuid,
     submission_id: Uuid,
     attachment_id: Uuid,
 }
@@ -111,6 +115,7 @@ async fn issue_download_grant(
     State(state): State<AttachmentDownloadState>,
     Path(path): Path<DownloadGrantPath>,
     Extension(token): Extension<ApiTokenContext>,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<DownloadGrantResponse>, ApiError> {
     let grant = state
         .service
@@ -122,11 +127,38 @@ async fn issue_download_grant(
         .await
         .map_err(download_error)?;
 
+    AuditEvent::new(
+        "evidence_attachment_download_grant.issued",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "issue_attachment_download_grant",
+    )
+    .workspace_id(path.workspace_id)
+    .request_id(request_id.0)
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(grant.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(grant.audit.attachment_id),
+    )
+    .object(AuditObject::new(
+        "evidence_attachment",
+        grant.audit.attachment_id.into(),
+    ))
+    .emit();
+
     Ok(Json(grant.into()))
 }
 
 async fn redeem_download_grant(
     State(state): State<AttachmentDownloadState>,
+    Extension(request_id): Extension<RequestId>,
     query: Result<Query<DownloadGrantQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
     let Query(query) = query.map_err(|_| ApiError::NotFound)?;
@@ -139,6 +171,31 @@ async fn redeem_download_grant(
         .redeem(&query.token)
         .await
         .map_err(download_error)?;
+    AuditEvent::new(
+        "evidence_attachment_download_grant.redeemed",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: downloaded.audit.issued_by_user_id.into(),
+            api_token_id: downloaded.audit.issued_via_api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "redeem_attachment_download_grant",
+    )
+    .workspace_id(downloaded.audit.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(downloaded.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(downloaded.audit.attachment_id),
+    )
+    .object(AuditObject::new(
+        "evidence_attachment",
+        downloaded.audit.attachment_id.into(),
+    ))
+    .emit();
     let disposition = content_disposition(&downloaded.attachment.filename);
     let mut response = Body::from_stream(downloaded.object.chunks).into_response();
     *response.status_mut() = StatusCode::OK;

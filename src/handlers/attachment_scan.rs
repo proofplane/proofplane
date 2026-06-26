@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::{
     domain::{EvidenceAttachmentId, EvidenceSubmissionId},
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{NewOutboxMessage, PendingAttachmentUploadWork, Postgres},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
@@ -105,12 +106,31 @@ impl AttachmentScanHandler {
         let object = match self.object_store.get_object(&quarantine_key).await {
             Ok(object) => object,
             Err(StorageError::NotFound) => {
-                self.mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
+                let updated = self
+                    .mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
                     .await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             Err(error) if final_delivery => {
-                self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             Err(error) => return Err(retryable(error)),
@@ -124,7 +144,16 @@ impl AttachmentScanHandler {
                 reason: "stored object metadata does not match attachment metadata".to_owned(),
             };
             if final_delivery {
-                self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 return Ok(());
             }
             return Err(scan_error(error));
@@ -141,7 +170,16 @@ impl AttachmentScanHandler {
         let scan_result = match scan_result {
             Ok(scan_result) => scan_result,
             Err(error) if final_delivery => {
-                self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string()).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        message.request_id,
+                        "failed_upload",
+                    );
+                }
                 // TODO: don't ack here, let the message fail so it can be dead-lettered
                 return Ok(());
             }
@@ -162,24 +200,58 @@ impl AttachmentScanHandler {
             MalwareScanOutcome::Clean => {
                 tracing::debug!("got clean scan, requesting finalization");
                 let message = attachment_finalization_requested_message(&work, request_id);
-                self.repository
+                let transaction_work = work.clone();
+                let updated = self
+                    .repository
                     .in_transaction(async move |transaction| {
-                        if transaction.request_attachment_finalization(&work).await? {
+                        let updated = transaction
+                            .request_attachment_finalization(&transaction_work)
+                            .await?;
+                        if updated {
                             transaction.append_outbox_message(&message).await?;
                         }
-                        Ok(())
+                        Ok(updated)
                     })
                     .await
                     .map_err(retryable)?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Success,
+                        &work,
+                        request_id,
+                        "finalizing",
+                    );
+                }
                 Ok(())
             }
             MalwareScanOutcome::Malicious { reason } => {
                 tracing::debug!("scan found a virus, marking attachment as malicious");
-                self.mark_malicious(&work, reason).await
+                let updated = self.mark_malicious(&work, reason).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        request_id,
+                        "contains_virus",
+                    );
+                }
+                Ok(())
             }
             MalwareScanOutcome::Failed { reason } => {
                 tracing::debug!("scan failed");
-                self.mark_failed(&work, reason).await
+                let updated = self.mark_failed(&work, reason).await?;
+                if updated {
+                    emit_worker_attachment_audit(
+                        "evidence_attachment_scan.completed",
+                        AuditOutcome::Failure,
+                        &work,
+                        request_id,
+                        "failed_upload",
+                    );
+                }
+                Ok(())
             }
         }
     }
@@ -188,9 +260,10 @@ impl AttachmentScanHandler {
         &self,
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
-    ) -> Result<(), RetryableWorkerError> {
+    ) -> Result<bool, RetryableWorkerError> {
         let reason = reason.as_ref();
-        self.repository
+        let updated = self
+            .repository
             .mark_attachment_contains_virus(work.evidence_attachment_id, &work.object_key)
             .await
             .map_err(retryable)?;
@@ -200,17 +273,17 @@ impl AttachmentScanHandler {
             scanner_reason = reason,
             "attachment scan detected malicious content"
         );
-
-        Ok(())
+        Ok(updated)
     }
 
     async fn mark_failed(
         &self,
         work: &PendingAttachmentUploadWork,
         reason: impl AsRef<str>,
-    ) -> Result<(), RetryableWorkerError> {
+    ) -> Result<bool, RetryableWorkerError> {
         let reason = reason.as_ref();
-        self.repository
+        let updated = self
+            .repository
             .mark_attachment_upload_failed(work.evidence_attachment_id, &work.object_key)
             .await
             .map_err(retryable)?;
@@ -220,8 +293,42 @@ impl AttachmentScanHandler {
             scanner_reason = reason,
             "attachment scan failed terminally"
         );
-        Ok(())
+        Ok(updated)
     }
+}
+
+fn emit_worker_attachment_audit(
+    event_name: &'static str,
+    outcome: AuditOutcome,
+    work: &PendingAttachmentUploadWork,
+    request_id: Option<Uuid>,
+    lifecycle_status: &'static str,
+) {
+    let mut event = AuditEvent::new(
+        event_name,
+        outcome,
+        AuditActor::System { name: "worker" },
+        AuditClientType::Worker,
+        "handle_attachment_scan",
+    )
+    .workspace_id(work.workspace_id.into())
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(work.evidence_submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(work.evidence_attachment_id),
+    )
+    .metadata("lifecycle_status", lifecycle_status)
+    .object(AuditObject::new(
+        "evidence_attachment",
+        work.evidence_attachment_id.into(),
+    ));
+    if let Some(request_id) = request_id {
+        event = event.request_id(request_id);
+    }
+    event.emit();
 }
 
 fn attachment_finalization_requested_message(

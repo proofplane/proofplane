@@ -35,6 +35,7 @@ use crate::{
         EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspacePermission,
     },
     object_storage::StorageError,
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authorize_workspace_route,
         error::{domain_errors, ApiError},
@@ -308,6 +309,7 @@ async fn create_evidence_submission(
     State(state): State<EvidenceSubmissionState>,
     Path(path): Path<EvidenceRequestSubmissionsPath>,
     Extension(token): Extension<ApiTokenContext>,
+    Extension(request_id): Extension<RequestId>,
     Json(body): Json<CreateEvidenceSubmissionRequest>,
 ) -> Result<Json<CreateEvidenceSubmissionResponse>, ApiError> {
     let evidence_request_id = EvidenceRequestId::from(path.evidence_request_id);
@@ -320,6 +322,26 @@ async fn create_evidence_submission(
         .create(token, evidence_request_id, payload)
         .await?
         .ok_or(ApiError::NotFound)?;
+
+    AuditEvent::new(
+        "evidence_submission.created",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "create_evidence_submission",
+    )
+    .workspace_id(token.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata("evidence_request_id", path.evidence_request_id)
+    .metadata("evidence_submission_id", Uuid::from(submission.id))
+    .object(AuditObject::new(
+        "evidence_submission",
+        submission.id.into(),
+    ))
+    .emit();
 
     Ok(Json(submission.into()))
 }
@@ -391,6 +413,27 @@ async fn upload_evidence_attachment(
         .service
         .create_attachment(&token, request_id.0, submission_id, payload)
         .await?;
+
+    AuditEvent::new(
+        "evidence_attachment.accepted",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "upload_evidence_attachment",
+    )
+    .workspace_id(token.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata("evidence_submission_id", path.submission_id)
+    .metadata("evidence_attachment_id", Uuid::from(attachment.id))
+    .metadata("lifecycle_status", attachment.upload_status.as_str())
+    .object(AuditObject::new(
+        "evidence_attachment",
+        attachment.id.into(),
+    ))
+    .emit();
 
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))
 }
