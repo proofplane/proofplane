@@ -20,6 +20,7 @@ use crate::{
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     validate,
+    validation::Validation,
 };
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -344,10 +345,10 @@ fn parse_create_submission_request(
 fn validate_coverage_window(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-) -> crate::validation::Validation<(DateTime<Utc>, DateTime<Utc>), DomainError> {
+) -> Validation<(DateTime<Utc>, DateTime<Utc>), DomainError> {
     if end < start {
-        return crate::validation::Validation::invalid(DomainError::InvalidCoverageWindow);
+        return Validation::invalid(DomainError::InvalidCoverageWindow);
     }
 
-    crate::validation::Validation::valid((start, end))
+    Validation::valid((start, end))
 }

@@ -160,14 +160,16 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
     assert_eq!(created_logs.len(), 1);
     assert_audit_event(
         &created_logs[0],
-        "evidence_request_control_mapping.created",
-        "create_evidence_request_control_mapping",
-        "rest",
-        workspace_id,
-        app.user_id(),
-        app.api_token_id(),
-        "evidence_request_control_mapping",
-        control_id,
+        ExpectedAuditEvent {
+            event_name: "evidence_request_control_mapping.created",
+            operation: "create_evidence_request_control_mapping",
+            client_type: "rest",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request_control_mapping",
+            object_id: control_id,
+        },
     );
 
     let (duplicate, duplicate_logs) = capture_audit_logs(|request_id| {
@@ -222,14 +224,16 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
     assert_eq!(deleted_logs.len(), 1);
     assert_audit_event(
         &deleted_logs[0],
-        "evidence_request_control_mapping.deleted",
-        "delete_evidence_request_control_mapping",
-        "rest",
-        workspace_id,
-        app.user_id(),
-        app.api_token_id(),
-        "evidence_request_control_mapping",
-        control_id,
+        ExpectedAuditEvent {
+            event_name: "evidence_request_control_mapping.deleted",
+            operation: "delete_evidence_request_control_mapping",
+            client_type: "rest",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request_control_mapping",
+            object_id: control_id,
+        },
     );
     assert_eq!(app.get(&path).await.json::<Value>(), json!([]));
     let (missing_delete, missing_delete_logs) = capture_audit_logs(|request_id| {
@@ -308,32 +312,33 @@ fn uuid_field(value: &Value) -> Uuid {
     Uuid::parse_str(value.as_str().unwrap()).unwrap()
 }
 
-fn assert_audit_event(
-    record: &Value,
-    event_name: &str,
-    operation: &str,
-    client_type: &str,
+struct ExpectedAuditEvent {
+    event_name: &'static str,
+    operation: &'static str,
+    client_type: &'static str,
     workspace_id: Uuid,
     user_id: Uuid,
     api_token_id: Uuid,
-    object_type: &str,
+    object_type: &'static str,
     object_id: Uuid,
-) {
+}
+
+fn assert_audit_event(record: &Value, expected: ExpectedAuditEvent) {
     let fields = &record["fields"];
     let metadata: Value =
         serde_json::from_str(fields["metadata"].as_str().expect("metadata is text"))
             .expect("metadata parses");
 
     assert_eq!(fields["type"], "audit_log");
-    assert_eq!(fields["event_name"], event_name);
+    assert_eq!(fields["event_name"], expected.event_name);
     assert_eq!(fields["outcome"], "success");
     assert_eq!(fields["actor_type"], "api_token");
-    assert_eq!(fields["user_id"], user_id.to_string());
-    assert_eq!(fields["api_token_id"], api_token_id.to_string());
-    assert_eq!(fields["client_type"], client_type);
-    assert_eq!(fields["operation"], operation);
-    assert_eq!(fields["workspace_id"], workspace_id.to_string());
-    assert_eq!(fields["object_type"], object_type);
-    assert_eq!(fields["object_id"], object_id.to_string());
-    assert_eq!(metadata["control_id"], object_id.to_string());
+    assert_eq!(fields["user_id"], expected.user_id.to_string());
+    assert_eq!(fields["api_token_id"], expected.api_token_id.to_string());
+    assert_eq!(fields["client_type"], expected.client_type);
+    assert_eq!(fields["operation"], expected.operation);
+    assert_eq!(fields["workspace_id"], expected.workspace_id.to_string());
+    assert_eq!(fields["object_type"], expected.object_type);
+    assert_eq!(fields["object_id"], expected.object_id.to_string());
+    assert_eq!(metadata["control_id"], expected.object_id.to_string());
 }

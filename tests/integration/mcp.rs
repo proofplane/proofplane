@@ -415,14 +415,16 @@ async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() 
     assert_eq!(logs.len(), 1);
     assert_audit_event(
         &logs[0],
-        "evidence_submission.created",
-        "create_evidence_submission",
-        "mcp",
-        workspace_id,
-        app.user_id(),
-        app.api_token_id(),
-        "evidence_submission",
-        submission_id,
+        ExpectedAuditEvent {
+            event_name: "evidence_submission.created",
+            operation: "create_evidence_submission",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_submission",
+            object_id: submission_id,
+        },
     );
     let metadata = audit_metadata(&logs[0]);
     assert_eq!(
@@ -744,14 +746,16 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
     assert_eq!(logs.len(), 1);
     assert_audit_event(
         &logs[0],
-        "evidence_request_control_mapping.created",
-        "map_evidence_request_to_control",
-        "mcp",
-        workspace_id,
-        app.user_id(),
-        app.api_token_id(),
-        "evidence_request_control_mapping",
-        second_control_id,
+        ExpectedAuditEvent {
+            event_name: "evidence_request_control_mapping.created",
+            operation: "map_evidence_request_to_control",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request_control_mapping",
+            object_id: second_control_id,
+        },
     );
 
     let limited = app
@@ -935,9 +939,11 @@ async fn raw_call_tool_response(
     response.assert_status_ok();
     let body = response.text();
     body.lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .filter(|data| data.starts_with('{'))
-        .last()
+        .rev()
+        .find_map(|line| {
+            line.strip_prefix("data: ")
+                .filter(|data| data.starts_with('{'))
+        })
         .map(|data| serde_json::from_str(data).expect("SSE data is JSON"))
         .unwrap_or_else(|| panic!("MCP response includes JSON data event: {body}"))
 }
@@ -1064,30 +1070,31 @@ fn field_issue_names(data: &Value) -> Vec<&str> {
         .collect()
 }
 
-fn assert_audit_event(
-    record: &Value,
-    event_name: &str,
-    operation: &str,
-    client_type: &str,
+struct ExpectedAuditEvent {
+    event_name: &'static str,
+    operation: &'static str,
+    client_type: &'static str,
     workspace_id: Uuid,
     user_id: Uuid,
     api_token_id: Uuid,
-    object_type: &str,
+    object_type: &'static str,
     object_id: Uuid,
-) {
+}
+
+fn assert_audit_event(record: &Value, expected: ExpectedAuditEvent) {
     let fields = &record["fields"];
 
     assert_eq!(fields["type"], "audit_log");
-    assert_eq!(fields["event_name"], event_name);
+    assert_eq!(fields["event_name"], expected.event_name);
     assert_eq!(fields["outcome"], "success");
     assert_eq!(fields["actor_type"], "api_token");
-    assert_eq!(fields["user_id"], user_id.to_string());
-    assert_eq!(fields["api_token_id"], api_token_id.to_string());
-    assert_eq!(fields["client_type"], client_type);
-    assert_eq!(fields["operation"], operation);
-    assert_eq!(fields["workspace_id"], workspace_id.to_string());
-    assert_eq!(fields["object_type"], object_type);
-    assert_eq!(fields["object_id"], object_id.to_string());
+    assert_eq!(fields["user_id"], expected.user_id.to_string());
+    assert_eq!(fields["api_token_id"], expected.api_token_id.to_string());
+    assert_eq!(fields["client_type"], expected.client_type);
+    assert_eq!(fields["operation"], expected.operation);
+    assert_eq!(fields["workspace_id"], expected.workspace_id.to_string());
+    assert_eq!(fields["object_type"], expected.object_type);
+    assert_eq!(fields["object_id"], expected.object_id.to_string());
 }
 
 fn audit_metadata(record: &Value) -> Value {
