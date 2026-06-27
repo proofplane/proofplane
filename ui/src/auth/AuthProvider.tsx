@@ -24,6 +24,7 @@ export function ProofplaneAuthProvider({ children }: ProofplaneAuthProviderProps
       onRedirectCallback={(appState) => {
         window.history.replaceState({}, document.title, appState?.returnTo ?? "/app");
       }}
+      // When Auth0 uses a custom domain, refresh should restore the session without persistent browser token storage.
       useRefreshTokens
     >
       {children}

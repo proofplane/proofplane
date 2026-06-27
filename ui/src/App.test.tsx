@@ -186,25 +186,25 @@ it("uses a centered spinner while opening the app session", () => {
   expect(screen.queryByText(/Checking your Auth0 session/i)).not.toBeInTheDocument();
 });
 
-it("asks unauthenticated app users to resume sign in on the same path", () => {
+it("redirects unauthenticated app users to Auth0 on the same path", async () => {
   renderAt("/app/workspaces/workspace-789/tokens?source=refresh#token");
 
   expect(
-    screen.getByRole("heading", { name: /Sign in to resume setup/i }),
-  ).toBeInTheDocument();
-  expect(screen.getByText(/browser session was not available/i)).toBeInTheDocument();
+    screen.queryByRole("heading", { name: /Sign in to resume setup/i }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(/Finishing sign in/i);
   expect(screen.queryByText(/Start with Auth0/i)).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: /Resume sign in/i }));
-
-  expect(auth0State.loginWithRedirect).toHaveBeenCalledWith({
-    appState: {
-      returnTo: "/app/workspaces/workspace-789/tokens?source=refresh#token",
-    },
-    authorizationParams: {
-      audience: "https://api.proofplane.com",
-      redirect_uri: "http://localhost:3000/auth/callback",
-    },
+  await waitFor(() => {
+    expect(auth0State.loginWithRedirect).toHaveBeenCalledWith({
+      appState: {
+        returnTo: "/app/workspaces/workspace-789/tokens?source=refresh#token",
+      },
+      authorizationParams: {
+        audience: "https://api.proofplane.com",
+        redirect_uri: "http://localhost:3000/auth/callback",
+      },
+    });
   });
 });
 

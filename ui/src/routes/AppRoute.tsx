@@ -25,7 +25,6 @@ import {
 } from "../api/tokens";
 import { createWorkspace, listWorkspaces, type Workspace } from "../api/workspaces";
 import { getAuthConfig } from "../auth/config";
-import { StartWorkspaceButton } from "../auth/StartWorkspaceButton";
 import { AuthLoading } from "../components/AuthLoading";
 import { Button } from "../components/Button";
 import { Shell } from "../components/Shell";
@@ -47,16 +46,33 @@ export function AppRoute() {
     );
   }
 
-  return <ConfiguredAppRoute />;
+  return <ConfiguredAppRoute config={config} />;
 }
 
-function ConfiguredAppRoute() {
-  const { getAccessTokenSilently, isAuthenticated, isLoading } = useAuth0();
+function ConfiguredAppRoute({ config }: { config: NonNullable<ReturnType<typeof getAuthConfig>> }) {
+  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
   const location = useLocation();
+  const loginStarted = useRef(false);
   const apiClient = useMemo(
     () => createApiClient({ getAccessToken: getAccessTokenSilently }),
     [getAccessTokenSilently],
   );
+  const returnTo = `${location.pathname}${location.search}${location.hash}`;
+
+  useEffect(() => {
+    if (isLoading || isAuthenticated || loginStarted.current) {
+      return;
+    }
+
+    loginStarted.current = true;
+    void loginWithRedirect({
+      appState: { returnTo },
+      authorizationParams: {
+        audience: config.audience,
+        redirect_uri: `${window.location.origin}/auth/callback`,
+      },
+    });
+  }, [config.audience, isAuthenticated, isLoading, loginWithRedirect, returnTo]);
 
   if (isLoading) {
     return (
@@ -69,20 +85,7 @@ function ConfiguredAppRoute() {
   if (!isAuthenticated) {
     return (
       <Shell>
-        <section className="page-heading" aria-labelledby="app-title">
-          <p className="eyebrow">Sign in required</p>
-          <h1 id="app-title">Sign in to resume setup.</h1>
-          <p>
-            Your browser session was not available. Sign in again to continue
-            this workspace step.
-          </p>
-          <div className="actions">
-            <StartWorkspaceButton
-              label="Resume sign in"
-              returnTo={`${location.pathname}${location.search}${location.hash}`}
-            />
-          </div>
-        </section>
+        <AuthLoading />
       </Shell>
     );
   }
