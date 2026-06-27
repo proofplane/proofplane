@@ -200,7 +200,7 @@ it("renders authenticated navigation and logs out through Auth0", async () => {
 
   renderAt("/app");
 
-  expect(await screen.findByRole("link", { name: "Workspaces" })).toHaveAttribute(
+  expect(await screen.findByRole("link", { name: "Workspace" })).toHaveAttribute(
     "href",
     "/app",
   );
@@ -226,6 +226,7 @@ it("uses skeleton rows while loading workspaces", () => {
 it("creates a workspace and routes to token creation", async () => {
   auth0State.isAuthenticated = true;
   const fetchMock = mockFetchSequence([
+    [],
     {
       id: "workspace-123",
       slug: null,
@@ -242,19 +243,28 @@ it("creates a workspace and routes to token creation", async () => {
         created_at: "2026-06-24T00:00:00Z",
       },
     ],
+    [
+      {
+        id: "workspace-123",
+        slug: null,
+        name: "Acme",
+        role: "owner",
+        created_at: "2026-06-24T00:00:00Z",
+      },
+    ],
   ]);
   const { container } = renderAt("/app/onboarding");
 
-  fireEvent.change(screen.getByLabelText(/Workspace name/i), {
+  fireEvent.change(await screen.findByLabelText(/Workspace name/i), {
     target: { value: "Acme" },
   });
   fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
 
-  await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-  expect(fetchMock.mock.calls[0][0].toString()).toBe(
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+  expect(fetchMock.mock.calls[1][0].toString()).toBe(
     "http://127.0.0.1:3000/workspaces",
   );
-  expect(fetchMock.mock.calls[0][1]).toMatchObject({
+  expect(fetchMock.mock.calls[1][1]).toMatchObject({
     body: JSON.stringify({ name: "Acme" }),
     method: "POST",
   });
@@ -267,7 +277,8 @@ it("creates a workspace and routes to token creation", async () => {
 
 it("preserves workspace input when creation fails", async () => {
   auth0State.isAuthenticated = true;
-  mockFetchJson(
+  mockFetchSequence([
+    [],
     {
       error: {
         code: "slug_taken",
@@ -275,12 +286,11 @@ it("preserves workspace input when creation fails", async () => {
         details: [],
       },
     },
-    { status: 409 },
-  );
+  ], [200, 409]);
 
   renderAt("/app/onboarding");
 
-  fireEvent.change(screen.getByLabelText(/Workspace name/i), {
+  fireEvent.change(await screen.findByLabelText(/Workspace name/i), {
     target: { value: "Acme" },
   });
   fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
@@ -291,7 +301,7 @@ it("preserves workspace input when creation fails", async () => {
   expect(screen.getByLabelText(/Workspace name/i)).toHaveValue("Acme");
 });
 
-it("lets authenticated users resume existing workspaces", async () => {
+it("routes authenticated users with a workspace to token setup", async () => {
   auth0State.isAuthenticated = true;
   mockFetchJson([
     {
@@ -306,15 +316,33 @@ it("lets authenticated users resume existing workspaces", async () => {
   const { container } = renderAt("/app");
 
   expect(
-    await screen.findByRole("heading", { name: /Resume a workspace/i }),
+    await screen.findByRole("heading", { name: /Token creation is next/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText("Existing Workspace")).toBeInTheDocument();
-  expect(screen.getByText("Role: owner")).toBeInTheDocument();
+  expect(screen.getByText(/Existing Workspace is ready for token setup/i)).toBeInTheDocument();
   expect(container.textContent).not.toMatch(/workspace-456/i);
-  expect(screen.getByRole("link", { name: /Resume setup/i })).toHaveAttribute(
-    "href",
-    "/app/workspaces/workspace-456/tokens",
-  );
+  expect(screen.queryByRole("link", { name: /Resume setup/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Create another workspace/i)).not.toBeInTheDocument();
+});
+
+it("keeps authenticated users with a workspace out of onboarding", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([
+    {
+      id: "workspace-456",
+      slug: null,
+      name: "Existing Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ]);
+
+  renderAt("/app/onboarding");
+
+  expect(
+    await screen.findByRole("heading", { name: /Token creation is next/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Existing Workspace is ready for token setup/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Workspace name/i)).not.toBeInTheDocument();
 });
 
 it("shows the workspace name on token setup routes", async () => {
@@ -369,13 +397,14 @@ function mockFetchPending() {
   return fetchMock;
 }
 
-function mockFetchSequence(bodies: unknown[]) {
+function mockFetchSequence(bodies: unknown[], statuses: number[] = []) {
   const fetchMock = vi.fn<typeof fetch>(async () => {
     const body = bodies.shift();
+    const status = statuses.shift();
 
     return new Response(JSON.stringify(body), {
       headers: { "Content-Type": "application/json" },
-      status: 200,
+      status: status ?? 200,
     });
   });
 

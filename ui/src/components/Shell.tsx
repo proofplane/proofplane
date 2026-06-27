@@ -46,7 +46,7 @@ function AuthNav() {
   return (
     <nav className="shell-nav" aria-label="Primary navigation">
       <NavLink className={navClass} to="/app">
-        Workspaces
+        Workspace
       </NavLink>
       <NavLink className={navClass} to="/docs">
         Docs

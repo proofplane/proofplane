@@ -2,7 +2,7 @@ import { useAuth0 } from "@auth0/auth0-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
-import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { ApiError, createApiClient } from "../api/client";
 import { createWorkspace, listWorkspaces, type Workspace } from "../api/workspaces";
 import { getAuthConfig } from "../auth/config";
@@ -94,25 +94,38 @@ function WorkspaceGate({ apiClient }: WorkspaceRouteProps) {
     return <Navigate replace to="/app/onboarding" />;
   }
 
-  return <WorkspaceResume workspaces={workspaces.data} />;
+  return <Navigate replace to={workspaceTokenPath(workspaces.data[0])} />;
 }
 
 function WorkspaceOnboarding({ apiClient }: WorkspaceRouteProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
+  const workspaces = useWorkspaces(apiClient);
 
   const create = useMutation({
     mutationFn: () => createWorkspace(apiClient, { name: name.trim() }),
     onSuccess: async (workspace) => {
       await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      navigate(`/app/workspaces/${workspace.id}/tokens`);
+      navigate(workspaceTokenPath(workspace));
     },
   });
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     create.mutate();
+  }
+
+  if (workspaces.isLoading) {
+    return <WorkspaceListSkeleton />;
+  }
+
+  if (workspaces.isError) {
+    return <WorkspaceError error={workspaces.error} />;
+  }
+
+  if (workspaces.data?.length) {
+    return <Navigate replace to={workspaceTokenPath(workspaces.data[0])} />;
   }
 
   return (
@@ -142,37 +155,6 @@ function WorkspaceOnboarding({ apiClient }: WorkspaceRouteProps) {
           <ArrowRight aria-hidden="true" size={16} />
         </Button>
       </form>
-    </>
-  );
-}
-
-function WorkspaceResume({ workspaces }: { workspaces: Workspace[] }) {
-  return (
-    <>
-      <section className="page-heading onboarding-heading" aria-labelledby="app-title">
-        <p className="eyebrow">Workspace setup</p>
-        <h1 id="app-title">Resume a workspace.</h1>
-        <p>Select an existing workspace instead of creating a duplicate.</p>
-      </section>
-
-      <div className="workspace-list">
-        {workspaces.map((workspace) => (
-          <article className="workspace-row" key={workspace.id}>
-            <div>
-              <h2>{workspace.name}</h2>
-              <p>Role: {workspace.role}</p>
-            </div>
-            <Link className="button button-primary" to={`/app/workspaces/${workspace.id}/tokens`}>
-              Resume setup
-              <ArrowRight aria-hidden="true" size={16} />
-            </Link>
-          </article>
-        ))}
-      </div>
-
-      <Link className="button button-secondary onboarding-secondary-action" to="/app/onboarding">
-        Create another workspace
-      </Link>
     </>
   );
 }
@@ -285,4 +267,8 @@ function useWorkspaces(apiClient: ReturnType<typeof createApiClient>) {
     queryKey: ["workspaces"],
     retry: false,
   });
+}
+
+function workspaceTokenPath(workspace: Pick<Workspace, "id">) {
+  return `/app/workspaces/${workspace.id}/tokens`;
 }
