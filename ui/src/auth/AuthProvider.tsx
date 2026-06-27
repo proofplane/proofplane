@@ -24,6 +24,7 @@ export function ProofplaneAuthProvider({ children }: ProofplaneAuthProviderProps
       onRedirectCallback={(appState) => {
         window.history.replaceState({}, document.title, appState?.returnTo ?? "/app");
       }}
+      useRefreshTokens
     >
       {children}
     </Auth0Provider>

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, vi } from "vitest";
+import type { ApiToken, IssuedApiToken } from "./api/tokens";
 import { App } from "./App";
 
 const auth0State = vi.hoisted(() => ({
@@ -12,9 +13,13 @@ const auth0State = vi.hoisted(() => ({
   loginWithRedirect: vi.fn(),
   logout: vi.fn(),
 }));
+const auth0ProviderProps = vi.hoisted(() => [] as Record<string, unknown>[]);
 
 vi.mock("@auth0/auth0-react", () => ({
-  Auth0Provider: ({ children }: { children: React.ReactNode }) => children,
+  Auth0Provider: (props: { children: React.ReactNode }) => {
+    auth0ProviderProps.push(props);
+    return props.children;
+  },
   useAuth0: () => auth0State,
 }));
 
@@ -38,6 +43,7 @@ beforeEach(() => {
   auth0State.getAccessTokenSilently.mockResolvedValue("access-token");
   auth0State.loginWithRedirect.mockReset();
   auth0State.logout.mockReset();
+  auth0ProviderProps.length = 0;
   vi.unstubAllGlobals();
   import.meta.env.VITE_AUTH0_DOMAIN = "proofplane.auth0.com";
   import.meta.env.VITE_AUTH0_CLIENT_ID = "client_123";
@@ -87,6 +93,17 @@ it("renders the public explainer without a demo gate", () => {
   expect(container.textContent).not.toMatch(
     /Book a Demo|without starting from an empty dashboard|workspace_id|request_id|\/workspaces\/\{id\}/i,
   );
+});
+
+it("configures Auth0 refresh tokens without persistent browser storage", () => {
+  renderAt("/");
+
+  expect(auth0ProviderProps[0]).toMatchObject({
+    clientId: "client_123",
+    domain: "proofplane.auth0.com",
+    useRefreshTokens: true,
+  });
+  expect(auth0ProviderProps[0]).not.toHaveProperty("cacheLocation");
 });
 
 it("sends the primary CTA to Auth0 signup/login", () => {
@@ -169,6 +186,28 @@ it("uses a centered spinner while opening the app session", () => {
   expect(screen.queryByText(/Checking your Auth0 session/i)).not.toBeInTheDocument();
 });
 
+it("asks unauthenticated app users to resume sign in on the same path", () => {
+  renderAt("/app/workspaces/workspace-789/tokens?source=refresh#token");
+
+  expect(
+    screen.getByRole("heading", { name: /Sign in to resume setup/i }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/browser session was not available/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Start with Auth0/i)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Resume sign in/i }));
+
+  expect(auth0State.loginWithRedirect).toHaveBeenCalledWith({
+    appState: {
+      returnTo: "/app/workspaces/workspace-789/tokens?source=refresh#token",
+    },
+    authorizationParams: {
+      audience: "https://api.proofplane.com",
+      redirect_uri: "http://localhost:3000/auth/callback",
+    },
+  });
+});
+
 it("renders a recoverable not-found route", () => {
   renderAt("/missing");
 
@@ -225,34 +264,7 @@ it("uses skeleton rows while loading workspaces", () => {
 
 it("creates a workspace and routes to token creation", async () => {
   auth0State.isAuthenticated = true;
-  const fetchMock = mockFetchSequence([
-    [],
-    {
-      id: "workspace-123",
-      slug: null,
-      name: "Acme",
-      role: "owner",
-      created_at: "2026-06-24T00:00:00Z",
-    },
-    [
-      {
-        id: "workspace-123",
-        slug: null,
-        name: "Acme",
-        role: "owner",
-        created_at: "2026-06-24T00:00:00Z",
-      },
-    ],
-    [
-      {
-        id: "workspace-123",
-        slug: null,
-        name: "Acme",
-        role: "owner",
-        created_at: "2026-06-24T00:00:00Z",
-      },
-    ],
-  ]);
+  const fetchMock = mockWorkspaceCreationFetch();
   const { container } = renderAt("/app/onboarding");
 
   fireEvent.change(await screen.findByLabelText(/Workspace name/i), {
@@ -260,18 +272,21 @@ it("creates a workspace and routes to token creation", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: /Create workspace/i }));
 
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-  expect(fetchMock.mock.calls[1][0].toString()).toBe(
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === "POST")).toBe(true),
+  );
+  const createCall = fetchMock.mock.calls.find((call) => call[1]?.method === "POST");
+  expect(createCall?.[0].toString()).toBe(
     "http://127.0.0.1:3000/workspaces",
   );
-  expect(fetchMock.mock.calls[1][1]).toMatchObject({
+  expect(createCall?.[1]).toMatchObject({
     body: JSON.stringify({ name: "Acme" }),
     method: "POST",
   });
   expect(
-    await screen.findByRole("heading", { name: /Token creation is next/i }),
+    await screen.findByRole("heading", { name: /Issue a scoped API token/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/Acme is ready for token setup/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Token name/i)).toHaveValue("Acme setup token");
   expect(container.textContent).not.toMatch(/workspace-123/i);
 });
 
@@ -316,9 +331,11 @@ it("routes authenticated users with a workspace to token setup", async () => {
   const { container } = renderAt("/app");
 
   expect(
-    await screen.findByRole("heading", { name: /Token creation is next/i }),
+    await screen.findByRole("heading", { name: /Issue a scoped API token/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/Existing Workspace is ready for token setup/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Token name/i)).toHaveValue(
+    "Existing Workspace setup token",
+  );
   expect(container.textContent).not.toMatch(/workspace-456/i);
   expect(screen.queryByRole("link", { name: /Resume setup/i })).not.toBeInTheDocument();
   expect(screen.queryByText(/Create another workspace/i)).not.toBeInTheDocument();
@@ -339,9 +356,11 @@ it("keeps authenticated users with a workspace out of onboarding", async () => {
   renderAt("/app/onboarding");
 
   expect(
-    await screen.findByRole("heading", { name: /Token creation is next/i }),
+    await screen.findByRole("heading", { name: /Issue a scoped API token/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/Existing Workspace is ready for token setup/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Token name/i)).toHaveValue(
+    "Existing Workspace setup token",
+  );
   expect(screen.queryByLabelText(/Workspace name/i)).not.toBeInTheDocument();
 });
 
@@ -360,10 +379,220 @@ it("shows the workspace name on token setup routes", async () => {
   const { container } = renderAt("/app/workspaces/workspace-789/tokens");
 
   expect(
-    await screen.findByRole("heading", { name: /Token creation is next/i }),
+    await screen.findByRole("heading", { name: /Issue a scoped API token/i }),
   ).toBeInTheDocument();
-  expect(screen.getByText(/Named Workspace is ready for token setup/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Token name/i)).toHaveValue(
+    "Named Workspace setup token",
+  );
   expect(container.textContent).not.toMatch(/workspace-789/i);
+});
+
+it("shows exact granular permissions before token creation", async () => {
+  auth0State.isAuthenticated = true;
+  mockFetchJson([
+    {
+      id: "workspace-789",
+      slug: null,
+      name: "Named Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ]);
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  expect(await screen.findByLabelText("Selected permissions")).toHaveTextContent(
+    "read_evidence_requests",
+  );
+  expect(screen.getByLabelText("Selected permissions")).toHaveTextContent(
+    "read_evidence_submissions",
+  );
+  expect(screen.getByLabelText("Selected permissions")).toHaveTextContent(
+    "read_controls",
+  );
+
+  fireEvent.click(screen.getByLabelText(/All permissions/i));
+
+  expect(screen.getByLabelText("Selected permissions")).toHaveTextContent(
+    "write_evidence_requests",
+  );
+  expect(screen.getByLabelText("Selected permissions")).toHaveTextContent(
+    "write_evidence_submissions",
+  );
+  expect(screen.getByLabelText("Selected permissions")).toHaveTextContent(
+    "write_controls",
+  );
+});
+
+it("blocks custom token creation without selected permissions", async () => {
+  auth0State.isAuthenticated = true;
+  const fetchMock = mockFetchJson([
+    {
+      id: "workspace-789",
+      slug: null,
+      name: "Named Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ]);
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  fireEvent.click(await screen.findByLabelText(/Custom/i));
+  fireEvent.click(screen.getByRole("button", { name: /Create token/i }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /Choose at least one permission/i,
+  );
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("creates a token and shows the raw token once", async () => {
+  auth0State.isAuthenticated = true;
+  const fetchMock = mockTokenRouteFetch({
+    postResponse: issuedTokenResponse(),
+    tokens: [],
+  });
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  fireEvent.click(await screen.findByRole("button", { name: /Create token/i }));
+
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === "POST")).toBe(true),
+  );
+  const createCall = fetchMock.mock.calls.find((call) => call[1]?.method === "POST");
+  expect(createCall?.[0].toString()).toBe(
+    "http://127.0.0.1:3000/workspaces/workspace-789/api-tokens",
+  );
+  expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
+    name: "Named Workspace setup token",
+    permissions: [
+      "read_evidence_requests",
+      "read_evidence_submissions",
+      "read_controls",
+    ],
+  });
+  expect(await screen.findByText("ppat_test_raw_token")).toBeInTheDocument();
+  expect(screen.getByText(/PROOFPLANE_API_TOKEN=ppat_test_raw_token/i)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByLabelText(/I saved this token/i));
+  fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+
+  expect(screen.queryByText("ppat_test_raw_token")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Tokens" })).toBeInTheDocument();
+});
+
+it("does not retain raw token state when token creation fails", async () => {
+  auth0State.isAuthenticated = true;
+  mockTokenRouteFetch({
+    postResponse: {
+      error: {
+        message: "invalid permissions",
+      },
+    },
+    postStatus: 400,
+    tokens: [],
+  });
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  fireEvent.click(await screen.findByRole("button", { name: /Create token/i }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/invalid permissions/i);
+  expect(screen.queryByText(/ppat_/i)).not.toBeInTheDocument();
+});
+
+it("lists active tokens by name on refresh", async () => {
+  auth0State.isAuthenticated = true;
+  mockTokenRouteFetch({
+    tokens: [listedToken({ id: "token-active", name: "CI token" })],
+  });
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  expect(await screen.findByRole("heading", { name: "Tokens" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "CI token" })).toBeInTheDocument();
+  expect(screen.getByText("Expires Jul 24, 2026")).toBeInTheDocument();
+  expect(screen.getByLabelText("CI token permissions")).toHaveTextContent(
+    "read_evidence_requests",
+  );
+  expect(screen.getByLabelText("CI token permissions")).toHaveTextContent(
+    "read_evidence_submissions",
+  );
+  expect(screen.getByLabelText("CI token permissions")).toHaveTextContent(
+    "read_controls",
+  );
+  expect(screen.getByRole("button", { name: /Delete/i })).toBeInTheDocument();
+});
+
+it("confirms before deleting a token", async () => {
+  auth0State.isAuthenticated = true;
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal("confirm", confirm);
+  const fetchMock = mockTokenRouteFetch({
+    tokens: [listedToken({ id: "token-active", name: "CI token" })],
+  });
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  fireEvent.click(await screen.findByRole("button", { name: /Delete/i }));
+
+  expect(confirm).toHaveBeenCalledWith(
+    expect.stringContaining("any users of this token will lose access immediately"),
+  );
+  expect(fetchMock.mock.calls.some((call) => call[1]?.method === "DELETE")).toBe(false);
+});
+
+it("deletes active tokens and hides revoked tokens until toggled", async () => {
+  auth0State.isAuthenticated = true;
+  vi.stubGlobal("confirm", vi.fn(() => true));
+  const fetchMock = mockTokenRouteFetch({
+    tokens: [
+      listedToken({ id: "token-active", name: "CI token" }),
+      listedToken({
+        id: "token-revoked",
+        name: "Old token",
+        revoked_at: "2026-06-25T00:00:00Z",
+      }),
+    ],
+    tokensAfterDelete: [
+      listedToken({
+        id: "token-active",
+        name: "CI token",
+        revoked_at: "2026-06-26T00:00:00Z",
+      }),
+      listedToken({
+        id: "token-revoked",
+        name: "Old token",
+        revoked_at: "2026-06-25T00:00:00Z",
+      }),
+    ],
+  });
+
+  renderAt("/app/workspaces/workspace-789/tokens");
+
+  fireEvent.click(await screen.findByRole("button", { name: /Delete/i }));
+
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === "DELETE")).toBe(true),
+  );
+  await waitFor(() =>
+    expect(screen.getByText("No active tokens yet.")).toBeInTheDocument(),
+  );
+  expect(screen.queryByRole("heading", { name: "CI token" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByLabelText(/Show revoked/i));
+
+  expect(await screen.findByRole("heading", { name: "CI token" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Old token" })).toBeInTheDocument();
+  expect(screen.getByLabelText("CI token permissions")).toHaveTextContent(
+    "read_controls",
+  );
+  expect(screen.getByLabelText("Old token permissions")).toHaveTextContent(
+    "read_controls",
+  );
+  expect(screen.getAllByText("Revoked")).toHaveLength(2);
 });
 
 it("uses skeleton content while loading token setup", () => {
@@ -375,9 +604,41 @@ it("uses skeleton content while loading token setup", () => {
   expect(screen.queryByText(/Checking workspace access/i)).not.toBeInTheDocument();
 });
 
+function issuedTokenResponse(): IssuedApiToken {
+  return {
+    id: "token-123",
+    name: "Named Workspace setup token",
+    workspace_id: "workspace-789",
+    permissions: [
+      "read_evidence_requests",
+      "read_evidence_submissions",
+      "read_controls",
+    ],
+    expires_at: "2026-07-24T00:00:00Z",
+    revoked_at: null,
+    last_used_at: null,
+    created_at: "2026-06-24T00:00:00Z",
+    api_token: "ppat_test_raw_token",
+  };
+}
+
+function listedToken(overrides: Partial<ApiToken> = {}): ApiToken {
+  const { api_token, ...token } = issuedTokenResponse();
+
+  return {
+    ...token,
+    ...overrides,
+  };
+}
+
 function mockFetchJson(body: unknown, init: ResponseInit = {}) {
-  const fetchMock = vi.fn<typeof fetch>(async () => {
-    return new Response(JSON.stringify(body), {
+  const fetchMock = vi.fn<typeof fetch>(async (input, requestInit) => {
+    const url = input.toString();
+    const method = requestInit?.method ?? "GET";
+    const responseBody =
+      method === "GET" && url.endsWith("/api-tokens") ? [] : body;
+
+    return new Response(JSON.stringify(responseBody), {
       headers: { "Content-Type": "application/json" },
       status: init.status ?? 200,
       statusText: init.statusText,
@@ -387,6 +648,89 @@ function mockFetchJson(body: unknown, init: ResponseInit = {}) {
   vi.stubGlobal("fetch", fetchMock);
 
   return fetchMock;
+}
+
+function mockTokenRouteFetch({
+  postResponse,
+  postStatus = 200,
+  tokens,
+  tokensAfterDelete,
+}: {
+  postResponse?: unknown;
+  postStatus?: number;
+  tokens: unknown[];
+  tokensAfterDelete?: unknown[];
+}) {
+  let deleted = false;
+  const workspace = [
+    {
+      id: "workspace-789",
+      slug: null,
+      name: "Named Workspace",
+      role: "owner",
+      created_at: "2026-06-24T00:00:00Z",
+    },
+  ];
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input.toString();
+    const method = init?.method ?? "GET";
+
+    if (method === "POST") {
+      return jsonResponse(postResponse ?? issuedTokenResponse(), postStatus);
+    }
+
+    if (method === "DELETE") {
+      deleted = true;
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.endsWith("/api-tokens")) {
+      return jsonResponse(deleted ? (tokensAfterDelete ?? tokens) : tokens);
+    }
+
+    return jsonResponse(workspace);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  return fetchMock;
+}
+
+function mockWorkspaceCreationFetch() {
+  let created = false;
+  const workspace = {
+    id: "workspace-123",
+    slug: null,
+    name: "Acme",
+    role: "owner",
+    created_at: "2026-06-24T00:00:00Z",
+  };
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input.toString();
+    const method = init?.method ?? "GET";
+
+    if (method === "POST") {
+      created = true;
+      return jsonResponse(workspace);
+    }
+
+    if (url.endsWith("/api-tokens")) {
+      return jsonResponse([]);
+    }
+
+    return jsonResponse(created ? [workspace] : []);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  return fetchMock;
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+    status,
+  });
 }
 
 function mockFetchPending() {

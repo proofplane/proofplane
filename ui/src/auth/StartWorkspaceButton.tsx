@@ -5,16 +5,29 @@ import { getAuthConfig } from "./config";
 
 type StartWorkspaceButtonProps = {
   className?: string;
+  label?: string;
+  returnTo?: string;
 };
 
-export function StartWorkspaceButton({ className }: StartWorkspaceButtonProps) {
+export function StartWorkspaceButton({
+  className,
+  label = "Log in or sign up",
+  returnTo = "/app",
+}: StartWorkspaceButtonProps) {
   const config = getAuthConfig();
 
   if (!config) {
-    return <MissingAuthConfigButton className={className} />;
+    return <MissingAuthConfigButton className={className} label={label} />;
   }
 
-  return <ConfiguredStartWorkspaceButton className={className} config={config} />;
+  return (
+    <ConfiguredStartWorkspaceButton
+      className={className}
+      config={config}
+      label={label}
+      returnTo={returnTo}
+    />
+  );
 }
 
 type ConfiguredStartWorkspaceButtonProps = StartWorkspaceButtonProps & {
@@ -24,6 +37,8 @@ type ConfiguredStartWorkspaceButtonProps = StartWorkspaceButtonProps & {
 function ConfiguredStartWorkspaceButton({
   className,
   config,
+  label,
+  returnTo,
 }: ConfiguredStartWorkspaceButtonProps) {
   const { isLoading, loginWithRedirect } = useAuth0();
   const [error, setError] = useState<string>();
@@ -33,7 +48,7 @@ function ConfiguredStartWorkspaceButton({
 
     try {
       await loginWithRedirect({
-        appState: { returnTo: "/app" },
+        appState: { returnTo },
         authorizationParams: {
           audience: config.audience,
           redirect_uri: `${window.location.origin}/auth/callback`,
@@ -52,7 +67,7 @@ function ConfiguredStartWorkspaceButton({
         onClick={startWorkspaceSetup}
         type="button"
       >
-        Log in or sign up
+        {label}
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (
@@ -64,7 +79,10 @@ function ConfiguredStartWorkspaceButton({
   );
 }
 
-function MissingAuthConfigButton({ className }: StartWorkspaceButtonProps) {
+function MissingAuthConfigButton({
+  className,
+  label = "Log in or sign up",
+}: StartWorkspaceButtonProps) {
   const [error, setError] = useState<string>();
 
   return (
@@ -74,7 +92,7 @@ function MissingAuthConfigButton({ className }: StartWorkspaceButtonProps) {
         onClick={() => setError("Auth0 is not configured for this environment.")}
         type="button"
       >
-        Log in or sign up
+        {label}
         <ArrowRight aria-hidden="true" size={16} />
       </button>
       {error ? (

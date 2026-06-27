@@ -15,7 +15,7 @@ are lean handoff units that link into those sources of technical depth.
 | 001. [UI App Scaffold](./tickets/001-ui-app-scaffold.md) | Done | Create the Vite React app, design tokens, routing shell, and test harness. |
 | 002. [Public Explainer And Auth Entry](./tickets/002-public-explainer-and-auth-entry.md) | Done | Explain Proofplane and route users into Auth0 signup/login. |
 | 003. [Workspace Onboarding Flow](./tickets/003-workspace-onboarding-flow.md) | Done | Create or resume workspace setup using current workspace APIs. |
-| 004. [Scoped Token Creation Flow](./tickets/004-scoped-token-creation-flow.md) | Todo | Create a one-time token with job-based permission presets. |
+| 004. [Scoped Token Creation Flow](./tickets/004-scoped-token-creation-flow.md) | Done | Create a one-time token with job-based permission presets. |
 | 005. [MCP Setup Preview](./tickets/005-mcp-setup-preview.md) | Todo | Show honest install/config guidance and suggested prompts. |
 | 006. [Workspace Home And Packet Preview](./tickets/006-workspace-home-and-packet-preview.md) | Todo | Show controls, evidence status, readiness, and packet preview/unavailable states. |
 | 007. [Token And Workspace Settings](./tickets/007-token-and-workspace-settings.md) | Todo | List/revoke tokens and expose workspace identity/settings. |
