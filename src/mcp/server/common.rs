@@ -38,6 +38,18 @@ pub(super) fn authorize(
     McpRequestContext::authorize(&parts.extensions, &parts.headers, workspace_id, permission)
 }
 
+pub(super) fn authorize_token_workspace(
+    ctx: &RequestContext<RoleServer>,
+    permission: WorkspacePermission,
+) -> Result<McpRequestContext, rmcp::ErrorData> {
+    let parts = ctx
+        .extensions
+        .get::<http::request::Parts>()
+        .ok_or_else(|| rmcp::ErrorData::internal_error("request context unavailable", None))?;
+
+    McpRequestContext::authorize_token_workspace(&parts.extensions, &parts.headers, permission)
+}
+
 pub(super) fn parse_uuid_arg(
     field: &'static str,
     value: Option<String>,

@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
-use super::support::{capture_audit_logs, upload_attachment, TestApp};
+use super::support::{
+    capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, upload_attachment, TestApp,
+};
 
 const MCP: &str = "/mcp";
 
@@ -50,7 +52,12 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_latest_evidence_submission",
         "create_evidence_submission",
         "create_attachment_download_grant",
+        "list_frameworks",
+        "list_framework_requirements",
         "list_controls",
+        "get_control",
+        "create_control",
+        "replace_control",
         "list_evidence_request_control_mappings",
         "map_evidence_request_to_control",
         "remove_evidence_request_control_mapping",
@@ -91,6 +98,26 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "control_id",
     );
     assert_schema_has_property(
+        &find_tool(&tool_list, "list_framework_requirements")["inputSchema"],
+        "framework_id",
+    );
+    assert_schema_lacks_property(
+        &find_tool(&tool_list, "list_framework_requirements")["inputSchema"],
+        "workspace_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "get_control")["inputSchema"],
+        "control_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_control")["inputSchema"],
+        "framework_requirement_ids",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "replace_control")["inputSchema"],
+        "framework_requirement_ids",
+    );
+    assert_schema_has_property(
         &find_tool(&tool_list, "list_evidence_requests")["outputSchema"],
         "evidence_requests",
     );
@@ -109,6 +136,23 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "list_controls")["outputSchema"],
         "controls",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "list_frameworks")["outputSchema"],
+        "frameworks",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "list_framework_requirements")["outputSchema"],
+        "requirements",
+    );
+    assert_schema_has_property(&find_tool(&tool_list, "get_control")["outputSchema"], "id");
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_control")["outputSchema"],
+        "framework_requirements",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "replace_control")["outputSchema"],
+        "framework_requirements",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "list_evidence_request_control_mappings")["outputSchema"],
@@ -550,6 +594,313 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
 }
 
 #[tokio::test]
+async fn mcp_framework_tools_list_global_reference_data_without_workspace_argument() {
+    let app = TestApp::builder()
+        .with_soc2_reference_data()
+        .workspace("workspace", "MCP framework workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+
+    let frameworks = mcp_client.call_tool("list_frameworks", json!({})).await;
+    assert_eq!(
+        frameworks["frameworks"][0]["id"],
+        soc2_framework_id().to_string()
+    );
+    assert_eq!(frameworks["frameworks"][0]["code"], "soc2");
+
+    let requirements = mcp_client
+        .call_tool(
+            "list_framework_requirements",
+            json!({ "framework_id": soc2_framework_id() }),
+        )
+        .await;
+    assert_eq!(
+        requirement_codes(&requirements["requirements"]),
+        ["CC6.1", "CC7.1"]
+    );
+
+    let missing = mcp_client
+        .call_tool_error(
+            "list_framework_requirements",
+            json!({ "framework_id": Uuid::new_v4() }),
+        )
+        .await;
+    assert_eq!(missing.data["problem"]["code"], "not_found");
+
+    let limited = app
+        .issue_api_token(
+            app.workspace_id("workspace"),
+            vec![WorkspacePermission::ReadEvidenceRequests],
+        )
+        .await;
+    let limited_client = McpClient::connect(&server, &limited.raw_token).await;
+    let denied = limited_client
+        .call_tool_error("list_frameworks", json!({}))
+        .await;
+    assert_eq!(denied.data["problem"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_only() {
+    let app = TestApp::builder()
+        .with_soc2_reference_data()
+        .workspace("workspace", "MCP control lifecycle workspace")
+        .with_default_membership()
+        .workspace("other", "MCP hidden control workspace")
+        .without_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let token = app.api_token().to_owned();
+
+    let (created, create_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "create_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "code": "PP-MCP-01",
+                        "title": "MCP access review",
+                        "description": "Control description for MCP access review.",
+                        "framework_requirement_ids": [cc71_id(), cc61_id()]
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+    let control_id = uuid_from(&created["id"]);
+    assert_eq!(created["workspace_id"], workspace_id.to_string());
+    assert_eq!(
+        requirement_codes(&created["framework_requirements"]),
+        ["CC6.1", "CC7.1"]
+    );
+    assert_eq!(create_logs.len(), 1);
+    assert_audit_event(
+        &create_logs[0],
+        ExpectedAuditEvent {
+            event_name: "control.created",
+            operation: "create_control",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "control",
+            object_id: control_id,
+        },
+    );
+
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let listed = mcp_client
+        .call_tool("list_controls", json!({ "workspace_id": workspace_id }))
+        .await;
+    assert_eq!(listed["controls"][0]["id"], control_id.to_string());
+
+    let got = mcp_client
+        .call_tool(
+            "get_control",
+            json!({ "workspace_id": workspace_id, "control_id": control_id }),
+        )
+        .await;
+    assert_eq!(got["code"], "PP-MCP-01");
+
+    let (updated, update_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "replace_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "control_id": control_id,
+                        "code": "PP-MCP-02",
+                        "title": "Updated MCP access review",
+                        "description": "Control description for updated MCP access review.",
+                        "framework_requirement_ids": [cc71_id()]
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+    assert_eq!(updated["id"], control_id.to_string());
+    assert_eq!(updated["code"], "PP-MCP-02");
+    assert_eq!(
+        requirement_codes(&updated["framework_requirements"]),
+        ["CC7.1"]
+    );
+    assert_eq!(update_logs.len(), 1);
+    assert_audit_event(
+        &update_logs[0],
+        ExpectedAuditEvent {
+            event_name: "control.updated",
+            operation: "replace_control",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "control",
+            object_id: control_id,
+        },
+    );
+
+    let (duplicate, duplicate_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool_error(
+                    "create_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "code": "PP-MCP-02",
+                        "title": "Duplicate MCP access review",
+                        "description": "Duplicate control description.",
+                        "framework_requirement_ids": []
+                    }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(duplicate["problem"]["code"], "control_code_taken");
+    assert!(duplicate_logs.is_empty());
+
+    let (unknown_requirement, unknown_requirement_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool_error(
+                    "replace_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "control_id": control_id,
+                        "code": "PP-MCP-03",
+                        "title": "Unknown requirement mapping",
+                        "description": "Unknown requirement control description.",
+                        "framework_requirement_ids": [Uuid::new_v4()]
+                    }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(unknown_requirement["problem"]["code"], "validation_failed");
+    assert_eq!(
+        field_issue_names(&unknown_requirement),
+        ["framework_requirement_ids"]
+    );
+    assert!(unknown_requirement_logs.is_empty());
+
+    let missing = mcp_client
+        .call_tool_error(
+            "get_control",
+            json!({ "workspace_id": workspace_id, "control_id": Uuid::new_v4() }),
+        )
+        .await;
+    assert_eq!(missing.data["problem"]["code"], "not_found");
+
+    let cross_workspace = mcp_client
+        .call_tool_error(
+            "get_control",
+            json!({ "workspace_id": other_workspace_id, "control_id": control_id }),
+        )
+        .await;
+    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
+
+    let missing_replace = mcp_client
+        .call_tool_error(
+            "replace_control",
+            json!({
+                "workspace_id": workspace_id,
+                "control_id": Uuid::new_v4(),
+                "code": "PP-MISSING",
+                "title": "Missing control",
+                "description": "Missing control description.",
+                "framework_requirement_ids": []
+            }),
+        )
+        .await;
+    assert_eq!(missing_replace.data["problem"]["code"], "not_found");
+
+    let cross_workspace_replace = mcp_client
+        .call_tool_error(
+            "replace_control",
+            json!({
+                "workspace_id": other_workspace_id,
+                "control_id": control_id,
+                "code": "PP-CROSS",
+                "title": "Cross workspace",
+                "description": "Cross-workspace control description.",
+                "framework_requirement_ids": []
+            }),
+        )
+        .await;
+    assert_eq!(cross_workspace_replace.data["problem"]["code"], "not_found");
+
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let read_only_token = read_only.raw_token.clone();
+    let (denied_create, denied_create_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let read_only_token = read_only_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &read_only_token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "create_control",
+                    json!({
+                        "workspace_id": workspace_id,
+                        "code": "PP-DENIED",
+                        "title": "Denied",
+                        "description": "Denied control description.",
+                        "framework_requirement_ids": []
+                    }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied_create["problem"]["code"], "not_found");
+    assert!(denied_create_logs.is_empty());
+
+    let read_only_client = McpClient::connect(&server, &read_only.raw_token).await;
+    let denied_replace = read_only_client
+        .call_tool_error(
+            "replace_control",
+            json!({
+                "workspace_id": workspace_id,
+                "control_id": control_id,
+                "code": "PP-DENIED",
+                "title": "Denied",
+                "description": "Denied control description.",
+                "framework_requirement_ids": []
+            }),
+        )
+        .await;
+    assert_eq!(denied_replace.data["problem"]["code"], "not_found");
+}
+
+#[tokio::test]
 async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP controls workspace")
@@ -914,6 +1265,13 @@ fn assert_schema_has_property(schema: &Value, property: &str) {
     );
 }
 
+fn assert_schema_lacks_property(schema: &Value, property: &str) {
+    assert!(
+        !schema_has_property(schema, property),
+        "schema omits {property}: {schema}"
+    );
+}
+
 fn schema_has_property(value: &Value, property: &str) -> bool {
     match value {
         Value::Object(object) => {
@@ -1056,6 +1414,14 @@ fn audit_metadata(record: &Value) -> Value {
             .expect("metadata is text"),
     )
     .expect("metadata parses")
+}
+
+fn requirement_codes(list: &Value) -> Vec<&str> {
+    list.as_array()
+        .expect("requirements array")
+        .iter()
+        .map(|item| item["code"].as_str().expect("requirement code"))
+        .collect()
 }
 
 fn uuid_from(value: &Value) -> Uuid {
