@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize, format_datetime, not_found, optional_timestamp, parse_uuid_arg,
+        argument_errors, authorize_token_workspace, format_datetime, not_found, optional_timestamp,
         required_uuid, service_error,
     },
     ProofplaneMcp,
 };
 use crate::{
-    domain::{EvidenceRequest, EvidenceRequestId, WorkspaceId, WorkspacePermission},
+    domain::{EvidenceRequest, EvidenceRequestId, WorkspacePermission},
     validate,
 };
 
@@ -26,15 +26,8 @@ impl ProofplaneMcp {
     async fn list_evidence_requests(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<WorkspaceRequest>,
     ) -> Result<Json<ListEvidenceRequestsResponse>, rmcp::ErrorData> {
-        let workspace_id =
-            parse_uuid_arg("workspace_id", args.workspace_id).map(WorkspaceId::from)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceRequests,
-        )?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let requests = self
             .evidence_requests
             .list_by_workspace(context.token)
@@ -55,12 +48,8 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceRequestRequest>,
     ) -> Result<Json<GetEvidenceRequestResponse>, rmcp::ErrorData> {
-        let (workspace_id, evidence_request_id) = parse_evidence_request_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceRequests,
-        )?;
+        let evidence_request_id = parse_evidence_request_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let request = self
             .evidence_requests
             .get(context.token, evidence_request_id)
@@ -82,12 +71,8 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ListDueEvidenceRequestsRequest>,
     ) -> Result<Json<ListEvidenceRequestsResponse>, rmcp::ErrorData> {
-        let (workspace_id, now) = parse_due_evidence_requests_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceRequests,
-        )?;
+        let now = parse_due_evidence_requests_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let requests = self
             .evidence_requests
             .list_due(context.token, now.unwrap_or_else(Utc::now))
@@ -101,19 +86,12 @@ impl ProofplaneMcp {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct WorkspaceRequest {
-    pub(super) workspace_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct EvidenceRequestRequest {
-    pub(super) workspace_id: Option<String>,
     pub(super) evidence_request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListDueEvidenceRequestsRequest {
-    workspace_id: Option<String>,
     now: Option<String>,
 }
 
@@ -164,12 +142,11 @@ impl From<EvidenceRequest> for EvidenceRequestResponseDTO {
 
 pub(super) fn parse_evidence_request_request(
     args: EvidenceRequestRequest,
-) -> Result<(WorkspaceId, EvidenceRequestId), rmcp::ErrorData> {
+) -> Result<EvidenceRequestId, rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
             .map(EvidenceRequestId::from),
-        => (workspace_id, evidence_request_id),
+        => evidence_request_id,
     }
     .into_result()
     .map_err(argument_errors)
@@ -177,11 +154,10 @@ pub(super) fn parse_evidence_request_request(
 
 fn parse_due_evidence_requests_request(
     args: ListDueEvidenceRequestsRequest,
-) -> Result<(WorkspaceId, Option<DateTime<Utc>>), rmcp::ErrorData> {
+) -> Result<Option<DateTime<Utc>>, rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         now <- optional_timestamp("now", args.now),
-        => (workspace_id, now),
+        => now,
     }
     .into_result()
     .map_err(argument_errors)
@@ -193,11 +169,8 @@ mod tests {
 
     #[test]
     fn due_request_accepts_missing_optional_now() {
-        let (_, now) = parse_due_evidence_requests_request(ListDueEvidenceRequestsRequest {
-            workspace_id: Some("018f5a06-935b-7b5d-9e78-6d3f2f86d6f1".to_owned()),
-            now: None,
-        })
-        .expect("valid args");
+        let now = parse_due_evidence_requests_request(ListDueEvidenceRequestsRequest { now: None })
+            .expect("valid args");
 
         assert_eq!(now, None);
     }

@@ -7,11 +7,13 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    common::{argument_errors, authorize, download_error, format_datetime, required_uuid},
+    common::{
+        argument_errors, authorize_token_workspace, download_error, format_datetime, required_uuid,
+    },
     ProofplaneMcp,
 };
 use crate::{
-    domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspaceId, WorkspacePermission},
+    domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspacePermission},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::attachment_downloads::IssuedDownloadGrant,
     validate,
@@ -28,13 +30,10 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateAttachmentDownloadGrantRequest>,
     ) -> Result<Json<CreateAttachmentDownloadGrantResponse>, rmcp::ErrorData> {
-        let (workspace_id, submission_id, attachment_id) =
-            parse_attachment_download_grant_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceSubmissions,
-        )?;
+        let (submission_id, attachment_id) = parse_attachment_download_grant_request(args)?;
+        let context =
+            authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
+        let workspace_id = context.token.workspace_id;
         let grant = self
             .attachment_downloads
             .issue(&context.token, submission_id, attachment_id)
@@ -73,7 +72,6 @@ impl ProofplaneMcp {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CreateAttachmentDownloadGrantRequest {
-    workspace_id: Option<String>,
     submission_id: Option<String>,
     attachment_id: Option<String>,
 }
@@ -105,14 +103,13 @@ impl From<IssuedDownloadGrant> for CreateAttachmentDownloadGrantResponse {
 
 fn parse_attachment_download_grant_request(
     args: CreateAttachmentDownloadGrantRequest,
-) -> Result<(WorkspaceId, EvidenceSubmissionId, EvidenceAttachmentId), rmcp::ErrorData> {
+) -> Result<(EvidenceSubmissionId, EvidenceAttachmentId), rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         submission_id <- required_uuid("submission_id", args.submission_id)
             .map(EvidenceSubmissionId::from),
         attachment_id <- required_uuid("attachment_id", args.attachment_id)
             .map(EvidenceAttachmentId::from),
-        => (workspace_id, submission_id, attachment_id),
+        => (submission_id, attachment_id),
     }
     .into_result()
     .map_err(argument_errors)
@@ -140,7 +137,6 @@ mod tests {
     #[test]
     fn download_grant_request_accumulates_multiple_invalid_uuid_fields() {
         let error = parse_attachment_download_grant_request(CreateAttachmentDownloadGrantRequest {
-            workspace_id: Some("not-workspace".to_owned()),
             submission_id: Some("not-submission".to_owned()),
             attachment_id: Some("not-attachment".to_owned()),
         })
@@ -151,7 +147,6 @@ mod tests {
         assert_eq!(
             field_issues(&error),
             [
-                ("workspace_id".to_owned(), "must be a UUID".to_owned()),
                 ("submission_id".to_owned(), "must be a UUID".to_owned()),
                 ("attachment_id".to_owned(), "must be a UUID".to_owned()),
             ]
@@ -161,7 +156,6 @@ mod tests {
     #[test]
     fn missing_required_uuid_fields_map_to_required_message() {
         let error = parse_attachment_download_grant_request(CreateAttachmentDownloadGrantRequest {
-            workspace_id: None,
             submission_id: None,
             attachment_id: None,
         })
@@ -170,7 +164,6 @@ mod tests {
         assert_eq!(
             field_issues(&error),
             [
-                ("workspace_id".to_owned(), "is required".to_owned()),
                 ("submission_id".to_owned(), "is required".to_owned()),
                 ("attachment_id".to_owned(), "is required".to_owned()),
             ]

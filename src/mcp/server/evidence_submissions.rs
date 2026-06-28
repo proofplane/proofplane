@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize, domain_errors, format_datetime, not_found, required_timestamp,
-        required_uuid, service_error,
+        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
+        required_timestamp, required_uuid, service_error,
     },
     evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest},
     ProofplaneMcp,
@@ -36,12 +36,10 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateEvidenceSubmissionRequest>,
     ) -> Result<Json<CreateEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let (workspace_id, evidence_request_id, payload) = parse_create_submission_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::WriteEvidenceSubmissions,
-        )?;
+        let (evidence_request_id, payload) = parse_create_submission_request(args)?;
+        let context =
+            authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
+        let workspace_id = context.token.workspace_id;
         let submission = self
             .evidence_submissions
             .create(context.token, evidence_request_id, payload)
@@ -84,12 +82,9 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<GetEvidenceSubmissionRequest>,
     ) -> Result<Json<GetEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let (workspace_id, submission_id) = parse_evidence_submission_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceSubmissions,
-        )?;
+        let submission_id = parse_evidence_submission_request(args)?;
+        let context =
+            authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
         let detail = self
             .evidence_submissions
             .get(context.token, submission_id)
@@ -112,12 +107,9 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceRequestRequest>,
     ) -> Result<Json<GetEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let (workspace_id, evidence_request_id) = parse_evidence_request_request(args)?;
-        let context = authorize(
-            &ctx,
-            workspace_id,
-            WorkspacePermission::ReadEvidenceSubmissions,
-        )?;
+        let evidence_request_id = parse_evidence_request_request(args)?;
+        let context =
+            authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
         let detail = self
             .evidence_submissions
             .latest_for_request(context.token, evidence_request_id)
@@ -134,7 +126,6 @@ impl ProofplaneMcp {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CreateEvidenceSubmissionRequest {
-    workspace_id: Option<String>,
     evidence_request_id: Option<String>,
     coverage_start_at: Option<String>,
     coverage_end_at: Option<String>,
@@ -146,7 +137,6 @@ struct CreateEvidenceSubmissionRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct GetEvidenceSubmissionRequest {
-    pub(super) workspace_id: Option<String>,
     pub(super) submission_id: Option<String>,
 }
 
@@ -285,12 +275,11 @@ impl From<EvidenceAttachment> for EvidenceAttachmentResponseDTO {
 
 pub(super) fn parse_evidence_submission_request(
     args: GetEvidenceSubmissionRequest,
-) -> Result<(WorkspaceId, EvidenceSubmissionId), rmcp::ErrorData> {
+) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         submission_id <- required_uuid("submission_id", args.submission_id)
             .map(EvidenceSubmissionId::from),
-        => (workspace_id, submission_id),
+        => submission_id,
     }
     .into_result()
     .map_err(argument_errors)
@@ -298,21 +287,13 @@ pub(super) fn parse_evidence_submission_request(
 
 fn parse_create_submission_request(
     args: CreateEvidenceSubmissionRequest,
-) -> Result<
-    (
-        WorkspaceId,
-        EvidenceRequestId,
-        CreateEvidenceSubmissionPayload,
-    ),
-    rmcp::ErrorData,
-> {
-    let (workspace_id, evidence_request_id, coverage_start_at, coverage_end_at) = validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+) -> Result<(EvidenceRequestId, CreateEvidenceSubmissionPayload), rmcp::ErrorData> {
+    let (evidence_request_id, coverage_start_at, coverage_end_at) = validate! {
         evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
             .map(EvidenceRequestId::from),
         coverage_start_at <- required_timestamp("coverage_start_at", args.coverage_start_at),
         coverage_end_at <- required_timestamp("coverage_end_at", args.coverage_end_at),
-        => (workspace_id, evidence_request_id, coverage_start_at, coverage_end_at),
+        => (evidence_request_id, coverage_start_at, coverage_end_at),
     }
     .into_result()
     .map_err(argument_errors)?;
@@ -339,7 +320,7 @@ fn parse_create_submission_request(
     .into_result()
     .map_err(domain_errors)?;
 
-    Ok((workspace_id, evidence_request_id, payload))
+    Ok((evidence_request_id, payload))
 }
 
 fn validate_coverage_window(

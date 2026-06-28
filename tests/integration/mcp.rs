@@ -65,7 +65,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     .into_iter()
     .collect::<BTreeSet<_>>();
     assert_eq!(tool_names, expected_tool_names);
-    assert_schema_has_property(
+    assert_schema_lacks_property(
         &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
         "workspace_id",
     );
@@ -108,6 +108,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "get_control")["inputSchema"],
         "control_id",
+    );
+    assert_schema_lacks_property(
+        &find_tool(&tool_list, "get_control")["inputSchema"],
+        "workspace_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_control")["inputSchema"],
@@ -253,10 +257,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .await;
 
     let listed = mcp_client
-        .call_tool(
-            "list_evidence_requests",
-            json!({ "workspace_id": workspace_id }),
-        )
+        .call_tool("list_evidence_requests", json!({}))
         .await;
     assert_eq!(
         listed["evidence_requests"]
@@ -269,12 +270,16 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         listed["evidence_requests"][0]["workspace_id"],
         workspace_id.to_string()
     );
+    assert!(!listed["evidence_requests"]
+        .as_array()
+        .expect("requests array")
+        .iter()
+        .any(|request| request["title"] == "Hidden request"));
 
     let got = mcp_client
         .call_tool(
             "get_evidence_request",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": due["id"],
             }),
         )
@@ -285,7 +290,6 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .call_tool(
             "list_due_evidence_requests",
             json!({
-                "workspace_id": workspace_id,
                 "now": "2026-02-01T00:00:00Z",
             }),
         )
@@ -293,20 +297,8 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
     assert_eq!(due_only["evidence_requests"][0]["id"], due["id"]);
     assert_ne!(due_only["evidence_requests"][0]["id"], later["id"]);
 
-    let concealed = mcp_client
-        .call_tool_error(
-            "list_evidence_requests",
-            json!({ "workspace_id": other_workspace_id }),
-        )
-        .await;
-    assert_eq!(concealed.code.0, -32002);
-    assert_eq!(concealed.data["problem"]["code"], "not_found");
-
     let invalid = mcp_client
-        .call_tool_error(
-            "list_due_evidence_requests",
-            json!({ "workspace_id": "nope", "now": "not-a-date" }),
-        )
+        .call_tool_error("list_due_evidence_requests", json!({ "now": "not-a-date" }))
         .await;
     assert_eq!(invalid.code.0, -32602);
     let fields: Vec<_> = invalid.data["problem"]["field_issues"]
@@ -315,7 +307,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .iter()
         .map(|issue| issue["field"].as_str().expect("field"))
         .collect();
-    assert_eq!(fields, ["workspace_id", "now"]);
+    assert_eq!(fields, ["now"]);
 }
 
 #[tokio::test]
@@ -354,7 +346,7 @@ async fn mcp_submission_tools_preserve_selective_context() {
     let direct = mcp_client
         .call_tool(
             "get_evidence_submission",
-            json!({ "workspace_id": workspace_id, "submission_id": submission_id }),
+            json!({ "submission_id": submission_id }),
         )
         .await;
     assert_eq!(direct["submission"]["summary"], "Quarterly access review");
@@ -367,7 +359,7 @@ async fn mcp_submission_tools_preserve_selective_context() {
     let latest = mcp_client
         .call_tool(
             "get_latest_evidence_submission",
-            json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
+            json!({ "evidence_request_id": evidence_request_id }),
         )
         .await;
     assert_eq!(latest["submission"]["summary"], "Quarterly access review");
@@ -402,7 +394,6 @@ async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() 
                 .call_tool(
                     "create_evidence_submission",
                     json!({
-                        "workspace_id": workspace_id,
                         "evidence_request_id": evidence_request_id,
                         "coverage_start_at": "2026-01-01T00:00:00Z",
                         "coverage_end_at": "2026-03-31T23:59:59Z",
@@ -505,7 +496,6 @@ async fn mcp_create_evidence_submission_reports_structured_validation_errors() {
         .call_tool_error(
             "create_evidence_submission",
             json!({
-                "workspace_id": "not-a-uuid",
                 "evidence_request_id": evidence_request_id,
                 "coverage_start_at": "not-a-date",
                 "coverage_end_at": "2026-03-31T23:59:59Z",
@@ -515,16 +505,12 @@ async fn mcp_create_evidence_submission_reports_structured_validation_errors() {
         )
         .await;
     assert_eq!(invalid_args.data["problem"]["code"], "validation_failed");
-    assert_eq!(
-        field_issue_names(&invalid_args.data),
-        ["workspace_id", "coverage_start_at"]
-    );
+    assert_eq!(field_issue_names(&invalid_args.data), ["coverage_start_at"]);
 
     let invalid_domain = mcp_client
         .call_tool_error(
             "create_evidence_submission",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": evidence_request_id,
                 "coverage_start_at": "2026-04-01T00:00:00Z",
                 "coverage_end_at": "2026-03-31T23:59:59Z",
@@ -567,7 +553,6 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
         .call_tool_error(
             "create_attachment_download_grant",
             json!({
-                "workspace_id": workspace_id,
                 "submission_id": submission_id,
                 "attachment_id": attachment_id,
             }),
@@ -580,7 +565,6 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
         .call_tool(
             "create_attachment_download_grant",
             json!({
-                "workspace_id": workspace_id,
                 "submission_id": submission_id,
                 "attachment_id": attachment_id,
             }),
@@ -655,7 +639,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
         .await;
     let server = app.mcp_http_server();
     let workspace_id = app.workspace_id("workspace");
-    let other_workspace_id = app.workspace_id("other");
     let token = app.api_token().to_owned();
 
     let (created, create_logs) = capture_audit_logs(|request_id| {
@@ -667,7 +650,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
                 .call_tool(
                     "create_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "code": "PP-MCP-01",
                         "title": "MCP access review",
                         "description": "Control description for MCP access review.",
@@ -700,16 +682,11 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
     );
 
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
-    let listed = mcp_client
-        .call_tool("list_controls", json!({ "workspace_id": workspace_id }))
-        .await;
+    let listed = mcp_client.call_tool("list_controls", json!({})).await;
     assert_eq!(listed["controls"][0]["id"], control_id.to_string());
 
     let got = mcp_client
-        .call_tool(
-            "get_control",
-            json!({ "workspace_id": workspace_id, "control_id": control_id }),
-        )
+        .call_tool("get_control", json!({ "control_id": control_id }))
         .await;
     assert_eq!(got["code"], "PP-MCP-01");
 
@@ -722,7 +699,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
                 .call_tool(
                     "replace_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "control_id": control_id,
                         "code": "PP-MCP-02",
                         "title": "Updated MCP access review",
@@ -764,7 +740,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
                 .call_tool_error(
                     "create_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "code": "PP-MCP-02",
                         "title": "Duplicate MCP access review",
                         "description": "Duplicate control description.",
@@ -788,7 +763,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
                 .call_tool_error(
                     "replace_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "control_id": control_id,
                         "code": "PP-MCP-03",
                         "title": "Unknown requirement mapping",
@@ -809,26 +783,14 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
     assert!(unknown_requirement_logs.is_empty());
 
     let missing = mcp_client
-        .call_tool_error(
-            "get_control",
-            json!({ "workspace_id": workspace_id, "control_id": Uuid::new_v4() }),
-        )
+        .call_tool_error("get_control", json!({ "control_id": Uuid::new_v4() }))
         .await;
     assert_eq!(missing.data["problem"]["code"], "not_found");
-
-    let cross_workspace = mcp_client
-        .call_tool_error(
-            "get_control",
-            json!({ "workspace_id": other_workspace_id, "control_id": control_id }),
-        )
-        .await;
-    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
 
     let missing_replace = mcp_client
         .call_tool_error(
             "replace_control",
             json!({
-                "workspace_id": workspace_id,
                 "control_id": Uuid::new_v4(),
                 "code": "PP-MISSING",
                 "title": "Missing control",
@@ -838,21 +800,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
         )
         .await;
     assert_eq!(missing_replace.data["problem"]["code"], "not_found");
-
-    let cross_workspace_replace = mcp_client
-        .call_tool_error(
-            "replace_control",
-            json!({
-                "workspace_id": other_workspace_id,
-                "control_id": control_id,
-                "code": "PP-CROSS",
-                "title": "Cross workspace",
-                "description": "Cross-workspace control description.",
-                "framework_requirement_ids": []
-            }),
-        )
-        .await;
-    assert_eq!(cross_workspace_replace.data["problem"]["code"], "not_found");
 
     let read_only = app
         .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
@@ -868,7 +815,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
                 .call_tool_error(
                     "create_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "code": "PP-DENIED",
                         "title": "Denied",
                         "description": "Denied control description.",
@@ -888,7 +834,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
         .call_tool_error(
             "replace_control",
             json!({
-                "workspace_id": workspace_id,
                 "control_id": control_id,
                 "code": "PP-DENIED",
                 "title": "Denied",
@@ -929,15 +874,13 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     .await
     .assert_status_ok();
 
-    let controls = mcp_client
-        .call_tool("list_controls", json!({ "workspace_id": workspace_id }))
-        .await;
+    let controls = mcp_client.call_tool("list_controls", json!({})).await;
     assert_eq!(controls["controls"][0]["code"], "PP-AC-01");
 
     let mappings = mcp_client
         .call_tool(
             "list_evidence_request_control_mappings",
-            json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
+            json!({ "evidence_request_id": evidence_request_id }),
         )
         .await;
     assert_eq!(
@@ -953,7 +896,7 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
         .await;
     let limited_client = McpClient::connect(&server, &limited.raw_token).await;
     let denied = limited_client
-        .call_tool_error("list_controls", json!({ "workspace_id": workspace_id }))
+        .call_tool_error("list_controls", json!({}))
         .await;
     assert_eq!(denied.data["problem"]["code"], "not_found");
 }
@@ -982,7 +925,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .call_tool(
             "map_evidence_request_to_control",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": evidence_request_id,
                 "control_id": control_id,
                 "rationale": "Maps access evidence to the access review control."
@@ -1002,7 +944,7 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
     let listed = mcp_client
         .call_tool(
             "list_evidence_request_control_mappings",
-            json!({ "workspace_id": workspace_id, "evidence_request_id": evidence_request_id }),
+            json!({ "evidence_request_id": evidence_request_id }),
         )
         .await;
     assert_eq!(
@@ -1014,7 +956,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .call_tool_error(
             "map_evidence_request_to_control",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": evidence_request_id,
                 "control_id": control_id,
                 "rationale": "Duplicate mapping"
@@ -1030,7 +971,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .call_tool(
             "remove_evidence_request_control_mapping",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": evidence_request_id,
                 "control_id": control_id
             }),
@@ -1047,7 +987,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .call_tool_error(
             "remove_evidence_request_control_mapping",
             json!({
-                "workspace_id": workspace_id,
                 "evidence_request_id": evidence_request_id,
                 "control_id": control_id
             }),
@@ -1079,7 +1018,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
                 .call_tool(
                     "map_evidence_request_to_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "evidence_request_id": evidence_request_id,
                         "control_id": second_control_id,
                         "rationale": "Audited mapping"
@@ -1122,7 +1060,6 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
                 .call_tool_error(
                     "map_evidence_request_to_control",
                     json!({
-                        "workspace_id": workspace_id,
                         "evidence_request_id": evidence_request_id,
                         "control_id": control_id,
                         "rationale": "Denied mapping"
