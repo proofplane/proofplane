@@ -25,7 +25,7 @@ provenance, and freshness is derived from submitted evidence.
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
 | Agent interface | MCP binary scaffold | MCP runtime and tools |
-| Launch surface | Product and GTM notes | Minimal sandbox/MCP setup UI and marketing site |
+| Launch surface | Product and GTM notes, PRODUCT.md, DESIGN.md | Minimal self-onboarding UI and marketing site |
 
 ## Epic Portfolio
 
@@ -38,7 +38,7 @@ provenance, and freshness is derived from submitted evidence.
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
-| [Sandbox Product Launch](./sandbox-product-launch/README.md) | Todo | A founder can connect an agent to a realistic SOC 2 sandbox. |
+| [Self-Onboarding UI](./self-onboarding-ui/README.md) | Done - Will Do Later | Remaining UI tickets are postponed until MCP is more complete; specs may need revalidation before reopening. |
 
 ## Preferred Sequence
 
@@ -50,8 +50,8 @@ provenance, and freshness is derived from submitted evidence.
    independently of that demo milestone.
 4. Add MCP auditor-packet tools after preview, export jobs, and download grants
    are stable.
-5. Complete MCP equivalence and metrics, then build the Sandbox Product Launch
-   on the stable APIs and packet workflow.
+5. Build the Self-Onboarding UI on the stable Auth/API-token foundations, using
+   preview states where MCP and packet workflow tickets are still in progress.
 6. Create a separate production-deployment epic when deployment planning begins.
 
 ## Definition Of MVP Done
@@ -60,7 +60,7 @@ provenance, and freshness is derived from submitted evidence.
   shipped.
 - `make check` passes, and Docker-backed integration tests cover the release
   flow and external dependency failures.
-- Production configuration supports Postgres, SpiceDB, Google Pub/Sub, GCS,
+- Production configuration supports Postgres, Google Pub/Sub, GCS,
   Auth0, and ClamAV without local emulator requirements.
 - User-owned API tokens can submit evidence, retrieve only finalized
   attachments, inspect summarized evidence, and perform the supported MCP

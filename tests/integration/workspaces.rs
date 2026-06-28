@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{header, Method, StatusCode};
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use proofplane::routes::request_context::REQUEST_ID_HEADER;
 use serde_json::{json, Value};
@@ -40,6 +40,25 @@ async fn create_workspace_requires_authentication() {
         .json(&json!({ "name": "x" }))
         .await;
     assert_eq!(invalid.status_code(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn workspace_preflight_does_not_require_authentication() {
+    let app = TestApp::start_without_default_auth().await;
+
+    let response = app
+        .server()
+        .method(Method::OPTIONS, "/workspaces")
+        .add_header(header::ORIGIN.as_str(), "http://127.0.0.1:5173")
+        .add_header(header::ACCESS_CONTROL_REQUEST_METHOD.as_str(), "GET")
+        .add_header(
+            header::ACCESS_CONTROL_REQUEST_HEADERS.as_str(),
+            "authorization",
+        )
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::OK);
+    assert_eq!(response.header("access-control-allow-origin"), "*");
 }
 
 #[tokio::test]

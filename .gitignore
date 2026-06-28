@@ -1,2 +1,7 @@
 target/
 .local/
+ui/node_modules/
+ui/dist/
+ui/.env.local
+ui/playwright-report/
+ui/test-results/

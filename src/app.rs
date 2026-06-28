@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::Span;
 
 use crate::{
@@ -136,6 +136,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))
+        .layer(CorsLayer::permissive())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
