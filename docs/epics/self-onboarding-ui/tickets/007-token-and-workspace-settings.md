@@ -1,6 +1,6 @@
 # 007 - Token And Workspace Settings
 
-**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#routes)
+**Status:** Done - Will Do Later · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#routes)
 
 **Summary** - Add the minimal authenticated settings surfaces for workspace
 identity, token listing, and token revocation so users can recover from setup
@@ -30,3 +30,5 @@ mistakes.
 **Notes**
 
 - Member management can remain read-only or hidden unless invite-by-email exists.
+- Postponed until the MCP is more feature complete; revalidate the linked spec
+  and UX before reopening because the current requirements may no longer apply.

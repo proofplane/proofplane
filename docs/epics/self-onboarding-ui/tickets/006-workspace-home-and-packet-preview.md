@@ -1,6 +1,6 @@
 # 006 - Workspace Home And Packet Preview
 
-**Status:** Todo · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#workspace-home)
+**Status:** Done - Will Do Later · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#workspace-home)
 
 **Summary** - Build the authenticated workspace home that shows setup progress,
 starter controls, evidence request status, token/MCP readiness, suggested
@@ -31,3 +31,5 @@ prompts, and packet preview or unavailable states.
 
 - Replace sample states with real Trusted Compliance Reads data as those tickets
   land; do not block the UI shell on packet export.
+- Postponed until the MCP is more feature complete; revalidate the linked spec
+  and UX before reopening because the current requirements may no longer apply.

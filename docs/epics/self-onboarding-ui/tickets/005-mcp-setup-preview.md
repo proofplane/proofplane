@@ -1,6 +1,6 @@
 # 005 - MCP Setup Preview
 
-**Status:** Todo · **Depends on:** 004 · **Spec:** [spec.md](../spec.md#mcp-setup-preview)
+**Status:** Done - Will Do Later · **Depends on:** 004 · **Spec:** [spec.md](../spec.md#mcp-setup-preview)
 
 **Summary** - After token creation, show honest MCP installation and
 configuration guidance with copyable snippets, readiness labels, and suggested
@@ -29,3 +29,5 @@ agent prompts.
 
 - This ticket does not implement the MCP runtime. It links to the MCP Server
   epic and must avoid claiming production readiness early.
+- Postponed until the MCP is more feature complete; revalidate the linked spec
+  and UX before reopening because the current requirements may no longer apply.

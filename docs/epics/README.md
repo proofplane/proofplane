@@ -38,7 +38,7 @@ provenance, and freshness is derived from submitted evidence.
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
-| [Self-Onboarding UI](./self-onboarding-ui/README.md) | Todo | A founder can create a workspace, issue a scoped token, and see MCP setup guidance in a realistic SOC 2 sandbox. |
+| [Self-Onboarding UI](./self-onboarding-ui/README.md) | Done - Will Do Later | Remaining UI tickets are postponed until MCP is more complete; specs may need revalidation before reopening. |
 
 ## Preferred Sequence
 
