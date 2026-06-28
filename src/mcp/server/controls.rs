@@ -607,10 +607,10 @@ fn required_uuid_array(
     }
 
     if errors.is_empty() {
-        Validation::valid(ids)
-    } else {
-        Validation::invalid_many(errors)
+        return Validation::valid(ids);
     }
+
+    Validation::invalid_many(errors)
 }
 
 fn parse_remove_evidence_request_control_mapping_request(
