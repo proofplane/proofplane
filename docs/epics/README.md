@@ -24,7 +24,7 @@ provenance, and freshness is derived from submitted evidence.
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Submission summaries and auditor packet reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
-| Agent interface | Streamable HTTP MCP runtime and core compliance tools | Interactive authorization, client distribution, packet tools, and equivalence |
+| Agent interface | Streamable HTTP MCP runtime and core compliance tools | Interactive authorization, client distribution, browser attachment-management grants, packet tools, and equivalence |
 | Launch surface | Product and GTM notes, PRODUCT.md, DESIGN.md, minimal self-onboarding UI | Guided agent connection and workspace home |
 
 ## Epic Portfolio
@@ -37,6 +37,7 @@ provenance, and freshness is derived from submitted evidence.
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
+| [MCP Attachment Upload](./mcp-attachment-upload/README.md) | Todo | Agents hand humans scoped upload links without moving attachment bytes through MCP. |
 | [Agent Connector Onboarding](./agent-connector-onboarding/README.md) | Todo | Non-technical users connect hosted Proofplane to their chosen agent without terminals, config edits, or copied API tokens. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
 | [Self-Onboarding UI](./self-onboarding-ui/README.md) | Done - Will Do Later | Remaining UI tickets are postponed until MCP is more complete; specs may need revalidation before reopening. |
@@ -47,6 +48,8 @@ provenance, and freshness is derived from submitted evidence.
    complete foundations.
 2. Build the MCP runtime and core evidence/control tools while the shared audit
    contract and evidence audit events land; this produces the core MCP demo.
+   Add MCP Attachment Upload when the demo needs human file selection without
+   sending bytes through MCP.
 3. Build production adapters and the Trusted Compliance Reads packet lane
    independently of that demo milestone.
 4. Add MCP auditor-packet tools after preview, export jobs, and download grants
