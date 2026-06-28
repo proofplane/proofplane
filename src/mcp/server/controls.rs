@@ -8,17 +8,17 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize, authorize_token_workspace, domain_errors, format_datetime,
-        not_found, parse_uuid_arg, required_uuid, service_error,
+        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
+        parse_uuid_arg, required_uuid, service_error,
     },
-    evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest, WorkspaceRequest},
+    evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest},
     ProofplaneMcp,
 };
 use crate::domain::{
     required_text, Control, ControlId, CreateControlPayload,
     CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, EvidenceRequestId,
     Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
-    WorkspaceId, WorkspacePermission,
+    WorkspacePermission,
 };
 use crate::{
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -79,11 +79,8 @@ impl ProofplaneMcp {
     async fn list_controls(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<WorkspaceRequest>,
     ) -> Result<Json<ListControlsResponse>, rmcp::ErrorData> {
-        let workspace_id =
-            parse_uuid_arg("workspace_id", args.workspace_id).map(WorkspaceId::from)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::ReadControls)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let controls = self
             .controls
             .list_controls(context.token)
@@ -101,8 +98,8 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<GetControlRequest>,
     ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
-        let (workspace_id, control_id) = parse_get_control_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::ReadControls)?;
+        let control_id = parse_get_control_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let control = self
             .controls
             .get_control(context.token, control_id)
@@ -122,8 +119,9 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateControlRequest>,
     ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
-        let (workspace_id, payload) = parse_create_control_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::WriteControls)?;
+        let payload = parse_create_control_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.token.workspace_id;
         let control = self
             .controls
             .create_control(context.token, payload)
@@ -158,8 +156,9 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ReplaceControlRequest>,
     ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
-        let (workspace_id, control_id, payload) = parse_replace_control_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::WriteControls)?;
+        let (control_id, payload) = parse_replace_control_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.token.workspace_id;
         let control = self
             .controls
             .replace_control(context.token, control_id, payload)
@@ -195,8 +194,8 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceRequestRequest>,
     ) -> Result<Json<ListEvidenceRequestControlMappingsResponse>, rmcp::ErrorData> {
-        let (workspace_id, evidence_request_id) = parse_evidence_request_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::ReadControls)?;
+        let evidence_request_id = parse_evidence_request_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let mappings = self
             .controls
             .list_evidence_request_control_mappings(context.token, evidence_request_id)
@@ -218,8 +217,9 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<MapEvidenceRequestToControlRequest>,
     ) -> Result<Json<EvidenceRequestControlMappingResponseDTO>, rmcp::ErrorData> {
-        let (workspace_id, payload) = parse_map_evidence_request_to_control_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::WriteControls)?;
+        let payload = parse_map_evidence_request_to_control_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.token.workspace_id;
         let mapping = self
             .controls
             .create_evidence_request_control_mapping(context.token, payload)
@@ -262,9 +262,10 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<RemoveEvidenceRequestControlMappingRequest>,
     ) -> Result<Json<RemoveEvidenceRequestControlMappingResponse>, rmcp::ErrorData> {
-        let (workspace_id, evidence_request_id, control_id) =
+        let (evidence_request_id, control_id) =
             parse_remove_evidence_request_control_mapping_request(args)?;
-        let context = authorize(&ctx, workspace_id, WorkspacePermission::WriteControls)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.token.workspace_id;
         let deleted = self
             .controls
             .delete_evidence_request_control_mapping(context.token, evidence_request_id, control_id)
@@ -310,13 +311,11 @@ struct FrameworkRequirementsRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct GetControlRequest {
-    workspace_id: Option<String>,
     control_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ControlDTO {
-    workspace_id: Option<String>,
     code: Option<String>,
     title: Option<String>,
     description: Option<String>,
@@ -327,7 +326,6 @@ type CreateControlRequest = ControlDTO;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReplaceControlRequest {
-    workspace_id: Option<String>,
     control_id: Option<String>,
     code: Option<String>,
     title: Option<String>,
@@ -337,7 +335,6 @@ struct ReplaceControlRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct MapEvidenceRequestToControlRequest {
-    workspace_id: Option<String>,
     evidence_request_id: Option<String>,
     control_id: Option<String>,
     rationale: Option<String>,
@@ -345,7 +342,6 @@ struct MapEvidenceRequestToControlRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct RemoveEvidenceRequestControlMappingRequest {
-    workspace_id: Option<String>,
     evidence_request_id: Option<String>,
     control_id: Option<String>,
 }
@@ -482,13 +478,12 @@ struct RemoveEvidenceRequestControlMappingResponse {
 
 fn parse_map_evidence_request_to_control_request(
     args: MapEvidenceRequestToControlRequest,
-) -> Result<(WorkspaceId, CreateEvidenceRequestControlMappingPayload), rmcp::ErrorData> {
-    let (workspace_id, evidence_request_id, control_id) = validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+) -> Result<CreateEvidenceRequestControlMappingPayload, rmcp::ErrorData> {
+    let (evidence_request_id, control_id) = validate! {
         evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
             .map(EvidenceRequestId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => (workspace_id, evidence_request_id, control_id),
+        => (evidence_request_id, control_id),
     }
     .into_result()
     .map_err(argument_errors)?;
@@ -497,23 +492,17 @@ fn parse_map_evidence_request_to_control_request(
         .into_result()
         .map_err(domain_errors)?;
 
-    Ok((
-        workspace_id,
-        CreateEvidenceRequestControlMappingPayload {
-            evidence_request_id,
-            control_id,
-            rationale,
-        },
-    ))
+    Ok(CreateEvidenceRequestControlMappingPayload {
+        evidence_request_id,
+        control_id,
+        rationale,
+    })
 }
 
-fn parse_get_control_request(
-    args: GetControlRequest,
-) -> Result<(WorkspaceId, ControlId), rmcp::ErrorData> {
+fn parse_get_control_request(args: GetControlRequest) -> Result<ControlId, rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => (workspace_id, control_id),
+        => control_id,
     }
     .into_result()
     .map_err(argument_errors)
@@ -521,14 +510,13 @@ fn parse_get_control_request(
 
 fn parse_create_control_request(
     args: CreateControlRequest,
-) -> Result<(WorkspaceId, CreateControlPayload), rmcp::ErrorData> {
-    let (workspace_id, framework_requirement_ids) = validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+) -> Result<CreateControlPayload, rmcp::ErrorData> {
+    let framework_requirement_ids = validate! {
         framework_requirement_ids <- required_uuid_array(
             "framework_requirement_ids",
             args.framework_requirement_ids,
         ),
-        => (workspace_id, framework_requirement_ids),
+        => framework_requirement_ids,
     }
     .into_result()
     .map_err(argument_errors)?;
@@ -542,28 +530,24 @@ fn parse_create_control_request(
     .into_result()
     .map_err(domain_errors)?;
 
-    Ok((
-        workspace_id,
-        CreateControlPayload {
-            code,
-            title,
-            description,
-            framework_requirement_ids,
-        },
-    ))
+    Ok(CreateControlPayload {
+        code,
+        title,
+        description,
+        framework_requirement_ids,
+    })
 }
 
 fn parse_replace_control_request(
     args: ReplaceControlRequest,
-) -> Result<(WorkspaceId, ControlId, UpdateControlPayload), rmcp::ErrorData> {
-    let (workspace_id, control_id, framework_requirement_ids) = validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
+) -> Result<(ControlId, UpdateControlPayload), rmcp::ErrorData> {
+    let (control_id, framework_requirement_ids) = validate! {
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
         framework_requirement_ids <- required_uuid_array(
             "framework_requirement_ids",
             args.framework_requirement_ids,
         ),
-        => (workspace_id, control_id, framework_requirement_ids),
+        => (control_id, framework_requirement_ids),
     }
     .into_result()
     .map_err(argument_errors)?;
@@ -578,7 +562,6 @@ fn parse_replace_control_request(
     .map_err(domain_errors)?;
 
     Ok((
-        workspace_id,
         control_id,
         UpdateControlPayload {
             code,
@@ -615,13 +598,12 @@ fn required_uuid_array(
 
 fn parse_remove_evidence_request_control_mapping_request(
     args: RemoveEvidenceRequestControlMappingRequest,
-) -> Result<(WorkspaceId, EvidenceRequestId, ControlId), rmcp::ErrorData> {
+) -> Result<(EvidenceRequestId, ControlId), rmcp::ErrorData> {
     validate! {
-        workspace_id <- required_uuid("workspace_id", args.workspace_id).map(WorkspaceId::from),
         evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
             .map(EvidenceRequestId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => (workspace_id, evidence_request_id, control_id),
+        => (evidence_request_id, control_id),
     }
     .into_result()
     .map_err(argument_errors)
@@ -688,10 +670,8 @@ mod tests {
 
     #[test]
     fn create_control_request_parses_required_fields_and_uuid_array() {
-        let workspace_id = Uuid::new_v4();
         let requirement_id = Uuid::new_v4();
-        let (parsed_workspace_id, payload) = parse_create_control_request(ControlDTO {
-            workspace_id: Some(workspace_id.to_string()),
+        let payload = parse_create_control_request(ControlDTO {
             code: Some("PP-AC-01".to_owned()),
             title: Some("Access review".to_owned()),
             description: Some("Review access quarterly.".to_owned()),
@@ -699,7 +679,6 @@ mod tests {
         })
         .expect("create request parses");
 
-        assert_eq!(Uuid::from(parsed_workspace_id), workspace_id);
         assert_eq!(payload.code, "PP-AC-01");
         assert_eq!(
             payload
@@ -714,7 +693,6 @@ mod tests {
     #[test]
     fn create_control_request_requires_framework_requirement_ids_even_when_empty() {
         let error = parse_create_control_request(ControlDTO {
-            workspace_id: Some(Uuid::new_v4().to_string()),
             code: Some("PP-AC-01".to_owned()),
             title: Some("Access review".to_owned()),
             description: Some("Review access quarterly.".to_owned()),
@@ -724,8 +702,7 @@ mod tests {
 
         assert_eq!(field_issue_names(&error), ["framework_requirement_ids"]);
 
-        let (_, payload) = parse_create_control_request(ControlDTO {
-            workspace_id: Some(Uuid::new_v4().to_string()),
+        let payload = parse_create_control_request(ControlDTO {
             code: Some("PP-AC-01".to_owned()),
             title: Some("Access review".to_owned()),
             description: Some("Review access quarterly.".to_owned()),
@@ -738,7 +715,6 @@ mod tests {
     #[test]
     fn create_control_request_reports_invalid_uuid_array_field() {
         let error = parse_create_control_request(ControlDTO {
-            workspace_id: Some(Uuid::new_v4().to_string()),
             code: Some("PP-AC-01".to_owned()),
             title: Some("Access review".to_owned()),
             description: Some("Review access quarterly.".to_owned()),
@@ -752,7 +728,6 @@ mod tests {
     #[test]
     fn create_control_request_rejects_empty_required_text() {
         let error = parse_create_control_request(ControlDTO {
-            workspace_id: Some(Uuid::new_v4().to_string()),
             code: Some("".to_owned()),
             title: Some(" ".to_owned()),
             description: Some("\t".to_owned()),
@@ -765,26 +740,21 @@ mod tests {
 
     #[test]
     fn replace_control_request_requires_control_id_and_parses_update_payload() {
-        let workspace_id = Uuid::new_v4();
         let control_id = Uuid::new_v4();
         let requirement_id = Uuid::new_v4();
-        let (parsed_workspace_id, parsed_control_id, payload) =
-            parse_replace_control_request(ReplaceControlRequest {
-                workspace_id: Some(workspace_id.to_string()),
-                control_id: Some(control_id.to_string()),
-                code: Some("PP-AC-02".to_owned()),
-                title: Some("Updated access review".to_owned()),
-                description: Some("Updated review control.".to_owned()),
-                framework_requirement_ids: Some(vec![requirement_id.to_string()]),
-            })
-            .expect("replace request parses");
+        let (parsed_control_id, payload) = parse_replace_control_request(ReplaceControlRequest {
+            control_id: Some(control_id.to_string()),
+            code: Some("PP-AC-02".to_owned()),
+            title: Some("Updated access review".to_owned()),
+            description: Some("Updated review control.".to_owned()),
+            framework_requirement_ids: Some(vec![requirement_id.to_string()]),
+        })
+        .expect("replace request parses");
 
-        assert_eq!(Uuid::from(parsed_workspace_id), workspace_id);
         assert_eq!(Uuid::from(parsed_control_id), control_id);
         assert_eq!(payload.code, "PP-AC-02");
 
         let missing_control_id = parse_replace_control_request(ReplaceControlRequest {
-            workspace_id: Some(workspace_id.to_string()),
             control_id: None,
             code: Some("PP-AC-02".to_owned()),
             title: Some("Updated access review".to_owned()),

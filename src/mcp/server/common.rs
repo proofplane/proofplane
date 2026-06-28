@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::super::context::McpRequestContext;
 use crate::{
-    domain::{DomainError, WorkspaceId, WorkspacePermission},
+    domain::{DomainError, WorkspacePermission},
     repository::{ConflictKind, Error as RepositoryError},
     services::{attachment_downloads::DownloadError, Error as ServiceError},
     validation::Validation,
@@ -23,19 +23,6 @@ pub(super) enum McpArgumentError {
     Missing { field: &'static str },
     InvalidUuid { field: &'static str },
     InvalidTimestamp { field: &'static str },
-}
-
-pub(super) fn authorize(
-    ctx: &RequestContext<RoleServer>,
-    workspace_id: WorkspaceId,
-    permission: WorkspacePermission,
-) -> Result<McpRequestContext, rmcp::ErrorData> {
-    let parts = ctx
-        .extensions
-        .get::<http::request::Parts>()
-        .ok_or_else(|| rmcp::ErrorData::internal_error("request context unavailable", None))?;
-
-    McpRequestContext::authorize(&parts.extensions, &parts.headers, workspace_id, permission)
 }
 
 pub(super) fn authorize_token_workspace(
