@@ -45,6 +45,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .map(|tool| tool["name"].as_str().expect("tool has a name"))
         .collect::<BTreeSet<_>>();
     let expected_tool_names = [
+        "create_evidence_request",
         "list_evidence_requests",
         "get_evidence_request",
         "list_due_evidence_requests",
@@ -65,6 +66,18 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     .into_iter()
     .collect::<BTreeSet<_>>();
     assert_eq!(tool_names, expected_tool_names);
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
+        "title",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
+        "due_at",
+    );
+    assert_schema_lacks_property(
+        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
+        "workspace_id",
+    );
     assert_schema_lacks_property(
         &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
         "workspace_id",
@@ -124,6 +137,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "list_evidence_requests")["outputSchema"],
         "evidence_requests",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_evidence_request")["outputSchema"],
+        "evidence_request",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
@@ -256,6 +273,43 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
     app.insert_evidence_request_row(other_workspace_id, "Hidden request")
         .await;
 
+    let token = app.api_token().to_owned();
+    let (created, create_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "create_evidence_request",
+                    evidence_request("Created by MCP", "2026-02-15T00:00:00Z"),
+                )
+                .await
+        }
+    })
+    .await;
+    let created_id = uuid_from(&created["evidence_request"]["id"]);
+    assert_eq!(
+        created["evidence_request"]["workspace_id"],
+        workspace_id.to_string()
+    );
+    assert_eq!(created["evidence_request"]["title"], "Created by MCP");
+    assert_eq!(created["evidence_request"]["cadence"], "quarterly");
+    assert_eq!(create_logs.len(), 1);
+    assert_audit_event(
+        &create_logs[0],
+        ExpectedAuditEvent {
+            event_name: "evidence_request.created",
+            operation: "create_evidence_request",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request",
+            object_id: created_id,
+        },
+    );
+
     let listed = mcp_client
         .call_tool("list_evidence_requests", json!({}))
         .await;
@@ -264,7 +318,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
             .as_array()
             .expect("requests array")
             .len(),
-        2
+        3
     );
     assert_eq!(
         listed["evidence_requests"][0]["workspace_id"],
@@ -275,6 +329,11 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .expect("requests array")
         .iter()
         .any(|request| request["title"] == "Hidden request"));
+    assert!(listed["evidence_requests"]
+        .as_array()
+        .expect("requests array")
+        .iter()
+        .any(|request| request["id"] == created_id.to_string()));
 
     let got = mcp_client
         .call_tool(
@@ -308,6 +367,81 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         .map(|issue| issue["field"].as_str().expect("field"))
         .collect();
     assert_eq!(fields, ["now"]);
+
+    let invalid_create = mcp_client
+        .call_tool_error(
+            "create_evidence_request",
+            json!({
+                "title": "",
+                "description": " ",
+                "collection_instructions": "\t",
+                "cadence": "weekly",
+                "due_at": "not-a-date",
+                "schedule_anchor_at": "also-not-a-date",
+                "freshness_window_days": 0,
+                "status": "draft"
+            }),
+        )
+        .await;
+    assert_eq!(invalid_create.code.0, -32602);
+    assert_eq!(
+        field_issue_names(&invalid_create.data),
+        ["due_at", "schedule_anchor_at",]
+    );
+
+    let invalid_domain = mcp_client
+        .call_tool_error(
+            "create_evidence_request",
+            json!({
+                "title": "",
+                "description": " ",
+                "collection_instructions": "\t",
+                "cadence": "weekly",
+                "due_at": "2026-02-15T00:00:00Z",
+                "schedule_anchor_at": "2026-01-01T00:00:00Z",
+                "freshness_window_days": 0,
+                "status": "draft"
+            }),
+        )
+        .await;
+    assert_eq!(invalid_domain.code.0, -32602);
+    assert_eq!(
+        field_issue_names(&invalid_domain.data),
+        [
+            "title",
+            "description",
+            "collection_instructions",
+            "cadence",
+            "freshness_window_days",
+            "status"
+        ]
+    );
+
+    let read_only = app
+        .issue_api_token(
+            workspace_id,
+            vec![WorkspacePermission::ReadEvidenceRequests],
+        )
+        .await;
+    let read_only_token = read_only.raw_token.clone();
+    let (denied_create, denied_create_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let read_only_token = read_only_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &read_only_token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "create_evidence_request",
+                    evidence_request("Denied request", "2026-02-15T00:00:00Z"),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied_create["problem"]["code"], "not_found");
+    assert!(denied_create_logs.is_empty());
 }
 
 #[tokio::test]
