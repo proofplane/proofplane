@@ -18,6 +18,34 @@ pub struct McpRequestContext {
 }
 
 impl McpRequestContext {
+    pub fn authorize_token_workspace(
+        extensions: &http::Extensions,
+        headers: &http::HeaderMap,
+        required_permission: WorkspacePermission,
+    ) -> Result<Self, rmcp::ErrorData> {
+        let token = extensions
+            .get::<ApiTokenContext>()
+            .copied()
+            .ok_or_else(internal_context_error)?;
+        let request_id = extensions
+            .get::<RequestId>()
+            .copied()
+            .ok_or_else(internal_context_error)?;
+
+        if !token.permissions.has(required_permission) {
+            return Err(not_found());
+        }
+
+        Ok(Self {
+            token,
+            request_id,
+            session_id: headers
+                .get(SESSION_ID_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+        })
+    }
+
     pub fn authorize(
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
@@ -129,5 +157,32 @@ mod tests {
         assert_eq!(context.token, token);
         assert_eq!(context.request_id, request_id);
         assert_eq!(context.session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn token_workspace_authorization_checks_permission_without_argument_workspace() {
+        let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
+        let token = api_token_context(workspace_id);
+        let request_id = RequestId(uuid::Uuid::new_v4());
+        let mut extensions = http::Extensions::new();
+        extensions.insert(token);
+        extensions.insert(request_id);
+        let headers = http::HeaderMap::new();
+
+        let context = McpRequestContext::authorize_token_workspace(
+            &extensions,
+            &headers,
+            WorkspacePermission::ReadControls,
+        )
+        .expect("token workspace authorization succeeds");
+        assert_eq!(context.token.workspace_id, workspace_id);
+
+        let denied = McpRequestContext::authorize_token_workspace(
+            &extensions,
+            &headers,
+            WorkspacePermission::WriteControls,
+        )
+        .expect_err("permission failure is concealed");
+        assert_eq!(denied.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
     }
 }

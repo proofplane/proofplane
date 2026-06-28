@@ -1,8 +1,9 @@
 use axum::http::StatusCode;
+use proofplane::routes::request_context::REQUEST_ID_HEADER;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::{cc61_id, cc71_id, TestApp};
+use super::support::{capture_audit_logs, cc61_id, cc71_id, TestApp};
 
 #[tokio::test]
 async fn create_list_get_and_update_controls_with_requirement_mappings() {
@@ -136,27 +137,57 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
     let evidence_request_id = uuid_field(&evidence_request["id"]);
     let path = mapping_path(workspace_id, evidence_request_id);
 
-    let created = app
-        .post(&path)
-        .json(&json!({
-            "control_id": control_id,
-            "rationale": "This request proves access approvals were reviewed."
-        }))
-        .await
-        .json::<Value>();
+    let (created_response, created_logs) = capture_audit_logs(|request_id| {
+        let path = path.clone();
+        let app = &app;
+        async move {
+            app.post(&path)
+                .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
+                .json(&json!({
+                    "control_id": control_id,
+                    "rationale": "This request proves access approvals were reviewed."
+                }))
+                .await
+        }
+    })
+    .await;
+    let created = created_response.json::<Value>();
     assert_eq!(created["control"]["id"], control_id.to_string());
     assert_eq!(
         created["rationale"],
         "This request proves access approvals were reviewed."
     );
+    assert_eq!(created_logs.len(), 1);
+    assert_audit_event(
+        &created_logs[0],
+        ExpectedAuditEvent {
+            event_name: "evidence_request_control_mapping.created",
+            operation: "create_evidence_request_control_mapping",
+            client_type: "rest",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request_control_mapping",
+            object_id: control_id,
+        },
+    );
 
-    app.post(&path)
-        .json(&json!({
-            "control_id": control_id,
-            "rationale": "Duplicate mapping"
-        }))
-        .await
-        .assert_status(StatusCode::CONFLICT);
+    let (duplicate, duplicate_logs) = capture_audit_logs(|request_id| {
+        let path = path.clone();
+        let app = &app;
+        async move {
+            app.post(&path)
+                .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
+                .json(&json!({
+                    "control_id": control_id,
+                    "rationale": "Duplicate mapping"
+                }))
+                .await
+        }
+    })
+    .await;
+    duplicate.assert_status(StatusCode::CONFLICT);
+    assert!(duplicate_logs.is_empty());
 
     let listed = app.get(&path).await.json::<Value>();
     assert_eq!(listed.as_array().unwrap().len(), 1);
@@ -179,13 +210,44 @@ async fn evidence_request_control_mappings_create_list_delete_and_conflict() {
         .await
         .assert_status_not_found();
 
-    app.delete(&format!("{path}/{control_id}"))
-        .await
-        .assert_status(StatusCode::NO_CONTENT);
+    let (deleted, deleted_logs) = capture_audit_logs(|request_id| {
+        let path = path.clone();
+        let app = &app;
+        async move {
+            app.delete(&format!("{path}/{control_id}"))
+                .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
+                .await
+        }
+    })
+    .await;
+    deleted.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(deleted_logs.len(), 1);
+    assert_audit_event(
+        &deleted_logs[0],
+        ExpectedAuditEvent {
+            event_name: "evidence_request_control_mapping.deleted",
+            operation: "delete_evidence_request_control_mapping",
+            client_type: "rest",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_request_control_mapping",
+            object_id: control_id,
+        },
+    );
     assert_eq!(app.get(&path).await.json::<Value>(), json!([]));
-    app.delete(&format!("{path}/{control_id}"))
-        .await
-        .assert_status_not_found();
+    let (missing_delete, missing_delete_logs) = capture_audit_logs(|request_id| {
+        let path = path.clone();
+        let app = &app;
+        async move {
+            app.delete(&format!("{path}/{control_id}"))
+                .add_header(REQUEST_ID_HEADER.as_str(), request_id.to_string())
+                .await
+        }
+    })
+    .await;
+    missing_delete.assert_status_not_found();
+    assert!(missing_delete_logs.is_empty());
 }
 
 #[tokio::test]
@@ -248,4 +310,35 @@ fn requirement_codes(list: &Value) -> Vec<&str> {
 
 fn uuid_field(value: &Value) -> Uuid {
     Uuid::parse_str(value.as_str().unwrap()).unwrap()
+}
+
+struct ExpectedAuditEvent {
+    event_name: &'static str,
+    operation: &'static str,
+    client_type: &'static str,
+    workspace_id: Uuid,
+    user_id: Uuid,
+    api_token_id: Uuid,
+    object_type: &'static str,
+    object_id: Uuid,
+}
+
+fn assert_audit_event(record: &Value, expected: ExpectedAuditEvent) {
+    let fields = &record["fields"];
+    let metadata: Value =
+        serde_json::from_str(fields["metadata"].as_str().expect("metadata is text"))
+            .expect("metadata parses");
+
+    assert_eq!(fields["type"], "audit_log");
+    assert_eq!(fields["event_name"], expected.event_name);
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["actor_type"], "api_token");
+    assert_eq!(fields["user_id"], expected.user_id.to_string());
+    assert_eq!(fields["api_token_id"], expected.api_token_id.to_string());
+    assert_eq!(fields["client_type"], expected.client_type);
+    assert_eq!(fields["operation"], expected.operation);
+    assert_eq!(fields["workspace_id"], expected.workspace_id.to_string());
+    assert_eq!(fields["object_type"], expected.object_type);
+    assert_eq!(fields["object_id"], expected.object_id.to_string());
+    assert_eq!(metadata["control_id"], expected.object_id.to_string());
 }

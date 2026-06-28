@@ -22,9 +22,11 @@ use crate::{
         EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
         UpdateControlPayload, WorkspacePermission,
     },
+    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authorize_workspace_route,
         error::{domain_errors, ApiError},
+        request_context::RequestId,
     },
     services::controls::ControlService,
     validate,
@@ -372,6 +374,7 @@ async fn create_evidence_request_control_mapping(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingsPath>,
     Extension(token): Extension<ApiTokenContext>,
+    Extension(request_id): Extension<RequestId>,
     Json(body): Json<CreateEvidenceRequestControlMappingRequest>,
 ) -> Result<Json<EvidenceRequestControlMappingResponse>, ApiError> {
     let payload = body
@@ -383,6 +386,26 @@ async fn create_evidence_request_control_mapping(
         .create_evidence_request_control_mapping(token, payload)
         .await?
         .ok_or(ApiError::NotFound)?;
+
+    AuditEvent::new(
+        "evidence_request_control_mapping.created",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "create_evidence_request_control_mapping",
+    )
+    .workspace_id(token.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata("evidence_request_id", path.evidence_request_id)
+    .metadata("control_id", Uuid::from(mapping.control.id))
+    .object(AuditObject::new(
+        "evidence_request_control_mapping",
+        mapping.control.id.into(),
+    ))
+    .emit();
 
     Ok(Json(mapping.into()))
 }
@@ -408,6 +431,7 @@ async fn delete_evidence_request_control_mapping(
     State(state): State<ControlState>,
     Path(path): Path<EvidenceRequestControlMappingPath>,
     Extension(token): Extension<ApiTokenContext>,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let deleted = state
         .service
@@ -421,6 +445,26 @@ async fn delete_evidence_request_control_mapping(
     if !deleted {
         return Err(ApiError::NotFound);
     }
+
+    AuditEvent::new(
+        "evidence_request_control_mapping.deleted",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "delete_evidence_request_control_mapping",
+    )
+    .workspace_id(token.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata("evidence_request_id", path.evidence_request_id)
+    .metadata("control_id", path.control_id)
+    .object(AuditObject::new(
+        "evidence_request_control_mapping",
+        path.control_id,
+    ))
+    .emit();
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

@@ -11,7 +11,7 @@ Full runtime, tool, identity, and error decisions live in [spec.md](./spec.md).
 | --- | --- | --- |
 | 001. [MCP Runtime And Authentication](./tickets/001-mcp-runtime-and-authentication.md) | Done | Authenticated Streamable HTTP runtime, public operations routes, and graceful shutdown shipped. |
 | 002. [Compliance Read Tools](./tickets/002-compliance-read-tools.md) | Done | Core read tools expose selectively detailed evidence, human attachment grants, controls, and mappings. |
-| 003. [Compliance Write Tools](./tickets/003-compliance-write-tools.md) | Todo | Expose submission and mapping writes. |
+| 003. [Compliance Write Tools](./tickets/003-compliance-write-tools.md) | Done | Submission and mapping writes are exposed with REST-equivalent persistence and audit semantics. |
 | 004. [Auditor Packet Tools](./tickets/004-auditor-packet-tools.md) | Todo | Preview readiness, request and monitor exports, then issue human grants. |
 | 005. [MCP Logging And Equivalence](./tickets/005-mcp-logging-and-equivalence.md) | Todo | Prove parity and attributable tool activity. |
 
