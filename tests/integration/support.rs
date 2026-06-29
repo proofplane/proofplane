@@ -19,7 +19,10 @@ use proofplane::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
         opaque_token::generate_opaque_token,
-        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        paseto::{
+            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
+            UploadGrantEncryptor,
+        },
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
@@ -494,6 +497,18 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             &self.app_config.paseto.download,
         )
         .expect("download grant decryptor initializes");
+        let upload_grant_encryptor = UploadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-upload-grant",
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("upload grant encryptor initializes");
+        let upload_grant_decryptor = UploadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-upload-grant",
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("upload grant decryptor initializes");
         let recorder = PrometheusBuilder::new().build_recorder();
         create_mcp_app(McpAppDependencies {
             postgres: self.postgres.clone(),
@@ -503,6 +518,8 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             public_api_base_url: self.app_config.server.public_api_base_url.clone(),
             download_grant_encryptor,
             download_grant_decryptor,
+            upload_grant_encryptor,
+            upload_grant_decryptor,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),

@@ -53,6 +53,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_latest_evidence_submission",
         "create_evidence_submission",
         "create_attachment_download_grant",
+        "create_attachment_upload_grant",
         "list_frameworks",
         "list_framework_requirements",
         "list_controls",
@@ -101,6 +102,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "create_attachment_download_grant")["inputSchema"],
         "attachment_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_attachment_upload_grant")["inputSchema"],
+        "submission_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "map_evidence_request_to_control")["inputSchema"],
@@ -194,6 +199,18 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "create_attachment_download_grant")["outputSchema"],
         "expires_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_attachment_upload_grant")["outputSchema"],
+        "url_secret_type",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_attachment_upload_grant")["outputSchema"],
+        "expires_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_attachment_upload_grant")["outputSchema"],
+        "intended_use",
     );
 
     client
@@ -709,6 +726,127 @@ async fn mcp_attachment_download_grants_use_bearer_secret_urls_and_status_mappin
     assert_eq!(grant["url_secret_type"], "bearer_secret");
     assert_eq!(grant["intended_use"], "human_presentation");
     assert!(grant.get("token").is_none());
+}
+
+#[tokio::test]
+async fn mcp_attachment_upload_grants_issue_bearer_secret_urls_and_audit_success_only() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP upload grant workspace")
+        .with_default_membership()
+        .workspace("other", "MCP upload grant hidden workspace")
+        .without_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let token = app.api_token().to_owned();
+
+    let (grant, logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "create_attachment_upload_grant",
+                    json!({ "submission_id": submission_id }),
+                )
+                .await
+        }
+    })
+    .await;
+
+    let url = grant["url"].as_str().expect("upload grant URL");
+    assert!(url.starts_with("https://api.proofplane.test/evidence-attachment-uploads?token="));
+    assert_eq!(grant["submission_id"], submission_id.to_string());
+    assert_eq!(grant["url_secret_type"], "bearer_secret");
+    assert_eq!(grant["intended_use"], "human_browser_upload");
+    assert!(grant["expires_at"].as_str().is_some());
+    assert!(grant.get("token").is_none());
+    assert!(grant.get("api_token").is_none());
+    assert!(grant.get("upload_session_cookie").is_none());
+    assert!(grant.get("file").is_none());
+    assert!(grant.get("bytes").is_none());
+
+    assert_eq!(logs.len(), 1);
+    assert_audit_event(
+        &logs[0],
+        ExpectedAuditEvent {
+            event_name: "evidence_attachment_upload_grant.issued",
+            operation: "create_attachment_upload_grant",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "evidence_submission",
+            object_id: submission_id,
+        },
+    );
+    let metadata = audit_metadata(&logs[0]);
+    assert_eq!(
+        metadata["evidence_submission_id"],
+        submission_id.to_string()
+    );
+    assert!(!metadata.to_string().contains("token"));
+    assert!(!metadata.to_string().contains("url"));
+
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let invalid = mcp_client
+        .call_tool_error(
+            "create_attachment_upload_grant",
+            json!({ "submission_id": "not-a-uuid" }),
+        )
+        .await;
+    assert_eq!(invalid.data["problem"]["code"], "validation_failed");
+    assert_eq!(field_issue_names(&invalid.data), ["submission_id"]);
+
+    let missing = mcp_client
+        .call_tool_error(
+            "create_attachment_upload_grant",
+            json!({ "submission_id": Uuid::new_v4() }),
+        )
+        .await;
+    assert_eq!(missing.data["problem"]["code"], "not_found");
+
+    let other_submission_id = insert_submission_row(
+        &app,
+        app.workspace_id("other"),
+        "Hidden upload grant submission",
+    )
+    .await;
+    let cross_workspace = mcp_client
+        .call_tool_error(
+            "create_attachment_upload_grant",
+            json!({ "submission_id": other_submission_id }),
+        )
+        .await;
+    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
+
+    let read_only = app
+        .issue_api_token(
+            workspace_id,
+            vec![WorkspacePermission::ReadEvidenceSubmissions],
+        )
+        .await;
+    let (denied, denied_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = read_only.raw_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "create_attachment_upload_grant",
+                    json!({ "submission_id": submission_id }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied["problem"]["code"], "not_found");
+    assert!(denied_logs.is_empty());
 }
 
 #[tokio::test]
@@ -1403,6 +1541,44 @@ async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
         .await;
     response.assert_status_ok();
     uuid_from(&response.json::<Value>()["id"])
+}
+
+async fn insert_submission_row(app: &TestApp, workspace_id: Uuid, title: &str) -> Uuid {
+    let client = app
+        .postgres()
+        .get()
+        .await
+        .expect("submission fixture connection opens");
+    let evidence_request_id = Uuid::new_v4();
+    let submission_id = Uuid::new_v4();
+    client
+        .execute(
+            r#"
+INSERT INTO evidence_requests (
+    id, workspace_id, title, description, collection_instructions,
+    cadence, due_at, schedule_anchor_at, freshness_window_days, status
+)
+VALUES ($1, $2, $3, 'Seeded description', 'Seeded instructions', 'quarterly', now(), now(), 90, 'active')
+"#,
+            &[&evidence_request_id, &workspace_id, &title],
+        )
+        .await
+        .expect("evidence request fixture inserts");
+    client
+        .execute(
+            r#"
+INSERT INTO evidence_submissions (
+    id, evidence_request_id, submitted_by_api_token_id,
+    coverage_start_at, coverage_end_at, source_system, collection_method
+)
+VALUES ($1, $2, $3, now(), now(), 'integration', 'manual_upload')
+"#,
+            &[&submission_id, &evidence_request_id, &app.api_token_id()],
+        )
+        .await
+        .expect("evidence submission fixture inserts");
+
+    submission_id
 }
 
 async fn finalize_attachment(
