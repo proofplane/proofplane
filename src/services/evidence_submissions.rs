@@ -211,6 +211,67 @@ impl EvidenceSubmissionService {
             }
         }
     }
+
+    pub async fn create_first_attachment(
+        &self,
+        token: &ApiTokenContext,
+        request_id: Uuid,
+        submission_id: EvidenceSubmissionId,
+        mut payload: UploadEvidenceAttachmentPayload,
+    ) -> Result<Option<EvidenceAttachment>, Error> {
+        payload.evidence_submission_id = submission_id;
+
+        let create_payload = CreateEvidenceAttachmentPayload {
+            evidence_submission_id: submission_id,
+            filename: payload.filename,
+            content_type: payload.content_type,
+            content_length: payload.content_length,
+            object_key: payload.object_key.clone(),
+            checksum_sha256: payload.checksum_sha256,
+            checksum_crc32c: payload.checksum_crc32c,
+        };
+
+        let result = self
+            .repository
+            .in_workspace_context(
+                token.workspace_id,
+                token.user_id,
+                token.api_token_id,
+                async move |context| {
+                    let Some(attachment) = context
+                        .create_first_evidence_attachment(&create_payload)
+                        .await?
+                    else {
+                        return Ok(None);
+                    };
+                    context
+                        .append_outbox_message(&attachment_scan_requested_message(
+                            &attachment,
+                            request_id,
+                        ))
+                        .await?;
+
+                    Ok(Some(attachment))
+                },
+            )
+            .await;
+
+        match result {
+            Ok(Some(attachment)) => Ok(Some(attachment)),
+            Ok(None) => {
+                let _ = self
+                    .delete_uploaded_attachment_object(&payload.object_key)
+                    .await;
+                Ok(None)
+            }
+            Err(error) => {
+                let _ = self
+                    .delete_uploaded_attachment_object(&payload.object_key)
+                    .await;
+                Err(error.into())
+            }
+        }
+    }
 }
 
 fn attachment_scan_requested_message(

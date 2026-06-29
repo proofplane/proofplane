@@ -513,6 +513,81 @@ RETURNING
         };
         evidence_attachment_from_row(&row)
     }
+
+    pub async fn create_first_evidence_attachment(
+        &self,
+        payload: &CreateEvidenceAttachmentPayload,
+    ) -> Result<Option<EvidenceAttachment>, Error> {
+        let locked_submission = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT s.id
+FROM evidence_submissions s
+JOIN evidence_requests er ON er.id = s.evidence_request_id
+WHERE s.id = $1
+  AND er.workspace_id = $2
+FOR UPDATE OF s
+"#,
+                &[
+                    &Uuid::from(payload.evidence_submission_id),
+                    &Uuid::from(self.workspace_id),
+                ],
+            )
+            .await?;
+
+        if locked_submission.is_none() {
+            return Err(Error::InvariantViolation(
+                "attachment insert requires an existing workspace-scoped submission",
+            ));
+        }
+
+        let row = self
+            .transaction
+            .query_opt(
+                r#"
+INSERT INTO evidence_attachments (
+    evidence_submission_id,
+    filename,
+    content_type,
+    content_length,
+    object_key,
+    checksum_sha256,
+    checksum_crc32c,
+    upload_status
+)
+SELECT $1, $2, $3, $4, $5, $6, $7, 'pending'
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM evidence_attachments
+    WHERE evidence_submission_id = $1
+)
+RETURNING
+    id,
+    evidence_submission_id,
+    filename,
+    content_type,
+    content_length,
+    object_key,
+    checksum_sha256,
+    checksum_crc32c,
+    upload_status
+"#,
+                &[
+                    &Uuid::from(payload.evidence_submission_id),
+                    &payload.filename,
+                    &payload.content_type,
+                    &payload.content_length,
+                    &payload.object_key,
+                    &payload.checksum_sha256,
+                    &payload.checksum_crc32c,
+                ],
+            )
+            .await?;
+
+        row.map(|row| evidence_attachment_from_row(&row))
+            .transpose()
+    }
 }
 
 fn evidence_submission_detail_from_rows(

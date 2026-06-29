@@ -101,9 +101,11 @@ GET  /evidence-attachment-uploads
 POST /evidence-attachment-uploads/files
 ```
 
-The first `GET` redeems the URL token and sets the upload-session cookie. Later
-page loads use the cookie. `POST /files` accepts one multipart `file` field and
-uses the existing `EvidenceSubmissionService::upload_attachment` and
+The first `GET` redeems the URL token, sets the upload-session cookie, and
+redirects to `/evidence-attachment-uploads` so refreshes use the cookie instead
+of the single-use token. Later page loads use the cookie. `POST /files` accepts
+one multipart `file` field and uses the existing
+`EvidenceSubmissionService::upload_attachment` and
 `create_attachment` flow. Browser uploads compute CRC32C server-side while
 streaming; native browser forms do not need to provide `Content-Digest`.
 
@@ -134,10 +136,10 @@ The first version is a minimal API-served HTML page, not a React route in the
 separate Vite UI app. It may borrow Proofplane visual tokens, but it should not
 add new deployment requirements for serving the SPA.
 
-The page allows one file selection and one upload at a time. After success it
-shows "Uploaded" and short copy telling the human to ask the MCP client to check
-processing status. It also refreshes or displays the current attachment list
-with filename, size, and coarse status.
+The page allows one file selection and one upload total for the scoped
+submission. After success it shows a dedicated "Upload successful" screen with a
+message that the page can be safely closed. Later visits display the existing
+attachment list with filename, size, and coarse status, without an upload button.
 
 No polling, delete, preview, download, multi-file POST, drag-and-drop, or
 product login is part of the first pass.

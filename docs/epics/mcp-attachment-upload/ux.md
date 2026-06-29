@@ -10,8 +10,9 @@ what has already been uploaded.
 
 - Valid session: show submission attachment inventory, a single file picker,
   and an upload button.
-- Successful upload: show "Uploaded" and copy telling the human to ask the MCP
-  client to check attachment processing status.
+- Successful upload: show only "Upload successful" and tell the human they can
+  safely close the page.
+- Existing attachment: show the attachment inventory without an upload button.
 - Duplicate filename: do not interrupt the human; the server applies a
   macOS-style suffix and the page shows the stored filename.
 - Expired or invalid link/session: show "This upload link is no longer

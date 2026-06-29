@@ -84,6 +84,9 @@ async fn open_upload_session(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
+    if query.uploaded.is_some() {
+        return Ok(Html(success_page()).into_response());
+    }
     let body = render_upload_page(
         &inventory(
             &state.submissions,
@@ -91,7 +94,7 @@ async fn open_upload_session(
             session.api_token_context(),
         )
         .await?,
-        query.uploaded.as_deref().map(|_| "Uploaded"),
+        None,
     );
     Ok(Html(body).into_response())
 }
@@ -109,7 +112,11 @@ async fn upload_file(
     };
     let token = session.api_token_context();
     let before = detail(&state.submissions, session.submission_id, token).await?;
-    let mut payload = match attachment_upload_from_multipart(
+    if !before.attachments.is_empty() {
+        return Ok(upload_already_exists_response(&before));
+    }
+
+    let payload = match attachment_upload_from_multipart(
         &state.submissions,
         &token,
         session.submission_id,
@@ -124,19 +131,15 @@ async fn upload_file(
         }
         Err(error) => return Err(error),
     };
-    payload.filename = available_filename(
-        &payload.filename,
-        before
-            .attachments
-            .iter()
-            .map(|attachment| attachment.filename.as_str()),
-    )
-    .map_err(|message| ApiError::BadRequest(vec![message]))?;
 
-    let attachment = state
+    let Some(attachment) = state
         .submissions
-        .create_attachment(&token, request_id.0, session.submission_id, payload)
-        .await?;
+        .create_first_attachment(&token, request_id.0, session.submission_id, payload)
+        .await?
+    else {
+        let latest = detail(&state.submissions, session.submission_id, token).await?;
+        return Ok(upload_already_exists_response(&latest));
+    };
     emit_upload_audit(&token, request_id.0, session.submission_id, &attachment);
 
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -171,24 +174,11 @@ async fn redeem_grant(
             grant.issued_via_api_token_id,
         )
         .map_err(upload_session_error)?;
-    let body = render_upload_page(
-        &inventory(
-            &state.submissions,
-            grant.submission_id,
-            crate::authentication::ApiTokenContext {
-                workspace_id: grant.workspace_id,
-                user_id: grant.issued_by_user_id,
-                api_token_id: grant.issued_via_api_token_id,
-                permissions: crate::domain::WorkspacePermissions::from_iter(
-                    crate::domain::WorkspacePermission::ALL,
-                ),
-            },
-        )
-        .await?,
-        None,
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(
+        LOCATION,
+        HeaderValue::from_static("/evidence-attachment-uploads"),
     );
-
-    let mut response = Html(body).into_response();
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&session_cookie(&session, state.secure_cookie))
@@ -287,6 +277,19 @@ fn render_upload_page(
                 .join("")
         )
     };
+    let upload = if attachments.is_empty() {
+        r#"<section class="panel" aria-labelledby="upload-file">
+<h2 id="upload-file">Upload a file</h2>
+<form method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
+<label for="file">File</label>
+<input id="file" name="file" type="file" required>
+<button type="submit">Upload</button>
+</form>
+</section>"#
+            .to_owned()
+    } else {
+        String::new()
+    };
 
     format!(
         r#"<!doctype html>
@@ -372,24 +375,36 @@ button:hover {{ background: oklch(72% 0.09 174); }}
 <body>
 <main>
 <h1>Evidence attachment upload</h1>
-<p>Add one evidence file for the scoped submission. This link does not grant access to the rest of Proofplane.</p>
+<p>Add one evidence file for the scoped submission. If you have to upload more than one file, put them in the same zip file and upload the zip. This link does not grant access to the rest of Proofplane.</p>
 {message}
 <section class="panel" aria-labelledby="current-attachments">
 <h2 id="current-attachments">Current attachments</h2>
 {rows}
 </section>
-<section class="panel" aria-labelledby="upload-file">
-<h2 id="upload-file">Upload a file</h2>
-<form method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
-<label for="file">File</label>
-<input id="file" name="file" type="file" required>
-<button type="submit">Upload</button>
-</form>
-</section>
+{upload}
 </main>
 </body>
 </html>"#
     )
+}
+
+fn success_page() -> String {
+    r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload successful</title>
+<style>
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: oklch(17% 0.012 170); color: oklch(94% 0.01 150); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+main { width: min(560px, calc(100% - 32px)); border: 1px solid oklch(39% 0.018 170); background: oklch(24% 0.014 170); border-radius: 8px; padding: 24px; }
+h1 { margin: 0 0 10px; font-size: 1.5rem; letter-spacing: 0; }
+p { margin: 0; color: oklch(76% 0.015 155); line-height: 1.55; }
+</style>
+</head>
+<body><main><h1>Upload successful</h1><p>You can safely close the page now.</p></main></body>
+</html>"#
+        .to_owned()
 }
 
 fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> Response {
@@ -422,6 +437,24 @@ fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> 
         .into_response()
 }
 
+fn upload_already_exists_response(detail: &EvidenceSubmissionDetail) -> Response {
+    let attachments = detail
+        .attachments
+        .clone()
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+
+    (
+        StatusCode::CONFLICT,
+        Html(render_upload_page(
+            &attachments,
+            Some("A file has already been uploaded for this evidence submission."),
+        )),
+    )
+        .into_response()
+}
+
 fn unavailable_page() -> String {
     r#"<!doctype html>
 <html lang="en">
@@ -439,47 +472,6 @@ p { margin: 0; color: oklch(76% 0.015 155); line-height: 1.55; }
 <body><main><h1>This upload link is no longer available</h1><p>Ask the MCP client for a new upload link.</p></main></body>
 </html>"#
         .to_owned()
-}
-
-fn available_filename<'a>(
-    filename: &str,
-    existing: impl Iterator<Item = &'a str>,
-) -> Result<String, String> {
-    let existing = existing.collect::<std::collections::HashSet<_>>();
-    if !existing.contains(filename) {
-        return Ok(filename.to_owned());
-    }
-
-    let (stem, extension) = filename_parts(filename);
-    for index in 1..=100 {
-        let candidate = match extension {
-            Some(extension) => format!("{stem} ({index}).{extension}"),
-            None => format!("{stem} ({index})"),
-        };
-        if !existing.contains(candidate.as_str()) {
-            let candidate = crate::domain::validate_attachment_filename(candidate)
-                .into_result()
-                .map_err(|errors| {
-                    errors
-                        .into_iter()
-                        .next()
-                        .map(|error| error.to_string())
-                        .unwrap_or_else(|| "attachment filename is invalid".to_owned())
-                })?;
-            return Ok(candidate);
-        }
-    }
-
-    Err("too many attachments share this filename".to_owned())
-}
-
-fn filename_parts(filename: &str) -> (&str, Option<&str>) {
-    match filename.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
-            (stem, Some(extension))
-        }
-        _ => (filename, None),
-    }
 }
 
 fn format_bytes(bytes: i64) -> String {
@@ -552,49 +544,4 @@ impl From<EvidenceAttachment> for UploadSessionAttachmentResponse {
 
 fn upload_status(status: AttachmentUploadStatus) -> &'static str {
     status.as_str()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::available_filename;
-
-    #[test]
-    fn available_filename_keeps_unique_name() {
-        assert_eq!(
-            available_filename("report.pdf", ["other.pdf"].into_iter()).unwrap(),
-            "report.pdf"
-        );
-    }
-
-    #[test]
-    fn available_filename_uses_macos_style_suffix() {
-        assert_eq!(
-            available_filename("report.pdf", ["report.pdf"].into_iter()).unwrap(),
-            "report (1).pdf"
-        );
-        assert_eq!(
-            available_filename("report", ["report"].into_iter()).unwrap(),
-            "report (1)"
-        );
-    }
-
-    #[test]
-    fn available_filename_uses_next_open_suffix() {
-        assert_eq!(
-            available_filename(
-                "report.pdf",
-                ["report.pdf", "report (1).pdf", "report (2).pdf"].into_iter(),
-            )
-            .unwrap(),
-            "report (3).pdf"
-        );
-    }
-
-    #[test]
-    fn available_filename_fails_after_suffix_bound() {
-        let mut existing = vec!["report.pdf".to_owned()];
-        existing.extend((1..=100).map(|index| format!("report ({index}).pdf")));
-
-        assert!(available_filename("report.pdf", existing.iter().map(String::as_str)).is_err());
-    }
 }
