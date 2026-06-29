@@ -1,9 +1,9 @@
-# 002 - MCP Upload Grant Tool
+# 002 - MCP Attachment Management Tool
 
 **Status:** Done · **Depends on:** [001](./001-upload-grant-persistence.md) · **Spec:** [spec.md](../spec.md#tool-contract)
 
-**Summary** - Add `create_attachment_upload_grant` so an MCP client can give a
-human a short-lived browser URL for uploading attachments to an existing
+**Summary** - Add `manage_evidence_submission_attachment` so an MCP client can
+give a human a short-lived browser URL for managing attachments on an existing
 Evidence Submission.
 
 **Acceptance criteria**
@@ -16,8 +16,8 @@ Evidence Submission.
   receives the appropriate structured MCP error without a URL.
 - [x] Given the tool response, when it is returned, then no raw API token,
   upload-session cookie, or file bytes are included.
-- [x] Given existing MCP submission and download-grant tools, when this ships,
-  then their schemas and behavior remain unchanged.
+- [x] Given existing MCP submission tools, when this ships, then their schemas
+  and behavior remain unchanged.
 
 **Tasks**
 

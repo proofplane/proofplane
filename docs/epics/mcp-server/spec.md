@@ -62,7 +62,6 @@ Read tools:
 - `list_due_evidence_requests`
 - `get_evidence_submission`
 - `get_latest_evidence_submission`
-- `create_attachment_download_grant`
 - `list_frameworks`
 - `list_framework_requirements`
 - `list_controls`
@@ -73,6 +72,7 @@ Write tools:
 
 - `create_evidence_request`
 - `create_evidence_submission`
+- `manage_evidence_submission_attachment`
 - `create_control`
 - `replace_control`
 - `map_evidence_request_to_control`
@@ -80,8 +80,8 @@ Write tools:
 
 These tools are sufficient for the core MCP demo: an agent can inspect due
 requests and latest summarized evidence, create a request or submission, direct
-a human to finalized attachments, discover framework requirement IDs, create or
-update workspace controls, and inspect or update control mappings.
+a human to manage a submission attachment, discover framework requirement IDs,
+create or update workspace controls, and inspect or update control mappings.
 
 `list_frameworks` and `list_framework_requirements` expose global standards
 reference data. They require a valid API token with `ReadControls` on the

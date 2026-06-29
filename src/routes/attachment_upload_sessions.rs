@@ -1,5 +1,5 @@
 use axum::{
-    extract::{rejection::QueryRejection, DefaultBodyLimit, Multipart, Query, State},
+    extract::{rejection::QueryRejection, DefaultBodyLimit, Multipart, Path, Query, State},
     http::{
         header::{COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
@@ -24,6 +24,7 @@ use crate::{
         request_context::RequestId,
     },
     services::{
+        attachment_downloads::{AttachmentDownloadService, DownloadError},
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
         evidence_submissions::EvidenceSubmissionService,
         upload_sessions::{UploadSessionError, UploadSessionTokenService, VerifiedUploadSession},
@@ -35,6 +36,7 @@ const UPLOAD_SESSION_COOKIE: &str = "proofplane_attachment_upload_session";
 #[derive(Clone)]
 pub struct AttachmentUploadSessionState {
     pub grants: AttachmentUploadGrantService,
+    pub downloads: AttachmentDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
     pub secure_cookie: bool,
@@ -48,20 +50,25 @@ pub fn router(state: AttachmentUploadSessionState) -> Router {
             "/evidence-attachment-uploads/files",
             post(upload_file).layer(DefaultBodyLimit::max(state.max_attachment_bytes)),
         )
+        .route(
+            "/evidence-attachment-uploads/files/{attachment_id}/download",
+            get(download_file),
+        )
         .with_state(state)
 }
 
 #[derive(Debug, Deserialize)]
 struct UploadSessionQuery {
     token: Option<String>,
-    uploaded: Option<String>,
 }
 
 #[derive(Debug)]
 struct UploadSessionAttachmentResponse {
+    id: Uuid,
     filename: String,
     content_length: i64,
     upload_status: String,
+    downloadable: bool,
 }
 
 async fn open_upload_session(
@@ -82,9 +89,6 @@ async fn open_upload_session(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
-    if query.uploaded.is_some() {
-        return Ok(Html(success_page()).into_response());
-    }
     let body = render_upload_page(
         &inventory(
             &state.submissions,
@@ -143,7 +147,58 @@ async fn upload_file(
     let mut response = StatusCode::SEE_OTHER.into_response();
     response.headers_mut().insert(
         LOCATION,
-        HeaderValue::from_static("/evidence-attachment-uploads?uploaded=1"),
+        HeaderValue::from_static("/evidence-attachment-uploads"),
+    );
+    Ok(response)
+}
+
+async fn download_file(
+    State(state): State<AttachmentUploadSessionState>,
+    headers: HeaderMap,
+    Extension(request_id): Extension<RequestId>,
+    Path(attachment_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let session = match verify_session(&state, &headers) {
+        Ok(session) => session,
+        Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
+    };
+    let token = session.api_token_context();
+    let grant = state
+        .downloads
+        .issue(&token, session.submission_id, attachment_id.into())
+        .await
+        .map_err(upload_session_download_error)?;
+    AuditEvent::new(
+        "evidence_attachment_download_grant.issued",
+        AuditOutcome::Success,
+        AuditActor::ApiToken {
+            user_id: token.user_id.into(),
+            api_token_id: token.api_token_id.into(),
+        },
+        AuditClientType::Rest,
+        "issue_attachment_download_grant_via_upload_session",
+    )
+    .workspace_id(token.workspace_id.into())
+    .request_id(request_id.0)
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(grant.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(grant.audit.attachment_id),
+    )
+    .object(AuditObject::new(
+        "evidence_attachment",
+        grant.audit.attachment_id.into(),
+    ))
+    .emit();
+
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(
+        LOCATION,
+        HeaderValue::from_str(grant.url.as_str()).map_err(|_| ApiError::Internal)?,
     );
     Ok(response)
 }
@@ -267,14 +322,15 @@ fn render_upload_page(
         r#"<p class="empty">No attachments have been added yet.</p>"#.to_owned()
     } else {
         format!(
-            r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th></tr></thead><tbody>{}</tbody></table>"#,
+            r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody>{}</tbody></table>"#,
             attachments
                 .iter()
                 .map(|attachment| format!(
-                    "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                     escape_html(&attachment.filename),
                     format_bytes(attachment.content_length),
                     escape_html(&attachment.upload_status),
+                    download_link(attachment),
                 ))
                 .collect::<Vec<_>>()
                 .join("")
@@ -300,7 +356,7 @@ fn render_upload_page(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Evidence attachment upload</title>
+<title>Evidence attachment management</title>
 <style>
 :root {{
   color-scheme: dark;
@@ -358,11 +414,12 @@ input[type="file"] {{
   padding: 10px;
   color: var(--ink);
 }}
-input[type="file"]:focus-visible, button:focus-visible {{
+input[type="file"]:focus-visible, button:focus-visible, .button:focus-visible {{
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }}
-button {{
+button, .button {{
+  display: inline-block;
   justify-self: start;
   border: 0;
   border-radius: 6px;
@@ -371,13 +428,14 @@ button {{
   padding: 10px 16px;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
 }}
-button:hover {{ background: oklch(72% 0.09 174); }}
+button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
 </style>
 </head>
 <body>
 <main>
-<h1>Evidence attachment upload</h1>
+<h1>Evidence attachment management</h1>
 <p>Add one evidence file for the scoped submission. If you have to upload more than one file, put them in the same zip file and upload the zip. This link does not grant access to the rest of Proofplane.</p>
 {message}
 <section class="panel" aria-labelledby="current-attachments">
@@ -389,25 +447,6 @@ button:hover {{ background: oklch(72% 0.09 174); }}
 </body>
 </html>"#
     )
-}
-
-fn success_page() -> String {
-    r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Upload successful</title>
-<style>
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: oklch(17% 0.012 170); color: oklch(94% 0.01 150); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-main { width: min(560px, calc(100% - 32px)); border: 1px solid oklch(39% 0.018 170); background: oklch(24% 0.014 170); border-radius: 8px; padding: 24px; }
-h1 { margin: 0 0 10px; font-size: 1.5rem; letter-spacing: 0; }
-p { margin: 0; color: oklch(76% 0.015 155); line-height: 1.55; }
-</style>
-</head>
-<body><main><h1>Upload successful</h1><p>You can safely close the page now.</p></main></body>
-</html>"#
-        .to_owned()
 }
 
 fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> Response {
@@ -539,13 +578,41 @@ fn unavailable_response() -> Response {
 impl From<EvidenceAttachment> for UploadSessionAttachmentResponse {
     fn from(attachment: EvidenceAttachment) -> Self {
         Self {
+            id: Uuid::from(attachment.id),
             filename: attachment.filename,
             content_length: attachment.content_length,
             upload_status: upload_status(attachment.upload_status).to_owned(),
+            downloadable: attachment.upload_status == AttachmentUploadStatus::Uploaded,
         }
     }
 }
 
 fn upload_status(status: AttachmentUploadStatus) -> &'static str {
     status.as_str()
+}
+
+fn download_link(attachment: &UploadSessionAttachmentResponse) -> String {
+    if attachment.downloadable {
+        format!(
+            r#"<a class="button" href="/evidence-attachment-uploads/files/{}/download">Download</a>"#,
+            attachment.id
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn upload_session_download_error(error: DownloadError) -> ApiError {
+    match error {
+        DownloadError::NotFound => ApiError::NotFound,
+        DownloadError::NotReady => ApiError::Conflict {
+            code: "attachment_not_ready",
+            message: "attachment is not ready for download".to_owned(),
+        },
+        DownloadError::MetadataMismatch | DownloadError::Internal => ApiError::Internal,
+        DownloadError::Repository(repository_error) => {
+            tracing::error!(error = %repository_error, "attachment download repository failure");
+            ApiError::Internal
+        }
+    }
 }

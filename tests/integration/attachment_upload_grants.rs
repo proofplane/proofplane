@@ -273,7 +273,7 @@ async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
         .add_header("cookie", cookie)
         .await
         .text();
-    assert!(body.contains("Evidence attachment upload"));
+    assert!(body.contains("Evidence attachment management"));
     assert!(body.contains("Current attachments"));
 
     let redeemed_at = app
@@ -409,6 +409,7 @@ async fn upload_session_page_with_existing_attachment_hides_upload_form() {
     assert!(!body.contains(r#"<input id="file""#));
     assert!(!body.contains(r#"action="/evidence-attachment-uploads/files""#));
     assert!(body.contains("pending"));
+    assert!(!body.contains("Download"));
 }
 
 #[tokio::test]
@@ -432,22 +433,21 @@ async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline(
     response.assert_status(axum::http::StatusCode::SEE_OTHER);
     assert_eq!(
         response.header("location").to_str().expect("location"),
-        "/evidence-attachment-uploads?uploaded=1"
+        "/evidence-attachment-uploads"
     );
     let page = app
         .server()
-        .get("/evidence-attachment-uploads?uploaded=1")
+        .get("/evidence-attachment-uploads")
         .add_header("cookie", cookie.clone())
         .await;
     page.assert_status_ok();
     let body = page.text();
-    assert!(body.contains("Upload successful"));
-    assert!(body.contains("You can safely close the page now."));
     assert!(!body.contains("countdown"));
     assert!(!body.contains("window.close()"));
-    assert!(!body.contains("browser-artifact.txt"));
-    assert!(!body.contains("Current attachments"));
-    assert!(!body.contains("pending"));
+    assert!(body.contains("browser-artifact.txt"));
+    assert!(body.contains("Current attachments"));
+    assert!(body.contains("pending"));
+    assert!(!body.contains("Download"));
 
     let row = app
         .postgres()
@@ -475,11 +475,52 @@ GROUP BY a.id
     assert_eq!(row.get::<_, i64>("outbox_count"), 1);
 
     app.server()
-        .get("/evidence-attachment-uploads?uploaded=1")
+        .get("/evidence-attachment-uploads")
         .add_header("cookie", cookie)
         .await
         .assert_status_ok();
     assert_eq!(attachment_filenames(&app, submission_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn upload_session_page_downloads_finalized_attachment() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let attachment = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "ready.txt",
+        b"ready bytes",
+    )
+    .await;
+    let attachment_id = Uuid::parse_str(attachment["id"].as_str().expect("attachment id"))
+        .expect("attachment id parses");
+    finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
+
+    let page = app
+        .server()
+        .get("/evidence-attachment-uploads")
+        .add_header("cookie", cookie.clone())
+        .await;
+    page.assert_status_ok();
+    let body = page.text();
+    assert!(body.contains("ready.txt"));
+    assert!(body.contains("Download"));
+
+    let redirect = app
+        .server()
+        .get(&format!(
+            "/evidence-attachment-uploads/files/{attachment_id}/download"
+        ))
+        .add_header("cookie", cookie)
+        .await;
+    redirect.assert_status(axum::http::StatusCode::SEE_OTHER);
+    let location_header = redirect.header("location");
+    let location = location_header.to_str().expect("location");
+    assert!(location.starts_with("https://api.proofplane.test/attachment-downloads?token="));
 }
 
 #[tokio::test]

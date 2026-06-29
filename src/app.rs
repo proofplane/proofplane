@@ -147,7 +147,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             },
         }))
         .merge(attachment_downloads::router(AttachmentDownloadState {
-            service: attachment_download_service,
+            service: attachment_download_service.clone(),
             route_auth: AttachmentDownloadRouteAuthState {
                 authenticator: api_token_authenticator.clone(),
             },
@@ -155,6 +155,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
         .merge(attachment_upload_sessions::router(
             AttachmentUploadSessionState {
                 grants: attachment_upload_grant_service,
+                downloads: attachment_download_service,
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
                 secure_cookie: secure_upload_cookie,

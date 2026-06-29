@@ -23,14 +23,14 @@ use crate::{
 #[tool_router(router = attachment_upload_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
     #[tool(
-        name = "create_attachment_upload_grant",
-        description = "Create a short-lived human-browser upload URL for an existing evidence submission."
+        name = "manage_evidence_submission_attachment",
+        description = "Create a short-lived human-browser URL to upload or download an evidence submission attachment."
     )]
-    async fn create_attachment_upload_grant(
+    async fn manage_evidence_submission_attachment(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<CreateAttachmentUploadGrantRequest>,
-    ) -> Result<Json<CreateAttachmentUploadGrantResponse>, rmcp::ErrorData> {
+        Parameters(args): Parameters<ManageEvidenceSubmissionAttachmentRequest>,
+    ) -> Result<Json<ManageEvidenceSubmissionAttachmentResponse>, rmcp::ErrorData> {
         let submission_id = parse_attachment_upload_grant_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
@@ -49,7 +49,7 @@ impl ProofplaneMcp {
                 api_token_id: context.token.api_token_id.into(),
             },
             AuditClientType::Mcp,
-            "create_attachment_upload_grant",
+            "manage_evidence_submission_attachment",
         )
         .workspace_id(workspace_id.into())
         .request_id(context.request_id.0)
@@ -68,12 +68,12 @@ impl ProofplaneMcp {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct CreateAttachmentUploadGrantRequest {
+struct ManageEvidenceSubmissionAttachmentRequest {
     submission_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct CreateAttachmentUploadGrantResponse {
+struct ManageEvidenceSubmissionAttachmentResponse {
     url: String,
     expires_at: String,
     submission_id: String,
@@ -81,20 +81,20 @@ struct CreateAttachmentUploadGrantResponse {
     intended_use: &'static str,
 }
 
-impl From<IssuedUploadGrant> for CreateAttachmentUploadGrantResponse {
+impl From<IssuedUploadGrant> for ManageEvidenceSubmissionAttachmentResponse {
     fn from(grant: IssuedUploadGrant) -> Self {
         Self {
             url: grant.url.to_string(),
             expires_at: format_datetime(grant.expires_at),
             submission_id: grant.submission_id.to_string(),
             url_secret_type: "bearer_secret",
-            intended_use: "human_browser_upload",
+            intended_use: "human_browser_attachment_management",
         }
     }
 }
 
 fn parse_attachment_upload_grant_request(
-    args: CreateAttachmentUploadGrantRequest,
+    args: ManageEvidenceSubmissionAttachmentRequest,
 ) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
     validate! {
         submission_id <- required_uuid("submission_id", args.submission_id)
@@ -118,7 +118,7 @@ fn upload_grant_error(error: UploadGrantError) -> rmcp::ErrorData {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_attachment_upload_grant_request, CreateAttachmentUploadGrantRequest};
+    use super::{parse_attachment_upload_grant_request, ManageEvidenceSubmissionAttachmentRequest};
     use rmcp::model::ErrorCode;
 
     fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
@@ -137,20 +137,22 @@ mod tests {
 
     #[test]
     fn upload_grant_request_requires_submission_uuid() {
-        let missing = parse_attachment_upload_grant_request(CreateAttachmentUploadGrantRequest {
-            submission_id: None,
-        })
-        .expect_err("missing submission");
+        let missing =
+            parse_attachment_upload_grant_request(ManageEvidenceSubmissionAttachmentRequest {
+                submission_id: None,
+            })
+            .expect_err("missing submission");
         assert_eq!(missing.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             field_issues(&missing),
             [("submission_id".to_owned(), "is required".to_owned())]
         );
 
-        let invalid = parse_attachment_upload_grant_request(CreateAttachmentUploadGrantRequest {
-            submission_id: Some("nope".to_owned()),
-        })
-        .expect_err("invalid submission");
+        let invalid =
+            parse_attachment_upload_grant_request(ManageEvidenceSubmissionAttachmentRequest {
+                submission_id: Some("nope".to_owned()),
+            })
+            .expect_err("invalid submission");
         assert_eq!(
             field_issues(&invalid),
             [("submission_id".to_owned(), "must be a UUID".to_owned())]

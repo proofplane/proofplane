@@ -1,21 +1,21 @@
-# MCP Attachment Upload Spec
+# MCP Attachment Management Spec
 
 ## Goal
 
 Let an authenticated MCP client hand a human a short-lived Proofplane URL for
-adding attachment bytes to an existing Evidence Submission without passing the
-file through chat, model context, or MCP.
+adding or downloading attachment bytes for an existing Evidence Submission
+without passing the file through chat, model context, or MCP.
 
-The MCP tool creates a narrow delegated browser upload session. Attachment bytes
-still enter Proofplane through HTTP and the existing quarantine, scan,
-finalization, and audit pipeline.
+The MCP tool creates a narrow delegated browser attachment-management session.
+Uploaded attachment bytes still enter Proofplane through HTTP and the existing
+quarantine, scan, finalization, and audit pipeline.
 
 ## Tool Contract
 
 Add the MCP tool:
 
 ```text
-create_attachment_upload_grant
+manage_evidence_submission_attachment
 ```
 
 Input:
@@ -39,7 +39,7 @@ Response:
   "expires_at": "2026-06-28T12:00:00.000Z",
   "submission_id": "uuid",
   "url_secret_type": "bearer_secret",
-  "intended_use": "human_browser_upload"
+  "intended_use": "human_browser_attachment_management"
 }
 ```
 
@@ -137,12 +137,13 @@ separate Vite UI app. It may borrow Proofplane visual tokens, but it should not
 add new deployment requirements for serving the SPA.
 
 The page allows one file selection and one upload total for the scoped
-submission. After success it shows a dedicated "Upload successful" screen with a
-message that the page can be safely closed. Later visits display the existing
-attachment list with filename, size, and coarse status, without an upload button.
+submission. After success it returns to the attachment-management page and shows
+the stored file with filename, size, and coarse status. Later visits display the
+same existing attachment list without an upload button. Uploaded attachments show
+a download button; processing or failed attachments do not.
 
-No polling, delete, preview, download, multi-file POST, drag-and-drop, or
-product login is part of the first pass.
+No polling, delete, preview, multi-file POST, drag-and-drop, or product login is
+part of the first pass.
 
 ## Audit And Logging
 

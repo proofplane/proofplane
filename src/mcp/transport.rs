@@ -22,7 +22,6 @@ use crate::{
         request_context::attach_request_id,
     },
     services::{
-        attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
@@ -52,13 +51,6 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let attachment_downloads = AttachmentDownloadService::new(
-        dependencies.postgres.clone(),
-        dependencies.object_store,
-        dependencies.public_api_base_url.clone(),
-        dependencies.download_grant_encryptor,
-        dependencies.download_grant_decryptor,
-    );
     let attachment_upload_grants = AttachmentUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url,
@@ -71,7 +63,6 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
-            attachment_downloads,
             attachment_upload_grants,
             controls,
         ),

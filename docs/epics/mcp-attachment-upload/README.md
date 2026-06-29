@@ -1,7 +1,7 @@
-# MCP Attachment Upload Epic
+# MCP Attachment Management Epic
 
-Let MCP clients delegate evidence attachment upload to a human browser session
-without moving file bytes through chat, model context, or MCP.
+Let MCP clients delegate evidence attachment upload and download to a human
+browser session without moving file bytes through chat, model context, or MCP.
 
 Technical decisions live in [spec.md](./spec.md). Page behavior lives in
 [ux.md](./ux.md).
@@ -11,7 +11,7 @@ Technical decisions live in [spec.md](./spec.md). Page behavior lives in
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Upload Grant Persistence](./tickets/001-upload-grant-persistence.md) | Done | Added durable single-use grant state, upload-grant keyring, and service primitives. |
-| 002. [MCP Upload Grant Tool](./tickets/002-mcp-upload-grant-tool.md) | Done | Added `create_attachment_upload_grant` and audit issuance. |
+| 002. [MCP Upload Grant Tool](./tickets/002-mcp-upload-grant-tool.md) | Done | Added the MCP management tool and audit issuance. |
 | 003. [Grant Redemption And Upload Session](./tickets/003-grant-redemption-and-upload-session.md) | Done | Redeems one-time URLs into scoped browser upload sessions. |
 | 004. [Browser Upload Page](./tickets/004-browser-upload-page.md) | Done | Serves the minimal page, lists existing attachments, and uploads one file at a time. |
 
