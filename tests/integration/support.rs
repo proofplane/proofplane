@@ -255,7 +255,11 @@ impl TestApp {
             .expect("Postgres test container exposes Postgres");
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-        let app_config = config(database_url.clone(), builder.max_attachment_bytes);
+        let app_config = config(
+            database_url.clone(),
+            builder.max_attachment_bytes,
+            builder.public_api_base_url,
+        );
 
         let mut database = store::conn(&database_url)
             .await
@@ -484,6 +488,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         format!("Bearer {}", self.api_token)
     }
 
+    pub fn public_api_base_url(&self) -> &url::Url {
+        &self.app_config.server.public_api_base_url
+    }
+
     fn mcp_app(&self) -> Router {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
@@ -582,6 +590,7 @@ pub struct TestAppBuilder {
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
     max_attachment_bytes: usize,
+    public_api_base_url: url::Url,
 }
 
 impl TestAppBuilder {
@@ -602,6 +611,11 @@ impl TestAppBuilder {
 
     pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: usize) -> Self {
         self.max_attachment_bytes = max_attachment_bytes;
+        self
+    }
+
+    pub fn with_public_api_base_url(mut self, public_api_base_url: url::Url) -> Self {
+        self.public_api_base_url = public_api_base_url;
         self
     }
 
@@ -630,6 +644,8 @@ impl Default for TestAppBuilder {
             soc2_reference_data: false,
             workspaces: Vec::new(),
             max_attachment_bytes: 25 * 1024 * 1024,
+            public_api_base_url: url::Url::parse("https://api.proofplane.test/")
+                .expect("public API base URL parses"),
         }
     }
 }
@@ -936,7 +952,11 @@ async fn shared_clamav() -> Arc<TestClamAv> {
     clamav
 }
 
-fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
+fn config(
+    database_url: String,
+    max_attachment_bytes: usize,
+    public_api_base_url: url::Url,
+) -> AppConfig {
     let storage_root =
         std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
 
@@ -945,8 +965,7 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
             api_bind: socket_addr("127.0.0.1:0"),
             worker_bind: socket_addr("127.0.0.1:0"),
             mcp_bind: socket_addr("127.0.0.1:0"),
-            public_api_base_url: url::Url::parse("https://api.proofplane.test/")
-                .expect("public API base URL parses"),
+            public_api_base_url,
         },
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {

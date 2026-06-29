@@ -8,7 +8,10 @@ use tracing::Span;
 use crate::{
     authentication::{
         auth0::TokenVerifier,
-        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        paseto::{
+            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
+            UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
+        },
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::AppConfig,
@@ -17,6 +20,7 @@ use crate::{
     routes::{
         api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
+        attachment_upload_sessions::{self, AttachmentUploadSessionState},
         controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
@@ -29,9 +33,14 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        api_tokens::ApiTokenService, attachment_downloads::AttachmentDownloadService,
-        controls::ControlService, evidence_requests::EvidenceRequestService,
-        evidence_submissions::EvidenceSubmissionService, user::UserService,
+        api_tokens::ApiTokenService,
+        attachment_downloads::AttachmentDownloadService,
+        attachment_upload_grants::AttachmentUploadGrantService,
+        controls::ControlService,
+        evidence_requests::EvidenceRequestService,
+        evidence_submissions::EvidenceSubmissionService,
+        upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
+        user::UserService,
         workspaces::WorkspaceService,
     },
 };
@@ -49,6 +58,10 @@ pub fn create_app<V: TokenVerifier + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
     let api_token_authenticator = dependencies.api_token_authenticator.clone();
+    let evidence_submission_service = EvidenceSubmissionService::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store.clone(),
+    );
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         "proofplane-attachment-download",
@@ -68,6 +81,39 @@ pub fn create_app<V: TokenVerifier + 'static>(
         download_grant_encryptor,
         download_grant_decryptor,
     );
+    let upload_grant_encryptor = UploadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-upload-grant",
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let upload_grant_decryptor = UploadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        "proofplane-attachment-upload-grant",
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let upload_session_encryptor = UploadSessionEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        UPLOAD_SESSION_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let upload_session_decryptor = UploadSessionDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        UPLOAD_SESSION_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let attachment_upload_grant_service = AttachmentUploadGrantService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        upload_grant_encryptor,
+        upload_grant_decryptor,
+    );
+    let upload_session_service =
+        UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
 
     Ok(Router::new()
         .nest(
@@ -94,10 +140,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
             },
         }))
         .merge(evidence_submissions::router(EvidenceSubmissionState {
-            service: EvidenceSubmissionService::new(
-                dependencies.postgres.clone(),
-                dependencies.object_store.clone(),
-            ),
+            service: evidence_submission_service.clone(),
             max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             route_auth: EvidenceSubmissionRouteAuthState {
                 authenticator: api_token_authenticator.clone(),
@@ -109,6 +152,14 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 authenticator: api_token_authenticator.clone(),
             },
         }))
+        .merge(attachment_upload_sessions::router(
+            AttachmentUploadSessionState {
+                grants: attachment_upload_grant_service,
+                sessions: upload_session_service,
+                submissions: evidence_submission_service,
+                secure_cookie: secure_upload_cookie,
+            },
+        ))
         .merge(controls::router(ControlState {
             service: ControlService::new(dependencies.postgres.clone()),
             route_auth: ControlRouteAuthState {

@@ -1,5 +1,6 @@
 pub mod api_tokens;
 pub mod attachment_downloads;
+pub mod attachment_upload_sessions;
 pub mod authentication;
 pub mod controls;
 pub mod error;

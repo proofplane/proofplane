@@ -20,6 +20,7 @@ use crate::config::{PasetoDownloadConfig, PasetoUploadGrantConfig};
 // being API keys and not something else.
 const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
 const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-grant:v1";
+const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-session:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +235,105 @@ impl UploadGrantDecryptor {
         let footer = parse_footer(untrusted.untrusted_footer())?;
         let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
         let trusted = decrypt_local_token(key, &untrusted, UPLOAD_GRANT_IMPLICIT_ASSERTION)?;
+
+        verified_payload(
+            trusted.payload(),
+            &footer.kid,
+            self.issuer.as_str(),
+            &self.audience,
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadSessionEncryptor {
+    issuer: Url,
+    audience: String,
+    key_id: String,
+    secret_key: SymmetricKey<V4>,
+}
+
+impl UploadSessionEncryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let active = config
+            .keys
+            .iter()
+            .find(|key| key.id == config.active_key_id)
+            .ok_or(Error::Keyring)?;
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            key_id: active.id.clone(),
+            secret_key: symmetric_key(active.secret.expose_secret())?,
+        })
+    }
+
+    pub fn encrypt<T: Serialize>(
+        &self,
+        registered: RegisteredClaims,
+        custom_claims: &T,
+    ) -> Result<IssuedPasetoToken, Error> {
+        let payload = payload(
+            self.issuer.as_str(),
+            &self.audience,
+            &registered,
+            custom_claims,
+        )?;
+        let footer = footer(&self.key_id)?;
+        let token = encrypt_local_token(
+            &self.secret_key,
+            payload.as_bytes(),
+            footer.as_bytes(),
+            UPLOAD_SESSION_IMPLICIT_ASSERTION,
+        )?;
+
+        Ok(IssuedPasetoToken {
+            token,
+            token_id: registered.token_id,
+            key_id: self.key_id.clone(),
+            expires_at: normalize_datetime(registered.expires_at)?,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadSessionDecryptor {
+    issuer: Url,
+    audience: String,
+    keys: HashMap<String, SymmetricKey<V4>>,
+}
+
+impl UploadSessionDecryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let mut keys = HashMap::new();
+        for key in &config.keys {
+            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
+        }
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            keys,
+        })
+    }
+
+    pub fn decrypt<T: DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
+        let footer = parse_footer(untrusted.untrusted_footer())?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+        let trusted = decrypt_local_token(key, &untrusted, UPLOAD_SESSION_IMPLICIT_ASSERTION)?;
 
         verified_payload(
             trusted.payload(),

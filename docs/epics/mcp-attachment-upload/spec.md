@@ -161,3 +161,5 @@ Application tracing and ingress logs must not record query-token values.
   duplicate filename suffixing for the signed upload UI only.
 - 2026-06-29: Ticket 001 implementation uses a dedicated `paseto.upload_grant`
   keyring for single-use upload grant URL tokens.
+- 2026-06-29: Ticket 003 ships grant redemption plus session-backed JSON
+  inventory; HTML rendering and `POST /files` remain ticket 004.

@@ -1,20 +1,26 @@
 use chrono::{Duration, SecondsFormat, Utc};
 use proofplane::{
     authentication::{
-        paseto::{UploadGrantDecryptor, UploadGrantEncryptor},
+        paseto::{
+            RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionEncryptor,
+        },
         ApiTokenContext,
     },
     config::{PasetoUploadGrantConfig, PasetoUploadGrantKey},
     domain::{EvidenceSubmissionId, WorkspaceId, WorkspacePermission, WorkspacePermissions},
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
-    services::attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
+    services::{
+        attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
+        upload_sessions::UPLOAD_SESSION_AUDIENCE,
+    },
 };
 use secrecy::SecretString;
+use serde::Serialize;
 use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{upload_attachment, TestApp};
 
 #[tokio::test]
 async fn upload_grant_issue_persists_workspace_submission_issuer_and_expiry() {
@@ -233,6 +239,186 @@ async fn existing_download_grants_remain_reusable() {
     app.get(&path).await.assert_status_ok();
 }
 
+#[tokio::test]
+async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let service = upload_grant_service(&app);
+    let issued = service
+        .issue(&api_token_context(&app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+
+    let response = app.get(&upload_path(&issued.url)).await;
+    response.assert_status_ok();
+    let set_cookie = response.header("set-cookie");
+    let cookie = set_cookie.to_str().expect("set-cookie");
+
+    assert!(cookie.starts_with("proofplane_attachment_upload_session=v4.local."));
+    assert!(cookie.contains("; HttpOnly"));
+    assert!(cookie.contains("; SameSite=Lax"));
+    assert!(cookie.contains("; Path=/evidence-attachment-uploads"));
+    assert!(cookie.contains("; Max-Age=900"));
+    assert!(cookie.contains("; Secure"));
+    assert_eq!(
+        response.json::<Value>()["submission_id"],
+        json!(submission_id.to_string())
+    );
+
+    let redeemed_at = app
+        .postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one("SELECT redeemed_at FROM attachment_upload_grants", &[])
+        .await
+        .expect("grant row reads")
+        .get::<_, Option<chrono::DateTime<Utc>>>("redeemed_at");
+    assert!(redeemed_at.is_some());
+}
+
+#[tokio::test]
+async fn upload_session_grant_url_cannot_be_opened_twice() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let issued = upload_grant_service(&app)
+        .issue(&api_token_context(&app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+    let path = upload_path(&issued.url);
+
+    app.get(&path).await.assert_status_ok();
+    let second = app.get(&path).await;
+
+    second.assert_status(axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(second.maybe_header("set-cookie"), None);
+}
+
+#[tokio::test]
+async fn upload_session_cookie_loads_only_scoped_submission_inventory() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let other_submission_id = create_submission(&app, workspace_id).await;
+    upload_attachment(&app, workspace_id, submission_id, "scoped.txt", b"scoped").await;
+    upload_attachment(
+        &app,
+        workspace_id,
+        other_submission_id,
+        "other.txt",
+        b"other",
+    )
+    .await;
+    let issued = upload_grant_service(&app)
+        .issue(&api_token_context(&app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+    let redeemed = app.get(&upload_path(&issued.url)).await;
+    redeemed.assert_status_ok();
+    let cookie = redeemed.header("set-cookie");
+
+    let opened = app
+        .get("/evidence-attachment-uploads")
+        .add_header("cookie", cookie)
+        .await;
+    opened.assert_status_ok();
+    let body = opened.json::<Value>();
+
+    assert_eq!(body["submission_id"], json!(submission_id.to_string()));
+    assert_eq!(
+        body["attachments"].as_array().expect("attachments").len(),
+        1
+    );
+    assert_eq!(body["attachments"][0]["filename"], json!("scoped.txt"));
+}
+
+#[tokio::test]
+async fn upload_session_missing_malformed_expired_tampered_or_wrong_purpose_cookie_is_unavailable()
+{
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+
+    app.get("/evidence-attachment-uploads")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+    app.get("/evidence-attachment-uploads")
+        .add_header("cookie", "proofplane_attachment_upload_session=not-a-token")
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    let expired = session_cookie(&app, workspace_id, submission_id, 1);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    app.get("/evidence-attachment-uploads")
+        .add_header("cookie", expired)
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    let tampered = format!(
+        "{}x",
+        session_cookie(&app, workspace_id, submission_id, 900)
+    );
+    app.get("/evidence-attachment-uploads")
+        .add_header("cookie", tampered)
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    let wrong_purpose = format!(
+        "proofplane_attachment_upload_session={}",
+        issue_grant_token(&app, &upload_grant_service(&app), workspace_id).await
+    );
+    app.get("/evidence-attachment-uploads")
+        .add_header("cookie", wrong_purpose)
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn upload_session_cookie_secure_attribute_follows_public_api_base_url() {
+    let https = upload_grant_app().await;
+    let workspace_id = https.workspace_id("workspace");
+    let submission_id = create_submission(&https, workspace_id).await;
+    let issued = upload_grant_service(&https)
+        .issue(
+            &api_token_context(&https, workspace_id),
+            submission_id.into(),
+        )
+        .await
+        .expect("upload grant issues");
+    assert!(https
+        .get(&upload_path(&issued.url))
+        .await
+        .header("set-cookie")
+        .to_str()
+        .expect("set-cookie")
+        .contains("; Secure"));
+
+    let http = TestApp::builder()
+        .with_public_api_base_url(Url::parse("http://api.proofplane.test/").unwrap())
+        .workspace("workspace", "Upload grant workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = http.workspace_id("workspace");
+    let submission_id = create_submission(&http, workspace_id).await;
+    let issued = upload_grant_service(&http)
+        .issue(
+            &api_token_context(&http, workspace_id),
+            submission_id.into(),
+        )
+        .await
+        .expect("upload grant issues");
+    assert!(!http
+        .get(&upload_path(&issued.url))
+        .await
+        .header("set-cookie")
+        .to_str()
+        .expect("set-cookie")
+        .contains("; Secure"));
+}
+
 async fn upload_grant_app() -> TestApp {
     TestApp::builder()
         .workspace("workspace", "Upload grant workspace")
@@ -244,14 +430,8 @@ async fn upload_grant_app() -> TestApp {
 }
 
 fn upload_grant_service(app: &TestApp) -> AttachmentUploadGrantService {
-    let config = PasetoUploadGrantConfig {
-        active_key_id: "integration-upload-grant-001".to_owned(),
-        keys: vec![PasetoUploadGrantKey {
-            id: "integration-upload-grant-001".to_owned(),
-            secret: SecretString::from("k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"),
-        }],
-    };
-    let base_url = Url::parse("https://api.proofplane.test/").expect("base URL parses");
+    let config = upload_grant_config();
+    let base_url = app.public_api_base_url().clone();
     AttachmentUploadGrantService::new(
         app.postgres_arc(),
         base_url.clone(),
@@ -264,6 +444,66 @@ fn upload_grant_service(app: &TestApp) -> AttachmentUploadGrantService {
         UploadGrantDecryptor::from_config(base_url, "proofplane-attachment-upload-grant", &config)
             .expect("upload grant decryptor initializes"),
     )
+}
+
+fn upload_path(url: &Url) -> String {
+    let mut path = url.path().to_owned();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    path
+}
+
+fn session_cookie(
+    app: &TestApp,
+    workspace_id: Uuid,
+    submission_id: Uuid,
+    ttl_seconds: i64,
+) -> String {
+    let token = UploadSessionEncryptor::from_config(
+        app.public_api_base_url().clone(),
+        UPLOAD_SESSION_AUDIENCE,
+        &upload_grant_config(),
+    )
+    .expect("upload session encryptor initializes")
+    .encrypt(
+        RegisteredClaims {
+            subject: app.user_id(),
+            token_id: Uuid::new_v4(),
+            expires_at: Utc::now() + chrono::Duration::seconds(ttl_seconds),
+        },
+        &TestUploadSessionClaims {
+            version: 1,
+            workspace_id: workspace_id.to_string(),
+            submission_id: submission_id.to_string(),
+            issued_by_user_id: app.user_id().to_string(),
+            issued_via_api_token_id: app.api_token_id().to_string(),
+        },
+    )
+    .expect("upload session token issues")
+    .token;
+
+    format!("proofplane_attachment_upload_session={token}")
+}
+
+#[derive(Serialize)]
+struct TestUploadSessionClaims {
+    version: u8,
+    workspace_id: String,
+    submission_id: String,
+    issued_by_user_id: String,
+    issued_via_api_token_id: String,
+}
+
+fn upload_grant_config() -> PasetoUploadGrantConfig {
+    PasetoUploadGrantConfig {
+        active_key_id: "integration-upload-grant-001".to_owned(),
+        keys: vec![PasetoUploadGrantKey {
+            id: "integration-upload-grant-001".to_owned(),
+            secret: SecretString::from("k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"),
+        }],
+    }
 }
 
 fn api_token_context(app: &TestApp, workspace_id: Uuid) -> ApiTokenContext {
