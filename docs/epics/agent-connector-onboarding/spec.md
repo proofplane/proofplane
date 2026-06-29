@@ -96,8 +96,10 @@ introspection endpoint, or load signing keys from the API-owned authorization
 service, but its runtime responsibility is token verification and MCP
 workspace/scope enforcement.
 
-MCP access tokens are interactive connection credentials and must not be
-represented to users as `ppat_` API tokens.
+MCP OAuth credentials are hidden client credentials produced by the OAuth
+flow. The website must not display them, put them in setup snippets, or label
+them as `ppat_` API tokens. `ppat_` tokens remain only for advanced manual and
+API-token setup.
 
 The website route that renders the authorization experience is
 `/connect/mcp/authorize`. Protocol endpoints live under the API authorization
