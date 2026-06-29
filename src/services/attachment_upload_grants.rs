@@ -53,6 +53,7 @@ pub struct RedeemedUploadGrant {
     pub submission_id: EvidenceSubmissionId,
     pub issued_by_user_id: UserId,
     pub issued_via_api_token_id: ApiTokenId,
+    pub expires_at: DateTime<Utc>,
     pub redeemed_at: DateTime<Utc>,
 }
 
@@ -172,6 +173,7 @@ impl AttachmentUploadGrantService {
             submission_id: redeemed.evidence_submission_id,
             issued_by_user_id: redeemed.issued_by_user_id,
             issued_via_api_token_id: redeemed.issued_via_api_token_id,
+            expires_at: redeemed.expires_at,
             redeemed_at,
         })
     }

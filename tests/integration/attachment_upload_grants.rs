@@ -264,7 +264,8 @@ async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
     assert!(cookie.contains("; HttpOnly"));
     assert!(cookie.contains("; SameSite=Lax"));
     assert!(cookie.contains("; Path=/evidence-attachment-uploads"));
-    assert!(cookie.contains("; Max-Age=900"));
+    let max_age = cookie_max_age(cookie);
+    assert!((1..=300).contains(&max_age));
     assert!(cookie.contains("; Secure"));
     let body = app
         .server()
@@ -340,6 +341,40 @@ async fn upload_session_cookie_loads_only_scoped_submission_inventory() {
 
     assert!(body.contains("scoped.txt"));
     assert!(!body.contains("other.txt"));
+}
+
+#[tokio::test]
+async fn upload_session_cookie_expires_at_original_grant_expiry() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let issued = upload_grant_service(&app)
+        .issue(&api_token_context(&app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE attachment_upload_grants SET expires_at = now() + interval '1 second'",
+            &[],
+        )
+        .await
+        .expect("grant expiry updates");
+
+    let redeemed = app.server().get(&upload_path(&issued.url)).await;
+    redeemed.assert_status(axum::http::StatusCode::SEE_OTHER);
+    let set_cookie = redeemed.header("set-cookie");
+    let cookie = set_cookie.to_str().expect("set-cookie");
+    assert_eq!(cookie_max_age(cookie), 1);
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    app.server()
+        .get("/evidence-attachment-uploads")
+        .add_header("cookie", cookie)
+        .await
+        .assert_status(axum::http::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -723,6 +758,16 @@ fn browser_upload_form(bytes: &[u8], filename: &str, content_type: &str) -> Mult
             .file_name(filename)
             .mime_type(content_type),
     )
+}
+
+fn cookie_max_age(cookie: &str) -> i64 {
+    cookie
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("Max-Age="))
+        .expect("cookie contains Max-Age")
+        .parse()
+        .expect("Max-Age is an integer")
 }
 
 async fn attachment_filenames(app: &TestApp, submission_id: Uuid) -> Vec<String> {

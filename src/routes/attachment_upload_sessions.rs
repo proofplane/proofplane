@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -25,10 +26,7 @@ use crate::{
     services::{
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
         evidence_submissions::EvidenceSubmissionService,
-        upload_sessions::{
-            UploadSessionError, UploadSessionTokenService, VerifiedUploadSession,
-            UPLOAD_SESSION_TTL,
-        },
+        upload_sessions::{UploadSessionError, UploadSessionTokenService, VerifiedUploadSession},
     },
 };
 
@@ -167,11 +165,12 @@ async fn redeem_grant(
     };
     let session = state
         .sessions
-        .issue(
+        .issue_until(
             grant.workspace_id,
             grant.submission_id,
             grant.issued_by_user_id,
             grant.issued_via_api_token_id,
+            grant.expires_at,
         )
         .map_err(upload_session_error)?;
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -181,8 +180,12 @@ async fn redeem_grant(
     );
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&session_cookie(&session, state.secure_cookie))
-            .map_err(|_| ApiError::Internal)?,
+        HeaderValue::from_str(&session_cookie(
+            &session,
+            state.secure_cookie,
+            grant.expires_at,
+        ))
+        .map_err(|_| ApiError::Internal)?,
     );
     Ok(response)
 }
@@ -506,10 +509,11 @@ fn upload_session_cookie(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn session_cookie(token: &str, secure: bool) -> String {
+fn session_cookie(token: &str, secure: bool, expires_at: DateTime<Utc>) -> String {
+    let max_age = (expires_at - Utc::now()).num_seconds().max(1);
     let mut cookie = format!(
         "{UPLOAD_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/evidence-attachment-uploads; Max-Age={}",
-        UPLOAD_SESSION_TTL.as_secs()
+        max_age
     );
     if secure {
         cookie.push_str("; Secure");

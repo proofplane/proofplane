@@ -19,7 +19,7 @@ session that can list attachments for exactly one Evidence Submission.
 **Tasks**
 
 - [x] Add routes for grant redemption and session-backed inventory access.
-- [x] Add upload-session token or cookie signing with a 15-minute fixed expiry.
+- [x] Add upload-session token or cookie signing bounded by the grant expiry.
 - [x] Scope the cookie path and set HttpOnly/SameSite attributes.
 - [x] Add submission attachment inventory loading through the session scope.
 - [x] Add integration tests for first redemption, repeat redemption, expiry,

@@ -75,8 +75,8 @@ bearer link.
 
 Opening the grant URL consumes the URL once and establishes a separate
 HttpOnly, SameSite upload-session cookie scoped to the upload routes. The
-session is scoped to one workspace and one Evidence Submission, expires 15
-minutes after redemption, and is not sliding.
+session is scoped to one workspace and one Evidence Submission, expires at the
+grant URL's original `expires_at`, and is not sliding.
 
 The upload session can:
 

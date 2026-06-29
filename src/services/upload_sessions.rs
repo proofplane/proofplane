@@ -63,6 +63,23 @@ impl UploadSessionTokenService {
         let expires_at = Utc::now()
             + chrono::Duration::from_std(UPLOAD_SESSION_TTL)
                 .map_err(|_| UploadSessionError::Internal)?;
+        self.issue_until(
+            workspace_id,
+            submission_id,
+            issued_by_user_id,
+            issued_via_api_token_id,
+            expires_at,
+        )
+    }
+
+    pub fn issue_until(
+        &self,
+        workspace_id: WorkspaceId,
+        submission_id: EvidenceSubmissionId,
+        issued_by_user_id: UserId,
+        issued_via_api_token_id: ApiTokenId,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, UploadSessionError> {
         let issued = self
             .encryptor
             .encrypt(
