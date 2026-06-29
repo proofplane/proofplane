@@ -368,7 +368,7 @@ async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline(
     let response = app
         .server()
         .post("/evidence-attachment-uploads/files")
-        .add_header("cookie", cookie)
+        .add_header("cookie", cookie.clone())
         .multipart(browser_upload_form(
             b"browser bytes",
             "browser-artifact.txt",
@@ -376,9 +376,20 @@ async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline(
         ))
         .await;
 
-    response.assert_status_ok();
-    let body = response.text();
-    assert!(body.contains("Uploaded browser-artifact.txt"));
+    response.assert_status(axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.header("location").to_str().expect("location"),
+        "/evidence-attachment-uploads?uploaded=1"
+    );
+    let page = app
+        .server()
+        .get("/evidence-attachment-uploads?uploaded=1")
+        .add_header("cookie", cookie.clone())
+        .await;
+    page.assert_status_ok();
+    let body = page.text();
+    assert!(body.contains("Uploaded"));
+    assert!(body.contains("browser-artifact.txt"));
     assert!(body.contains("Ask the MCP client to check attachment processing status"));
 
     let row = app
@@ -405,6 +416,13 @@ GROUP BY a.id
     );
     assert_eq!(row.get::<_, String>("upload_status"), "pending");
     assert_eq!(row.get::<_, i64>("outbox_count"), 1);
+
+    app.server()
+        .get("/evidence-attachment-uploads?uploaded=1")
+        .add_header("cookie", cookie)
+        .await
+        .assert_status_ok();
+    assert_eq!(attachment_filenames(&app, submission_id).await.len(), 1);
 }
 
 #[tokio::test]
@@ -418,11 +436,23 @@ async fn upload_session_post_suffixes_duplicate_filename_without_changing_rest_b
     let response = app
         .server()
         .post("/evidence-attachment-uploads/files")
-        .add_header("cookie", cookie)
+        .add_header("cookie", cookie.clone())
         .multipart(browser_upload_form(b"new", "report.pdf", "application/pdf"))
         .await;
-    response.assert_status_ok();
-    assert!(response.text().contains("Uploaded report (1).pdf"));
+    response.assert_status(axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.header("location").to_str().expect("location"),
+        "/evidence-attachment-uploads?uploaded=1"
+    );
+    let page = app
+        .server()
+        .get("/evidence-attachment-uploads?uploaded=1")
+        .add_header("cookie", cookie)
+        .await;
+    page.assert_status_ok();
+    let body = page.text();
+    assert!(body.contains("Uploaded"));
+    assert!(body.contains("report (1).pdf"));
 
     let filenames = attachment_filenames(&app, submission_id).await;
     assert!(filenames.contains(&"report.pdf".to_owned()));

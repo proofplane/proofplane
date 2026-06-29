@@ -1,7 +1,7 @@
 use axum::{
     extract::{rejection::QueryRejection, DefaultBodyLimit, Multipart, Query, State},
     http::{
-        header::{COOKIE, SET_COOKIE},
+        header::{COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
     },
     response::{Html, IntoResponse, Response},
@@ -56,6 +56,7 @@ pub fn router(state: AttachmentUploadSessionState) -> Router {
 #[derive(Debug, Deserialize)]
 struct UploadSessionQuery {
     token: Option<String>,
+    uploaded: Option<String>,
 }
 
 #[derive(Debug)]
@@ -90,7 +91,7 @@ async fn open_upload_session(
             session.api_token_context(),
         )
         .await?,
-        None,
+        query.uploaded.as_deref().map(|_| "Uploaded"),
     );
     Ok(Html(body).into_response())
 }
@@ -138,12 +139,12 @@ async fn upload_file(
         .await?;
     emit_upload_audit(&token, request_id.0, session.submission_id, &attachment);
 
-    let after = inventory(&state.submissions, session.submission_id, token).await?;
-    Ok(Html(render_upload_page(
-        &after,
-        Some(&format!("Uploaded {}", attachment.filename)),
-    ))
-    .into_response())
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(
+        LOCATION,
+        HeaderValue::from_static("/evidence-attachment-uploads?uploaded=1"),
+    );
+    Ok(response)
 }
 
 async fn redeem_grant(
