@@ -407,8 +407,14 @@ async fn upload_evidence_attachment(
     // because if the database record fails to be created, the orphaned attachment can be
     // automatically cleaned up with object storage retention settings since it's in a quarantine
     // bucket and that will probably have a cleanup policy.
-    let payload =
-        attachment_upload_from_multipart(&state.service, &token, submission_id, multipart).await?;
+    let payload = attachment_upload_from_multipart(
+        &state.service,
+        &token,
+        submission_id,
+        multipart,
+        AttachmentUploadDigest::RequireHeader,
+    )
+    .await?;
     let attachment = state
         .service
         .create_attachment(&token, request_id.0, submission_id, payload)
@@ -438,11 +444,18 @@ async fn upload_evidence_attachment(
     Ok((StatusCode::ACCEPTED, Json(attachment.into())))
 }
 
-async fn attachment_upload_from_multipart(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttachmentUploadDigest {
+    RequireHeader,
+    ComputeOnly,
+}
+
+pub(crate) async fn attachment_upload_from_multipart(
     service: &EvidenceSubmissionService,
     token: &ApiTokenContext,
     evidence_submission_id: EvidenceSubmissionId,
     mut multipart: Multipart,
+    digest: AttachmentUploadDigest,
 ) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
     let field = multipart
         .next_field()
@@ -477,8 +490,13 @@ async fn attachment_upload_from_multipart(
     .validate()
     .into_result()
     .map_err(domain_errors)?;
-    let expected_crc32c = field_content_digest_crc32c(&field)
-        .map_err(|message| ApiError::BadRequest(vec![message]))?;
+    let expected_crc32c = match digest {
+        AttachmentUploadDigest::RequireHeader => Some(
+            field_content_digest_crc32c(&field)
+                .map_err(|message| ApiError::BadRequest(vec![message]))?,
+        ),
+        AttachmentUploadDigest::ComputeOnly => None,
+    };
 
     let crc32c = Arc::new(AtomicU32::new(0));
     let chunks = file_chunks(field, Arc::clone(&crc32c));
@@ -494,9 +512,24 @@ async fn attachment_upload_from_multipart(
 
     let actual_crc32c = crc32c.load(Ordering::Relaxed);
 
-    if let Err(message) = validate_attachment_upload(expected_crc32c, actual_crc32c) {
+    if let Some(expected_crc32c) = expected_crc32c {
+        if let Err(message) = validate_attachment_upload(expected_crc32c, actual_crc32c) {
+            maybe_delete_uploaded_file(service, uploaded_file.object_key).await;
+            return Err(ApiError::BadRequest(vec![message]));
+        }
+    }
+
+    if digest == AttachmentUploadDigest::ComputeOnly
+        && multipart
+            .next_field()
+            .await
+            .map_err(multipart_error)?
+            .is_some()
+    {
         maybe_delete_uploaded_file(service, uploaded_file.object_key).await;
-        return Err(ApiError::BadRequest(vec![message]));
+        return Err(ApiError::BadRequest(vec![
+            "browser upload requires exactly one file field".to_owned(),
+        ]));
     }
 
     uploaded_file.checksum_crc32c = encode_crc32c_base64(actual_crc32c);

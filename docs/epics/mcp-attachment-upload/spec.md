@@ -104,7 +104,8 @@ POST /evidence-attachment-uploads/files
 The first `GET` redeems the URL token and sets the upload-session cookie. Later
 page loads use the cookie. `POST /files` accepts one multipart `file` field and
 uses the existing `EvidenceSubmissionService::upload_attachment` and
-`create_attachment` flow.
+`create_attachment` flow. Browser uploads compute CRC32C server-side while
+streaming; native browser forms do not need to provide `Content-Digest`.
 
 The existing authenticated REST upload endpoint remains unchanged. It continues
 to require a bearer API token and keeps its current duplicate-filename behavior.
@@ -163,3 +164,6 @@ Application tracing and ingress logs must not record query-token values.
   keyring for single-use upload grant URL tokens.
 - 2026-06-29: Ticket 003 ships grant redemption plus session-backed JSON
   inventory; HTML rendering and `POST /files` remain ticket 004.
+- 2026-06-29: Ticket 004 ships the API-served HTML page and native browser
+  upload route. Browser uploads compute CRC32C server-side; authenticated REST
+  uploads keep requiring client-provided `Content-Digest`.

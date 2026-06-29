@@ -158,6 +158,7 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
                 secure_cookie: secure_upload_cookie,
+                max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             },
         ))
         .merge(controls::router(ControlState {

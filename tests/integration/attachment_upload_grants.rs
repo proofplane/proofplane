@@ -1,3 +1,4 @@
+use axum_test::multipart::{MultipartForm, Part};
 use chrono::{Duration, SecondsFormat, Utc};
 use proofplane::{
     authentication::{
@@ -261,10 +262,9 @@ async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
     assert!(cookie.contains("; Path=/evidence-attachment-uploads"));
     assert!(cookie.contains("; Max-Age=900"));
     assert!(cookie.contains("; Secure"));
-    assert_eq!(
-        response.json::<Value>()["submission_id"],
-        json!(submission_id.to_string())
-    );
+    let body = response.text();
+    assert!(body.contains("Evidence attachment upload"));
+    assert!(body.contains("Current attachments"));
 
     let redeemed_at = app
         .postgres()
@@ -324,14 +324,183 @@ async fn upload_session_cookie_loads_only_scoped_submission_inventory() {
         .add_header("cookie", cookie)
         .await;
     opened.assert_status_ok();
-    let body = opened.json::<Value>();
+    let body = opened.text();
 
-    assert_eq!(body["submission_id"], json!(submission_id.to_string()));
+    assert!(body.contains("scoped.txt"));
+    assert!(!body.contains("other.txt"));
+}
+
+#[tokio::test]
+async fn upload_session_page_renders_existing_inventory_and_native_upload_form() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "already-there.txt",
+        b"existing",
+    )
+    .await;
+    let issued = upload_grant_service(&app)
+        .issue(&api_token_context(&app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+
+    let page = app.get(&upload_path(&issued.url)).await;
+    page.assert_status_ok();
+    let body = page.text();
+
+    assert!(body.contains("already-there.txt"));
+    assert!(body.contains(r#"type="file""#));
+    assert!(body.contains(r#"action="/evidence-attachment-uploads/files""#));
+    assert!(body.contains("pending"));
+}
+
+#[tokio::test]
+async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
+
+    let response = app
+        .server()
+        .post("/evidence-attachment-uploads/files")
+        .add_header("cookie", cookie)
+        .multipart(browser_upload_form(
+            b"browser bytes",
+            "browser-artifact.txt",
+            "text/plain",
+        ))
+        .await;
+
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("Uploaded browser-artifact.txt"));
+    assert!(body.contains("Ask the MCP client to check attachment processing status"));
+
+    let row = app
+        .postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            r#"
+SELECT a.filename, a.checksum_crc32c, a.upload_status, count(o.id) AS outbox_count
+FROM evidence_attachments a
+LEFT JOIN outbox_messages o ON o.aggregate_id = a.id::text
+WHERE a.evidence_submission_id = $1
+GROUP BY a.id
+"#,
+            &[&submission_id],
+        )
+        .await
+        .expect("attachment row reads");
+    assert_eq!(row.get::<_, String>("filename"), "browser-artifact.txt");
     assert_eq!(
-        body["attachments"].as_array().expect("attachments").len(),
-        1
+        row.get::<_, String>("checksum_crc32c"),
+        super::support::crc32c_base64(b"browser bytes")
     );
-    assert_eq!(body["attachments"][0]["filename"], json!("scoped.txt"));
+    assert_eq!(row.get::<_, String>("upload_status"), "pending");
+    assert_eq!(row.get::<_, i64>("outbox_count"), 1);
+}
+
+#[tokio::test]
+async fn upload_session_post_suffixes_duplicate_filename_without_changing_rest_behavior() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    upload_attachment(&app, workspace_id, submission_id, "report.pdf", b"existing").await;
+    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
+
+    let response = app
+        .server()
+        .post("/evidence-attachment-uploads/files")
+        .add_header("cookie", cookie)
+        .multipart(browser_upload_form(b"new", "report.pdf", "application/pdf"))
+        .await;
+    response.assert_status_ok();
+    assert!(response.text().contains("Uploaded report (1).pdf"));
+
+    let filenames = attachment_filenames(&app, submission_id).await;
+    assert!(filenames.contains(&"report.pdf".to_owned()));
+    assert!(filenames.contains(&"report (1).pdf".to_owned()));
+
+    app.post(&attachment_collection_path(workspace_id, submission_id))
+        .multipart(super::support::attachment_form(
+            b"rest duplicate",
+            "report.pdf",
+            "application/pdf",
+            None,
+        ))
+        .await
+        .assert_status(axum::http::StatusCode::ACCEPTED);
+    let filenames = attachment_filenames(&app, submission_id).await;
+    assert_eq!(
+        filenames
+            .iter()
+            .filter(|filename| filename.as_str() == "report.pdf")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn upload_session_post_unavailable_session_returns_generic_page() {
+    let app = upload_grant_app().await;
+    let response = app
+        .server()
+        .post("/evidence-attachment-uploads/files")
+        .add_header("cookie", "proofplane_attachment_upload_session=not-a-token")
+        .multipart(browser_upload_form(b"bytes", "artifact.txt", "text/plain"))
+        .await;
+
+    response.assert_status(axum::http::StatusCode::NOT_FOUND);
+    assert!(response
+        .text()
+        .contains("This upload link is no longer available"));
+}
+
+#[tokio::test]
+async fn upload_session_post_rejects_invalid_or_multiple_file_fields_with_page() {
+    let app = upload_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+
+    for form in [
+        MultipartForm::new().add_part("note", Part::text("not a file")),
+        browser_upload_form(b"bytes", "path/file.txt", "text/plain"),
+        MultipartForm::new()
+            .add_part(
+                "file",
+                Part::bytes(b"one".to_vec())
+                    .file_name("one.txt")
+                    .mime_type("text/plain"),
+            )
+            .add_part(
+                "file",
+                Part::bytes(b"two".to_vec())
+                    .file_name("two.txt")
+                    .mime_type("text/plain"),
+            ),
+    ] {
+        let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
+        let response = app
+            .server()
+            .post("/evidence-attachment-uploads/files")
+            .add_header("cookie", cookie)
+            .multipart(form)
+            .await;
+
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        let body = response.text();
+        assert!(body.contains("Upload failed"));
+        assert!(body.contains("Current attachments"));
+    }
+
+    assert!(attachment_filenames(&app, submission_id).await.is_empty());
 }
 
 #[tokio::test]
@@ -453,6 +622,44 @@ fn upload_path(url: &Url) -> String {
         path.push_str(query);
     }
     path
+}
+
+async fn upload_session_cookie(app: &TestApp, workspace_id: Uuid, submission_id: Uuid) -> String {
+    let issued = upload_grant_service(app)
+        .issue(&api_token_context(app, workspace_id), submission_id.into())
+        .await
+        .expect("upload grant issues");
+    app.get(&upload_path(&issued.url))
+        .await
+        .header("set-cookie")
+        .to_str()
+        .expect("set-cookie")
+        .to_owned()
+}
+
+fn browser_upload_form(bytes: &[u8], filename: &str, content_type: &str) -> MultipartForm {
+    MultipartForm::new().add_part(
+        "file",
+        Part::bytes(bytes.to_vec())
+            .file_name(filename)
+            .mime_type(content_type),
+    )
+}
+
+async fn attachment_filenames(app: &TestApp, submission_id: Uuid) -> Vec<String> {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query(
+            "SELECT filename FROM evidence_attachments WHERE evidence_submission_id = $1 ORDER BY filename",
+            &[&submission_id],
+        )
+        .await
+        .expect("attachment filenames read")
+        .into_iter()
+        .map(|row| row.get("filename"))
+        .collect()
 }
 
 fn session_cookie(
@@ -581,6 +788,10 @@ fn dynamic_due_at() -> String {
 
 fn collection_path(workspace_id: Uuid, evidence_request_id: Uuid) -> String {
     format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions")
+}
+
+fn attachment_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String {
+    format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments")
 }
 
 fn created_id(value: &Value) -> Uuid {

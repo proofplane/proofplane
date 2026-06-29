@@ -12,8 +12,8 @@ Technical decisions live in [spec.md](./spec.md). Page behavior lives in
 | --- | --- | --- |
 | 001. [Upload Grant Persistence](./tickets/001-upload-grant-persistence.md) | Done | Added durable single-use grant state, upload-grant keyring, and service primitives. |
 | 002. [MCP Upload Grant Tool](./tickets/002-mcp-upload-grant-tool.md) | Done | Added `create_attachment_upload_grant` and audit issuance. |
-| 003. [Grant Redemption And Upload Session](./tickets/003-grant-redemption-and-upload-session.md) | Done | Redeems one-time URLs into scoped browser upload sessions with JSON inventory. |
-| 004. [Browser Upload Page](./tickets/004-browser-upload-page.md) | Todo | Serve the minimal page, list existing attachments, and upload one file at a time. |
+| 003. [Grant Redemption And Upload Session](./tickets/003-grant-redemption-and-upload-session.md) | Done | Redeems one-time URLs into scoped browser upload sessions. |
+| 004. [Browser Upload Page](./tickets/004-browser-upload-page.md) | Done | Serves the minimal page, lists existing attachments, and uploads one file at a time. |
 
 ## Sequencing
 

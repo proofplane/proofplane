@@ -28,5 +28,3 @@ session that can list attachments for exactly one Evidence Submission.
 **Notes**
 
 - The browser session is a narrow delegated credential, not a product login.
-- Ticket 003 ships the session-backed JSON inventory only; page rendering and
-  multipart upload remain in ticket 004.
