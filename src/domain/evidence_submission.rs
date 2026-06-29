@@ -6,6 +6,7 @@ use super::{ids::uuid_id, ApiTokenId, DomainError, EvidenceRequestId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(EvidenceAttachmentId);
+uuid_id!(AttachmentUploadGrantId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentUploadStatus {

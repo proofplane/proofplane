@@ -12,13 +12,14 @@ use serde_json::{Map, Value};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::PasetoDownloadConfig;
+use crate::config::{PasetoDownloadConfig, PasetoUploadGrantConfig};
 
 // We use assertions as a mechanism for verifying that the API key is being
 // used for the right purpose. For example, for API keys, we want to make sure
 // that the tokens we're verifying were issued with the intention of them
 // being API keys and not something else.
 const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
+const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-grant:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,8 +70,7 @@ impl DownloadGrantEncryptor {
             issuer,
             audience: audience.into(),
             key_id: active.id.clone(),
-            secret_key: SymmetricKey::<V4>::try_from(active.secret.expose_secret())
-                .map_err(|_| Error::Keyring)?,
+            secret_key: symmetric_key(active.secret.expose_secret())?,
         })
     }
 
@@ -86,13 +86,12 @@ impl DownloadGrantEncryptor {
             custom_claims,
         )?;
         let footer = footer(&self.key_id)?;
-        let token = LocalToken::encrypt(
+        let token = encrypt_local_token(
             &self.secret_key,
             payload.as_bytes(),
-            Some(footer.as_bytes()),
-            Some(DOWNLOAD_IMPLICIT_ASSERTION),
-        )
-        .map_err(|_| Error::Issue)?;
+            footer.as_bytes(),
+            DOWNLOAD_IMPLICIT_ASSERTION,
+        )?;
 
         Ok(IssuedPasetoToken {
             token,
@@ -118,11 +117,7 @@ impl DownloadGrantDecryptor {
     ) -> Result<Self, Error> {
         let mut keys = HashMap::new();
         for key in &config.keys {
-            keys.insert(
-                key.id.clone(),
-                SymmetricKey::<V4>::try_from(key.secret.expose_secret())
-                    .map_err(|_| Error::Keyring)?,
-            );
+            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
         }
 
         Ok(Self {
@@ -139,13 +134,106 @@ impl DownloadGrantDecryptor {
         let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
         let footer = parse_footer(untrusted.untrusted_footer())?;
         let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
-        let trusted = LocalToken::decrypt(
-            key,
-            &untrusted,
-            Some(untrusted.untrusted_footer()),
-            Some(DOWNLOAD_IMPLICIT_ASSERTION),
+        let trusted = decrypt_local_token(key, &untrusted, DOWNLOAD_IMPLICIT_ASSERTION)?;
+
+        verified_payload(
+            trusted.payload(),
+            &footer.kid,
+            self.issuer.as_str(),
+            &self.audience,
         )
-        .map_err(|_| Error::Verify)?;
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadGrantEncryptor {
+    issuer: Url,
+    audience: String,
+    key_id: String,
+    secret_key: SymmetricKey<V4>,
+}
+
+impl UploadGrantEncryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let active = config
+            .keys
+            .iter()
+            .find(|key| key.id == config.active_key_id)
+            .ok_or(Error::Keyring)?;
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            key_id: active.id.clone(),
+            secret_key: symmetric_key(active.secret.expose_secret())?,
+        })
+    }
+
+    pub fn encrypt<T: Serialize>(
+        &self,
+        registered: RegisteredClaims,
+        custom_claims: &T,
+    ) -> Result<IssuedPasetoToken, Error> {
+        let payload = payload(
+            self.issuer.as_str(),
+            &self.audience,
+            &registered,
+            custom_claims,
+        )?;
+        let footer = footer(&self.key_id)?;
+        let token = encrypt_local_token(
+            &self.secret_key,
+            payload.as_bytes(),
+            footer.as_bytes(),
+            UPLOAD_GRANT_IMPLICIT_ASSERTION,
+        )?;
+
+        Ok(IssuedPasetoToken {
+            token,
+            token_id: registered.token_id,
+            key_id: self.key_id.clone(),
+            expires_at: normalize_datetime(registered.expires_at)?,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadGrantDecryptor {
+    issuer: Url,
+    audience: String,
+    keys: HashMap<String, SymmetricKey<V4>>,
+}
+
+impl UploadGrantDecryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let mut keys = HashMap::new();
+        for key in &config.keys {
+            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
+        }
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            keys,
+        })
+    }
+
+    pub fn decrypt<T: DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
+        let footer = parse_footer(untrusted.untrusted_footer())?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+        let trusted = decrypt_local_token(key, &untrusted, UPLOAD_GRANT_IMPLICIT_ASSERTION)?;
 
         verified_payload(
             trusted.payload(),
@@ -257,6 +345,34 @@ fn footer(key_id: &str) -> Result<String, Error> {
     .map_err(|_| Error::Issue)
 }
 
+fn symmetric_key(secret: &str) -> Result<SymmetricKey<V4>, Error> {
+    SymmetricKey::<V4>::try_from(secret).map_err(|_| Error::Keyring)
+}
+
+fn encrypt_local_token(
+    key: &SymmetricKey<V4>,
+    payload: &[u8],
+    footer: &[u8],
+    implicit_assertion: &[u8],
+) -> Result<String, Error> {
+    LocalToken::encrypt(key, payload, Some(footer), Some(implicit_assertion))
+        .map_err(|_| Error::Issue)
+}
+
+fn decrypt_local_token(
+    key: &SymmetricKey<V4>,
+    token: &UntrustedToken<Local, V4>,
+    implicit_assertion: &[u8],
+) -> Result<pasetors::token::TrustedToken, Error> {
+    LocalToken::decrypt(
+        key,
+        token,
+        Some(token.untrusted_footer()),
+        Some(implicit_assertion),
+    )
+    .map_err(|_| Error::Verify)
+}
+
 fn parse_footer(footer: &[u8]) -> Result<TokenFooter, Error> {
     let footer: TokenFooter = serde_json::from_slice(footer).map_err(|_| Error::Verify)?;
     if footer.kid.trim().is_empty() {
@@ -296,11 +412,13 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::config::PasetoDownloadKey;
+    use crate::config::{PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey};
 
     const DOWNLOAD_AUDIENCE: &str = "proofplane-attachment-download";
+    const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-attachment-upload-grant";
     const DOWNLOAD_SECRET: &str = "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs";
-    const OTHER_DOWNLOAD_SECRET: &str = "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY";
+    const UPLOAD_GRANT_SECRET: &str = "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY";
+    const OTHER_DOWNLOAD_SECRET: &str = UPLOAD_GRANT_SECRET;
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestClaims {
@@ -343,12 +461,30 @@ mod tests {
         }
     }
 
+    fn upload_grant_config(active_id: &str) -> PasetoUploadGrantConfig {
+        PasetoUploadGrantConfig {
+            active_key_id: active_id.to_owned(),
+            keys: vec![PasetoUploadGrantKey {
+                id: "local-upload-grant".to_owned(),
+                secret: SecretString::from(UPLOAD_GRANT_SECRET),
+            }],
+        }
+    }
+
     fn download_encryptor(config: &PasetoDownloadConfig) -> DownloadGrantEncryptor {
         DownloadGrantEncryptor::from_config(issuer(), DOWNLOAD_AUDIENCE, config).unwrap()
     }
 
     fn download_decryptor(config: &PasetoDownloadConfig) -> DownloadGrantDecryptor {
         DownloadGrantDecryptor::from_config(issuer(), DOWNLOAD_AUDIENCE, config).unwrap()
+    }
+
+    fn upload_grant_encryptor(config: &PasetoUploadGrantConfig) -> UploadGrantEncryptor {
+        UploadGrantEncryptor::from_config(issuer(), UPLOAD_GRANT_AUDIENCE, config).unwrap()
+    }
+
+    fn upload_grant_decryptor(config: &PasetoUploadGrantConfig) -> UploadGrantDecryptor {
+        UploadGrantDecryptor::from_config(issuer(), UPLOAD_GRANT_AUDIENCE, config).unwrap()
     }
 
     #[test]
@@ -423,6 +559,7 @@ mod tests {
     #[test]
     fn purpose_and_implicit_assertion_separation_fail_closed() {
         let download_config = download_config("local-download");
+        let upload_grant_config = upload_grant_config("local-upload-grant");
         let wrong_audience_decryptor =
             DownloadGrantDecryptor::from_config(issuer(), "wrong-audience", &download_config)
                 .unwrap();
@@ -430,8 +567,18 @@ mod tests {
             .encrypt(registered(), &custom_claims())
             .unwrap()
             .token;
+        let upload_grant_token = upload_grant_encryptor(&upload_grant_config)
+            .encrypt(registered(), &custom_claims())
+            .unwrap()
+            .token;
         assert!(wrong_audience_decryptor
             .decrypt::<TestClaims>(&download_token)
+            .is_err());
+        assert!(upload_grant_decryptor(&upload_grant_config)
+            .decrypt::<TestClaims>(&download_token)
+            .is_err());
+        assert!(download_decryptor(&download_config)
+            .decrypt::<TestClaims>(&upload_grant_token)
             .is_err());
         let download_wrong_implicit =
             local_token_with_implicit(&download_config, b"wrong-implicit");

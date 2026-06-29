@@ -3,6 +3,7 @@ use deadpool_postgres::{Object, Pool};
 use crate::domain::{ApiTokenId, UserId, WorkspaceId};
 
 mod api_tokens;
+mod attachment_upload_grants;
 pub mod constraints;
 mod controls;
 pub mod error;
@@ -13,6 +14,7 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
+pub use attachment_upload_grants::{AttachmentUploadGrant, NewAttachmentUploadGrant};
 pub use constraints::ConflictKind;
 pub use error::Error;
 pub use evidence_submissions::{

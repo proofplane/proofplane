@@ -60,11 +60,11 @@ Upload grants are persisted because the URL is single-use. A grant records:
 - five-minute URL expiry;
 - optional redeemed time.
 
-The URL token is encrypted and authenticated using the same PASETO download
-grant primitives or an equivalent purpose-separated profile. It carries enough
-information to identify the grant and validate issuer, audience, expiry, and
-version, but redemption still checks and marks the database row in one atomic
-operation.
+The URL token is encrypted and authenticated using a dedicated
+`paseto.upload_grant` PASETO `v4.local` keyring with upload-specific audience
+and implicit assertion. It carries enough information to identify the grant and
+validate issuer, audience, expiry, and version, but redemption still checks and
+marks the database row in one atomic operation.
 
 Malformed, expired, already redeemed, cross-workspace, missing, and
 authorization-invalid grants all resolve to a generic unavailable result. The
@@ -159,3 +159,5 @@ Application tracing and ingress logs must not record query-token values.
 - 2026-06-28: Initial scope for MCP-issued single-use browser upload grants,
   grant-authenticated attachment upload, existing attachment visibility, and
   duplicate filename suffixing for the signed upload UI only.
+- 2026-06-29: Ticket 001 implementation uses a dedicated `paseto.upload_grant`
+  keyring for single-use upload grant URL tokens.

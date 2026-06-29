@@ -24,8 +24,9 @@ use proofplane::{
     },
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
-        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
-        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
@@ -956,6 +957,15 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
                     id: "integration-download-001".to_owned(),
                     secret: SecretString::from(
                         "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs",
+                    ),
+                }],
+            },
+            upload_grant: PasetoUploadGrantConfig {
+                active_key_id: "integration-upload-grant-001".to_owned(),
+                keys: vec![PasetoUploadGrantKey {
+                    id: "integration-upload-grant-001".to_owned(),
+                    secret: SecretString::from(
+                        "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY",
                     ),
                 }],
             },
