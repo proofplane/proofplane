@@ -82,10 +82,11 @@ The upload session can:
 
 - render the upload page;
 - list existing attachments for the scoped submission;
-- upload one file at a time to the scoped submission.
+- upload the first file for the scoped submission when none exists;
+- issue a download redirect for a finalized attachment in the scoped submission.
 
 It cannot create submissions, upload to another submission, delete attachments,
-download attachments, call arbitrary API routes, or expose the user's API token.
+call arbitrary API routes, or expose the user's API token.
 
 If the upload session expires, the human must ask the agent for a new MCP upload
 grant. A new session lists existing attachments before any new upload so the
@@ -99,36 +100,34 @@ Add API-origin routes outside normal workspace bearer-token auth:
 GET  /evidence-attachment-uploads?token=<grant>
 GET  /evidence-attachment-uploads
 POST /evidence-attachment-uploads/files
+GET  /evidence-attachment-uploads/files/{attachment_id}/download
 ```
 
 The first `GET` redeems the URL token, sets the upload-session cookie, and
 redirects to `/evidence-attachment-uploads` so refreshes use the cookie instead
 of the single-use token. Later page loads use the cookie. `POST /files` accepts
 one multipart `file` field and uses the existing
-`EvidenceSubmissionService::upload_attachment` and
-`create_attachment` flow. Browser uploads compute CRC32C server-side while
-streaming; native browser forms do not need to provide `Content-Digest`.
+`EvidenceSubmissionService::upload_attachment` and first-attachment creation
+flow. Browser uploads compute CRC32C server-side while streaming; native browser
+forms do not need to provide `Content-Digest`.
+
+The download route verifies the upload-session cookie, issues the existing
+short-lived attachment download grant for a finalized attachment in the scoped
+submission, audits that issuance, and redirects the browser to the grant URL.
 
 The existing authenticated REST upload endpoint remains unchanged. It continues
 to require a bearer API token and keeps its current duplicate-filename behavior.
 
-## Duplicate Filenames
+## First Attachment Only
 
-The signed browser upload flow should not fail only because a human chose a
-filename that already exists on the submission. For this flow only, the server
-renames duplicates before creating the attachment:
+The signed browser upload flow accepts only the first attachment for the scoped
+submission. If an attachment already exists, the page shows the existing
+inventory without an upload form and `POST /files` returns conflict without
+creating another object. Concurrent browser uploads race through the same
+first-attachment insert path, so only one attachment row is created.
 
-```text
-report.pdf
-report (1).pdf
-report (2).pdf
-```
-
-The server is the source of truth because concurrent sessions can race. The
-implementation may attempt a bounded sequence of suffixes, such as 100 names,
-then return conflict if all are unavailable.
-
-The existing filename validation rules still apply after suffixing.
+The existing authenticated REST upload endpoint remains multi-attachment and
+keeps its current duplicate-filename behavior.
 
 ## Page Behavior
 
@@ -170,3 +169,7 @@ Application tracing and ingress logs must not record query-token values.
 - 2026-06-29: Ticket 004 ships the API-served HTML page and native browser
   upload route. Browser uploads compute CRC32C server-side; authenticated REST
   uploads keep requiring client-provided `Content-Digest`.
+- 2026-06-29: Follow-up implementation redirects after browser POST so refreshes
+  do not resubmit, bounds the upload-session cookie to the grant expiry, limits
+  the browser flow to the first attachment only, and adds session-scoped
+  download redirects for finalized attachments.

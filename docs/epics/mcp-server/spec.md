@@ -137,10 +137,10 @@ may request and poll an asynchronous packet export and create its human download
 grant, but never transports the ZIP. Native approve/reject and derived
 control-status tools are not part of the MVP.
 
-MCP Attachment Upload is tracked in a separate epic. That workflow may add a
-tool that creates a human browser upload grant for an existing Evidence
-Submission, but attachment bytes still remain HTTP-only and never pass through
-MCP.
+MCP Attachment Management is tracked in a separate epic. That workflow adds
+`manage_evidence_submission_attachment`, which creates a human browser session
+for uploading the first submission attachment and downloading finalized
+attachments. Attachment bytes remain HTTP-only and never pass through MCP.
 
 ## Errors And Equivalence
 
@@ -187,9 +187,9 @@ the MVP.
   metadata, not tool arguments or model-visible data; Proofplane's initial
   runtime deliberately uses pre-provisioned API tokens while OAuth interop is
   deferred to the separate OAuth workstream.
-- 2026-06-28: Linked the separate MCP Attachment Upload epic for human browser
-  upload grants while preserving the rule that attachment bytes do not pass
-  through MCP.
 - 2026-06-29: Linked the deferred OAuth workstream to the Agent Connector
   Onboarding epic, which owns interactive authorization and client
   distribution.
+- 2026-06-29: Linked the separate MCP Attachment Management epic for human
+  browser upload/download sessions while preserving the rule that attachment
+  bytes do not pass through MCP.

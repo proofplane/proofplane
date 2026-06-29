@@ -28,3 +28,6 @@ session that can list attachments for exactly one Evidence Submission.
 **Notes**
 
 - The browser session is a narrow delegated credential, not a product login.
+- Follow-up commits clarified in the spec that the session cookie Max-Age is
+  bounded by the redeemed grant expiry and grant redemption redirects before
+  rendering the page.
