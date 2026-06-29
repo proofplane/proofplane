@@ -24,8 +24,8 @@ provenance, and freshness is derived from submitted evidence.
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Submission summaries and auditor packet reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
-| Agent interface | MCP binary scaffold | MCP runtime and tools |
-| Launch surface | Product and GTM notes, PRODUCT.md, DESIGN.md | Minimal self-onboarding UI and marketing site |
+| Agent interface | Streamable HTTP MCP runtime and core compliance tools | Interactive authorization, client distribution, packet tools, and equivalence |
+| Launch surface | Product and GTM notes, PRODUCT.md, DESIGN.md, minimal self-onboarding UI | Guided agent connection and workspace home |
 
 ## Epic Portfolio
 
@@ -37,6 +37,7 @@ provenance, and freshness is derived from submitted evidence.
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
 | [Trusted Compliance Reads](./trusted-compliance-reads/README.md) | Todo | Auditor-ready packets expose summarized evidence, provenance, and freshness. |
 | [MCP Server](./mcp-server/README.md) | Todo | Agents use the same services and authorization model as REST clients. |
+| [Agent Connector Onboarding](./agent-connector-onboarding/README.md) | Todo | Non-technical users connect hosted Proofplane to their chosen agent without terminals, config edits, or copied API tokens. |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
 | [Self-Onboarding UI](./self-onboarding-ui/README.md) | Done - Will Do Later | Remaining UI tickets are postponed until MCP is more complete; specs may need revalidation before reopening. |
 
@@ -50,9 +51,13 @@ provenance, and freshness is derived from submitted evidence.
    independently of that demo milestone.
 4. Add MCP auditor-packet tools after preview, export jobs, and download grants
    are stable.
-5. Build the Self-Onboarding UI on the stable Auth/API-token foundations, using
-   preview states where MCP and packet workflow tickets are still in progress.
-6. Create a separate production-deployment epic when deployment planning begins.
+5. Add interactive MCP authorization and agent-native distribution through the
+   Agent Connector Onboarding epic, then replace the UI's token-centric MCP
+   preview with a verified connection flow.
+6. Build the remaining Self-Onboarding UI on the stable Auth/API-token
+   foundations, using preview states where packet workflow tickets are still in
+   progress.
+7. Create a separate production-deployment epic when deployment planning begins.
 
 ## Definition Of MVP Done
 
