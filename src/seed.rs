@@ -234,8 +234,8 @@ async fn seed_evidence_requests(
         .await?;
 
     repository
-        .in_workspace_context(workspace_id, user_id, token_id, async move |context| {
-            for seed in seeds {
+        .in_workspace_context(workspace_id, user_id, token_id, async |context| {
+            for seed in seeds.iter().cloned() {
                 if let Some(existing_request) =
                     existing.iter().find(|request| request.title == seed.title)
                 {
@@ -502,6 +502,7 @@ SET evidence_request_id = EXCLUDED.evidence_request_id,
     Ok(())
 }
 
+#[derive(Clone)]
 struct SeedEvidenceRequest {
     title: String,
     description: String,

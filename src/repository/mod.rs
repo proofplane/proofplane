@@ -1,6 +1,9 @@
 use deadpool_postgres::{Object, Pool};
 
-use crate::domain::{ApiTokenId, UserId, WorkspaceId};
+use crate::{
+    domain::{ApiTokenId, UserId, WorkspaceId},
+    errors::{retry, Retryable},
+};
 
 mod api_tokens;
 pub mod constraints;
@@ -70,31 +73,85 @@ impl WorkspaceReadContext {
     }
 }
 
+struct TransactionAttemptError {
+    error: Error,
+    retryable: bool,
+}
+
+impl TransactionAttemptError {
+    fn permanent(error: impl Into<Error>) -> Self {
+        Self {
+            error: error.into(),
+            retryable: false,
+        }
+    }
+
+    fn database(error: tokio_postgres::Error) -> Self {
+        let retryable = error
+            .code()
+            .is_some_and(error::is_transaction_sqlstate_retryable);
+        Self {
+            error: error.into(),
+            retryable,
+        }
+    }
+
+    fn operation(error: Error) -> Self {
+        let retryable = matches!(
+            &error,
+            Error::Database(error)
+                if error.code().is_some_and(error::is_transaction_sqlstate_retryable)
+        );
+        Self { error, retryable }
+    }
+}
+
+impl Retryable for TransactionAttemptError {
+    fn is_retryable(&self) -> bool {
+        self.retryable
+    }
+}
+
 impl Postgres {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
 
     pub async fn get(&self) -> Result<Object, deadpool_postgres::PoolError> {
-        self.pool.get().await
+        retry!(deadpool_postgres::PoolError, self.pool.get())
     }
 
     pub async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context, 'transaction> AsyncFnOnce(
+        F: for<'context, 'transaction> AsyncFn(
                 &'context mut TransactionContext<'transaction>,
             ) -> Result<T, Error>
             + Send,
     {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let mut context = TransactionContext { transaction };
-        let result = operation(&mut context).await?;
+        retry!(TransactionAttemptError, async {
+            let mut client = self
+                .get()
+                .await
+                .map_err(TransactionAttemptError::permanent)?;
+            let transaction = client
+                .transaction()
+                .await
+                .map_err(TransactionAttemptError::permanent)?;
+            let mut context = TransactionContext { transaction };
+            let result = operation(&mut context)
+                .await
+                .map_err(TransactionAttemptError::operation)?;
 
-        context.transaction.commit().await?;
+            context
+                .transaction
+                .commit()
+                .await
+                .map_err(TransactionAttemptError::database)?;
 
-        Ok(result)
+            Ok::<T, TransactionAttemptError>(result)
+        })
+        .map_err(|error| error.error)
     }
 
     pub async fn in_workspace_context<T, F>(
@@ -106,20 +163,34 @@ impl Postgres {
     ) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context, 'transaction> AsyncFnOnce(
+        F: for<'context, 'transaction> AsyncFn(
                 &'context mut WorkspaceTransactionContext<'transaction>,
             ) -> Result<T, Error>
             + Send,
     {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let mut context =
-            WorkspaceTransactionContext::new(workspace_id, user_id, api_token_id, transaction);
-        let result = operation(&mut context).await?;
+        retry!(TransactionAttemptError, async {
+            let mut client = self
+                .get()
+                .await
+                .map_err(TransactionAttemptError::permanent)?;
+            let transaction = client
+                .transaction()
+                .await
+                .map_err(TransactionAttemptError::permanent)?;
+            let mut context =
+                WorkspaceTransactionContext::new(workspace_id, user_id, api_token_id, transaction);
+            let result = operation(&mut context)
+                .await
+                .map_err(TransactionAttemptError::operation)?;
 
-        context.commit().await?;
+            context
+                .commit()
+                .await
+                .map_err(TransactionAttemptError::database)?;
 
-        Ok(result)
+            Ok::<T, TransactionAttemptError>(result)
+        })
+        .map_err(|error| error.error)
     }
 
     pub async fn in_workspace_context_read<T, F>(
@@ -129,11 +200,13 @@ impl Postgres {
     ) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context> AsyncFnOnce(&'context WorkspaceReadContext) -> Result<T, Error> + Send,
+        F: for<'context> AsyncFn(&'context WorkspaceReadContext) -> Result<T, Error> + Send,
     {
-        let client = self.get().await?;
-        let context = WorkspaceReadContext::new(workspace_id, client);
+        retry!(Error, async {
+            let client = self.get().await?;
+            let context = WorkspaceReadContext::new(workspace_id, client);
 
-        operation(&context).await
+            operation(&context).await
+        })
     }
 }

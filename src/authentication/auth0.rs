@@ -4,7 +4,10 @@ use jwtk::Claims;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::config::Auth0Config;
+use crate::{
+    config::Auth0Config,
+    errors::{retry, Retryable},
+};
 
 const JWKS_CACHE_DURATION: Duration = Duration::from_secs(3600);
 
@@ -38,6 +41,12 @@ pub enum VerifyError {
 impl VerifyError {
     pub fn is_token_rejection(&self) -> bool {
         !matches!(self, VerifyError::JwksUnavailable)
+    }
+}
+
+impl Retryable for VerifyError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::JwksUnavailable)
     }
 }
 
@@ -86,14 +95,25 @@ impl Auth0TokenVerifier {
 impl TokenVerifier for Auth0TokenVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
         let verified = match &self.backend {
-            Backend::Remote(verifier) => verifier.verify::<Auth0ExtraClaims>(token).await,
+            Backend::Remote(verifier) => retry!(VerifyError, verify_remote(verifier, token)),
             #[cfg(test)]
-            Backend::Local(verifier) => verifier.verify::<Auth0ExtraClaims>(token),
-        }
-        .map_err(classify_jwtk_error)?;
+            Backend::Local(verifier) => verifier
+                .verify::<Auth0ExtraClaims>(token)
+                .map_err(classify_jwtk_error),
+        }?;
 
         validate_claims(verified.claims(), &self.issuer, &self.audience)
     }
+}
+
+async fn verify_remote(
+    verifier: &RemoteJwksVerifier,
+    token: &str,
+) -> Result<jwtk::HeaderAndClaims<Auth0ExtraClaims>, VerifyError> {
+    verifier
+        .verify::<Auth0ExtraClaims>(token)
+        .await
+        .map_err(classify_jwtk_error)
 }
 
 fn classify_jwtk_error(error: jwtk::Error) -> VerifyError {
@@ -142,6 +162,8 @@ mod tests {
     use jwtk::rsa::{RsaAlgorithm, RsaPrivateKey};
     use jwtk::{sign, HeaderAndClaims, PublicKeyToJwk};
 
+    use crate::errors::Retryable;
+
     use super::{Auth0ExtraClaims, Auth0TokenVerifier, Backend, TokenVerifier, VerifyError};
 
     const ISSUER: &str = "https://proofplane.us.auth0.com/";
@@ -179,6 +201,22 @@ mod tests {
             .add_aud(aud)
             .set_exp_from_now(Duration::from_secs(3600));
         claims
+    }
+
+    #[test]
+    fn only_jwks_failures_are_retryable() {
+        assert!(VerifyError::JwksUnavailable.is_retryable());
+        for error in [
+            VerifyError::InvalidToken,
+            VerifyError::Expired,
+            VerifyError::NotYetValid,
+            VerifyError::MissingIssuer,
+            VerifyError::IssuerMismatch,
+            VerifyError::AudienceMismatch,
+            VerifyError::MissingSubject,
+        ] {
+            assert!(!error.is_retryable());
+        }
     }
 
     fn sign_with(fixture: &Fixture, mut claims: HeaderAndClaims<Auth0ExtraClaims>) -> String {

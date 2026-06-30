@@ -5,6 +5,7 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::{
+    errors::{retry, Retryable},
     pubsub::{OutboundMessage, Publisher},
     repository::{OutboxMessage, Postgres},
 };
@@ -60,10 +61,11 @@ where
     }
 
     pub async fn run_once(&self, now: DateTime<Utc>) -> Result<usize, OutboxDequeuerError> {
-        let rows = self
-            .postgres
-            .list_due_outbox_messages(now, self.config.batch_size)
-            .await?;
+        let rows = retry!(
+            crate::repository::Error,
+            self.postgres
+                .list_due_outbox_messages(now, self.config.batch_size)
+        )?;
         let mut published = 0;
 
         for row in rows {

@@ -629,7 +629,7 @@ async fn append_outbox(
                     .append_outbox_message(&outbox_payload(
                         "attachment.scan_requested",
                         "evidence_attachment",
-                        aggregate_id,
+                        aggregate_id.clone(),
                     ))
                     .await
             },
