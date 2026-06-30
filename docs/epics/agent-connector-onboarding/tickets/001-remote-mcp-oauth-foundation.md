@@ -19,6 +19,9 @@ verifies MCP-scoped credentials, and enforces workspace/scope access.
 - [ ] Given an authenticated user, when they grant access, then the resulting
   credential is bound to one selected workspace, one MCP resource, one client,
   and the approved workspace permissions.
+- [ ] Given Auth0 authenticates a user, when MCP credentials are issued, then
+  Auth0 JWTs are not returned to MCP clients and Proofplane-issued PASETO
+  credentials are used instead.
 - [ ] Given denied consent, an inaccessible workspace, or an invalid resource,
   when authorization is attempted, then no usable credential is issued.
 - [ ] Given an MCP request with a valid MCP-scoped credential, when it reaches
@@ -36,8 +39,12 @@ verifies MCP-scoped credentials, and enforces workspace/scope access.
 - [ ] Implement protected-resource and authorization-server discovery.
 - [ ] Implement browser authorization, workspace consent, PKCE, and resource
   binding outside the MCP server's web surface.
-- [ ] Implement opaque 15-minute access tokens and rotating 30-day idle /
-  90-day absolute refresh tokens.
+- [ ] Refactor existing PASETO helpers into purpose-specific issuers/verifiers
+  without changing attachment download grant behavior.
+- [ ] Add a separate MCP OAuth PASETO keyring and implicit assertions for
+  access and refresh tokens.
+- [ ] Implement 15-minute PASETO access tokens and rotating 30-day idle /
+  90-day absolute PASETO refresh tokens.
 - [ ] Implement revocation and refresh-token reuse detection.
 - [ ] Route OAuth and `ppat_` identities into the existing MCP authorization
   context without exposing credentials to tools.
@@ -57,3 +64,5 @@ verifies MCP-scoped credentials, and enforces workspace/scope access.
   configuration, not hard-coded production hosts.
 - 2026-06-29: Dynamic Client Registration was removed from MVP scope. OAuth is
   limited to known clients in this epic.
+- 2026-06-29: Spec now uses Proofplane-issued PASETO credentials for MCP OAuth
+  and keeps Auth0 JWTs as upstream human identity tokens only.

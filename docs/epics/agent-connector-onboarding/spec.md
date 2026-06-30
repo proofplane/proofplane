@@ -89,6 +89,12 @@ workspace selection, consent, authorization-code issuance, token exchange,
 refresh, and revocation. The MCP server must not serve the OAuth UI or static
 web assets.
 
+Auth0 JWTs authenticate the human user to Proofplane. They are not passed to
+MCP clients and are not accepted as MCP bearer tokens. After Auth0 login,
+Proofplane maps the Auth0 subject to a Proofplane user, applies workspace
+membership and consent rules, and issues Proofplane-owned MCP OAuth
+credentials.
+
 The MCP server publishes or participates in the metadata needed by MCP clients
 to discover the authorization server, then validates MCP-scoped bearer
 credentials on `/mcp`. It may verify self-contained tokens, call an
@@ -135,10 +141,23 @@ Registration is explicitly deferred. Generic MCP clients that cannot use a
 known OAuth client remain on the advanced API-token setup path until a later
 epic adds generic OAuth registration.
 
-MCP access and refresh tokens are opaque Proofplane-issued credentials stored
-only as digests. Access tokens expire after 15 minutes. Refresh tokens rotate
-on every use, have a 30-day idle lifetime, and have a 90-day absolute lifetime.
-Refresh-token reuse revokes the token family and requires the user to connect
+MCP access and refresh tokens are Proofplane-issued bearer credentials. OAuth
+does not require these bearer values to be JWTs. Use the existing PASETO
+implementation after refactoring it into purpose-specific issuers/verifiers.
+MCP OAuth tokens must use a separate keyring and implicit assertions from
+attachment download grants, for example:
+
+- `proofplane:mcp-oauth-access:v1`
+- `proofplane:mcp-oauth-refresh:v1`
+
+Access-token PASETOs expire after 15 minutes and include enough claims to
+identify the connection, user, workspace, OAuth client, MCP resource, and
+granted permissions. Each authenticated MCP request still checks the persisted
+connection for revocation, workspace membership, resource, and scope validity.
+
+Refresh-token PASETOs rotate on every use, have a 30-day idle lifetime, and
+have a 90-day absolute lifetime. Store refresh-token digests and rotation state
+server-side so reuse revokes the token family and requires the user to connect
 again. Revoking a connection immediately invalidates future refreshes and MCP
 requests for that connection.
 
@@ -162,7 +181,7 @@ The persisted model has three logical records:
 - known OAuth clients and their redirect-URI policy;
 - agent connections, one per user/workspace/client/resource/permission-set
   grant;
-- OAuth credentials, stored by digest and linked to an agent connection.
+- OAuth credential digests and rotation state, linked to an agent connection.
 
 Connection records include client name, client type, workspace, granted
 permissions, creation time, last authenticated MCP use, last refresh, and
@@ -367,3 +386,7 @@ workspace/account.
 - 2026-06-29: Removed Dynamic Client Registration from MVP scope. Generic MCP
   clients stay on the advanced API-token path until a later generic OAuth
   registration epic.
+- 2026-06-29: Chose Proofplane-issued PASETO bearer credentials for MCP OAuth.
+  Auth0 JWTs remain upstream human identity tokens only. MCP PASETOs use
+  separate OAuth key material and implicit assertions from attachment download
+  grants, with persisted connection checks for revocation and authorization.
