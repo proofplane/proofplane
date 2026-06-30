@@ -45,10 +45,13 @@ Repository failures return a generic server error.
 This is a pre-provisioned API-token model for clients that can be configured
 with a Proofplane API token and attach it as the MCP HTTP bearer credential.
 OAuth discovery, Protected Resource Metadata, and interactive MCP OAuth login
-are not part of this PR's runtime; they are deferred to the separate OAuth
-workstream. That workstream may change how MCP clients obtain bearer
-credentials, but it should preserve per-request validation and the prohibition
-on exposing credentials through tool arguments.
+are not part of this runtime; they are deferred to the
+[Agent Connector Onboarding](../agent-connector-onboarding/spec.md) workstream.
+That workstream may change how MCP clients obtain bearer credentials, but it
+must preserve per-request validation and the prohibition on exposing
+credentials through tool arguments. Browser-facing OAuth pages, Auth0
+callbacks, consent screens, and static web assets remain outside the MCP
+server; they belong to the website/API authorization surface.
 
 ## Core Demo Tools
 
@@ -179,3 +182,6 @@ the MVP.
   metadata, not tool arguments or model-visible data; Proofplane's initial
   runtime deliberately uses pre-provisioned API tokens while OAuth interop is
   deferred to the separate OAuth workstream.
+- 2026-06-29: Linked the deferred OAuth workstream to the Agent Connector
+  Onboarding epic, which owns interactive authorization and client
+  distribution.
