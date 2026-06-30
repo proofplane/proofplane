@@ -82,7 +82,7 @@ The upload session can:
 
 - render the upload page;
 - list existing attachments for the scoped submission;
-- upload the first file for the scoped submission when none exists;
+- upload files for the scoped submission, one file per form submit;
 - issue a download redirect for a finalized attachment in the scoped submission.
 
 It cannot create submissions, upload to another submission, delete attachments,
@@ -107,9 +107,9 @@ The first `GET` redeems the URL token, sets the upload-session cookie, and
 redirects to `/evidence-attachment-uploads` so refreshes use the cookie instead
 of the single-use token. Later page loads use the cookie. `POST /files` accepts
 one multipart `file` field and uses the existing
-`EvidenceSubmissionService::upload_attachment` and first-attachment creation
-flow. Browser uploads compute CRC32C server-side while streaming; native browser
-forms do not need to provide `Content-Digest`.
+`EvidenceSubmissionService::upload_attachment` and the existing attachment
+creation flow. Browser uploads compute CRC32C server-side while streaming;
+native browser forms do not need to provide `Content-Digest`.
 
 The download route verifies the upload-session cookie, issues the existing
 short-lived attachment download grant for a finalized attachment in the scoped
@@ -118,16 +118,15 @@ submission, audits that issuance, and redirects the browser to the grant URL.
 The existing authenticated REST upload endpoint remains unchanged. It continues
 to require a bearer API token and keeps its current duplicate-filename behavior.
 
-## First Attachment Only
+## Browser Upload Scope
 
-The signed browser upload flow accepts only the first attachment for the scoped
-submission. If an attachment already exists, the page shows the existing
-inventory without an upload form and `POST /files` returns conflict without
-creating another object. Concurrent browser uploads race through the same
-first-attachment insert path, so only one attachment row is created.
+The signed browser upload flow accepts one file field per request and allows
+repeated uploads for the scoped submission. If attachments already exist, the
+page shows the inventory and keeps the upload form available. Concurrent browser
+uploads can create multiple attachment rows.
 
-The existing authenticated REST upload endpoint remains multi-attachment and
-keeps its current duplicate-filename behavior.
+The existing authenticated REST upload endpoint remains unchanged and keeps its
+current duplicate-filename behavior.
 
 ## Page Behavior
 
@@ -135,11 +134,11 @@ The first version is a minimal API-served HTML page, not a React route in the
 separate Vite UI app. It may borrow Proofplane visual tokens, but it should not
 add new deployment requirements for serving the SPA.
 
-The page allows one file selection and one upload total for the scoped
-submission. After success it returns to the attachment-management page and shows
-the stored file with filename, size, and coarse status. Later visits display the
-same existing attachment list without an upload button. Uploaded attachments show
-a download button; processing or failed attachments do not.
+The page allows one file selection per submit. After success it returns to the
+attachment-management page and shows the stored files with filename, size, and
+coarse status. Later visits display the same existing attachment list with the
+upload button still available. Uploaded attachments show a download button;
+processing or failed attachments do not.
 
 No polling, delete, preview, multi-file POST, drag-and-drop, or product login is
 part of the first pass.
@@ -170,6 +169,7 @@ Application tracing and ingress logs must not record query-token values.
   upload route. Browser uploads compute CRC32C server-side; authenticated REST
   uploads keep requiring client-provided `Content-Digest`.
 - 2026-06-29: Follow-up implementation redirects after browser POST so refreshes
-  do not resubmit, bounds the upload-session cookie to the grant expiry, limits
-  the browser flow to the first attachment only, and adds session-scoped
-  download redirects for finalized attachments.
+  do not resubmit, bounds the upload-session cookie to the grant expiry, and
+  adds session-scoped download redirects for finalized attachments.
+- 2026-06-30: Browser sessions allow repeated one-file uploads for the scoped
+  submission while keeping multi-file POST out of scope.

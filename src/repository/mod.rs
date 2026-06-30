@@ -18,7 +18,8 @@ pub use attachment_upload_grants::{AttachmentUploadGrant, NewAttachmentUploadGra
 pub use constraints::ConflictKind;
 pub use error::Error;
 pub use evidence_submissions::{
-    AttachmentDownloadCandidate, FinalizingAttachmentUploadWork, PendingAttachmentUploadWork,
+    ArchiveAttachmentResult, AttachmentDownloadCandidate, FinalizingAttachmentUploadWork,
+    PendingAttachmentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use workspace_memberships::NewWorkspaceMembership;

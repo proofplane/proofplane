@@ -15,9 +15,11 @@ use uuid::Uuid;
 use crate::{
     authentication::ApiTokenContext,
     domain::{
-        AttachmentUploadStatus, EvidenceAttachment, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmissionDetail,
+        EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    repository::ArchiveAttachmentResult,
     routes::{
         error::ApiError,
         evidence_submissions::{attachment_upload_from_multipart, AttachmentUploadDigest},
@@ -54,6 +56,10 @@ pub fn router(state: AttachmentUploadSessionState) -> Router {
             "/evidence-attachment-uploads/files/{attachment_id}/download",
             get(download_file),
         )
+        .route(
+            "/evidence-attachment-uploads/files/{attachment_id}/archive",
+            post(archive_file),
+        )
         .with_state(state)
 }
 
@@ -69,6 +75,7 @@ struct UploadSessionAttachmentResponse {
     content_length: i64,
     upload_status: String,
     downloadable: bool,
+    archivable: bool,
 }
 
 async fn open_upload_session(
@@ -114,9 +121,6 @@ async fn upload_file(
     };
     let token = session.api_token_context();
     let before = detail(&state.submissions, session.submission_id, token).await?;
-    if !before.attachments.is_empty() {
-        return Ok(upload_already_exists_response(&before));
-    }
 
     let payload = match attachment_upload_from_multipart(
         &state.submissions,
@@ -134,14 +138,10 @@ async fn upload_file(
         Err(error) => return Err(error),
     };
 
-    let Some(attachment) = state
+    let attachment = state
         .submissions
-        .create_first_attachment(&token, request_id.0, session.submission_id, payload)
-        .await?
-    else {
-        let latest = detail(&state.submissions, session.submission_id, token).await?;
-        return Ok(upload_already_exists_response(&latest));
-    };
+        .create_attachment(&token, request_id.0, session.submission_id, payload)
+        .await?;
     emit_upload_audit(&token, request_id.0, session.submission_id, &attachment);
 
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -201,6 +201,49 @@ async fn download_file(
         HeaderValue::from_str(grant.url.as_str()).map_err(|_| ApiError::Internal)?,
     );
     Ok(response)
+}
+
+async fn archive_file(
+    State(state): State<AttachmentUploadSessionState>,
+    headers: HeaderMap,
+    Path(attachment_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let session = match verify_session(&state, &headers) {
+        Ok(session) => session,
+        Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
+    };
+    let token = session.api_token_context();
+    match state
+        .submissions
+        .archive_attachment(
+            &token,
+            session.submission_id,
+            EvidenceAttachmentId::from(attachment_id),
+        )
+        .await?
+    {
+        ArchiveAttachmentResult::Archived => {
+            let mut response = StatusCode::SEE_OTHER.into_response();
+            response.headers_mut().insert(
+                LOCATION,
+                HeaderValue::from_static("/evidence-attachment-uploads"),
+            );
+            Ok(response)
+        }
+        ArchiveAttachmentResult::NotFound => Ok(unavailable_response()),
+        ArchiveAttachmentResult::NotTerminal => {
+            let attachments = inventory(&state.submissions, session.submission_id, token).await?;
+            Ok((
+                StatusCode::CONFLICT,
+                Html(render_upload_page(
+                    &attachments,
+                    Some("Archive failed: attachment is still processing"),
+                )),
+            )
+                .into_response())
+        }
+    }
 }
 
 async fn redeem_grant(
@@ -330,14 +373,13 @@ fn render_upload_page(
                     escape_html(&attachment.filename),
                     format_bytes(attachment.content_length),
                     escape_html(&attachment.upload_status),
-                    download_link(attachment),
+                    attachment_actions(attachment),
                 ))
                 .collect::<Vec<_>>()
                 .join("")
         )
     };
-    let upload = if attachments.is_empty() {
-        r#"<section class="panel" aria-labelledby="upload-file">
+    let upload = r#"<section class="panel" aria-labelledby="upload-file">
 <h2 id="upload-file">Upload a file</h2>
 <form method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
 <label for="file">File</label>
@@ -345,10 +387,7 @@ fn render_upload_page(
 <button type="submit">Upload</button>
 </form>
 </section>"#
-            .to_owned()
-    } else {
-        String::new()
-    };
+        .to_owned();
 
     format!(
         r#"<!doctype html>
@@ -368,6 +407,8 @@ fn render_upload_page(
   --muted: oklch(76% 0.015 155);
   --accent: oklch(78% 0.09 174);
   --signal: oklch(78% 0.08 48);
+  --danger: oklch(66% 0.18 28);
+  --danger-hover: oklch(60% 0.18 28);
 }}
 * {{ box-sizing: border-box; }}
 body {{
@@ -400,11 +441,14 @@ p {{ color: var(--muted); line-height: 1.55; max-width: 68ch; }}
 }}
 .notice p {{ margin: 6px 0 0; }}
 table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
-th, td {{ padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--line); }}
+th, td {{ padding: 12px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }}
 th {{ color: var(--muted); font-size: 0.8125rem; font-weight: 620; }}
 td {{ font-size: 0.95rem; }}
 .empty {{ margin: 12px 0 0; }}
 form {{ display: grid; gap: 14px; margin-top: 16px; max-width: 520px; }}
+.actions {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-start; }}
+.actions form {{ display: inline; margin: 0; max-width: none; }}
+.sr-only {{ position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }}
 label {{ font-size: 0.8125rem; font-weight: 620; color: var(--muted); }}
 input[type="file"] {{
   width: 100%;
@@ -431,12 +475,22 @@ button, .button {{
   text-decoration: none;
 }}
 button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
+.icon-button {{
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+}}
+.icon-button svg {{ width: 18px; height: 18px; stroke: currentColor; }}
+.danger-button {{ background: var(--danger); color: var(--ink); }}
+.danger-button:hover {{ background: var(--danger-hover); }}
 </style>
 </head>
 <body>
 <main>
 <h1>Evidence attachment management</h1>
-<p>Add one evidence file for the scoped submission. If you have to upload more than one file, put them in the same zip file and upload the zip. This link does not grant access to the rest of Proofplane.</p>
+<p>Add evidence files for the scoped submission. This link does not grant access to the rest of Proofplane.</p>
 {message}
 <section class="panel" aria-labelledby="current-attachments">
 <h2 id="current-attachments">Current attachments</h2>
@@ -474,24 +528,6 @@ fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> 
         Html(render_upload_page(
             &attachments,
             Some(&format!("Upload failed: {message}")),
-        )),
-    )
-        .into_response()
-}
-
-fn upload_already_exists_response(detail: &EvidenceSubmissionDetail) -> Response {
-    let attachments = detail
-        .attachments
-        .clone()
-        .into_iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
-
-    (
-        StatusCode::CONFLICT,
-        Html(render_upload_page(
-            &attachments,
-            Some("A file has already been uploaded for this evidence submission."),
         )),
     )
         .into_response()
@@ -583,6 +619,12 @@ impl From<EvidenceAttachment> for UploadSessionAttachmentResponse {
             content_length: attachment.content_length,
             upload_status: upload_status(attachment.upload_status).to_owned(),
             downloadable: attachment.upload_status == AttachmentUploadStatus::Uploaded,
+            archivable: matches!(
+                attachment.upload_status,
+                AttachmentUploadStatus::Uploaded
+                    | AttachmentUploadStatus::ContainsVirus
+                    | AttachmentUploadStatus::FailedUpload
+            ),
         }
     }
 }
@@ -591,14 +633,25 @@ fn upload_status(status: AttachmentUploadStatus) -> &'static str {
     status.as_str()
 }
 
-fn download_link(attachment: &UploadSessionAttachmentResponse) -> String {
+fn attachment_actions(attachment: &UploadSessionAttachmentResponse) -> String {
+    let mut actions = Vec::new();
     if attachment.downloadable {
-        format!(
+        actions.push(format!(
             r#"<a class="button" href="/evidence-attachment-uploads/files/{}/download">Download</a>"#,
             attachment.id
-        )
-    } else {
+        ));
+    }
+    if attachment.archivable {
+        actions.push(format!(
+            r#"<form method="post" action="/evidence-attachment-uploads/files/{}/archive" onsubmit="return confirm('Archive this attachment?');"><button class="icon-button danger-button" type="submit" aria-label="Archive attachment"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg><span class="sr-only">Archive</span></button></form>"#,
+            attachment.id
+        ));
+    }
+
+    if actions.is_empty() {
         String::new()
+    } else {
+        format!(r#"<div class="actions">{}</div>"#, actions.join(""))
     }
 }
 

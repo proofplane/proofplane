@@ -4,13 +4,14 @@ use crate::{
     authentication::ApiTokenContext,
     domain::{
         CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
-        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
+        EvidenceSubmissionId,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{NewOutboxMessage, Postgres},
+    repository::{ArchiveAttachmentResult, NewOutboxMessage, Postgres},
     services::Error,
     worker::ATTACHMENT_SCAN_REQUESTED,
 };
@@ -271,6 +272,27 @@ impl EvidenceSubmissionService {
                 Err(error.into())
             }
         }
+    }
+
+    pub async fn archive_attachment(
+        &self,
+        token: &ApiTokenContext,
+        submission_id: EvidenceSubmissionId,
+        attachment_id: EvidenceAttachmentId,
+    ) -> Result<ArchiveAttachmentResult, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context(
+                token.workspace_id,
+                token.user_id,
+                token.api_token_id,
+                async move |context| {
+                    context
+                        .archive_evidence_attachment(submission_id, attachment_id)
+                        .await
+                },
+            )
+            .await?)
     }
 }
 

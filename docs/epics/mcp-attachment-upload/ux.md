@@ -12,11 +12,11 @@ and clear about what has already been uploaded.
   picker, and an upload button.
 - Successful upload: return to the management page and show the uploaded
   filename, size, and status.
-- Existing attachment: show the attachment inventory without an upload button.
+- Existing attachment: show the attachment inventory and keep the upload button
+  available.
 - Finalized attachment: show a download button.
 - Processing or failed attachment: show the status without a download button.
-- Second browser upload: show a short conflict message and keep the attachment
-  inventory visible.
+- Second browser upload: accept the file and return to the attachment inventory.
 - Expired or invalid link/session: show "This upload link is no longer
   available" and tell the human to ask the MCP client for a new upload link.
 - Upload failure: show a short error and keep the attachment inventory visible.
