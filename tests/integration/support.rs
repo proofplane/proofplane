@@ -36,6 +36,7 @@ use proofplane::{
         WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
     mcp::{create_app as create_mcp_app, McpAppDependencies},
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     repository::{NewWorkspaceMembership, Postgres},
     routes::authentication::AUTHORIZATION_HEADER,
     scanner::ClamAvMalwareScanner,
@@ -79,6 +80,46 @@ pub async fn upload_attachment(
         .await;
     response.assert_status(axum::http::StatusCode::ACCEPTED);
     response.json::<Value>()["attachment"].clone()
+}
+
+pub async fn finalize_attachment(
+    app: &TestApp,
+    workspace_id: Uuid,
+    submission_id: Uuid,
+    attachment_id: Uuid,
+) -> ObjectKey {
+    let client = app.postgres().get().await.expect("connection opens");
+    let row = client
+        .query_one(
+            "SELECT object_key, filename FROM evidence_attachments WHERE id = $1",
+            &[&attachment_id],
+        )
+        .await
+        .expect("attachment loads");
+    let quarantine_key =
+        ObjectKey::parse(row.get::<_, String>("object_key")).expect("quarantine key parses");
+    let filename: String = row.get("filename");
+    let final_key = ObjectKey::parse(format!(
+        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
+    ))
+    .expect("final key parses");
+    let store = FilesystemObjectStore::new(app.object_storage_root())
+        .await
+        .expect("filesystem store initializes");
+    store
+        .copy_object(&quarantine_key, &final_key)
+        .await
+        .expect("attachment copies to final storage");
+    // ponytail: direct finalization keeps grant tests small; use the worker when state-machine coverage matters.
+    client
+        .execute(
+            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
+            &[&attachment_id, &final_key.as_str()],
+        )
+        .await
+        .expect("attachment finalizes");
+
+    final_key
 }
 
 pub async fn set_submission_received_at(

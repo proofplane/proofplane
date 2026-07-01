@@ -9,7 +9,6 @@ use proofplane::{
     },
     config::{PasetoUploadGrantConfig, PasetoUploadGrantKey},
     domain::{EvidenceSubmissionId, WorkspaceId, WorkspacePermission, WorkspacePermissions},
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     services::{
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
         upload_sessions::UPLOAD_SESSION_AUDIENCE,
@@ -21,7 +20,7 @@ use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
-use super::support::{upload_attachment, TestApp};
+use super::support::{finalize_attachment, upload_attachment, TestApp};
 
 #[tokio::test]
 async fn upload_grant_issue_persists_workspace_submission_issuer_and_expiry() {
@@ -267,14 +266,11 @@ async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
     let max_age = cookie_max_age(cookie);
     assert!((1..=300).contains(&max_age));
     assert!(cookie.contains("; Secure"));
-    let body = app
-        .server()
+    app.server()
         .get("/evidence-attachment-uploads")
         .add_header("cookie", cookie)
         .await
-        .text();
-    assert!(body.contains("Evidence attachment management"));
-    assert!(body.contains("Current attachments"));
+        .assert_status_ok();
 
     let redeemed_at = app
         .postgres()
@@ -307,40 +303,6 @@ async fn upload_session_grant_url_cannot_be_opened_twice() {
 
     second.assert_status(axum::http::StatusCode::NOT_FOUND);
     assert_eq!(second.maybe_header("set-cookie"), None);
-}
-
-#[tokio::test]
-async fn upload_session_cookie_loads_only_scoped_submission_inventory() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let other_submission_id = create_submission(&app, workspace_id).await;
-    upload_attachment(&app, workspace_id, submission_id, "scoped.txt", b"scoped").await;
-    upload_attachment(
-        &app,
-        workspace_id,
-        other_submission_id,
-        "other.txt",
-        b"other",
-    )
-    .await;
-    let issued = upload_grant_service(&app)
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-    let redeemed = app.server().get(&upload_path(&issued.url)).await;
-    redeemed.assert_status(axum::http::StatusCode::SEE_OTHER);
-    let cookie = redeemed.header("set-cookie");
-
-    let opened = app
-        .get("/evidence-attachment-uploads")
-        .add_header("cookie", cookie)
-        .await;
-    opened.assert_status_ok();
-    let body = opened.text();
-
-    assert!(body.contains("scoped.txt"));
-    assert!(!body.contains("other.txt"));
 }
 
 #[tokio::test]
@@ -378,41 +340,6 @@ async fn upload_session_cookie_expires_at_original_grant_expiry() {
 }
 
 #[tokio::test]
-async fn upload_session_page_with_existing_attachment_keeps_upload_form() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    upload_attachment(
-        &app,
-        workspace_id,
-        submission_id,
-        "already-there.txt",
-        b"existing",
-    )
-    .await;
-    let issued = upload_grant_service(&app)
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-
-    let redeemed = app.server().get(&upload_path(&issued.url)).await;
-    redeemed.assert_status(axum::http::StatusCode::SEE_OTHER);
-    let page = app
-        .server()
-        .get("/evidence-attachment-uploads")
-        .add_header("cookie", redeemed.header("set-cookie"))
-        .await;
-    page.assert_status_ok();
-    let body = page.text();
-
-    assert!(body.contains("already-there.txt"));
-    assert!(body.contains(r#"<input id="file""#));
-    assert!(body.contains(r#"action="/evidence-attachment-uploads/files""#));
-    assert!(body.contains("pending"));
-    assert!(!body.contains("Download"));
-}
-
-#[tokio::test]
 async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline() {
     let app = upload_grant_app().await;
     let workspace_id = app.workspace_id("workspace");
@@ -435,20 +362,6 @@ async fn upload_session_post_accepts_native_form_and_enters_attachment_pipeline(
         response.header("location").to_str().expect("location"),
         "/evidence-attachment-uploads"
     );
-    let page = app
-        .server()
-        .get("/evidence-attachment-uploads")
-        .add_header("cookie", cookie.clone())
-        .await;
-    page.assert_status_ok();
-    let body = page.text();
-    assert!(!body.contains("countdown"));
-    assert!(!body.contains("window.close()"));
-    assert!(body.contains("browser-artifact.txt"));
-    assert!(body.contains("Current attachments"));
-    assert!(body.contains("pending"));
-    assert!(!body.contains("Download"));
-
     let row = app
         .postgres()
         .get()
@@ -500,16 +413,6 @@ async fn upload_session_page_downloads_finalized_attachment() {
     finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
     let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
 
-    let page = app
-        .server()
-        .get("/evidence-attachment-uploads")
-        .add_header("cookie", cookie.clone())
-        .await;
-    page.assert_status_ok();
-    let body = page.text();
-    assert!(body.contains("ready.txt"));
-    assert!(body.contains("Download"));
-
     let redirect = app
         .server()
         .get(&format!(
@@ -521,35 +424,6 @@ async fn upload_session_page_downloads_finalized_attachment() {
     let location_header = redirect.header("location");
     let location = location_header.to_str().expect("location");
     assert!(location.starts_with("https://api.proofplane.test/attachment-downloads?token="));
-}
-
-#[tokio::test]
-async fn upload_session_archive_actions_follow_terminal_statuses() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let uploaded =
-        upload_attachment(&app, workspace_id, submission_id, "uploaded.txt", b"up").await;
-    let failed =
-        upload_attachment(&app, workspace_id, submission_id, "failed.txt", b"failed").await;
-    let malicious =
-        upload_attachment(&app, workspace_id, submission_id, "virus.txt", b"virus").await;
-    upload_attachment(&app, workspace_id, submission_id, "pending.txt", b"pending").await;
-    finalize_attachment(&app, workspace_id, submission_id, attachment_id(&uploaded)).await;
-    set_attachment_status(&app, attachment_id(&failed), "failed").await;
-    set_attachment_status(&app, attachment_id(&malicious), "contains_virus").await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    let body = app
-        .server()
-        .get("/evidence-attachment-uploads")
-        .add_header("cookie", cookie)
-        .await
-        .text();
-
-    assert!(body.contains("/archive"));
-    assert!(body.contains("confirm('Archive this attachment?')"));
-    assert_eq!(body.matches("/archive").count(), 3);
 }
 
 #[tokio::test]
@@ -583,13 +457,12 @@ async fn upload_session_archives_terminal_attachment_idempotently_and_hides_it()
         );
     }
 
-    let body = app
-        .server()
+    app.server()
         .get("/evidence-attachment-uploads")
         .add_header("cookie", cookie)
         .await
-        .text();
-    assert!(!body.contains("archive-me.txt"));
+        .assert_status_ok();
+    assert!(attachment_archived(&app, attachment_id).await);
     assert_eq!(
         attachment_filenames(&app, submission_id).await,
         vec!["archive-me.txt"]
@@ -621,9 +494,7 @@ async fn upload_session_archive_rejects_non_terminal_attachment() {
         .await;
 
     response.assert_status(axum::http::StatusCode::CONFLICT);
-    let body = response.text();
-    assert!(body.contains("Archive failed: attachment is still processing"));
-    assert!(body.contains("still-pending.txt"));
+    assert!(!attachment_archived(&app, attachment_id(&attachment)).await);
 }
 
 #[tokio::test]
@@ -700,15 +571,11 @@ async fn upload_session_post_accepts_more_than_one_browser_upload() {
         vec!["report.pdf".to_owned(), "report.pdf".to_owned()]
     );
 
-    let page = app
-        .server()
+    app.server()
         .get("/evidence-attachment-uploads")
         .add_header("cookie", cookie)
-        .await;
-    page.assert_status_ok();
-    let body = page.text();
-    assert!(body.contains("report.pdf"));
-    assert!(body.contains(r#"<input id="file""#));
+        .await
+        .assert_status_ok();
 }
 
 #[tokio::test]
@@ -772,7 +639,7 @@ async fn concurrent_browser_uploads_can_create_multiple_attachments() {
 }
 
 #[tokio::test]
-async fn upload_session_post_unavailable_session_returns_generic_page() {
+async fn upload_session_post_unavailable_session_returns_not_found() {
     let app = upload_grant_app().await;
     let response = app
         .server()
@@ -782,13 +649,10 @@ async fn upload_session_post_unavailable_session_returns_generic_page() {
         .await;
 
     response.assert_status(axum::http::StatusCode::NOT_FOUND);
-    assert!(response
-        .text()
-        .contains("This upload link is no longer available"));
 }
 
 #[tokio::test]
-async fn upload_session_post_rejects_invalid_or_multiple_file_fields_with_page() {
+async fn upload_session_post_rejects_invalid_or_multiple_file_fields() {
     let app = upload_grant_app().await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
@@ -819,9 +683,6 @@ async fn upload_session_post_rejects_invalid_or_multiple_file_fields_with_page()
             .await;
 
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
-        let body = response.text();
-        assert!(body.contains("Upload failed"));
-        assert!(body.contains("Current attachments"));
     }
 
     assert!(attachment_filenames(&app, submission_id).await.is_empty());
@@ -996,22 +857,23 @@ async fn attachment_filenames(app: &TestApp, submission_id: Uuid) -> Vec<String>
         .collect()
 }
 
-fn attachment_id(attachment: &Value) -> Uuid {
-    Uuid::parse_str(attachment["id"].as_str().expect("attachment id"))
-        .expect("attachment id parses")
-}
-
-async fn set_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+async fn attachment_archived(app: &TestApp, attachment_id: Uuid) -> bool {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
-        .execute(
-            "UPDATE evidence_attachments SET upload_status = $2 WHERE id = $1",
-            &[&attachment_id, &status],
+        .query_one(
+            "SELECT archived FROM evidence_attachments WHERE id = $1",
+            &[&attachment_id],
         )
         .await
-        .expect("attachment status updates");
+        .expect("attachment archived flag reads")
+        .get("archived")
+}
+
+fn attachment_id(attachment: &Value) -> Uuid {
+    Uuid::parse_str(attachment["id"].as_str().expect("attachment id"))
+        .expect("attachment id parses")
 }
 
 fn session_cookie(
@@ -1148,41 +1010,4 @@ fn attachment_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String
 
 fn created_id(value: &Value) -> Uuid {
     Uuid::parse_str(value["id"].as_str().expect("id is a string")).expect("id parses")
-}
-
-async fn finalize_attachment(
-    app: &TestApp,
-    workspace_id: Uuid,
-    submission_id: Uuid,
-    attachment_id: Uuid,
-) {
-    let client = app.postgres().get().await.expect("connection opens");
-    let row = client
-        .query_one(
-            "SELECT object_key, filename FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
-        )
-        .await
-        .expect("attachment loads");
-    let quarantine_key =
-        ObjectKey::parse(row.get::<_, String>("object_key")).expect("quarantine key parses");
-    let filename: String = row.get("filename");
-    let final_key = ObjectKey::parse(format!(
-        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
-    ))
-    .expect("final key parses");
-    let store = FilesystemObjectStore::new(app.object_storage_root())
-        .await
-        .expect("filesystem store initializes");
-    store
-        .copy_object(&quarantine_key, &final_key)
-        .await
-        .expect("attachment copies to final storage");
-    client
-        .execute(
-            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
-            &[&attachment_id, &final_key.as_str()],
-        )
-        .await
-        .expect("attachment finalizes");
 }

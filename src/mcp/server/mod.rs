@@ -1,4 +1,4 @@
-mod attachment_upload_grants;
+mod attachment_grants;
 mod common;
 mod controls;
 mod evidence_requests;
@@ -47,7 +47,7 @@ impl ProofplaneMcp {
         ToolRouter::new()
             + Self::evidence_requests_tool_router()
             + Self::evidence_submissions_tool_router()
-            + Self::attachment_upload_grants_tool_router()
+            + Self::attachment_grants_tool_router()
             + Self::controls_tool_router()
     }
 }

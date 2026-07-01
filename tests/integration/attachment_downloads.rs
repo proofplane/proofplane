@@ -15,14 +15,14 @@ use proofplane::config::{PasetoDownloadConfig, PasetoDownloadKey};
 use proofplane::routes::authentication::AUTHORIZATION_HEADER;
 use proofplane::{
     domain::WorkspacePermission,
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
+    object_storage::{FilesystemObjectStore, ObjectStore},
 };
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::support::{upload_attachment, TestApp, INTEGRATION_API_TOKEN_ID};
+use super::support::{finalize_attachment, upload_attachment, TestApp, INTEGRATION_API_TOKEN_ID};
 
 const SIGNING_SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
 const ISSUER: &str = "https://api.proofplane.test/";
@@ -298,7 +298,9 @@ async fn redemption_conceals_invalid_tokens_and_newly_ineligible_or_missing_obje
         .assert_status_not_found();
 
     set_attachment_status(&app, attachment_id, "uploaded").await;
-    let store = filesystem_store(&app).await;
+    let store = FilesystemObjectStore::new(app.object_storage_root())
+        .await
+        .expect("filesystem store initializes");
     store
         .delete_object(&final_key)
         .await
@@ -401,49 +403,6 @@ async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
             .expect("submission ID is a string"),
     )
     .expect("submission ID is a UUID")
-}
-
-async fn finalize_attachment(
-    app: &TestApp,
-    workspace_id: Uuid,
-    submission_id: Uuid,
-    attachment_id: Uuid,
-) -> ObjectKey {
-    let client = app.postgres().get().await.expect("connection opens");
-    let row = client
-        .query_one(
-            "SELECT object_key, filename FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
-        )
-        .await
-        .expect("attachment loads");
-    let quarantine_key =
-        ObjectKey::parse(row.get::<_, String>("object_key")).expect("quarantine key parses");
-    let filename: String = row.get("filename");
-    let final_key = ObjectKey::parse(format!(
-        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
-    ))
-    .expect("final key parses");
-    let store = filesystem_store(app).await;
-    store
-        .copy_object(&quarantine_key, &final_key)
-        .await
-        .expect("attachment copies to final storage");
-    client
-        .execute(
-            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
-            &[&attachment_id, &final_key.as_str()],
-        )
-        .await
-        .expect("attachment finalizes");
-
-    final_key
-}
-
-async fn filesystem_store(app: &TestApp) -> FilesystemObjectStore {
-    FilesystemObjectStore::new(app.object_storage_root())
-        .await
-        .expect("filesystem store initializes")
 }
 
 async fn set_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {

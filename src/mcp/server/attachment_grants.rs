@@ -20,7 +20,7 @@ use crate::{
     validate,
 };
 
-#[tool_router(router = attachment_upload_grants_tool_router, vis = "pub(super)")]
+#[tool_router(router = attachment_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
     #[tool(
         name = "manage_evidence_submission_attachment",
@@ -31,7 +31,7 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ManageEvidenceSubmissionAttachmentRequest>,
     ) -> Result<Json<ManageEvidenceSubmissionAttachmentResponse>, rmcp::ErrorData> {
-        let submission_id = parse_attachment_upload_grant_request(args)?;
+        let submission_id = parse_attachment_grant_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
         let workspace_id = context.token.workspace_id;
@@ -93,7 +93,7 @@ impl From<IssuedUploadGrant> for ManageEvidenceSubmissionAttachmentResponse {
     }
 }
 
-fn parse_attachment_upload_grant_request(
+fn parse_attachment_grant_request(
     args: ManageEvidenceSubmissionAttachmentRequest,
 ) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
     validate! {
@@ -118,7 +118,7 @@ fn upload_grant_error(error: UploadGrantError) -> rmcp::ErrorData {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_attachment_upload_grant_request, ManageEvidenceSubmissionAttachmentRequest};
+    use super::{parse_attachment_grant_request, ManageEvidenceSubmissionAttachmentRequest};
     use rmcp::model::ErrorCode;
 
     fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
@@ -136,23 +136,21 @@ mod tests {
     }
 
     #[test]
-    fn upload_grant_request_requires_submission_uuid() {
-        let missing =
-            parse_attachment_upload_grant_request(ManageEvidenceSubmissionAttachmentRequest {
-                submission_id: None,
-            })
-            .expect_err("missing submission");
+    fn attachment_grant_request_requires_submission_uuid() {
+        let missing = parse_attachment_grant_request(ManageEvidenceSubmissionAttachmentRequest {
+            submission_id: None,
+        })
+        .expect_err("missing submission");
         assert_eq!(missing.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             field_issues(&missing),
             [("submission_id".to_owned(), "is required".to_owned())]
         );
 
-        let invalid =
-            parse_attachment_upload_grant_request(ManageEvidenceSubmissionAttachmentRequest {
-                submission_id: Some("nope".to_owned()),
-            })
-            .expect_err("invalid submission");
+        let invalid = parse_attachment_grant_request(ManageEvidenceSubmissionAttachmentRequest {
+            submission_id: Some("nope".to_owned()),
+        })
+        .expect_err("invalid submission");
         assert_eq!(
             field_issues(&invalid),
             [("submission_id".to_owned(), "must be a UUID".to_owned())]
