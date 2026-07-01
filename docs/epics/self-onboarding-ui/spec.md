@@ -7,7 +7,7 @@ sign in, create a workspace, issue a scoped API token, and see how MCP-backed
 agent workflows will connect to Proofplane data.
 
 This epic is frontend-first. It does not implement Auth0, workspace, token, MCP,
-or auditor-packet backend behavior. It consumes the existing management APIs and
+or auditor portal backend behavior. It consumes the existing management APIs and
 shows clear preview or unavailable states for backend capabilities still in
 progress.
 
@@ -138,8 +138,8 @@ The workspace home should not be an empty dashboard. It should show:
 - sample evidence request status;
 - token/MCP readiness;
 - suggested agent prompts;
-- an auditor packet preview area with a clear unavailable or preview state until
-  Trusted Compliance Reads is ready.
+- an auditor portal access area with a clear unavailable or preview state until
+  Auditor Portal Access is ready.
 
 Use real API data where available. Do not show sample setup modes until the
 backend supports them.
@@ -155,7 +155,7 @@ The UI must include clear recovery paths for:
 - raw token response shown once and not saved;
 - revoked or missing token;
 - MCP unavailable;
-- packet preview unavailable;
+- auditor portal access unavailable;
 - permission denied or not found responses from the API.
 
 ## Testing
@@ -173,4 +173,6 @@ Keep tests small:
 ## Revisions
 
 - 2026-06-23: Initial scope from `PRODUCT.md`, `DESIGN.md`, the agreed ponytail
-  stack, and the existing Auth/MCP/Trusted Compliance epics.
+  stack, and the then-current Auth/MCP compliance epics.
+- 2026-07-01: Replaced stale auditor planning references with Auditor Portal
+  Access.

@@ -8,7 +8,9 @@ use rmcp::transport::streamable_http_server::{
 use tokio_util::sync::CancellationToken;
 
 use super::{auth::authenticate_request, server::ProofplaneMcp};
-use crate::authentication::paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor};
+use crate::authentication::paseto::{
+    DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
+};
 use crate::{
     authentication::ApiTokenAuthenticator,
     config::HealthConfig,
@@ -20,7 +22,7 @@ use crate::{
         request_context::attach_request_id,
     },
     services::{
-        attachment_downloads::AttachmentDownloadService, controls::ControlService,
+        attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
 };
@@ -37,6 +39,8 @@ pub struct McpAppDependencies {
     pub public_api_base_url: Url,
     pub download_grant_encryptor: DownloadGrantEncryptor,
     pub download_grant_decryptor: DownloadGrantDecryptor,
+    pub upload_grant_encryptor: UploadGrantEncryptor,
+    pub upload_grant_decryptor: UploadGrantDecryptor,
     pub health: HealthConfig,
     pub cancellation_token: CancellationToken,
 }
@@ -47,12 +51,11 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let attachment_downloads = AttachmentDownloadService::new(
+    let attachment_upload_grants = AttachmentUploadGrantService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store,
         dependencies.public_api_base_url,
-        dependencies.download_grant_encryptor,
-        dependencies.download_grant_decryptor,
+        dependencies.upload_grant_encryptor,
+        dependencies.upload_grant_decryptor,
     );
     let controls = ControlService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
@@ -60,7 +63,7 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
-            attachment_downloads,
+            attachment_upload_grants,
             controls,
         ),
         dependencies.cancellation_token.clone(),

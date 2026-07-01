@@ -4,7 +4,10 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::{
-        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        paseto::{
+            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
+            UploadGrantEncryptor,
+        },
         ApiTokenAuthenticator,
     },
     config,
@@ -73,6 +76,16 @@ async fn run() -> Result<(), Error> {
         "proofplane-attachment-download",
         &config.paseto.download,
     )?;
+    let upload_grant_encryptor = UploadGrantEncryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        "proofplane-attachment-upload-grant",
+        &config.paseto.upload_grant,
+    )?;
+    let upload_grant_decryptor = UploadGrantDecryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        "proofplane-attachment-upload-grant",
+        &config.paseto.upload_grant,
+    )?;
     let metrics = PrometheusBuilder::new().install_recorder()?;
     let authenticator = Arc::new(ApiTokenAuthenticator::new(postgres.clone()));
     let sessions = CancellationToken::new();
@@ -84,6 +97,8 @@ async fn run() -> Result<(), Error> {
         public_api_base_url: config.server.public_api_base_url.clone(),
         download_grant_encryptor,
         download_grant_decryptor,
+        upload_grant_encryptor,
+        upload_grant_decryptor,
         health: config.health.clone(),
         cancellation_token: sessions.clone(),
     });

@@ -476,6 +476,76 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
 }
 
 #[tokio::test]
+async fn submission_reads_omit_archived_attachments() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Archived attachment workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let request = app
+        .create_evidence_request(workspace_id, &evidence_request("Archive target"))
+        .await;
+    let evidence_request_id = created_id(&request);
+    let created = app
+        .post(&collection_path(workspace_id, evidence_request_id))
+        .json(&evidence_submission())
+        .await
+        .json::<Value>();
+    let submission_id = created_id(&created);
+    let kept = upload_attachment(&app, workspace_id, submission_id, "kept.txt", b"kept").await;
+    let archived = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "archived.txt",
+        b"archived",
+    )
+    .await;
+    archive_attachment(&app, created_id(&archived)).await;
+
+    let direct = app
+        .get(&item_path(workspace_id, submission_id))
+        .await
+        .json::<Value>();
+    let latest = app
+        .get(&latest_path(workspace_id, evidence_request_id))
+        .await
+        .json::<Value>();
+
+    assert_eq!(direct["attachments"], json!([kept]));
+    assert_eq!(latest["attachments"], json!([kept]));
+}
+
+#[tokio::test]
+async fn submission_reads_still_return_submission_when_all_attachments_archived() {
+    let app = TestApp::builder()
+        .workspace("workspace", "All archived attachment workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let attachment = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "only-archived.txt",
+        b"archived",
+    )
+    .await;
+    archive_attachment(&app, created_id(&attachment)).await;
+
+    let direct = app
+        .get(&item_path(workspace_id, submission_id))
+        .await
+        .json::<Value>();
+
+    assert_eq!(direct["submission"]["id"], submission_id.to_string());
+    assert_eq!(direct["attachments"], json!([]));
+}
+
+#[tokio::test]
 async fn upload_attachment_returns_not_found_for_missing_cross_workspace_or_ungranted_submission() {
     let app = TestApp::builder()
         .workspace("workspace", "Attachment owner workspace")
@@ -964,6 +1034,19 @@ fn assert_timestamp(value: &Value) {
 fn created_id(created: &Value) -> Uuid {
     Uuid::parse_str(created["id"].as_str().expect("created response has an id"))
         .expect("created response id is a UUID")
+}
+
+async fn archive_attachment(app: &TestApp, attachment_id: Uuid) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE evidence_attachments SET archived = true WHERE id = $1",
+            &[&attachment_id],
+        )
+        .await
+        .expect("attachment archives");
 }
 
 fn collection_path(workspace_id: Uuid, evidence_request_id: Uuid) -> String {

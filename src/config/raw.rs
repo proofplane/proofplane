@@ -14,8 +14,9 @@ use super::{
         ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
-    PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+    ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -91,13 +92,18 @@ impl RawAuth0Config {
 #[derive(Debug, Deserialize)]
 pub(super) struct RawPasetoConfig {
     download: RawPasetoDownloadConfig,
+    upload_grant: RawPasetoUploadGrantConfig,
 }
 
 impl RawPasetoConfig {
     pub(super) fn validate(self) -> Validation<PasetoConfig, ConfigFieldError> {
         validate! {
             download <- self.download.validate(),
-            => PasetoConfig { download },
+            upload_grant <- self.upload_grant.validate(),
+            => PasetoConfig {
+                download,
+                upload_grant,
+            },
         }
     }
 }
@@ -184,6 +190,92 @@ fn validate_download_keyring(
     Validation::invalid(ConfigFieldError::new(
         "paseto.download.active_key_id",
         "must exist in paseto.download.keys",
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoUploadGrantConfig {
+    active_key_id: String,
+    keys: Vec<RawPasetoUploadGrantKey>,
+}
+
+impl RawPasetoUploadGrantConfig {
+    pub(super) fn validate(self) -> Validation<PasetoUploadGrantConfig, ConfigFieldError> {
+        validate! {
+            active_key_id <- string_value(self.active_key_id)
+                .at("paseto.upload_grant.active_key_id"),
+            keys <- validate_upload_grant_keys(self.keys),
+            => PasetoUploadGrantConfig {
+                active_key_id,
+                keys,
+            },
+        }
+        .and_then(validate_upload_grant_keyring)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoUploadGrantKey {
+    id: String,
+    secret: SecretString,
+}
+
+impl RawPasetoUploadGrantKey {
+    fn validate(self, index: usize) -> Validation<PasetoUploadGrantKey, ConfigFieldError> {
+        let id_path = format!("paseto.upload_grant.keys[{index}].id");
+        let secret_path = format!("paseto.upload_grant.keys[{index}].secret");
+
+        validate! {
+            id <- string_value(self.id).at(id_path),
+            secret <- paseto_download_key(self.secret).at(secret_path),
+            => PasetoUploadGrantKey { id, secret },
+        }
+    }
+}
+
+fn validate_upload_grant_keys(
+    keys: Vec<RawPasetoUploadGrantKey>,
+) -> Validation<Vec<PasetoUploadGrantKey>, ConfigFieldError> {
+    let mut errors = Vec::new();
+    let mut validated = Vec::with_capacity(keys.len());
+
+    for (index, key) in keys.into_iter().enumerate() {
+        match key.validate(index) {
+            Validation::Valid(key) => validated.push(key),
+            Validation::Invalid(mut key_errors) => errors.append(&mut key_errors),
+        }
+    }
+
+    if validated.is_empty() {
+        errors.push(ConfigFieldError::new(
+            "paseto.upload_grant.keys",
+            "must contain at least one key",
+        ));
+    }
+
+    add_duplicate_id_errors(
+        "paseto.upload_grant.keys",
+        validated.iter().map(|key| key.id.as_str()),
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        return Validation::valid(validated);
+    }
+
+    Validation::invalid_many(errors)
+}
+
+fn validate_upload_grant_keyring(
+    config: PasetoUploadGrantConfig,
+) -> Validation<PasetoUploadGrantConfig, ConfigFieldError> {
+    if config.keys.iter().any(|key| key.id == config.active_key_id) {
+        return Validation::valid(config);
+    }
+
+    Validation::invalid(ConfigFieldError::new(
+        "paseto.upload_grant.active_key_id",
+        "must exist in paseto.upload_grant.keys",
     ))
 }
 

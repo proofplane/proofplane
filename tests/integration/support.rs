@@ -19,19 +19,24 @@ use proofplane::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifyError},
         opaque_token::generate_opaque_token,
-        paseto::{DownloadGrantDecryptor, DownloadGrantEncryptor},
+        paseto::{
+            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
+            UploadGrantEncryptor,
+        },
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
         AppConfig, Auth0Config, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
-        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PubSubConfig,
-        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
         WorkspaceId, WorkspacePermission, WorkspaceRole,
     },
     mcp::{create_app as create_mcp_app, McpAppDependencies},
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     repository::{NewWorkspaceMembership, Postgres},
     routes::authentication::AUTHORIZATION_HEADER,
     scanner::ClamAvMalwareScanner,
@@ -75,6 +80,46 @@ pub async fn upload_attachment(
         .await;
     response.assert_status(axum::http::StatusCode::ACCEPTED);
     response.json::<Value>()["attachment"].clone()
+}
+
+pub async fn finalize_attachment(
+    app: &TestApp,
+    workspace_id: Uuid,
+    submission_id: Uuid,
+    attachment_id: Uuid,
+) -> ObjectKey {
+    let client = app.postgres().get().await.expect("connection opens");
+    let row = client
+        .query_one(
+            "SELECT object_key, filename FROM evidence_attachments WHERE id = $1",
+            &[&attachment_id],
+        )
+        .await
+        .expect("attachment loads");
+    let quarantine_key =
+        ObjectKey::parse(row.get::<_, String>("object_key")).expect("quarantine key parses");
+    let filename: String = row.get("filename");
+    let final_key = ObjectKey::parse(format!(
+        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
+    ))
+    .expect("final key parses");
+    let store = FilesystemObjectStore::new(app.object_storage_root())
+        .await
+        .expect("filesystem store initializes");
+    store
+        .copy_object(&quarantine_key, &final_key)
+        .await
+        .expect("attachment copies to final storage");
+    // ponytail: direct finalization keeps grant tests small; use the worker when state-machine coverage matters.
+    client
+        .execute(
+            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
+            &[&attachment_id, &final_key.as_str()],
+        )
+        .await
+        .expect("attachment finalizes");
+
+    final_key
 }
 
 pub async fn set_submission_received_at(
@@ -251,7 +296,11 @@ impl TestApp {
             .expect("Postgres test container exposes Postgres");
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-        let app_config = config(database_url.clone(), builder.max_attachment_bytes);
+        let app_config = config(
+            database_url.clone(),
+            builder.max_attachment_bytes,
+            builder.public_api_base_url,
+        );
 
         let mut database = store::conn(&database_url)
             .await
@@ -480,6 +529,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         format!("Bearer {}", self.api_token)
     }
 
+    pub fn public_api_base_url(&self) -> &url::Url {
+        &self.app_config.server.public_api_base_url
+    }
+
     fn mcp_app(&self) -> Router {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
@@ -493,6 +546,18 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             &self.app_config.paseto.download,
         )
         .expect("download grant decryptor initializes");
+        let upload_grant_encryptor = UploadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-upload-grant",
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("upload grant encryptor initializes");
+        let upload_grant_decryptor = UploadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            "proofplane-attachment-upload-grant",
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("upload grant decryptor initializes");
         let recorder = PrometheusBuilder::new().build_recorder();
         create_mcp_app(McpAppDependencies {
             postgres: self.postgres.clone(),
@@ -502,6 +567,8 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             public_api_base_url: self.app_config.server.public_api_base_url.clone(),
             download_grant_encryptor,
             download_grant_decryptor,
+            upload_grant_encryptor,
+            upload_grant_decryptor,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),
@@ -564,6 +631,7 @@ pub struct TestAppBuilder {
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
     max_attachment_bytes: usize,
+    public_api_base_url: url::Url,
 }
 
 impl TestAppBuilder {
@@ -584,6 +652,11 @@ impl TestAppBuilder {
 
     pub fn with_max_attachment_bytes(mut self, max_attachment_bytes: usize) -> Self {
         self.max_attachment_bytes = max_attachment_bytes;
+        self
+    }
+
+    pub fn with_public_api_base_url(mut self, public_api_base_url: url::Url) -> Self {
+        self.public_api_base_url = public_api_base_url;
         self
     }
 
@@ -612,6 +685,8 @@ impl Default for TestAppBuilder {
             soc2_reference_data: false,
             workspaces: Vec::new(),
             max_attachment_bytes: 25 * 1024 * 1024,
+            public_api_base_url: url::Url::parse("https://api.proofplane.test/")
+                .expect("public API base URL parses"),
         }
     }
 }
@@ -918,7 +993,11 @@ async fn shared_clamav() -> Arc<TestClamAv> {
     clamav
 }
 
-fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
+fn config(
+    database_url: String,
+    max_attachment_bytes: usize,
+    public_api_base_url: url::Url,
+) -> AppConfig {
     let storage_root =
         std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
 
@@ -927,8 +1006,7 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
             api_bind: socket_addr("127.0.0.1:0"),
             worker_bind: socket_addr("127.0.0.1:0"),
             mcp_bind: socket_addr("127.0.0.1:0"),
-            public_api_base_url: url::Url::parse("https://api.proofplane.test/")
-                .expect("public API base URL parses"),
+            public_api_base_url,
         },
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {
@@ -956,6 +1034,15 @@ fn config(database_url: String, max_attachment_bytes: usize) -> AppConfig {
                     id: "integration-download-001".to_owned(),
                     secret: SecretString::from(
                         "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs",
+                    ),
+                }],
+            },
+            upload_grant: PasetoUploadGrantConfig {
+                active_key_id: "integration-upload-grant-001".to_owned(),
+                keys: vec![PasetoUploadGrantKey {
+                    id: "integration-upload-grant-001".to_owned(),
+                    secret: SecretString::from(
+                        "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY",
                     ),
                 }],
             },

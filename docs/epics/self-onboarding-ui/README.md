@@ -31,6 +31,6 @@ are lean handoff units that link into those sources of technical depth.
 - **005** depends on 004 for token context, but it can ship with preview labels
   before the MCP Server epic is done.
 - **006** depends on 003 and can progressively replace preview/sample data with
-  real data as Trusted Compliance Reads and MCP Server tickets land.
+  real data as Auditor Portal Access and MCP Server tickets land.
 - **007** depends on 003-004 and can proceed in parallel with 005-006 after token
   management works in the UI.

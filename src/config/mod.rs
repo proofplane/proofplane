@@ -62,6 +62,7 @@ pub struct Auth0Config {
 #[derive(Debug, Clone)]
 pub struct PasetoConfig {
     pub download: PasetoDownloadConfig,
+    pub upload_grant: PasetoUploadGrantConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +73,18 @@ pub struct PasetoDownloadConfig {
 
 #[derive(Debug, Clone)]
 pub struct PasetoDownloadKey {
+    pub id: String,
+    pub secret: SecretString,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoUploadGrantConfig {
+    pub active_key_id: String,
+    pub keys: Vec<PasetoUploadGrantKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoUploadGrantKey {
     pub id: String,
     pub secret: SecretString,
 }
@@ -286,6 +299,11 @@ mod tests {
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert_eq!(config.paseto.download.active_key_id, "local-download-001");
         assert_eq!(config.paseto.download.keys.len(), 1);
+        assert_eq!(
+            config.paseto.upload_grant.active_key_id,
+            "local-upload-grant-001"
+        );
+        assert_eq!(config.paseto.upload_grant.keys.len(), 1);
     }
 
     #[test]
@@ -371,6 +389,11 @@ paseto:
     keys:
       - id: ""
         secret: "not-a-paserk"
+  upload_grant:
+    active_key_id: ""
+    keys:
+      - id: ""
+        secret: "not-a-paserk"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -419,6 +442,9 @@ health:
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));
+                assert!(paths.contains(&"paseto.upload_grant.active_key_id"));
+                assert!(paths.contains(&"paseto.upload_grant.keys[0].id"));
+                assert!(paths.contains(&"paseto.upload_grant.keys[0].secret"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"scanner.clamd_address"));
@@ -465,6 +491,7 @@ health:
         let debug = format!("{:?}", config.paseto);
 
         assert!(!debug.contains(config.paseto.download.keys[0].secret.expose_secret()));
+        assert!(!debug.contains(config.paseto.upload_grant.keys[0].secret.expose_secret()));
         assert!(debug.contains("Secret"));
     }
 
@@ -480,6 +507,11 @@ paseto:
         secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
       - id: "duplicate"
         secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+  upload_grant:
+    active_key_id: "local-upload-grant-001"
+    keys:
+      - id: "local-upload-grant-001"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
 "#,
         ));
 
@@ -500,12 +532,69 @@ paseto:
     keys:
       - id: "local-download-001"
         secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+  upload_grant:
+    active_key_id: "local-upload-grant-001"
+    keys:
+      - id: "local-upload-grant-001"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
 "#,
         ));
 
         let error = load_from_path(&path).expect_err("config is invalid");
 
         assert_validation_paths(error, &["paseto.download.active_key_id"]);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn upload_grant_keyring_validation_rejects_duplicate_ids() {
+        let path = write_temp_config(&local_config_with_paseto(
+            r#"
+paseto:
+  download:
+    active_key_id: "local-download-001"
+    keys:
+      - id: "local-download-001"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+  upload_grant:
+    active_key_id: "duplicate"
+    keys:
+      - id: "duplicate"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
+      - id: "duplicate"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
+"#,
+        ));
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert_validation_paths(error, &["paseto.upload_grant.keys"]);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn upload_grant_keyring_validation_rejects_missing_active_ids() {
+        let path = write_temp_config(&local_config_with_paseto(
+            r#"
+paseto:
+  download:
+    active_key_id: "local-download-001"
+    keys:
+      - id: "local-download-001"
+        secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+  upload_grant:
+    active_key_id: "missing-upload-grant"
+    keys:
+      - id: "local-upload-grant-001"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
+"#,
+        ));
+
+        let error = load_from_path(&path).expect_err("config is invalid");
+
+        assert_validation_paths(error, &["paseto.upload_grant.active_key_id"]);
 
         let _ = fs::remove_file(path);
     }

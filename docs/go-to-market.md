@@ -79,7 +79,7 @@ The first five minutes should produce a real artifact:
 4. User issues a sandbox AI-agent credential and configures their MCP client.
 5. User asks a suggested prompt such as "What do I have left to do for SOC 2?"
 6. The agent inspects real sandbox records and can create/map an Evidence
-   Request or preview an auditor-ready evidence packet through MCP.
+   Request or create an auditor access link through MCP.
 
 The sandbox should use realistic sample data, not an empty dashboard. The
 browser should lead directly to MCP setup and suggested prompts rather than
@@ -93,41 +93,37 @@ Recommended sandbox defaults:
 - starter actors: workspace owner and AI agent;
 - sample evidence request: quarterly user access review;
 - sample agent action: "identify missing evidence for SOC 2 controls";
-- sample auditor packet preview: control, mapped evidence request, latest
-  submission status, provenance, and timestamps.
+- sample auditor access preview: intended auditor email, link status, session
+  state, and evidence readiness.
 
 ## Auditor Workflow
 
-For the MVP, auditor support should mean an exportable, auditor-ready evidence
-packet.
+For the MVP, auditor support should mean secure, email-bound browser access to
+the workspace evidence record.
 
 The product exists to make controls and evidence reviewable, but the first
-version does not need to make auditors work inside Proofplane. Many auditors
-will already have their own portal, process, or file-exchange workflow. The MVP
-should therefore help the startup produce a clear packet that can be handed to
-an auditor without requiring the auditor to adopt the app.
+version should not require auditors to become workspace members or install an
+agent. The MVP should let the startup send a secure link that the intended
+auditor verifies by email before reviewing evidence in a narrow browser portal.
 
-Core MVP auditor packet capabilities:
+Core MVP auditor portal capabilities:
 
 - control-to-evidence mapping summary;
 - evidence request list and history;
 - submitted artifact inventory and metadata;
 - provenance, actor, and timestamp trail;
 - review or approval trail only if that state exists in the product;
-- latest submission status;
-- artifact links or bundled files when storage supports them;
-- exportable ZIP, CSV, Markdown, or PDF packet, depending on what is simplest
-  and reliable at the time.
+- all historical submissions;
+- downloadable uploaded attachments.
 
 Richer auditor workflow can come later:
 
-- guest access to a scoped audit workspace;
-- read-only control and evidence review;
 - comments and clarification requests;
 - auditor-facing API/MCP access;
 - auditor AI-agent actors and permissions;
 - multi-auditor workflows;
 - audit firm dashboards;
+- exportable ZIP, CSV, Markdown, or PDF packets;
 - cross-client auditor portals;
 - advanced sampling;
 - custom audit report generation;
@@ -291,7 +287,7 @@ Track the product-led funnel:
 - sandbox start to MCP credential issued;
 - credential issued to first successful MCP tool call;
 - first tool call to first MCP write;
-- first MCP write to evidence packet preview or export;
+- first MCP write to auditor access link created;
 - sandbox to paid conversion;
 - time from landing page to first meaningful artifact.
 

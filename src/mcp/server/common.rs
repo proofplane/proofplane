@@ -8,7 +8,7 @@ use super::super::context::McpRequestContext;
 use crate::{
     domain::{DomainError, WorkspacePermission},
     repository::{ConflictKind, Error as RepositoryError},
-    services::{attachment_downloads::DownloadError, Error as ServiceError},
+    services::Error as ServiceError,
     validation::Validation,
 };
 
@@ -235,40 +235,6 @@ pub(super) fn service_error(error: ServiceError) -> rmcp::ErrorData {
 
 fn repository_conflict(kind: ConflictKind) -> rmcp::ErrorData {
     conflict(kind.code(), kind.message())
-}
-
-pub(super) fn download_error(error: DownloadError) -> rmcp::ErrorData {
-    match error {
-        DownloadError::NotFound => not_found(),
-        DownloadError::NotReady => conflict(
-            "attachment_not_ready",
-            "attachment is not ready for download",
-        ),
-        DownloadError::MetadataMismatch | DownloadError::Internal => {
-            tracing::error!(%error, "MCP attachment download failure");
-            rmcp::ErrorData::internal_error(
-                "internal error",
-                Some(json!({
-                    "problem": {
-                        "code": "internal_error",
-                        "message": "internal error",
-                    }
-                })),
-            )
-        }
-        DownloadError::Repository(repository_error) => {
-            tracing::error!(error = %repository_error, "MCP attachment download repository failure");
-            rmcp::ErrorData::internal_error(
-                "dependency failure",
-                Some(json!({
-                    "problem": {
-                        "code": "dependency_failed",
-                        "message": "a dependency failed while handling the tool call",
-                    }
-                })),
-            )
-        }
-    }
 }
 
 pub(super) fn format_datetime(value: DateTime<Utc>) -> String {

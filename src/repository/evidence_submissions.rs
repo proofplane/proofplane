@@ -34,6 +34,13 @@ pub struct AttachmentDownloadCandidate {
     pub attachment: EvidenceAttachment,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveAttachmentResult {
+    Archived,
+    NotFound,
+    NotTerminal,
+}
+
 impl Postgres {
     pub async fn load_pending_attachment_upload_work(
         &self,
@@ -322,6 +329,7 @@ JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE er.workspace_id = $1
   AND s.id = $2
   AND a.id = $3
+  AND a.archived = false
 "#,
                 &[
                     &Uuid::from(self.workspace_id),
@@ -392,6 +400,7 @@ FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
+    AND a.archived = false
 WHERE s.id = $1
   AND er.workspace_id = $2
 ORDER BY a.filename, a.id
@@ -445,6 +454,7 @@ FROM latest_submission latest
 JOIN evidence_submissions s ON s.id = latest.id
 JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
+    AND a.archived = false
 ORDER BY a.filename, a.id
 "#,
                 &[
@@ -512,6 +522,130 @@ RETURNING
             ));
         };
         evidence_attachment_from_row(&row)
+    }
+
+    pub async fn create_first_evidence_attachment(
+        &self,
+        payload: &CreateEvidenceAttachmentPayload,
+    ) -> Result<Option<EvidenceAttachment>, Error> {
+        let locked_submission = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT s.id
+FROM evidence_submissions s
+JOIN evidence_requests er ON er.id = s.evidence_request_id
+WHERE s.id = $1
+  AND er.workspace_id = $2
+FOR UPDATE OF s
+"#,
+                &[
+                    &Uuid::from(payload.evidence_submission_id),
+                    &Uuid::from(self.workspace_id),
+                ],
+            )
+            .await?;
+
+        if locked_submission.is_none() {
+            return Err(Error::InvariantViolation(
+                "attachment insert requires an existing workspace-scoped submission",
+            ));
+        }
+
+        let row = self
+            .transaction
+            .query_opt(
+                r#"
+INSERT INTO evidence_attachments (
+    evidence_submission_id,
+    filename,
+    content_type,
+    content_length,
+    object_key,
+    checksum_sha256,
+    checksum_crc32c,
+    upload_status
+)
+SELECT $1, $2, $3, $4, $5, $6, $7, 'pending'
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM evidence_attachments
+    WHERE evidence_submission_id = $1
+)
+RETURNING
+    id,
+    evidence_submission_id,
+    filename,
+    content_type,
+    content_length,
+    object_key,
+    checksum_sha256,
+    checksum_crc32c,
+    upload_status
+"#,
+                &[
+                    &Uuid::from(payload.evidence_submission_id),
+                    &payload.filename,
+                    &payload.content_type,
+                    &payload.content_length,
+                    &payload.object_key,
+                    &payload.checksum_sha256,
+                    &payload.checksum_crc32c,
+                ],
+            )
+            .await?;
+
+        row.map(|row| evidence_attachment_from_row(&row))
+            .transpose()
+    }
+
+    pub async fn archive_evidence_attachment(
+        &self,
+        evidence_submission_id: EvidenceSubmissionId,
+        evidence_attachment_id: EvidenceAttachmentId,
+    ) -> Result<ArchiveAttachmentResult, Error> {
+        let row = self
+            .transaction
+            .query_opt(
+                r#"
+WITH scoped AS (
+    SELECT a.id, a.upload_status, a.archived
+    FROM evidence_attachments a
+    JOIN evidence_submissions s ON s.id = a.evidence_submission_id
+    JOIN evidence_requests er ON er.id = s.evidence_request_id
+    WHERE er.workspace_id = $1
+      AND s.id = $2
+      AND a.id = $3
+),
+updated AS (
+    UPDATE evidence_attachments a
+    SET archived = true
+    FROM scoped
+    WHERE a.id = scoped.id
+      AND (scoped.archived = true OR scoped.upload_status IN ('uploaded', 'contains_virus', 'failed'))
+    RETURNING a.id
+)
+SELECT
+    EXISTS (SELECT 1 FROM scoped) AS found,
+    EXISTS (SELECT 1 FROM updated) AS archived
+"#,
+                &[
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(evidence_submission_id),
+                    &Uuid::from(evidence_attachment_id),
+                ],
+            )
+            .await?
+            .ok_or(Error::InvariantViolation("archive query must return one row"))?;
+
+        match (
+            row.try_get::<_, bool>("found")?,
+            row.try_get::<_, bool>("archived")?,
+        ) {
+            (false, _) => Ok(ArchiveAttachmentResult::NotFound),
+            (true, true) => Ok(ArchiveAttachmentResult::Archived),
+            (true, false) => Ok(ArchiveAttachmentResult::NotTerminal),
+        }
     }
 }
 

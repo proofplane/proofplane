@@ -1,4 +1,4 @@
-mod attachment_downloads;
+mod attachment_grants;
 mod common;
 mod controls;
 mod evidence_requests;
@@ -12,7 +12,7 @@ use rmcp::{
 
 use crate::{
     services::{
-        attachment_downloads::AttachmentDownloadService, controls::ControlService,
+        attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
     VERSION,
@@ -22,7 +22,7 @@ use crate::{
 pub struct ProofplaneMcp {
     evidence_requests: EvidenceRequestService,
     evidence_submissions: EvidenceSubmissionService,
-    attachment_downloads: AttachmentDownloadService,
+    attachment_upload_grants: AttachmentUploadGrantService,
     controls: ControlService,
     tool_router: ToolRouter<Self>,
 }
@@ -31,13 +31,13 @@ impl ProofplaneMcp {
     pub fn new(
         evidence_requests: EvidenceRequestService,
         evidence_submissions: EvidenceSubmissionService,
-        attachment_downloads: AttachmentDownloadService,
+        attachment_upload_grants: AttachmentUploadGrantService,
         controls: ControlService,
     ) -> Self {
         Self {
             evidence_requests,
             evidence_submissions,
-            attachment_downloads,
+            attachment_upload_grants,
             controls,
             tool_router: Self::tool_router(),
         }
@@ -47,7 +47,7 @@ impl ProofplaneMcp {
         ToolRouter::new()
             + Self::evidence_requests_tool_router()
             + Self::evidence_submissions_tool_router()
-            + Self::attachment_downloads_tool_router()
+            + Self::attachment_grants_tool_router()
             + Self::controls_tool_router()
     }
 }

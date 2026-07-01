@@ -62,7 +62,6 @@ Read tools:
 - `list_due_evidence_requests`
 - `get_evidence_submission`
 - `get_latest_evidence_submission`
-- `create_attachment_download_grant`
 - `list_frameworks`
 - `list_framework_requirements`
 - `list_controls`
@@ -73,6 +72,7 @@ Write tools:
 
 - `create_evidence_request`
 - `create_evidence_submission`
+- `manage_evidence_submission_attachment`
 - `create_control`
 - `replace_control`
 - `map_evidence_request_to_control`
@@ -80,29 +80,13 @@ Write tools:
 
 These tools are sufficient for the core MCP demo: an agent can inspect due
 requests and latest summarized evidence, create a request or submission, direct
-a human to finalized attachments, discover framework requirement IDs, create or
-update workspace controls, and inspect or update control mappings.
+a human to manage a submission attachment, discover framework requirement IDs,
+create or update workspace controls, and inspect or update control mappings.
 
 `list_frameworks` and `list_framework_requirements` expose global standards
 reference data. They require a valid API token with `ReadControls` on the
 token's workspace, but they do not accept `workspace_id` because framework data
 is not workspace-scoped.
-
-## Auditor Packet Tools
-
-Read tools:
-
-- `preview_auditor_packet`
-- `get_auditor_packet_export`
-- `create_auditor_packet_download_grant`
-
-Write tools:
-
-- `request_auditor_packet_export`
-
-The packet tools are an additive workflow built after the core demo. They
-consume the Trusted Compliance Reads packet-read model and are not prerequisites
-for demonstrating the core evidence lifecycle through MCP.
 
 ## Context-Efficient Results
 
@@ -115,27 +99,27 @@ mirror verbose REST response shapes mechanically:
   description;
 - `get_evidence_submission` is the deliberate direct-detail operation and may
   return both summary and description;
-- `preview_auditor_packet` returns readiness metadata and gaps without either
-  free-text field;
-- `request_auditor_packet_export` returns only export ID and status;
-- `get_auditor_packet_export` returns compact lifecycle/result metadata and
-  bounded polling guidance;
-- `create_auditor_packet_download_grant` returns a browser URL only for a ready
-  export and never returns or fetches ZIP bytes;
 - tool results do not duplicate structured fields in explanatory prose.
 
-Attachment and packet download-grant tools are read-classified because they do
-not change compliance data. Each authorizes the current user API token, verifies
-the object is eligible, and returns a short-lived Proofplane HTTPS URL for human
+Attachment grant tools are read-classified because they do not change
+compliance data. Each authorizes the current user API token, verifies the object
+is eligible, and returns a short-lived Proofplane HTTPS URL for human
 inspection. URLs expire after five minutes and may be fetched more than once
 before expiry. A URL is a bearer secret; the tool result must tell the agent not
 to fetch, summarize, log, or persist it, only present it to the user. Attachment
-and ZIP bytes do not pass through MCP or model context.
+bytes do not pass through MCP or model context.
 
-Binary attachment upload and packet ZIP download remain HTTP operations. MCP
-may request and poll an asynchronous packet export and create its human download
-grant, but never transports the ZIP. Native approve/reject and derived
-control-status tools are not part of the MVP.
+Binary attachment upload and download remain HTTP operations. Native
+approve/reject and derived control-status tools are not part of the MVP.
+
+MCP Attachment Management is tracked in a separate epic. That workflow adds
+`manage_evidence_submission_attachment`, which creates a human browser session
+for uploading the first submission attachment and downloading finalized
+attachments. Attachment bytes remain HTTP-only and never pass through MCP.
+
+Auditor Portal Access is tracked in a separate epic. Its MCP tools create,
+list, and revoke auditor links, but the auditor review portal and attachment
+downloads remain browser workflows.
 
 ## Errors And Equivalence
 
@@ -170,11 +154,8 @@ the MVP.
 - 2026-06-20: Removed the deferred source-material tools. Added bounded
   submission context with selective MCP disclosure: summaries only on focused
   submission reads and descriptions only on direct-by-ID retrieval.
-- 2026-06-20: Added asynchronous packet export request/status/grant tools. The
-  worker persists the ZIP and the agent presents a browser grant URL without
-  mediating packet bytes.
-- 2026-06-22: Split core evidence tools from additive auditor-packet tools so
-  packet freshness and export work no longer block the core MCP demo.
+- 2026-06-22: Kept the core evidence tools separate from future auditor-facing
+  workflows so they no longer block the core MCP demo.
 - 2026-06-22: Fixed Streamable HTTP at `/mcp`, selected rmcp 1.7.0 with local
   stateful sessions and loopback host protection, required authentication on
   every transport request, and defined the bounded shutdown deadline.
@@ -185,3 +166,8 @@ the MVP.
 - 2026-06-29: Linked the deferred OAuth workstream to the Agent Connector
   Onboarding epic, which owns interactive authorization and client
   distribution.
+- 2026-06-29: Linked the separate MCP Attachment Management epic for human
+  browser upload/download sessions while preserving the rule that attachment
+  bytes do not pass through MCP.
+- 2026-07-01: Removed stale auditor export tools. Auditor access link
+  tools now belong to the separate Auditor Portal Access epic.

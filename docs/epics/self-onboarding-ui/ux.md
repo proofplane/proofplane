@@ -4,7 +4,7 @@
 
 The UI should let a founder understand Proofplane and reach a useful workspace
 state in minutes: workspace created, scoped token issued, MCP setup preview
-visible, and a clear picture of evidence and packet readiness.
+visible, and a clear picture of evidence and auditor access readiness.
 
 ## Visual Direction
 
@@ -82,7 +82,7 @@ Suggested prompts should be concrete:
 - `What evidence is missing for SOC 2?`
 - `Show me the latest evidence for MFA.`
 - `Create an evidence submission for the quarterly access review.`
-- `Preview an auditor packet and list the gaps.`
+- `Create an auditor access link for auditor@example.com.`
 
 ## Workspace Home
 
@@ -92,7 +92,7 @@ The home screen should be an operational snapshot, not analytics:
 - token and MCP readiness;
 - starter controls;
 - evidence request status;
-- packet preview or unavailable state;
+- auditor access preview or unavailable state;
 - suggested agent prompts.
 
 Rows and statuses should connect the object, the current state, and the next

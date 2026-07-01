@@ -26,6 +26,11 @@ paseto:
     keys:
       - id: "local-download-001"
         secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+  upload_grant:
+    active_key_id: "local-upload-grant-001"
+    keys:
+      - id: "local-upload-grant-001"
+        secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
 
 object_storage:
   backend: "filesystem"
