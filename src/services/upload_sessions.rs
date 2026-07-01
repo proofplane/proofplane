@@ -117,6 +117,7 @@ impl VerifiedUploadSession {
             api_token_id: self.issued_via_api_token_id,
             workspace_id: self.workspace_id,
             permissions: WorkspacePermissions::from_iter(WorkspacePermission::ALL),
+            agent_connection_id: None,
         }
     }
 }

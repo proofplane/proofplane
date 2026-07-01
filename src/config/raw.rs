@@ -1,5 +1,6 @@
 use std::{collections::HashSet, path::PathBuf};
 
+use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use serde::Deserialize;
 
@@ -14,9 +15,9 @@ use super::{
         ConfigValidationExt,
     },
     Auth0Config, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoOAuthConfig,
+    PasetoOAuthPublicKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
+    PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +94,7 @@ impl RawAuth0Config {
 pub(super) struct RawPasetoConfig {
     download: RawPasetoDownloadConfig,
     upload_grant: RawPasetoUploadGrantConfig,
+    oauth: RawPasetoOAuthConfig,
 }
 
 impl RawPasetoConfig {
@@ -100,11 +102,66 @@ impl RawPasetoConfig {
         validate! {
             download <- self.download.validate(),
             upload_grant <- self.upload_grant.validate(),
-            => PasetoConfig {
-                download,
-                upload_grant,
-            },
+            oauth <- self.oauth.validate(),
+            => PasetoConfig { download, upload_grant, oauth },
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoOAuthConfig {
+    active_key_id: Option<String>,
+    signing_key: Option<SecretString>,
+    verification_keys: Vec<RawPasetoOAuthPublicKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPasetoOAuthPublicKey {
+    id: String,
+    public_key: String,
+}
+
+impl RawPasetoOAuthConfig {
+    fn validate(self) -> Validation<PasetoOAuthConfig, ConfigFieldError> {
+        let keys = self
+            .verification_keys
+            .into_iter()
+            .map(|key| PasetoOAuthPublicKey {
+                id: key.id,
+                public_key: key.public_key,
+            })
+            .collect::<Vec<_>>();
+        let config = PasetoOAuthConfig {
+            active_key_id: self.active_key_id,
+            signing_key: self.signing_key,
+            verification_keys: keys,
+        };
+        if config.verification_keys.is_empty()
+            || config.verification_keys.iter().any(|key| {
+                key.id.trim().is_empty()
+                    || pasetors::keys::AsymmetricPublicKey::<pasetors::version4::V4>::try_from(
+                        key.public_key.as_str(),
+                    )
+                    .is_err()
+            })
+            || config.signing_key.as_ref().is_some_and(|key| {
+                pasetors::keys::AsymmetricSecretKey::<pasetors::version4::V4>::try_from(
+                    key.expose_secret(),
+                )
+                .is_err()
+            })
+            || config.active_key_id.is_some() != config.signing_key.is_some()
+            || config
+                .active_key_id
+                .as_ref()
+                .is_some_and(|id| !config.verification_keys.iter().any(|key| &key.id == id))
+        {
+            return Validation::invalid(ConfigFieldError::new(
+                "paseto.oauth",
+                "must contain valid public keys and a matching optional signing key",
+            ));
+        }
+        Validation::valid(config)
     }
 }
 
@@ -304,6 +361,8 @@ pub(super) struct RawServerConfig {
     worker_bind: String,
     mcp_bind: String,
     public_api_base_url: String,
+    public_mcp_resource_url: String,
+    public_app_base_url: String,
 }
 
 impl RawServerConfig {
@@ -314,11 +373,17 @@ impl RawServerConfig {
             mcp_bind <- socket_addr(self.mcp_bind).at("server.mcp_bind"),
             public_api_base_url <- validate_public_api_base_url(self.public_api_base_url)
                 .at("server.public_api_base_url"),
+            public_mcp_resource_url <- super::helpers::public_mcp_resource_url(self.public_mcp_resource_url)
+                .at("server.public_mcp_resource_url"),
+            public_app_base_url <- validate_public_api_base_url(self.public_app_base_url)
+                .at("server.public_app_base_url"),
             => ServerConfig {
                 api_bind,
                 worker_bind,
                 mcp_bind,
                 public_api_base_url,
+                public_mcp_resource_url,
+                public_app_base_url,
             },
         }
     }

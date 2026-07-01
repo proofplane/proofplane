@@ -61,6 +61,66 @@ CREATE TABLE IF NOT EXISTS api_token_permissions (
     PRIMARY KEY (api_token_id, permission)
 );
 
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT[] NOT NULL CHECK (cardinality(redirect_uris) > 0)
+);
+
+INSERT INTO oauth_clients (id, name, redirect_uris)
+VALUES ('proofplane-local', 'Proofplane Local', ARRAY['http://127.0.0.1/callback'])
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_requests (
+    id UUID PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients(id),
+    redirect_uri TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    scope TEXT[] NOT NULL,
+    state TEXT,
+    code_challenge TEXT NOT NULL,
+    user_id UUID REFERENCES users(id),
+    workspace_id UUID REFERENCES workspaces(id),
+    expires_at TIMESTAMPTZ NOT NULL,
+    decided_at TIMESTAMPTZ,
+    approved BOOLEAN,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS agent_connections (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    client_id TEXT NOT NULL REFERENCES oauth_clients(id),
+    resource TEXT NOT NULL,
+    permissions TEXT[] NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    digest BYTEA PRIMARY KEY,
+    request_id UUID NOT NULL UNIQUE REFERENCES oauth_authorization_requests(id),
+    connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    digest BYTEA PRIMARY KEY,
+    family_id UUID NOT NULL,
+    connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    expires_at TIMESTAMPTZ NOT NULL,
+    absolute_expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_tokens_family
+    ON oauth_refresh_tokens (family_id);
+
 CREATE TABLE IF NOT EXISTS outbox_messages (
     id BIGSERIAL PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -157,6 +217,7 @@ CREATE TABLE IF NOT EXISTS evidence_submissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
     submitted_by_api_token_id UUID NOT NULL REFERENCES api_tokens(id),
+    submitted_by_agent_connection_id UUID REFERENCES agent_connections(id),
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     coverage_start_at TIMESTAMPTZ NOT NULL,
     coverage_end_at TIMESTAMPTZ NOT NULL,

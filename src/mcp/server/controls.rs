@@ -21,7 +21,7 @@ use crate::domain::{
     WorkspacePermission,
 };
 use crate::{
-    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::controls::ControlMutationError,
     validate,
     validation::Validation,
@@ -131,10 +131,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "control.created",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "create_control",
         )
@@ -169,10 +166,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "control.updated",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "replace_control",
         )
@@ -230,10 +224,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "evidence_request_control_mapping.created",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "map_evidence_request_to_control",
         )
@@ -279,10 +270,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "evidence_request_control_mapping.deleted",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "remove_evidence_request_control_mapping",
         )

@@ -106,6 +106,23 @@ it("configures Auth0 refresh tokens without persistent browser storage", () => {
   expect(auth0ProviderProps[0]).not.toHaveProperty("cacheLocation");
 });
 
+it("renders MCP consent without exposing OAuth credentials", async () => {
+  auth0State.isAuthenticated = true;
+  vi.stubGlobal("fetch", vi.fn(async (input: URL | RequestInfo) => {
+    const path = input.toString();
+    const body = path.includes("/oauth/requests/")
+      ? { id: "request-1", client_name: "Proofplane Local", scopes: ["read_controls", "offline_access"], expires_at: "2030-01-01T00:00:00Z" }
+      : [{ id: "workspace-1", slug: null, name: "SOC 2", role: "owner", created_at: "2026-01-01T00:00:00Z" }];
+    return new Response(JSON.stringify(body), { status: 200 });
+  }));
+
+  renderAt("/connect/mcp/authorize?request_id=request-1");
+
+  expect(await screen.findByRole("heading", { name: "Authorize Proofplane Local" })).toBeInTheDocument();
+  expect(screen.getByText("Permissions: read_controls")).toBeInTheDocument();
+  expect(document.body.textContent).not.toMatch(/v4\.public|access_token|refresh_token/);
+});
+
 it("sends the primary CTA to Auth0 signup/login", () => {
   renderAt("/");
 

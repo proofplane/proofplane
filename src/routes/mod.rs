@@ -9,6 +9,7 @@ pub mod evidence_submissions;
 pub mod health;
 pub mod me;
 pub mod metrics;
+pub mod oauth;
 pub mod request_context;
 pub mod version;
 pub mod workspaces;

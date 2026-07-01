@@ -11,9 +11,20 @@ use uuid::Uuid;
 /// The identity responsible for an audited operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuditActor {
-    User { user_id: Uuid },
-    ApiToken { user_id: Uuid, api_token_id: Uuid },
-    System { name: &'static str },
+    User {
+        user_id: Uuid,
+    },
+    ApiToken {
+        user_id: Uuid,
+        api_token_id: Uuid,
+    },
+    AgentConnection {
+        user_id: Uuid,
+        agent_connection_id: Uuid,
+    },
+    System {
+        name: &'static str,
+    },
 }
 
 impl AuditActor {
@@ -21,13 +32,16 @@ impl AuditActor {
         match self {
             Self::User { .. } => "user",
             Self::ApiToken { .. } => "api_token",
+            Self::AgentConnection { .. } => "agent_connection",
             Self::System { .. } => "system",
         }
     }
 
     fn user_id(&self) -> Option<&Uuid> {
         match self {
-            Self::User { user_id } | Self::ApiToken { user_id, .. } => Some(user_id),
+            Self::User { user_id }
+            | Self::ApiToken { user_id, .. }
+            | Self::AgentConnection { user_id, .. } => Some(user_id),
             Self::System { .. } => None,
         }
     }
@@ -35,14 +49,24 @@ impl AuditActor {
     fn api_token_id(&self) -> Option<&Uuid> {
         match self {
             Self::ApiToken { api_token_id, .. } => Some(api_token_id),
-            Self::User { .. } | Self::System { .. } => None,
+            Self::User { .. } | Self::AgentConnection { .. } | Self::System { .. } => None,
+        }
+    }
+
+    fn agent_connection_id(&self) -> Option<&Uuid> {
+        match self {
+            Self::AgentConnection {
+                agent_connection_id,
+                ..
+            } => Some(agent_connection_id),
+            _ => None,
         }
     }
 
     fn system_name(self) -> Option<&'static str> {
         match self {
             Self::System { name } => Some(name),
-            Self::User { .. } | Self::ApiToken { .. } => None,
+            Self::User { .. } | Self::ApiToken { .. } | Self::AgentConnection { .. } => None,
         }
     }
 }
@@ -203,6 +227,7 @@ impl AuditEvent {
             actor_type = self.actor.actor_type(),
             user_id = self.actor.user_id().map(|id| id.to_string()),
             api_token_id = self.actor.api_token_id().map(|id| id.to_string()),
+            agent_connection_id = self.actor.agent_connection_id().map(|id| id.to_string()),
             system_name = self.actor.system_name(),
             client_type = self.client_type.as_str(),
             operation = self.operation,

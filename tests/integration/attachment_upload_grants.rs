@@ -933,6 +933,7 @@ fn api_token_context(app: &TestApp, workspace_id: Uuid) -> ApiTokenContext {
         api_token_id: app.api_token_id().into(),
         workspace_id: workspace_id.into(),
         permissions: WorkspacePermissions::from_iter(WorkspacePermission::ALL),
+        agent_connection_id: None,
     }
 }
 

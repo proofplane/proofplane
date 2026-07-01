@@ -31,6 +31,8 @@ struct DownloadClaims {
     attachment_id: String,
     issued_by_user_id: String,
     issued_via_api_token_id: String,
+    #[serde(default)]
+    issued_via_agent_connection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,7 @@ struct VerifiedDownloadGrant {
     attachment_id: EvidenceAttachmentId,
     issued_by_user_id: UserId,
     issued_via_api_token_id: ApiTokenId,
+    issued_via_agent_connection_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +68,7 @@ pub struct DownloadGrantAuditContext {
     pub attachment_id: EvidenceAttachmentId,
     pub issued_by_user_id: UserId,
     pub issued_via_api_token_id: ApiTokenId,
+    pub issued_via_agent_connection_id: Option<Uuid>,
 }
 
 #[derive(Clone)]
@@ -138,6 +142,9 @@ impl AttachmentDownloadService {
                     attachment_id: candidate.attachment.id.to_string(),
                     issued_by_user_id: token.user_id.to_string(),
                     issued_via_api_token_id: token.api_token_id.to_string(),
+                    issued_via_agent_connection_id: token
+                        .agent_connection_id
+                        .map(|id| id.to_string()),
                 },
             )
             .map_err(|_| DownloadError::Internal)?;
@@ -159,6 +166,7 @@ impl AttachmentDownloadService {
                 attachment_id: candidate.attachment.id,
                 issued_by_user_id: token.user_id,
                 issued_via_api_token_id: token.api_token_id,
+                issued_via_agent_connection_id: token.agent_connection_id,
             },
         })
     }
@@ -204,6 +212,7 @@ impl AttachmentDownloadService {
                 attachment_id: grant.attachment_id,
                 issued_by_user_id: grant.issued_by_user_id,
                 issued_via_api_token_id: grant.issued_via_api_token_id,
+                issued_via_agent_connection_id: grant.issued_via_agent_connection_id,
             },
         })
     }
@@ -247,6 +256,11 @@ impl TryFrom<VerifiedPasetoToken<DownloadClaims>> for VerifiedDownloadGrant {
             attachment_id: EvidenceAttachmentId::from(parse_uuid(&claims.attachment_id)?),
             issued_by_user_id,
             issued_via_api_token_id: ApiTokenId::from(parse_uuid(&claims.issued_via_api_token_id)?),
+            issued_via_agent_connection_id: claims
+                .issued_via_agent_connection_id
+                .as_deref()
+                .map(parse_uuid)
+                .transpose()?,
         })
     }
 }
@@ -336,6 +350,7 @@ mod tests {
             attachment_id: "00000000-0000-4000-8000-000000000003".to_owned(),
             issued_by_user_id: "00000000-0000-4000-8000-000000000004".to_owned(),
             issued_via_api_token_id: "00000000-0000-4000-8000-000000000005".to_owned(),
+            issued_via_agent_connection_id: None,
         }
     }
 

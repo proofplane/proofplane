@@ -7,12 +7,15 @@ use rmcp::transport::streamable_http_server::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{auth::authenticate_request, server::ProofplaneMcp};
+use super::{
+    auth::{authenticate_request, McpAuthenticator},
+    server::ProofplaneMcp,
+};
 use crate::authentication::paseto::{
     DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
-    authentication::ApiTokenAuthenticator,
+    authentication::{ApiTokenAuthenticator, OAuthAccessAuthenticator},
     config::HealthConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
@@ -36,6 +39,9 @@ pub struct McpAppDependencies {
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: Arc<ApiTokenAuthenticator>,
+    pub oauth_authenticator: OAuthAccessAuthenticator,
+    pub public_mcp_resource_url: Url,
+    pub authorization_issuer: Url,
     pub public_api_base_url: Url,
     pub download_grant_encryptor: DownloadGrantEncryptor,
     pub download_grant_decryptor: DownloadGrantDecryptor,
@@ -60,6 +66,8 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
     let controls = ControlService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
         dependencies.authenticator,
+        dependencies.oauth_authenticator,
+        dependencies.public_mcp_resource_url.clone(),
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
@@ -71,6 +79,20 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
 
     Router::new()
         .merge(protocol)
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            axum::routing::get({
+                let resource = dependencies.public_mcp_resource_url;
+                let issuer = dependencies.authorization_issuer;
+                move || async move {
+                    axum::Json(serde_json::json!({
+                        "resource": resource.as_str(),
+                        "authorization_servers": [issuer.as_str()],
+                        "scopes_supported": crate::domain::WorkspacePermission::ALL.map(crate::domain::WorkspacePermission::as_str),
+                    }))
+                }
+            }),
+        )
         .nest(&dependencies.health.live_path, health::livez_router())
         .nest(
             &dependencies.health.ready_path,
@@ -90,6 +112,8 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
 
 pub fn protocol_router(
     authenticator: Arc<ApiTokenAuthenticator>,
+    oauth_authenticator: OAuthAccessAuthenticator,
+    resource: Url,
     server: ProofplaneMcp,
     cancellation_token: CancellationToken,
 ) -> Router {
@@ -104,7 +128,13 @@ pub fn protocol_router(
     Router::new()
         .nest_service(ENDPOINT, transport)
         .layer(middleware::from_fn_with_state(
-            authenticator,
+            McpAuthenticator {
+                api_tokens: authenticator,
+                oauth: oauth_authenticator,
+                metadata_url: resource
+                    .join("/.well-known/oauth-protected-resource/mcp")
+                    .unwrap(),
+            },
             authenticate_request,
         ))
 }

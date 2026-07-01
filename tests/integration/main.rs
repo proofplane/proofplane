@@ -8,6 +8,7 @@ mod evidence_requests;
 mod evidence_submissions;
 mod mcp;
 mod me;
+mod oauth;
 mod repository;
 mod request_auth;
 mod support;

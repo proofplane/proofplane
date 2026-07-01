@@ -106,6 +106,27 @@ pub(super) fn public_api_base_url(value: String) -> Result<Url, String> {
     Ok(url)
 }
 
+pub(super) fn public_mcp_resource_url(value: String) -> Result<Url, String> {
+    let url = string_url(value)?;
+    let is_loopback = url
+        .host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback())
+        || matches!(url.host_str(), Some("localhost"));
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
+        return Err("must use HTTPS except for loopback development URLs".into());
+    }
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/mcp"
+    {
+        return Err("must be an absolute /mcp URL without credentials, query, or fragment".into());
+    }
+    Ok(url)
+}
+
 pub(super) fn paseto_download_key(value: SecretString) -> Result<SecretString, String> {
     secret_value(value).and_then(|value| {
         SymmetricKey::<V4>::try_from(value.expose_secret())
@@ -163,7 +184,7 @@ impl<T> ConfigValidationExt<T> for Result<T, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::public_api_base_url;
+    use super::{public_api_base_url, public_mcp_resource_url};
 
     #[test]
     fn public_api_base_url_requires_https_except_loopback_origins() {
@@ -173,5 +194,15 @@ mod tests {
         assert!(public_api_base_url("http://api.proofplane.com".to_owned()).is_err());
         assert!(public_api_base_url("https://api.proofplane.com/v1".to_owned()).is_err());
         assert!(public_api_base_url("https://user@example.com".to_owned()).is_err());
+    }
+
+    #[test]
+    fn public_mcp_resource_url_requires_exact_mcp_path() {
+        assert!(public_mcp_resource_url("https://mcp.proofplane.com/mcp".to_owned()).is_ok());
+        assert!(public_mcp_resource_url("http://127.0.0.1:3002/mcp".to_owned()).is_ok());
+        assert!(public_mcp_resource_url("https://mcp.proofplane.com/".to_owned()).is_err());
+        assert!(
+            public_mcp_resource_url("https://mcp.proofplane.com/mcp?token=x".to_owned()).is_err()
+        );
     }
 }

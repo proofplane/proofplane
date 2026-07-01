@@ -564,6 +564,17 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             object_store: self.object_store.clone(),
             metrics: recorder.handle(),
             authenticator: Arc::new(ApiTokenAuthenticator::new(self.postgres.clone())),
+            oauth_authenticator: proofplane::authentication::OAuthAccessAuthenticator::new(
+                self.postgres.clone(),
+                proofplane::authentication::paseto::OAuthTokenVerifier::from_config(
+                    self.app_config.server.public_api_base_url.clone(),
+                    &self.app_config.paseto.oauth,
+                )
+                .expect("OAuth verifier initializes"),
+                self.app_config.server.public_mcp_resource_url.to_string(),
+            ),
+            public_mcp_resource_url: self.app_config.server.public_mcp_resource_url.clone(),
+            authorization_issuer: self.app_config.server.public_api_base_url.clone(),
             public_api_base_url: self.app_config.server.public_api_base_url.clone(),
             download_grant_encryptor,
             download_grant_decryptor,
@@ -1007,6 +1018,10 @@ fn config(
             worker_bind: socket_addr("127.0.0.1:0"),
             mcp_bind: socket_addr("127.0.0.1:0"),
             public_api_base_url,
+            public_mcp_resource_url: url::Url::parse("https://mcp.proofplane.test/mcp")
+                .expect("public MCP resource URL parses"),
+            public_app_base_url: url::Url::parse("https://app.proofplane.test/")
+                .expect("public app URL parses"),
         },
         postgres: SecretString::from(database_url),
         pubsub: PubSubConfig {
@@ -1044,6 +1059,14 @@ fn config(
                     secret: SecretString::from(
                         "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY",
                     ),
+                }],
+            },
+            oauth: proofplane::config::PasetoOAuthConfig {
+                active_key_id: Some("integration-oauth-001".to_owned()),
+                signing_key: Some(SecretString::from("k4.secret.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8c5WpIyC_5kWKhS8VEYSZ05dYfuTF-ZdQFV4D9vLTcNQ")),
+                verification_keys: vec![proofplane::config::PasetoOAuthPublicKey {
+                    id: "integration-oauth-001".to_owned(),
+                    public_key: "k4.public.HOVqSMgv-ZFioUvFRGEmdOXWH7kxfmXUBVeA_by03DU".to_owned(),
                 }],
             },
         },

@@ -15,7 +15,7 @@ handoff units that link into it.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Remote MCP OAuth Foundation](./tickets/001-remote-mcp-oauth-foundation.md) | Todo | Add website/API-owned OAuth with MCP-side discovery and token verification. |
+| 001. [Remote MCP OAuth Foundation](./tickets/001-remote-mcp-oauth-foundation.md) | Done | Website/API OAuth with MCP-side discovery and public-key token verification. |
 | 002. [Connection Lifecycle And Audit](./tickets/002-connection-lifecycle-and-audit.md) | Todo | List and revoke client connections with attributable lifecycle events. |
 | 003. [Guided Agent Connection UI](./tickets/003-guided-agent-connection-ui.md) | Todo | Replace token-centric setup with client selection, authorization progress, and verification. |
 | 004. [Claude And Cowork Connector](./tickets/004-claude-and-cowork-connector.md) | Todo | Validate the remote connector path and prepare directory distribution. |

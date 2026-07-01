@@ -28,6 +28,7 @@ use crate::{
         health::{self, ReadyState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
+        oauth::{self, OAuthState},
         request_context::attach_request_id,
         version,
         workspaces::{self, WorkspacesState},
@@ -186,6 +187,14 @@ pub fn create_app<V: TokenVerifier + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
+        .merge(oauth::router(OAuthState::new(
+            dependencies.config.server.public_api_base_url.clone(),
+            dependencies.config.server.public_app_base_url.clone(),
+            dependencies.config.server.public_mcp_resource_url.clone(),
+            dependencies.postgres.clone(),
+            dependencies.user_authenticator,
+            &dependencies.config.paseto.oauth,
+        )?))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))

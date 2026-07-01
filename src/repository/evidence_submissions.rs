@@ -243,6 +243,7 @@ WITH inserted AS (
     INSERT INTO evidence_submissions (
         evidence_request_id,
         submitted_by_api_token_id,
+        submitted_by_agent_connection_id,
         coverage_start_at,
         coverage_end_at,
         source_system,
@@ -250,7 +251,7 @@ WITH inserted AS (
         summary,
         description
     )
-    SELECT er.id, $2, $3, $4, $5, $6, $7, $8
+    SELECT er.id, $2, (SELECT id FROM agent_connections WHERE id=$2), $3, $4, $5, $6, $7, $8
     FROM evidence_requests er
     WHERE er.id = $1
       AND er.workspace_id = $9

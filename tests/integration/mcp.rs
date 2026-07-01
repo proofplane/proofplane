@@ -1442,7 +1442,7 @@ fn assert_unauthorized(response: &axum_test::TestResponse) {
     response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.header(header::WWW_AUTHENTICATE),
-        "Bearer realm=\"proofplane-mcp\""
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\""
     );
 }
 

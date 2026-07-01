@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use pasetors::{
-    keys::SymmetricKey,
-    token::{Local, UntrustedToken},
-    version4::{LocalToken, V4},
+    keys::{AsymmetricPublicKey, AsymmetricSecretKey, SymmetricKey},
+    token::{Local, Public, UntrustedToken},
+    version4::{LocalToken, PublicToken, V4},
 };
 use secrecy::ExposeSecret;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::{PasetoDownloadConfig, PasetoUploadGrantConfig};
+use crate::config::{PasetoDownloadConfig, PasetoOAuthConfig, PasetoUploadGrantConfig};
 
 // We use assertions as a mechanism for verifying that the API key is being
 // used for the right purpose. For example, for API keys, we want to make sure
@@ -21,6 +21,8 @@ use crate::config::{PasetoDownloadConfig, PasetoUploadGrantConfig};
 const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
 const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-grant:v1";
 const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-session:v1";
+pub const ACCESS_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
+pub const REFRESH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-refresh:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +110,104 @@ pub struct DownloadGrantDecryptor {
     issuer: Url,
     audience: String,
     keys: HashMap<String, SymmetricKey<V4>>,
+}
+
+pub struct OAuthTokenIssuer {
+    issuer: Url,
+    key_id: String,
+    secret_key: AsymmetricSecretKey<V4>,
+}
+
+#[derive(Clone)]
+pub struct OAuthTokenVerifier {
+    issuer: Url,
+    keys: HashMap<String, AsymmetricPublicKey<V4>>,
+}
+
+impl OAuthTokenIssuer {
+    pub fn from_config(issuer: Url, config: &PasetoOAuthConfig) -> Result<Self, Error> {
+        let key_id = config.active_key_id.clone().ok_or(Error::Keyring)?;
+        let signing_key = config.signing_key.as_ref().ok_or(Error::Keyring)?;
+        Ok(Self {
+            issuer,
+            key_id,
+            secret_key: AsymmetricSecretKey::try_from(signing_key.expose_secret())
+                .map_err(|_| Error::Keyring)?,
+        })
+    }
+
+    pub fn issue<T: Serialize>(
+        &self,
+        audience: &str,
+        registered: RegisteredClaims,
+        claims: &T,
+        refresh: bool,
+    ) -> Result<IssuedPasetoToken, Error> {
+        let payload = payload(self.issuer.as_str(), audience, &registered, claims)?;
+        let footer = footer(&self.key_id)?;
+        let token = PublicToken::sign(
+            &self.secret_key,
+            payload.as_bytes(),
+            Some(footer.as_bytes()),
+            Some(if refresh {
+                REFRESH_IMPLICIT_ASSERTION
+            } else {
+                ACCESS_IMPLICIT_ASSERTION
+            }),
+        )
+        .map_err(|_| Error::Issue)?;
+        Ok(IssuedPasetoToken {
+            token,
+            token_id: registered.token_id,
+            key_id: self.key_id.clone(),
+            expires_at: normalize_datetime(registered.expires_at)?,
+        })
+    }
+}
+
+impl OAuthTokenVerifier {
+    pub fn from_config(issuer: Url, config: &PasetoOAuthConfig) -> Result<Self, Error> {
+        let keys = config
+            .verification_keys
+            .iter()
+            .map(|key| {
+                Ok((
+                    key.id.clone(),
+                    AsymmetricPublicKey::try_from(key.public_key.as_str())
+                        .map_err(|_| Error::Keyring)?,
+                ))
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(Self { issuer, keys })
+    }
+
+    pub fn verify<T: DeserializeOwned>(
+        &self,
+        token: &str,
+        audience: &str,
+        refresh: bool,
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Public, V4>::try_from(token).map_err(|_| Error::Verify)?;
+        let footer = parse_footer(untrusted.untrusted_footer())?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+        let trusted = PublicToken::verify(
+            key,
+            &untrusted,
+            Some(untrusted.untrusted_footer()),
+            Some(if refresh {
+                REFRESH_IMPLICIT_ASSERTION
+            } else {
+                ACCESS_IMPLICIT_ASSERTION
+            }),
+        )
+        .map_err(|_| Error::Verify)?;
+        verified_payload(
+            trusted.payload(),
+            &footer.kid,
+            self.issuer.as_str(),
+            audience,
+        )
+    }
 }
 
 impl DownloadGrantDecryptor {
@@ -512,7 +612,10 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::config::{PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey};
+    use crate::config::{
+        PasetoDownloadKey, PasetoOAuthConfig, PasetoOAuthPublicKey, PasetoUploadGrantConfig,
+        PasetoUploadGrantKey,
+    };
 
     const DOWNLOAD_AUDIENCE: &str = "proofplane-attachment-download";
     const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-attachment-upload-grant";
@@ -585,6 +688,36 @@ mod tests {
 
     fn upload_grant_decryptor(config: &PasetoUploadGrantConfig) -> UploadGrantDecryptor {
         UploadGrantDecryptor::from_config(issuer(), UPLOAD_GRANT_AUDIENCE, config).unwrap()
+    }
+
+    #[test]
+    fn oauth_public_tokens_require_matching_purpose_and_no_private_key_to_verify() {
+        let config = PasetoOAuthConfig {
+            active_key_id: Some("oauth".to_owned()),
+            signing_key: Some(SecretString::from("k4.secret.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8c5WpIyC_5kWKhS8VEYSZ05dYfuTF-ZdQFV4D9vLTcNQ")),
+            verification_keys: vec![PasetoOAuthPublicKey {
+                id: "oauth".to_owned(),
+                public_key: "k4.public.HOVqSMgv-ZFioUvFRGEmdOXWH7kxfmXUBVeA_by03DU".to_owned(),
+            }],
+        };
+        let token_issuer = OAuthTokenIssuer::from_config(issuer(), &config).unwrap();
+        let public_only = PasetoOAuthConfig {
+            active_key_id: None,
+            signing_key: None,
+            verification_keys: config.verification_keys.clone(),
+        };
+        let verifier = OAuthTokenVerifier::from_config(issuer(), &public_only).unwrap();
+        let token = token_issuer
+            .issue("mcp", registered(), &custom_claims(), false)
+            .unwrap();
+        assert!(token.token.starts_with("v4.public."));
+        assert!(verifier
+            .verify::<TestClaims>(&token.token, "mcp", false)
+            .is_ok());
+        assert!(verifier
+            .verify::<TestClaims>(&token.token, "mcp", true)
+            .is_err());
+        assert!(OAuthTokenIssuer::from_config(issuer(), &public_only).is_err());
     }
 
     #[test]

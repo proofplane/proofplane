@@ -5,6 +5,8 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://127.0.0.1:3000"
+  public_mcp_resource_url: "http://127.0.0.1:3002/mcp"
+  public_app_base_url: "http://127.0.0.1:5173"
 
 postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
 
@@ -31,6 +33,12 @@ paseto:
     keys:
       - id: "local-upload-grant-001"
         secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
+  oauth:
+    active_key_id: "local-oauth-001"
+    signing_key: "k4.secret.cHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo8c5WpIyC_5kWKhS8VEYSZ05dYfuTF-ZdQFV4D9vLTcNQ"
+    verification_keys:
+      - id: "local-oauth-001"
+        public_key: "k4.public.HOVqSMgv-ZFioUvFRGEmdOXWH7kxfmXUBVeA_by03DU"
 
 object_storage:
   backend: "filesystem"

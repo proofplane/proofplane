@@ -150,6 +150,11 @@ attachment download grants, for example:
 - `proofplane:mcp-oauth-access:v1`
 - `proofplane:mcp-oauth-refresh:v1`
 
+The OAuth keyring uses Ed25519 `v4.public` tokens. API configuration contains
+the active private signing key and public verification keys; MCP production
+configuration contains public verification keys only. Token payloads contain
+identifiers and permissions, never Auth0 tokens, credentials, or user content.
+
 Access-token PASETOs expire after 15 minutes and include enough claims to
 identify the connection, user, workspace, OAuth client, MCP resource, and
 granted permissions. Each authenticated MCP request still checks the persisted
@@ -357,6 +362,10 @@ screenshots, starter prompts, troubleshooting guide, and a durable test
 workspace/account.
 
 ## Revisions
+
+- 2026-06-30: Fixed MCP OAuth credentials to Ed25519 `v4.public` with API-only
+  private signing material, MCP public verification material, and separate
+  access/refresh implicit assertions. Attachment grants remain `v4.local`.
 
 - 2026-06-29: Initial proposal based on research into hosted OAuth connectors,
   client directories and deep links, Claude MCP bundles, and multi-client MCP

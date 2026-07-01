@@ -23,6 +23,7 @@ pub struct ApiTokenContext {
     pub api_token_id: ApiTokenId,
     pub workspace_id: WorkspaceId,
     pub permissions: WorkspacePermissions,
+    pub agent_connection_id: Option<Uuid>,
 }
 
 impl ApiTokenContext {
@@ -38,6 +39,85 @@ impl ApiTokenContext {
 #[derive(Clone)]
 pub struct ApiTokenAuthenticator {
     repository: Arc<repository::Postgres>,
+}
+
+#[derive(Clone)]
+pub struct OAuthAccessAuthenticator {
+    repository: Arc<repository::Postgres>,
+    verifier: paseto::OAuthTokenVerifier,
+    resource: String,
+}
+
+impl OAuthAccessAuthenticator {
+    pub fn new(
+        repository: Arc<repository::Postgres>,
+        verifier: paseto::OAuthTokenVerifier,
+        resource: String,
+    ) -> Self {
+        Self {
+            repository,
+            verifier,
+            resource,
+        }
+    }
+
+    pub async fn authenticate(&self, raw: &str) -> Result<Option<ApiTokenContext>, Error> {
+        let verified = match self.verifier.verify::<crate::routes::oauth::TokenClaims>(
+            raw,
+            &self.resource,
+            false,
+        ) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        let claims = verified.claims;
+        let client = self
+            .repository
+            .get()
+            .await
+            .map_err(repository::Error::from)
+            .map_err(Error::Repository)?;
+        let row = client
+            .query_opt(
+                "SELECT 1 FROM agent_connections a
+             JOIN workspace_memberships m ON m.workspace_id=a.workspace_id AND m.user_id=a.user_id
+             WHERE a.id=$1 AND a.user_id=$2 AND a.workspace_id=$3 AND a.client_id=$4
+               AND a.resource=$5 AND a.permissions=$6 AND a.revoked_at IS NULL",
+                &[
+                    &claims.connection_id,
+                    &claims.user_id,
+                    &claims.workspace_id,
+                    &claims.client_id,
+                    &claims.resource,
+                    &claims.permissions,
+                ],
+            )
+            .await
+            .map_err(repository::Error::from)
+            .map_err(Error::Repository)?;
+        if row.is_none() || claims.resource != self.resource {
+            return Ok(None);
+        }
+        let permissions = claims
+            .permissions
+            .iter()
+            .map(|value| value.parse())
+            .collect::<Result<WorkspacePermissions, _>>()
+            .map_err(|_| paseto::Error::Verify)?;
+        let _ = client
+            .execute(
+                "UPDATE agent_connections SET last_used_at=now() WHERE id=$1",
+                &[&claims.connection_id],
+            )
+            .await;
+        Ok(Some(ApiTokenContext {
+            user_id: claims.user_id.into(),
+            api_token_id: claims.connection_id.into(),
+            workspace_id: claims.workspace_id.into(),
+            permissions,
+            agent_connection_id: Some(claims.connection_id),
+        }))
+    }
 }
 
 impl ApiTokenAuthenticator {
@@ -94,6 +174,7 @@ impl ApiTokenAuthenticator {
             api_token_id,
             workspace_id,
             permissions: WorkspacePermissions::from_iter(stored.permissions),
+            agent_connection_id: None,
         }))
     }
 }
@@ -198,6 +279,7 @@ mod tests {
             api_token_id: ApiTokenId::from(Uuid::new_v4()),
             workspace_id,
             permissions: WorkspacePermissions::from_iter([WorkspacePermission::ReadControls]),
+            agent_connection_id: None,
         };
 
         assert!(context.allows(workspace_id, WorkspacePermission::ReadControls));

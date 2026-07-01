@@ -8,6 +8,7 @@ import { DocsRoute } from "./routes/DocsRoute";
 import { HomeRoute } from "./routes/HomeRoute";
 import { NotFoundRoute } from "./routes/NotFoundRoute";
 import { PricingRoute } from "./routes/PricingRoute";
+import { McpAuthorizeRoute } from "./routes/McpAuthorizeRoute";
 
 export function App() {
   const [queryClient] = useState(() => new QueryClient());
@@ -20,6 +21,7 @@ export function App() {
           <Route path="/auth/callback" element={<AuthCallbackRoute />} />
           <Route path="/docs" element={<DocsRoute />} />
           <Route path="/pricing" element={<PricingRoute />} />
+          <Route path="/connect/mcp/authorize" element={<McpAuthorizeRoute />} />
           <Route path="/app/*" element={<AppRoute />} />
           <Route path="*" element={<NotFoundRoute />} />
         </Routes>

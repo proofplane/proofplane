@@ -18,6 +18,18 @@ pub struct McpRequestContext {
 }
 
 impl McpRequestContext {
+    pub fn audit_actor(&self) -> crate::observability::audit::AuditActor {
+        match self.token.agent_connection_id {
+            Some(agent_connection_id) => crate::observability::audit::AuditActor::AgentConnection {
+                user_id: self.token.user_id.into(),
+                agent_connection_id,
+            },
+            None => crate::observability::audit::AuditActor::ApiToken {
+                user_id: self.token.user_id.into(),
+                api_token_id: self.token.api_token_id.into(),
+            },
+        }
+    }
     pub fn authorize_token_workspace(
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
@@ -99,6 +111,7 @@ pub(crate) fn api_token_context(workspace_id: WorkspaceId) -> ApiTokenContext {
         api_token_id: ApiTokenId::from(uuid::Uuid::new_v4()),
         workspace_id,
         permissions: WorkspacePermissions::from_iter([WorkspacePermission::ReadControls]),
+        agent_connection_id: None,
     }
 }
 

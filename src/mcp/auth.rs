@@ -8,22 +8,33 @@ use axum::{
 };
 use tracing::Span;
 
-use crate::authentication::{opaque_token, ApiTokenAuthenticator};
+use crate::authentication::{opaque_token, ApiTokenAuthenticator, OAuthAccessAuthenticator};
+use url::Url;
 
-pub(crate) const AUTHENTICATE_CHALLENGE: &str = "Bearer realm=\"proofplane-mcp\"";
+#[derive(Clone)]
+pub struct McpAuthenticator {
+    pub api_tokens: Arc<ApiTokenAuthenticator>,
+    pub oauth: OAuthAccessAuthenticator,
+    pub metadata_url: Url,
+}
 
 pub(crate) async fn authenticate_request(
-    State(authenticator): State<Arc<ApiTokenAuthenticator>>,
+    State(authenticator): State<McpAuthenticator>,
     mut request: Request,
     next: Next,
 ) -> Response {
     let Some(raw_token) = bearer_token(&request) else {
-        return unauthorized();
+        return unauthorized(&authenticator.metadata_url);
     };
 
-    let context = match authenticator.authenticate(raw_token).await {
+    let authenticated = if opaque_token::parse(raw_token).is_ok() {
+        authenticator.api_tokens.authenticate(raw_token).await
+    } else {
+        authenticator.oauth.authenticate(raw_token).await
+    };
+    let context = match authenticated {
         Ok(Some(context)) => context,
-        Ok(None) => return unauthorized(),
+        Ok(None) => return unauthorized(&authenticator.metadata_url),
         Err(error) => {
             tracing::error!(%error, "MCP API token authentication failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response();
@@ -43,17 +54,20 @@ fn bearer_token(request: &Request) -> Option<&str> {
         .to_str()
         .ok()?;
     let token = value.strip_prefix("Bearer ")?;
-    if token.trim() != token || opaque_token::parse(token).is_err() {
+    if token.trim() != token || token.is_empty() {
         return None;
     }
     Some(token)
 }
 
-fn unauthorized() -> Response {
+fn unauthorized(metadata_url: &Url) -> Response {
     let mut response = (StatusCode::UNAUTHORIZED, "authentication required").into_response();
     response.headers_mut().insert(
         header::WWW_AUTHENTICATE,
-        HeaderValue::from_static(AUTHENTICATE_CHALLENGE),
+        HeaderValue::from_str(&format!(
+            "Bearer realm=\"proofplane-mcp\", resource_metadata=\"{metadata_url}\""
+        ))
+        .expect("validated metadata URL is a header value"),
     );
     response
 }
@@ -88,7 +102,10 @@ mod tests {
             }
             let request = builder.body(Body::empty()).expect("request builds");
 
-            assert_eq!(bearer_token(&request), None);
+            assert_eq!(
+                bearer_token(&request),
+                authorization.and_then(|value| value.strip_prefix("Bearer "))
+            );
         }
     }
 }

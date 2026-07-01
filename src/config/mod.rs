@@ -37,6 +37,8 @@ pub struct ServerConfig {
     pub worker_bind: SocketAddr,
     pub mcp_bind: SocketAddr,
     pub public_api_base_url: Url,
+    pub public_mcp_resource_url: Url,
+    pub public_app_base_url: Url,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,20 @@ pub struct Auth0Config {
 pub struct PasetoConfig {
     pub download: PasetoDownloadConfig,
     pub upload_grant: PasetoUploadGrantConfig,
+    pub oauth: PasetoOAuthConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoOAuthConfig {
+    pub active_key_id: Option<String>,
+    pub signing_key: Option<SecretString>,
+    pub verification_keys: Vec<PasetoOAuthPublicKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoOAuthPublicKey {
+    pub id: String,
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +388,8 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://example.com/api"
+  public_mcp_resource_url: "http://example.com/not-mcp"
+  public_app_base_url: "http://example.com/app"
 postgres: ""
 pubsub:
   project_id: "proofplane-local"
@@ -394,6 +412,12 @@ paseto:
     keys:
       - id: ""
         secret: "not-a-paserk"
+  oauth:
+    active_key_id: "bad"
+    signing_key: "bad"
+    verification_keys:
+      - id: "bad"
+        public_key: "bad"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -433,6 +457,8 @@ health:
 
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"server.public_api_base_url"));
+                assert!(paths.contains(&"server.public_mcp_resource_url"));
+                assert!(paths.contains(&"server.public_app_base_url"));
                 assert!(paths.contains(&"postgres"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
@@ -627,7 +653,14 @@ paseto:
             .expect("local config has object_storage")
             .1;
 
-        format!("{before_paseto}\n{paseto}\nobject_storage:\n{after_paseto}")
+        let oauth = local
+            .split_once("  oauth:\n")
+            .expect("local config has oauth")
+            .1
+            .split_once("\nobject_storage:\n")
+            .expect("oauth block ends")
+            .0;
+        format!("{before_paseto}\n{paseto}  oauth:\n{oauth}\nobject_storage:\n{after_paseto}")
     }
 
     fn write_temp_config(contents: &str) -> PathBuf {
