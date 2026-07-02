@@ -1,4 +1,5 @@
 mod agent_connection_repository;
+mod auditor_access;
 mod auditor_access_grants;
 mod dequeuer_pubsub;
 mod mcp;

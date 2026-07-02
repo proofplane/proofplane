@@ -4,6 +4,7 @@ pub mod agent_connections;
 pub mod attachment_downloads;
 pub mod attachment_upload_grants;
 pub mod auditor_access_grants;
+pub mod auditor_access_sessions;
 pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;

@@ -1,9 +1,11 @@
 # 004 - Auditor Browser Sessions
 
-**Status:** Todo · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#auditor-sessions)
+**Status:** Absorbed by 003 · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#auditor-sessions)
 
-**Summary** - Create revocable server-side browser sessions after OTP
-verification so auditors can work for a week without repeated OTP prompts.
+**Summary** - Absorbed into
+[003 - Email OTP Verification And Auditor Sessions](./003-email-otp-verification.md)
+so OTP verification creates the server-side session directly, without a
+temporary verification token.
 
 **Acceptance criteria**
 

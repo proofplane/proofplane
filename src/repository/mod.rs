@@ -7,6 +7,7 @@ use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 mod agent_connections;
 mod attachment_upload_grants;
 mod auditor_access_grants;
+mod auditor_access_sessions;
 pub mod constraints;
 mod controls;
 pub mod error;
@@ -19,6 +20,7 @@ mod workspace_memberships;
 mod workspaces;
 
 pub use attachment_upload_grants::{AttachmentUploadGrant, NewAttachmentUploadGrant};
+pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
 pub use constraints::ConflictKind;
 pub use error::Error;
 pub use evidence_submissions::{

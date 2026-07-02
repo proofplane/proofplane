@@ -1,5 +1,6 @@
 mod agent_connection;
 mod auditor_access_grant;
+mod auditor_access_session;
 mod controls;
 mod error;
 mod evidence_request;
@@ -18,6 +19,9 @@ pub use agent_connection::{
 };
 pub use auditor_access_grant::{
     AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
+};
+pub use auditor_access_session::{
+    AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
 };
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload,

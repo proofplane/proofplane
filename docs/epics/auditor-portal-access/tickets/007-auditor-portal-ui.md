@@ -1,6 +1,6 @@
 # 007 - Auditor Portal UI
 
-**Status:** Todo · **Depends on:** 003, 004, 005, 006 · **Spec:** [ux.md](../ux.md)
+**Status:** Todo · **Depends on:** 003, 005, 006 · **Spec:** [ux.md](../ux.md)
 
 **Summary** - Add the minimal browser experience for auditors using
 server-rendered HTML from the Rust API instead of a separate frontend app.

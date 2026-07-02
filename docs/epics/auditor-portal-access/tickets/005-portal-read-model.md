@@ -1,6 +1,6 @@
 # 005 - Portal Read Model
 
-**Status:** Todo · **Depends on:** 004 · **Spec:** [spec.md](../spec.md#portal-read-model)
+**Status:** Todo · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#portal-read-model)
 
 **Summary** - Build the workspace-wide read model auditors see in the portal:
 all controls, mapped evidence requests, all submissions, and attachment
