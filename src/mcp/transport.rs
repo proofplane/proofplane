@@ -38,7 +38,8 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
+        attachment_upload_grants::AttachmentUploadGrantService,
+        auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
 };
@@ -101,10 +102,11 @@ where
     );
     let attachment_upload_grants = AttachmentUploadGrantService::new(
         dependencies.postgres.clone(),
-        dependencies.public_api_base_url,
+        dependencies.public_api_base_url.clone(),
         dependencies.upload_grant_encryptor,
         dependencies.upload_grant_decryptor,
     );
+    let auditor_access_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
     let controls = ControlService::new(dependencies.postgres.clone());
     let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
@@ -115,7 +117,9 @@ where
             evidence_requests,
             evidence_submissions,
             attachment_upload_grants,
+            auditor_access_grants,
             controls,
+            dependencies.public_api_base_url,
         ),
         dependencies.cancellation_token.clone(),
     )?;

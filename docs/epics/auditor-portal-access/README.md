@@ -12,8 +12,8 @@ are lean handoff units that link into those sources of technical depth.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Auditor Access Grants](./tickets/001-auditor-access-grants.md) | Doing | Grant persistence/service is in place; caller-surface audit emission remains. |
-| 002. [MCP Auditor Link Tools](./tickets/002-mcp-auditor-link-tools.md) | Todo | Let audited users create, list, and revoke auditor links through MCP. |
+| 001. [Auditor Access Grants](./tickets/001-auditor-access-grants.md) | Done | Grant persistence/service and MCP caller audit emission are in place. |
+| 002. [MCP Auditor Link Tools](./tickets/002-mcp-auditor-link-tools.md) | Done | Audited users can create, list, and revoke auditor links through MCP. |
 | 003. [Email OTP Verification](./tickets/003-email-otp-verification.md) | Todo | Prove the browser user controls the intended auditor email. |
 | 004. [Auditor Browser Sessions](./tickets/004-auditor-browser-sessions.md) | Todo | Create revocable seven-day browser sessions after OTP verification. |
 | 005. [Portal Read Model](./tickets/005-portal-read-model.md) | Todo | Assemble the workspace-wide read-only auditor data graph. |

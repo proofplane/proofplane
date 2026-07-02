@@ -29,7 +29,7 @@ provenance, and freshness is derived from submitted evidence.
 | Compliance model | Frameworks, controls, Evidence Requests, mappings | Auditor portal reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
-| Agent interface | Streamable HTTP MCP runtime and core compliance tools, interactive OAuth authorization (Proofplane facade), working Codex connection | Guided connection UI, Claude/Cowork validation, generic-client support matrix, auditor access link tools |
+| Agent interface | Streamable HTTP MCP runtime and core compliance tools, interactive OAuth authorization (Proofplane facade), working Codex connection, and auditor access link tools | Guided connection UI, Claude/Cowork validation, generic-client support matrix |
 | Launch surface | Product and GTM notes, PRODUCT.md, DESIGN.md, minimal self-onboarding UI | Guided agent connection and workspace home |
 
 ## Epic Portfolio
