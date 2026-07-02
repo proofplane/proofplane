@@ -3,122 +3,465 @@
 ## Goal
 
 Let a non-technical operations or compliance user connect Proofplane to an AI
-agent without installing a CLI, editing a configuration file, changing binary
-permissions, or copying a long-lived API token.
+agent without installing a CLI, editing configuration, or copying a long-lived
+API token.
 
 The core product principle is **connect an account, not install a server**.
-Proofplane remains a hosted Streamable HTTP MCP service. Claude/Cowork uses a
-remote connector, Codex uses a plugin, and both continue through browser
-authorization.
+Proofplane remains a hosted Streamable HTTP MCP service. Compatible clients
+discover Auth0, complete browser authorization, and receive credentials
+without exposing them to the user or model.
+
+## Architecture Decision
+
+Auth0 is the OAuth authorization server for remote MCP clients, following
+[Auth0's direct MCP authorization flow](https://auth0.com/ai/docs/mcp/intro/why-auth-for-mcp).
+Auth0 owns:
+
+- authorization-server discovery;
+- client registration and redirect-URI validation;
+- Authorization Code with PKCE;
+- login and OAuth consent;
+- access-token issuance;
+- signing-key publication and rotation;
+- user-grant management; and
+- OAuth protocol errors.
+
+Proofplane does not implement `/oauth/authorize`, `/oauth/token`,
+authorization-code storage, or a token-signing keyring. The initial release
+does not request `offline_access` and Auth0 does not issue an MCP refresh token.
+Auth0 access tokens expire after eight hours.
+
+Proofplane remains responsible for:
+
+- MCP Protected Resource Metadata and `401` challenges;
+- selecting and approving one Proofplane workspace during authorization;
+- durable agent-connection and audit records;
+- Auth0 access-token validation;
+- live workspace membership, scope, and revocation enforcement; and
+- the hosted MCP tools and application experience.
+
+The workspace grant is integrated into Auth0 through a post-login Redirect
+Action. The Action pauses Auth0's transaction, sends the browser to a
+Proofplane workspace-consent page, resumes at Auth0, and adds the approved
+Proofplane connection and workspace identifiers to the Auth0 access token.
+
+This replaces the earlier proposal for a Proofplane-owned OAuth facade and
+Proofplane-issued PASETO credentials. The reason is operational and security
+simplicity: Auth0 already implements the security-sensitive OAuth server
+behavior required by MCP.
 
 ## Current Reality
 
 The MCP runtime and core tools already use Streamable HTTP at `/mcp`. They
-authenticate every transport request with a pre-provisioned `ppat_` bearer
-token. The web UI can issue that token, but its setup preview describes a stdio
-connection without a command or remote endpoint.
-
-This works for technical API consumers but creates the wrong first-run path for
-the target customer:
+authenticate requests with a pre-provisioned, workspace-bound `ppat_` bearer
+token. The website can issue that token, but this is the wrong default for
+non-technical users:
 
 - the user must create, copy, and preserve a long-lived credential;
-- each agent requires different manual configuration;
-- credentials can be copied into plaintext configuration or shell state;
-- Proofplane cannot present an account-level connection list or browser-led
-  revocation flow;
-- the setup language assumes the user understands MCP transports and clients.
+- credentials can leak through plaintext configuration or shell state;
+- clients require different manual setup;
+- browser-led consent and reconnection are unavailable; and
+- connection lifecycle and audit attribution are token-centric.
 
 Existing `ppat_` authentication remains supported for CI, unattended agents,
-direct REST consumers, and MCP clients that cannot perform interactive OAuth.
+direct REST consumers, and MCP clients without interactive OAuth.
 
 ## Product Boundary
 
 This epic delivers:
 
-- standards-compatible interactive authorization for the hosted MCP endpoint;
-- a guided website flow that starts from the user's chosen agent;
+- Auth0-backed OAuth authorization for the hosted MCP endpoint;
+- one-workspace, scoped agent connections;
+- a guided website flow for supported clients;
 - first-class Claude/Cowork and Codex distribution artifacts;
-- generic remote-MCP instructions as a fallback;
+- generic remote-MCP instructions as a fallback; and
 - connection visibility, revocation, and attributable audit events.
 
-This epic does not install or run a Proofplane server on the user's computer.
-A universal macOS/Windows installer, Docker-based gateway, and Claude `.mcpb`
-bundle are deferred unless a future local-resource use case requires them.
-Cursor and VS Code distribution are explicitly outside this epic.
+This epic does not:
 
-This epic also does not make the MCP server a web-asset host. Browser pages,
-React assets, Auth0 callbacks, consent screens, and connection-management UI
-remain owned by the existing website and API surface. The MCP service stays a
-protocol/resource server.
+- run a local Proofplane server;
+- implement an OAuth authorization server in the Proofplane API;
+- synchronize every Proofplane workspace into Auth0 Organizations;
+- pass MCP credentials through prompts, tools, logs, or browser storage;
+- enable open Dynamic Client Registration in production; or
+- support unattended OAuth connections that must outlive the access token; or
+- remove existing API-token authentication.
+
+Auth0 Organizations are not used for workspace binding. Auth0 currently
+documents Organization user flows as
+[unavailable for third-party applications](https://auth0.com/docs/get-started/applications/first-party-and-third-party-applications),
+while MCP clients are third-party applications. A Proofplane Redirect Action
+bridge provides workspace selection without depending on that unsupported
+combination.
+
+## Roles And Trust Boundaries
+
+| Role | Component | Responsibility |
+| --- | --- | --- |
+| Resource owner | Proofplane user | Approves client access to one workspace |
+| OAuth client | Claude, Codex, or another MCP harness | Holds credentials and calls MCP |
+| Authorization server | Auth0 | Runs OAuth, login, consent, and access-token issuance |
+| Resource server | Proofplane MCP | Validates Auth0 tokens and serves authorized tools |
+| Domain authorization service | Proofplane API and database | Owns users, workspaces, grants, and revocation |
+
+The MCP client is not the model. Credentials remain transport metadata held by
+the client and must never enter model context.
+
+```mermaid
+flowchart LR
+    U[Human user]
+    C[MCP client<br/>Claude, Codex, or Inspector]
+    I[Auth0<br/>OAuth authorization server]
+
+    subgraph P[Proofplane]
+        M[MCP resource server<br/>/mcp]
+        W[Workspace consent UI]
+        A[Grant and connection API]
+        D[(Postgres)]
+    end
+
+    U -->|uses| C
+    C -->|discover, authorize, and exchange code| I
+    I -->|temporary Redirect Action| W
+    U -->|selects workspace and approves| W
+    W -->|create workspace grant| A
+    A --> D
+    W -->|resume transaction| I
+    I -->|Eight-hour Auth0 access token| C
+    C -->|Auth0 bearer access token| M
+    M -->|live grant and membership check| D
+```
 
 ## Target Journey
 
-The default journey is:
+1. The user chooses Claude/Cowork, Codex, or another supported agent.
+2. Proofplane opens the client's native connection path where one exists.
+3. The client contacts the hosted MCP endpoint and receives an OAuth
+   challenge.
+4. The client discovers Auth0 and opens Auth0 Universal Login.
+5. Auth0 authenticates the user and pauses at the Proofplane Redirect Action.
+6. Proofplane shows the requested permissions and lets the user choose one
+   accessible workspace.
+7. Auth0 completes the authorization code flow and returns an eight-hour
+   access token to the MCP client.
+8. The client calls `/mcp`; Proofplane verifies the Auth0 token and the live
+   workspace grant.
+9. Proofplane records successful use and offers a useful first prompt.
+10. After token expiry, the client starts authorization again. The Action
+    reuses the one active workspace connection without showing the workspace
+    page when it can do so safely.
 
-1. The user selects Claude/Cowork, Codex, or another supported agent in
-   Proofplane.
-2. Proofplane opens the client's native add/install experience where one
-   exists, or shows the shortest client-specific path.
-3. The client discovers that the hosted MCP endpoint requires authorization.
-4. A browser opens for Proofplane sign-in.
-5. The user selects a workspace and reviews the requested access.
-6. The client receives credentials without displaying them to the user or
-   model.
-7. Proofplane verifies the connection and offers a useful first prompt.
+The user never sees or copies the access token. If the client cannot restart
+authorization automatically, the user reconnects it manually.
 
-An experienced user may still copy the remote MCP URL or configure a `ppat_`
-token manually.
+## Initial Authorization Flow
 
-## Remote MCP Authorization
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant C as MCP client
+    participant M as Proofplane MCP
+    participant I as Auth0
+    participant X as Auth0 Post-Login Action
+    participant W as Proofplane consent UI/API
+    participant D as Postgres
 
-The production MCP endpoint must be public HTTPS and implement the MCP
-authorization contract for Streamable HTTP, including:
+    C->>M: Request /mcp without a token
+    M-->>C: 401 + WWW-Authenticate resource_metadata
+    C->>M: GET protected-resource metadata
+    M-->>C: resource URI, Auth0 issuer, supported scopes
+    C->>I: GET authorization-server metadata
+    I-->>C: Auth0 authorize, token, registration, and PKCE metadata
 
-- Protected Resource Metadata discovery;
-- authorization-server metadata discovery;
-- OAuth 2.1 authorization code flow with PKCE;
-- resource indicators and audience validation for the MCP endpoint;
-- short-lived access tokens;
-- refresh-token rotation when refresh tokens are issued;
-- explicit revocation;
-- generic authentication failures that do not reveal credential state.
+    C->>C: Generate state and PKCE verifier/challenge
+    C->>I: /authorize with client_id, redirect_uri, resource, scopes, challenge
+    I->>U: Universal Login
+    U->>I: Authenticate
+    I->>X: Run post-login Action for the MCP resource
 
-Auth0 remains the human identity provider. Proofplane's website/API owns the
-MCP authorization facade: browser login handoff, Auth0 callback handling,
-workspace selection, consent, authorization-code issuance, token exchange,
-refresh, and revocation. The MCP server must not serve the OAuth UI or static
-web assets.
+    X->>D: Find active connection for user, client, and resource
+    D-->>X: No active connection
+    X-->>W: Redirect with short-lived signed transaction token and Auth0 state
+    W->>W: Verify signature, expiry, state, resource, client, user, and scopes
+    W->>D: Load Proofplane user and accessible workspaces
+    W-->>U: Show client, requested permissions, and workspace picker
+    U->>W: Approve one workspace
+    W->>D: Recheck membership and create short-lived pending connection
+    W-->>I: POST signed connection result to /continue with original state
 
-Auth0 JWTs authenticate the human user to Proofplane. They are not passed to
-MCP clients and are not accepted as MCP bearer tokens. After Auth0 login,
-Proofplane maps the Auth0 subject to a Proofplane user, applies workspace
-membership and consent rules, and issues Proofplane-owned MCP OAuth
-credentials.
+    I->>X: Resume onContinuePostLogin
+    X->>X: Validate result and add connection/workspace claims
+    I->>U: Show mandatory third-party OAuth consent when required
+    U->>I: Approve requested MCP scopes
+    I-->>C: Authorization code at registered redirect URI
+    C->>I: Exchange code and PKCE verifier
+    I-->>C: Eight-hour Auth0 access token
 
-The MCP server publishes or participates in the metadata needed by MCP clients
-to discover the authorization server, then validates MCP-scoped bearer
-credentials on `/mcp`. It may verify self-contained tokens, call an
-introspection endpoint, or load signing keys from the API-owned authorization
-service, but its runtime responsibility is token verification and MCP
-workspace/scope enforcement.
+    C->>M: /mcp with Auth0 bearer access token
+    M->>D: Validate and activate connection, membership, and scopes
+    M-->>C: Authorized MCP response
+```
 
-MCP OAuth credentials are hidden client credentials produced by the OAuth
-flow. The website must not display them, put them in setup snippets, or label
-them as `ppat_` API tokens. `ppat_` tokens remain only for advanced manual and
-API-token setup.
+### Discovery
 
-The website route that renders the authorization experience is
-`/connect/mcp/authorize`. Protocol endpoints live under the API authorization
-surface, for example `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`, and
-OAuth metadata routes. The API issues Proofplane OAuth authorization codes and
-tokens; Auth0 does not directly issue MCP access or refresh tokens.
+The MCP server returns `401 Unauthorized` with:
 
-Authorization codes are opaque, one-time-use, PKCE-bound values stored only as
-digests with a short TTL. The approval screen binds a grant to exactly one
-user, one workspace, one OAuth client, one MCP resource, and one permission
-set. A client that needs multiple workspaces must create separate connections.
+```http
+WWW-Authenticate: Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource/mcp"
+```
 
-The initial OAuth scope vocabulary is the existing workspace permission
+The protected-resource metadata identifies:
+
+- `resource`: the canonical public MCP URI;
+- `authorization_servers`: the Auth0 issuer; and
+- `scopes_supported`: the minimal MCP permission set.
+
+The MCP server owns this endpoint under
+[RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). Auth0 owns
+authorization-server metadata under
+[RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
+
+The Auth0 tenant must enable the Resource Parameter Compatibility Profile so
+the MCP `resource` parameter becomes the access-token audience as required by
+[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707).
+
+### Client Registration
+
+Production first-class clients use Auth0's recommended manual Client ID
+Metadata Document registration where supported. Manual third-party
+application registration is the fallback. Auth0, not Proofplane, stores client
+IDs, redirect URIs, grant types, and token-endpoint authentication policy.
+
+Known clients must:
+
+- be third-party applications;
+- use Authorization Code with PKCE;
+- use OAuth access tokens without depending on third-party OIDC support;
+- use exact registered redirect URIs;
+- be granted access only to the Proofplane MCP resource and approved scopes;
+- use the `authorization_code` grant without `offline_access`; and
+- expose stable client identity suitable for connection display and audit.
+
+Open Dynamic Client Registration is deferred. Auth0's DCR endpoint is
+unauthenticated when enabled and requires tenant ACL and default third-party
+permission policy. Generic clients remain on API-token setup until that policy
+is deliberately shipped.
+
+### Auth0 Resource Server
+
+The Auth0 tenant defines one API/resource server whose identifier exactly
+matches the canonical public MCP resource URI, for example:
+
+```text
+https://mcp.proofplane.com/mcp
+```
+
+It uses:
+
+- RS256 access tokens and the RFC 9068 authorization token dialect;
+- the concrete MCP scopes defined below;
+- an eight-hour access-token lifetime;
+- offline access disabled for the MCP resource; and
+- domain-level identity connections usable by third-party clients.
+
+The MCP runtime receives only public verification material through Auth0 JWKS.
+Proofplane never receives Auth0 signing keys.
+
+## Workspace Grant Bridge
+
+Auth0 does not know Proofplane workspace membership. A post-login Redirect
+Action integrates that domain decision without taking over OAuth.
+
+### Initial authorization and connection reuse
+
+Proofplane permits at most one active connection for an Auth0
+user/client/resource tuple. The selected workspace is a property of that
+connection. Connecting the same client to another workspace requires revoking
+or replacing the existing connection through a visible user flow.
+
+For every authorization transaction targeting the MCP resource, the Action:
+
+1. verifies the expected Auth0 resource identifier and allowed client policy;
+2. reads `sub`, `client_id`, requested scopes, resource, and transaction state;
+3. asks Proofplane for the one active connection matching
+   `sub`/`client_id`/resource;
+4. when an active connection exists and the requested scopes are allowed,
+   rechecks membership and adds its connection and workspace claims without a
+   Proofplane browser redirect;
+5. when no active connection exists, creates a short-lived signed redirect
+   token and sends the browser to the workspace-consent route;
+6. resumes only with the original Auth0 `state` and a signed Proofplane result;
+7. verifies that result and rechecks it through the Proofplane grant API; and
+8. adds namespaced connection and workspace claims to the access token.
+
+An authorization request using `prompt=none` may succeed only through step 4.
+If workspace selection, reconnection, or any other interaction is required,
+the Action fails with `interaction_required` instead of attempting a redirect.
+The client must then start a visible authorization flow.
+
+The consent endpoint must not trust a workspace, scope, client, or user value
+submitted by the browser. It verifies the Auth0-signed transaction, loads the
+user by Auth0 subject, intersects requested scopes with the allowed MCP
+vocabulary, checks current membership, and writes a short-lived pending
+connection transactionally.
+
+The workspace step occurs before Auth0 has necessarily recorded its mandatory
+third-party consent or issued an authorization code. A pending connection is
+therefore not shown as authorized. The first valid Auth0-backed MCP request
+atomically activates it. If Auth0 consent is denied, code exchange is
+abandoned, or no valid request arrives before the pending deadline, the record
+expires and is removed. This prevents workspace approval from being mistaken
+for completed OAuth authorization.
+
+The continuation token is short-lived, single-use, bound to Auth0 state, and
+contains only identifiers. Proofplane stores its digest or nonce to prevent
+replay.
+
+### Access-token expiry and reauthorization
+
+Auth0 issues no MCP refresh token. When the eight-hour access token expires,
+the MCP server returns `401 Unauthorized` and the client must start
+Authorization Code with PKCE again.
+
+The best case is nearly silent:
+
+1. the client automatically restarts authorization;
+2. the Auth0 browser session is still active;
+3. the Action finds exactly one active Proofplane connection; and
+4. Auth0 returns a new code without login or workspace interaction.
+
+If the Auth0 session has expired, the user signs in again. If the connection
+was revoked, replaced, or is otherwise unavailable, the user completes the
+workspace step again. If the client does not automatically restart OAuth, its
+tools remain disconnected until the user selects its Authenticate or
+Reconnect control.
+
+Automatic reauthorization is client behavior, not guaranteed by MCP. The
+Claude/Cowork and Codex release gates must verify their behavior on access-token
+expiry. This release does not support background or unattended OAuth work
+beyond the token lifetime; those callers use `ppat_` credentials.
+
+## Access Token Contract
+
+The MCP server accepts only Auth0 access JWTs with all required standard and
+Proofplane claims:
+
+| Claim | Meaning |
+| --- | --- |
+| `iss` | Exact configured Auth0 issuer |
+| `aud` | Canonical Proofplane MCP resource URI |
+| `sub` | Auth0 user subject |
+| `azp` | Authorized MCP client ID |
+| `exp`, `iat` | Token lifetime |
+| `scope` | Auth0-approved MCP scopes |
+| `https://proofplane.com/connection_id` | Durable Proofplane agent connection |
+| `https://proofplane.com/workspace_id` | Workspace selected during consent |
+
+The claim namespace is configuration and must be collision-resistant. Tokens
+contain identifiers and scopes only, never Auth0 credentials, user content, or
+workspace data.
+
+The `scope` claim and persisted connection permissions must agree exactly.
+The resource server never trusts custom claims without the Auth0 signature,
+issuer, audience, and lifetime checks.
+
+## Runtime Authorization
+
+```mermaid
+flowchart TD
+    R[Request to /mcp] --> B{Bearer credential present?}
+    B -- no --> U[401 with resource metadata]
+    B -- yes --> T{ppat_ token format?}
+    T -- yes --> P[Existing API-token authenticator]
+    T -- no --> J[Verify Auth0 JWT signature and registered claims]
+    J --> C{Required MCP claims valid?}
+    C -- no --> U
+    C -- yes --> G[Load connection, user, workspace, and membership]
+    G --> V{Claims match active grant and required scope?}
+    V -- no --> U
+    V -- yes --> A[Attach unified actor context]
+    A --> M[Invoke MCP tool]
+```
+
+For every Auth0-backed MCP request, Proofplane:
+
+1. verifies the JWT signature against cached Auth0 JWKS;
+2. validates `iss`, `aud`, `exp`, `sub`, `azp`, and required custom claims;
+3. loads the named pending or active connection;
+4. requires its user, workspace, client, resource, and permissions to match;
+5. atomically activates a valid, unexpired pending connection or requires an
+   active connection, and requires membership to remain active;
+6. checks the tool's required scope; and
+7. records `last_used_at` and an agent-connection audit actor.
+
+The database check makes revocation and membership removal immediate even
+while an Auth0 JWT remains cryptographically valid.
+
+Invalid credentials return a generic `401`. Workspace and permission failures
+inside tools remain concealed as not-found responses where the existing MCP
+contract requires that behavior. Dependency failures return server errors and
+must not be collapsed into OAuth client errors.
+
+## Expiry, Reauthorization, And Revocation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as MCP client
+    participant M as Proofplane MCP
+    participant I as Auth0
+    participant X as Post-Login Action
+    participant P as Proofplane grant API
+    actor U as User
+
+    C->>M: MCP request with expired access token
+    M-->>C: 401 Unauthorized
+    C->>I: Start Authorization Code with PKCE again
+
+    opt Auth0 session expired
+        I-->>U: Universal Login
+        U->>I: Authenticate
+    end
+
+    I->>X: Run post-login Action
+    X->>P: Find active user, client, and resource binding
+
+    alt One active connection
+        P-->>X: Active connection, workspace, and scopes
+        X->>X: Add existing connection and workspace claims
+        I-->>C: Authorization code without Proofplane redirect
+        C->>I: Exchange code and PKCE verifier
+        I-->>C: New eight-hour access token
+        C->>M: Retry MCP request
+    else No reusable connection
+        alt Silent authorization request
+            X-->>I: Deny with interaction_required
+            I-->>C: Reconnect visibly
+        else Visible authorization request
+            X-->>U: Select and approve Proofplane workspace
+            U-->>X: Continue Auth0 transaction
+            I-->>C: Authorization code
+        end
+    end
+```
+
+When a user revokes a connection, Proofplane first commits local revocation.
+That immediately blocks all access tokens through the runtime database check.
+The Action refuses to reuse a revoked connection. A silent attempt receives
+`interaction_required`; a visible attempt may create a new pending connection
+after the user approves a workspace.
+
+Proofplane may also revoke the Auth0 user grant as credential hygiene. Local
+revocation remains authoritative because an already-issued access token is
+otherwise valid until its eight-hour expiry.
+
+An expired access token cannot be refreshed. Reauthorization always produces
+a new authorization code and access token.
+
+## Scope Model
+
+The Auth0 MCP resource server exposes the existing workspace permission
 vocabulary:
 
 - `read_evidence_requests`
@@ -128,265 +471,231 @@ vocabulary:
 - `read_controls`
 - `write_controls`
 
-`offline_access` is accepted only to request a refresh token. It does not map
-to a workspace permission. First-class agent flows may present a friendly
-"manage SOC 2 workspace" preset, but persisted grants store the concrete
-permission strings. Tools that require an ungranted permission return
-authorization failure rather than escalating the connection.
+`offline_access` is not advertised, requested, or accepted in this release.
 
-Proofplane supports known OAuth clients only for this epic. First-class clients
-such as Claude/Cowork and the Proofplane Codex plugin are pre-registered with
-stable metadata, support status, and exact redirect-URI policy. Dynamic Client
-Registration is explicitly deferred. Generic MCP clients that cannot use a
-known OAuth client remain on the advanced API-token setup path until a later
-epic adds generic OAuth registration.
+The Auth0 client grant limits which scopes a client may request. The user
+reviews the concrete requested scopes during the workspace step, and Auth0
+shows its mandatory third-party application consent when establishing the
+user grant. These are distinct: Proofplane binds the request to a workspace;
+Auth0 records consent for the client/resource/scope combination. Scope
+descriptions must make the two steps consistent rather than contradictory.
+Proofplane persists the approved set and intersects it with the signed token on
+every request. A tool never escalates a missing scope.
 
-MCP access and refresh tokens are Proofplane-issued bearer credentials. OAuth
-does not require these bearer values to be JWTs. Use the existing PASETO
-implementation after refactoring it into purpose-specific issuers/verifiers.
-MCP OAuth tokens must use a separate keyring and implicit assertions from
-attachment download grants, for example:
+## Persistence And Audit
 
-- `proofplane:mcp-oauth-access:v1`
-- `proofplane:mcp-oauth-refresh:v1`
+Proofplane stores:
 
-Access-token PASETOs expire after 15 minutes and include enough claims to
-identify the connection, user, workspace, OAuth client, MCP resource, and
-granted permissions. Each authenticated MCP request still checks the persisted
-connection for revocation, workspace membership, resource, and scope validity.
+- `agent_connections`, with at most one active connection per
+  user/Auth0-client/resource tuple;
+- a single-use consent-continuation nonce or digest;
+- structured authorization, use, rejection, and revocation audit events.
 
-Refresh-token PASETOs rotate on every use, have a 30-day idle lifetime, and
-have a 90-day absolute lifetime. Store refresh-token digests and rotation state
-server-side so reuse revokes the token family and requires the user to connect
-again. Revoking a connection immediately invalidates future refreshes and MCP
-requests for that connection.
+An agent connection contains:
 
-Credentials remain HTTP transport metadata. They must never appear in MCP tool
-arguments, tool results, prompts, logs, analytics, URLs, or browser storage
-owned by the UI.
+- Proofplane connection, user, and workspace IDs;
+- Auth0 subject and client ID;
+- a client display-name snapshot;
+- MCP resource and approved scopes;
+- pending expiry, activation, last-use, and revocation timestamps; and
+- no raw access token, authorization code, or signing key.
 
-## Connection Lifecycle And Audit
+Proofplane does not store OAuth clients or authorization codes locally. Auth0
+is authoritative for those protocol objects.
 
-Proofplane must let a user see agent connections associated with their account,
-including enough information to recognize the client, workspace, granted
-access, creation time, and recent use. Users can revoke a connection without
-revoking unrelated API tokens or other clients.
+Audit events use identifier-only fields and distinguish human, API-token, and
+agent-connection actors. Auth0 tenant logs remain the source for OAuth
+issuance events; Proofplane audit records domain approval, runtime use, and
+local revocation.
 
-Authorization, refresh, use, rejection, and revocation produce structured audit
-events using identifier-only fields. Tool-level audit behavior from the MCP
-Server epic remains unchanged.
+## Public Endpoints And Configuration
 
-The persisted model has three logical records:
+Required public roles are:
 
-- known OAuth clients and their redirect-URI policy;
-- agent connections, one per user/workspace/client/resource/permission-set
-  grant;
-- OAuth credential digests and rotation state, linked to an agent connection.
+- MCP resource URL, such as `https://mcp.proofplane.com/mcp`;
+- Auth0 issuer URL;
+- Auth0 JWKS URL;
+- Proofplane workspace-consent URL; and
+- Proofplane internal grant-validation URL callable from the Auth0 Action.
 
-Connection records include client name, client type, workspace, granted
-permissions, creation time, last authenticated MCP use, last refresh, and
-revocation time. Raw access and refresh credentials must never be stored.
+The MCP resource URL is both the protected resource identifier and Auth0 API
+audience. It must be identical in client requests, Auth0 configuration,
+protected-resource metadata, JWT validation, and connection records.
+
+Production endpoints use HTTPS. Local unit and integration tests use local
+JWK fixtures and a fake Action caller. End-to-end Auth0 testing uses a
+dedicated development tenant and an externally reachable preview environment;
+an Auth0 Action cannot call an unexposed loopback service.
+
+Secrets used between the Action and Proofplane are managed as Auth0 Action
+secrets and Proofplane runtime secrets. They are rotated independently of
+Auth0 JWT signing keys.
+
+The initial MCP deployment may use one replica or ingress stickiness keyed by
+`Mcp-Session-Id`. The session ID is transport state, never authorization.
+
+## Website Experience
+
+The website:
+
+- asks which agent the user uses;
+- launches the best verified client-specific connection path;
+- hosts the workspace-consent route invoked by the Auth0 Action;
+- clearly displays client identity, requested permissions, and workspace;
+- lists authorized connections and supports local revocation;
+- explains that OAuth connections may require reconnection after eight hours;
+- provides an explicit Authenticate or Reconnect action when the client cannot
+  restart OAuth automatically;
+- distinguishes "authorized" from external client connection health;
+- offers a first useful SOC 2 prompt; and
+- keeps API-token setup as an advanced path.
+
+The consent route is part of the Auth0 transaction. It accepts only a valid
+short-lived Action token and state, and it always rechecks membership on
+approval. A normal website session alone cannot mint an agent connection.
+
+Proofplane records a pending grant when the workspace is approved and marks it
+active only on the first valid Auth0-backed MCP request. The agent harness
+still owns whether its transport remains connected and tools are mounted.
+`last_used_at` is audit/debug metadata, not a readiness gate.
 
 ## Client Distribution
 
 ### Claude And Cowork
 
-Proofplane ships as a remote connector usable from Claude, Cowork, and Claude
-Desktop. The initial release may use a custom connector URL. Directory
-submission material follows once production OAuth, support, privacy, tool
-annotations, and test-account requirements are satisfied.
+Proofplane ships as a hosted remote connector. The initial release may use a
+custom connector URL. Directory submission follows production Auth0 OAuth,
+support, privacy, tool-annotation, and test-account validation.
 
-A local `.mcpb` extension is not the primary path because it is limited to
-Claude Desktop and introduces an unnecessary local runtime.
+The release smoke test must prove that Claude follows Protected Resource
+Metadata to the Auth0 issuer, completes the Redirect Action workspace step,
+and sends an Auth0 access token with the required claims.
 
 ### Codex
 
-Proofplane ships a Codex plugin that bundles:
+The `proofplane-soc2` Codex plugin bundles:
 
-- the hosted MCP server definition;
-- focused SOC 2 workflow skills and instructions;
-- safe first prompts and approval guidance.
+- the hosted MCP server declaration;
+- focused SOC 2 workflow skills;
+- server/tool instructions and safe first prompts; and
+- support, privacy, terms, and approval guidance.
 
-The plugin must not contain a customer credential. Authentication occurs
-through the remote MCP authorization flow during installation or first use only
-after that path is verified in the Codex app.
-
-Current Codex documentation describes OAuth for Streamable HTTP MCP servers via
-configuration plus `codex mcp login`. The observed Codex Desktop custom-MCP
-form exposes Streamable HTTP URL and bearer-token configuration, but does not
-show an inline OAuth connect action. Proofplane must therefore not treat the
-desktop custom-MCP form as the non-technical Codex onboarding path unless that
-surface gains OAuth support. Until plugin-driven OAuth is verified, direct
-Codex MCP setup is an advanced path and may require CLI/config steps or a
-bearer-token environment variable.
-
-The initial Codex plugin is Proofplane-owned and named `proofplane-soc2`. It
-ships through a Proofplane-controlled personal or repo marketplace during
-development, then moves to broader distribution only after plugin-led OAuth is
-validated. The plugin includes the hosted MCP declaration, SOC 2 workflow
-skills, server/tool instructions, starter prompts, approval guidance, and
-support/privacy/terms metadata. It must not be positioned as no-token
-onboarding until install or first use can complete OAuth without manual
-CLI/config work.
+It contains no customer credential. Plugin-led OAuth must be validated in the
+Codex app before the path is presented as no-token onboarding. If the app
+cannot complete Auth0 MCP OAuth, direct Codex setup remains an advanced path
+using documented CLI/config behavior.
 
 ### Other Clients
 
-Generic clients receive the remote MCP URL and advanced API-token setup
-instructions. Generic OAuth setup is deferred until Dynamic Client
-Registration or an equivalent known-client policy is added in a later epic.
-Manual JSON/TOML and API-token setup remains an advanced fallback, not the
-default call to action.
+Generic clients receive the hosted MCP URL and a capability matrix. OAuth is
+offered only to clients with a reviewed Auth0 registration path. Others use
+advanced `ppat_` setup.
 
-Generic guidance is generated from one versioned connection definition or
-equivalent source so endpoint and naming changes do not drift between docs.
-
-## Public Endpoint Configuration And Routing
-
-Endpoint URLs are configuration, not code constants. OAuth resource, issuer,
-redirect, and metadata values must be derived from validated public base URL
-config so local, preview, and production environments can differ safely.
-
-The required public URL roles are:
-
-- MCP resource URL: the externally visible Streamable HTTP MCP endpoint, for
-  example `http://127.0.0.1:3002/mcp` locally or
-  `https://mcp.proofplane.com/mcp` in production;
-- authorization issuer URL: the externally visible API/OAuth issuer, for
-  example `http://127.0.0.1:3000` locally or
-  `https://api.proofplane.com` in production;
-- app base URL: the externally visible browser UI origin, for example
-  `http://127.0.0.1:5173` locally or `https://app.proofplane.com` in
-  production.
-
-The MCP server serves Streamable HTTP protocol traffic at the configured MCP
-resource URL and protected resource metadata for that resource. It advertises
-the configured authorization issuer rather than serving browser UI itself.
-Protocol endpoints and token exchange live under the API/OAuth issuer. Browser
-UI and static assets live under the configured app base URL.
-
-Every environment must validate these URLs at startup. The MCP resource URL
-must include the `/mcp` path. The issuer and app base URLs must be absolute
-origins without fragments. Production values must use HTTPS; local development
-may use loopback HTTP.
-
-The initial production MCP deployment may run as a single replica or use
-ingress stickiness keyed by `Mcp-Session-Id`. The session identifier remains
-protocol state only and never grants authorization. Horizontal scaling without
-stickiness requires replacing the current process-local MCP session manager
-with shared session state or a stateless-compatible transport strategy.
-
-## Website Experience
-
-Replace the current token-success MCP preview with an agent connection area
-that:
-
-- asks which agent the user uses;
-- labels tested, preview, and generic clients honestly;
-- launches the best available install/connect mechanism;
-- shows authorization and connection progress;
-- records successful authorization without claiming the external client is
-  healthy;
-- offers a first task such as reviewing open evidence requests;
-- links advanced users to API-token setup separately.
-
-All browser-facing OAuth and connection-management screens are served by the
-website. If a client starts authorization from the MCP endpoint, discovery and
-redirect metadata must route the browser to the website/API authorization
-surface rather than to MCP-hosted HTML.
-
-Proofplane owns authorization and revocation state. The agent harness owns its
-own MCP connection health and should be the place where users see whether its
-tools are mounted and callable.
-
-After OAuth completes, Proofplane records the agent connection and may show it
-as authorized. It must not block OAuth success while waiting for MCP traffic or
-try to mirror the client's connection-health UI. Authenticated MCP traffic
-updates `last_used_at` for audit/debugging only. If a connection is revoked or
-credentials become unusable, Proofplane can show that the connection requires
-reconnection.
+Open DCR remains deferred until tenant ACL, abuse controls, default API
+permissions, cleanup, and client-display behavior are specified and tested.
 
 ## Compatibility And Failure Behavior
 
-- An unsupported client receives generic remote-MCP guidance without an
-  unsupported installer promise.
-- A user without workspace access cannot authorize that workspace.
-- Denied consent returns to a recoverable state and creates no usable grant.
-- Revoked, expired, wrong-resource, and wrong-workspace credentials fail closed.
-- Client-directory rejection does not block custom-connector or generic URL
+- Existing REST and MCP `ppat_` callers remain unchanged.
+- Unknown issuers, audiences, clients, connections, workspaces, and scopes
+  fail closed.
+- Missing or malformed Action state cannot create a connection.
+- Denied Auth0 consent or abandoned code exchange leaves no active connection;
+  the pending grant expires.
+- A user without current workspace membership cannot authorize or reuse a
+  connection.
+- Expired access tokens receive `401` and require a new authorization-code
+  flow.
+- Revocation and membership removal invalidate MCP access immediately.
+- Auth0 or Proofplane dependency failure does not fall back to shared or
+  long-lived credentials.
+- An unsupported client receives honest fallback guidance.
+- Client-directory rejection does not block custom connector or API-token
   setup.
-- Existing REST and MCP `ppat_` callers continue to work.
 
 ## Testing
 
-- Protocol tests cover discovery metadata, PKCE, resource/audience validation,
-  refresh rotation, denial, expiry, and revocation.
-- Integration tests prove workspace isolation and coexistence with `ppat_`
-  authentication.
-- UI tests cover each client-path state without invoking third-party desktop
-  applications.
+- Unit tests validate Auth0 JWT signature, issuer, audience, lifetime, client,
+  connection, workspace, and scope claims with local JWK fixtures.
+- MCP protocol tests validate `401` challenges and Protected Resource Metadata.
+- Action tests cover initial redirect, signed continuation, scope filtering,
+  active-connection reuse, silent interaction requirements, denial, and
+  unavailable Proofplane services.
+- Integration tests cover workspace isolation, live membership removal,
+  connection revocation, token expiry, reauthorization, and `ppat_`
+  coexistence.
+- Browser tests cover workspace approval, denial, expiry, replay, and malformed
+  Action transactions.
+- Preview smoke tests exercise initial and repeated Auth0 Authorization Code
+  with PKCE using MCP Inspector.
 - Release smoke tests exercise Claude/Cowork and Codex against a
-  production-like endpoint.
-- Distribution artifacts are validated against their host's current manifest
-  or submission requirements.
+  production-like environment, including behavior after token expiry.
 
-## Open Decisions
+Proofplane tests do not reproduce Auth0's authorization-code, PKCE, signing,
+or protocol-error internals. They test configuration, integration, claim
+validation, expiry, and Proofplane policy.
 
-Only one decision remains open before implementation:
+## Delivery Gates And Open Decisions
 
-- whether Codex app plugin installation can initiate and complete MCP OAuth
-  without manual CLI/config work.
+Implementation must not begin until these tenant capabilities are confirmed in
+a development Auth0 tenant:
 
-This is a validation spike, not a protocol-design blocker. If it fails, Codex
-ships as an advanced documented path using `codex mcp login` or bearer-token
-configuration while Claude/Cowork remains the first-class non-technical
-connector path.
+1. MCP Resource Parameter Compatibility Profile.
+2. Third-party client access to the MCP resource server.
+3. Post-login Redirect Actions for those third-party clients.
+4. An eight-hour access-token configuration without `offline_access`.
+5. Active-connection lookup and claim injection on repeated authorization.
 
-## Distribution Order And Submission Material
+The remaining client questions are:
 
-Ship and validate distribution in this order:
+- whether Claude/Cowork supports the selected Auth0 CIMD or manual
+  registration model;
+- whether Codex plugin installation can initiate and complete the flow without
+  CLI/config work; and
+- whether Claude/Cowork and Codex automatically restart OAuth after `401` or
+  provide a usable reconnect control; and
+- whether generic OAuth warrants enabling and securing open DCR.
 
-1. Production remote MCP plus website/API OAuth.
-2. Claude/Cowork custom connector setup.
-3. Guided website connection flow for Claude/Cowork.
-4. Codex plugin preview through a Proofplane-controlled marketplace.
-5. Directory or broader marketplace submission after production smoke tests.
+If a first-class client cannot recover from access-token expiry with an
+acceptable visible or automatic authorization flow, it must not be marketed
+as a persistent no-token connection. Unattended callers remain on `ppat_`
+authentication.
 
-Directory and marketplace submissions require privacy policy, terms of service,
-support contact, security overview, OAuth scope descriptions, tool list,
-screenshots, starter prompts, troubleshooting guide, and a durable test
-workspace/account.
+## Distribution Order
+
+1. Validate the Auth0 capability gates with MCP Inspector.
+2. Ship MCP discovery, Auth0 JWT validation, and workspace grant binding.
+3. Ship connection listing, revocation, and guided website setup.
+4. Validate Claude/Cowork custom connector behavior.
+5. Validate the Codex plugin preview.
+6. Prepare directory or broader marketplace submission.
+
+## Reference Material
+
+- [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
+- [Auth0 MCP authorization flow](https://auth0.com/ai/docs/mcp/intro/why-auth-for-mcp)
+- [Auth0 MCP client registration](https://auth0.com/ai/docs/mcp/guides/registering-your-mcp-client-application)
+- [Auth0 Resource Parameter Compatibility Profile](https://auth0.com/ai/docs/mcp/guides/resource-param-compatibility-profile)
+- [Auth0 Redirect Actions](https://auth0.com/docs/customize/actions/explore-triggers/signup-and-login-triggers/login-trigger/redirect-with-actions)
+- [Auth0 Redirect Action limitations](https://auth0.com/docs/customize/actions/explore-triggers/signup-and-login-triggers/login-trigger/redirect-with-actions#restrictions-and-limitations)
+- [RFC 9728: Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
+- [RFC 8707: Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707)
+- [RFC 9700: OAuth Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700)
 
 ## Revisions
 
-- 2026-06-29: Initial proposal based on research into hosted OAuth connectors,
-  client directories and deep links, Claude MCP bundles, and multi-client MCP
-  gateways. Chose hosted remote MCP plus native client distribution as the
-  default and retained API tokens for technical automation.
-- 2026-06-29: Excluded Cursor and VS Code distribution. Retained generic
-  remote-MCP guidance only as a fallback beyond Claude/Cowork and Codex.
-- 2026-06-29: Fixed the OAuth ownership boundary. The website/API owns the MCP
-  authorization facade and all browser UI; the MCP server remains a
-  protocol/resource server that publishes discovery metadata, verifies
-  MCP-scoped credentials, and enforces workspace/scope access.
-- 2026-06-29: Refined the Codex path after checking current Codex behavior.
-  Codex documents OAuth-capable Streamable HTTP MCP via `codex mcp login`, but
-  the desktop custom-MCP form appears bearer-token oriented. The epic now
-  requires explicit validation before presenting Codex plugin installation as a
-  no-token path.
-- 2026-06-29: Resolved most open decisions. Chose a Proofplane API-owned OAuth
-  facade backed by Auth0 identity, one connection per user/workspace/client,
-  existing workspace permissions as scopes, known-client OAuth only, opaque
-  rotating credentials, and configurable public endpoint roles.
-- 2026-06-29: Clarified that MCP resource, authorization issuer, and app base
-  URLs are environment configuration. Production hostnames are examples, not
-  hard-coded requirements.
-- 2026-06-29: Removed the website readiness taxonomy. Proofplane now owns
-  authorization/revocation state and last-used audit metadata; the agent
-  harness owns MCP connection-health display.
-- 2026-06-29: Removed Dynamic Client Registration from MVP scope. Generic MCP
-  clients stay on the advanced API-token path until a later generic OAuth
-  registration epic.
-- 2026-06-29: Chose Proofplane-issued PASETO bearer credentials for MCP OAuth.
-  Auth0 JWTs remain upstream human identity tokens only. MCP PASETOs use
-  separate OAuth key material and implicit assertions from attachment download
-  grants, with persisted connection checks for revocation and authorization.
+- 2026-07-02: Removed `offline_access` and connection-bound refresh metadata
+  from the initial release. Auth0 now issues eight-hour access tokens. Repeat
+  authorization reuses the one active user/client/resource connection without
+  a Proofplane redirect when possible; otherwise the user reconnects visibly.
+- 2026-07-02: Replaced the proposed Proofplane OAuth facade and PASETO token
+  service with direct Auth0 MCP authorization. Added the Redirect Action
+  workspace-grant bridge, connection-bound refresh metadata, runtime claim
+  contract, revocation behavior, delivery gates, and end-to-end diagrams.
+- 2026-06-29: Initial proposal selected hosted remote MCP, native client
+  distribution, and API-token compatibility.
+- 2026-06-29: Limited first-class distribution to Claude/Cowork and Codex,
+  leaving other clients on generic fallback guidance.
+- 2026-06-29: Established one-workspace grants, concrete workspace permission
+  scopes, configurable public endpoints, and Proofplane-owned connection
+  lifecycle records.

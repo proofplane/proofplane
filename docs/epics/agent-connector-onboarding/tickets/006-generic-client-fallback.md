@@ -8,9 +8,9 @@ connection definition.
 
 **Acceptance criteria**
 
-- [ ] Given a generic MCP client outside the known OAuth client list, when the
-  user follows fallback guidance, then it uses advanced API-token setup rather
-  than an unsupported OAuth promise.
+- [ ] Given a generic MCP client without a reviewed Auth0 registration path,
+  when the user follows fallback guidance, then it uses advanced API-token
+  setup rather than an unsupported OAuth promise.
 - [ ] Given an unsupported or incompatible client, when selected, then
   Proofplane identifies the limitation instead of claiming support.
 - [ ] Given an advanced bearer-token client, when this ships, then documented
@@ -23,7 +23,7 @@ connection definition.
 
 - [ ] Define a versioned source for generic connection metadata.
 - [ ] Add generic Streamable HTTP API-token guidance.
-- [ ] Document that generic OAuth and Dynamic Client Registration are deferred.
+- [ ] Document that open Auth0 Dynamic Client Registration remains deferred.
 - [ ] Add a client capability/support matrix with last-verified metadata.
 - [ ] Validate generated snippets in tests or release checks.
 - [ ] Document update ownership when a client changes its configuration format.
@@ -33,5 +33,5 @@ connection definition.
 - Cursor and VS Code distribution are excluded.
 - 2026-06-29: Scope narrowed with the spec to remove client-specific
   distribution.
-- 2026-06-29: Dynamic Client Registration was removed from MVP scope. Generic
-  clients use advanced API-token setup until a later generic OAuth epic.
+- 2026-07-02: Open Auth0 Dynamic Client Registration remains deferred until
+  tenant ACL, abuse prevention, and default API permissions are specified.
