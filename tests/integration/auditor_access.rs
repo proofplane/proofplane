@@ -366,6 +366,242 @@ async fn portal_data_rejects_missing_tampered_and_revoked_sessions() {
         .assert_status_not_found();
 }
 
+#[tokio::test]
+async fn auditor_session_downloads_uploaded_attachment_with_safe_headers_and_audit() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let submission_id = create_submission(&app, workspace_id).await;
+    let content = b"auditor downloadable bytes";
+    let attachment = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "Auditor packet.txt",
+        content,
+    )
+    .await;
+    let attachment_id = uuid_field(&attachment["id"]);
+    let final_key = finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+
+    let path = auditor_download_path(submission_id, attachment_id);
+    let request = app.server().get(&path).add_header(
+        "Cookie",
+        format!("proofplane_auditor_session={raw_session}"),
+    );
+    let (response, logs) = capture_audit_logs(|request_id| async move {
+        request
+            .add_header(REQUEST_ID_HEADER, request_id.to_string())
+            .await
+    })
+    .await;
+
+    response.assert_status_ok();
+    assert_eq!(response.as_bytes().as_ref(), content);
+    assert_eq!(response.header("content-type"), "text/plain");
+    assert_eq!(response.header("content-length"), content.len().to_string());
+    assert_eq!(
+        response.header("content-disposition"),
+        "attachment; filename=\"Auditor packet.txt\""
+    );
+    assert_eq!(response.header("cache-control"), "private, no-store");
+    assert_eq!(response.header("referrer-policy"), "no-referrer");
+
+    let logs = serde_json::to_string(&logs).expect("logs serialize");
+    assert!(logs.contains("auditor_attachment.downloaded"));
+    assert!(logs.contains("auditor@example.com"));
+    assert!(logs.contains(&workspace_id.to_string()));
+    assert!(logs.contains(&submission_id.to_string()));
+    assert!(logs.contains(&attachment_id.to_string()));
+    assert!(!logs.contains(invite_token));
+    assert!(!logs.contains(&raw_session));
+    assert!(!logs.contains(final_key.as_str()));
+    assert!(!logs.contains("auditor downloadable bytes"));
+}
+
+#[tokio::test]
+async fn auditor_download_rejects_ineligible_missing_and_cross_workspace_attachments() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    let submission_id = create_submission(&app, workspace_id).await;
+
+    let pending =
+        upload_attachment(&app, workspace_id, submission_id, "pending.txt", b"pending").await;
+    let pending_id = uuid_field(&pending["id"]);
+    assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
+
+    for status in ["finalizing", "failed", "contains_virus"] {
+        set_attachment_status(&app, pending_id, status).await;
+        assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
+    }
+
+    let archived = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "archived.txt",
+        b"archived",
+    )
+    .await;
+    let archived_id = uuid_field(&archived["id"]);
+    finalize_attachment(&app, workspace_id, submission_id, archived_id).await;
+    archive_attachment(&app, archived_id).await;
+    assert_auditor_download_not_found(&app, &raw_session, submission_id, archived_id).await;
+
+    assert_auditor_download_not_found(&app, &raw_session, submission_id, Uuid::new_v4()).await;
+    assert_auditor_download_not_found(&app, &raw_session, Uuid::new_v4(), archived_id).await;
+
+    let other_submission_id = create_submission(&app, other_workspace_id).await;
+    let other = upload_attachment(
+        &app,
+        other_workspace_id,
+        other_submission_id,
+        "other.txt",
+        b"other",
+    )
+    .await;
+    let other_attachment_id = uuid_field(&other["id"]);
+    finalize_attachment(
+        &app,
+        other_workspace_id,
+        other_submission_id,
+        other_attachment_id,
+    )
+    .await;
+    assert_auditor_download_not_found(&app, &raw_session, other_submission_id, other_attachment_id)
+        .await;
+}
+
+#[tokio::test]
+async fn auditor_download_rejects_logged_out_tampered_expired_and_grant_revoked_sessions() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let submission_id = create_submission(&app, workspace_id).await;
+    let attachment =
+        upload_attachment(&app, workspace_id, submission_id, "session.txt", b"session").await;
+    let attachment_id = uuid_field(&attachment["id"]);
+    finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let path = auditor_download_path(submission_id, attachment_id);
+
+    app.server().get(&path).await.assert_status_not_found();
+    app.server()
+        .get(&path)
+        .add_header("Cookie", "proofplane_auditor_session=tampered")
+        .await
+        .assert_status_not_found();
+
+    let logged_out_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    app.server()
+        .post("/auditor-access/logout")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={logged_out_session}"),
+        )
+        .await
+        .assert_status_ok();
+    let logged_out = app
+        .server()
+        .get(&path)
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={logged_out_session}"),
+        )
+        .await;
+    logged_out.assert_status_not_found();
+    assert!(!String::from_utf8_lossy(logged_out.as_bytes().as_ref()).contains("session"));
+
+    let expired_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    let loaded_session =
+        AuditorAccessSessionService::new(app.postgres_arc(), Arc::new(DisabledMailAdapter))
+            .load_session(&expired_session)
+            .await
+            .expect("session loads");
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE auditor_sessions SET created_at = now() - interval '2 seconds', expires_at = now() - interval '1 second' WHERE id = $1",
+            &[&Uuid::from(loaded_session.id)],
+        )
+        .await
+        .expect("session expires");
+    app.server()
+        .get(&path)
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={expired_session}"),
+        )
+        .await
+        .assert_status_not_found();
+
+    let revoked_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    AuditorAccessGrantService::new(app.postgres_arc())
+        .revoke(
+            &agent_connection_context(&app, workspace_id),
+            grant.grant.id,
+        )
+        .await
+        .expect("grant revokes");
+    app.server()
+        .get(&path)
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={revoked_session}"),
+        )
+        .await
+        .assert_status_not_found();
+}
+
+#[tokio::test]
+async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_details() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let submission_id = create_submission(&app, workspace_id).await;
+    let content = b"mismatch bytes";
+    let attachment =
+        upload_attachment(&app, workspace_id, submission_id, "mismatch.txt", content).await;
+    let attachment_id = uuid_field(&attachment["id"]);
+    let final_key = finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let metadata_path = app
+        .object_storage_root()
+        .join("metadata")
+        .join(format!("{}.json", final_key.as_str()));
+    let mut metadata: Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).expect("metadata reads"))
+            .expect("metadata parses");
+    metadata["sha256"] = Value::String("0".repeat(64));
+    std::fs::write(
+        metadata_path,
+        serde_json::to_vec_pretty(&metadata).expect("metadata serializes"),
+    )
+    .expect("metadata writes");
+
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    let response = app
+        .server()
+        .get(&auditor_download_path(submission_id, attachment_id))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    response.assert_status_internal_server_error();
+    let body = String::from_utf8_lossy(response.as_bytes().as_ref());
+    assert!(!body.contains(final_key.as_str()));
+    assert!(!body.contains("mismatch bytes"));
+}
+
 async fn verified_session_cookie(app: &TestApp, workspace_id: Uuid, invite_token: &str) -> String {
     app.server()
         .post(&format!("/auditor-access/{workspace_id}/otp/request"))
@@ -466,6 +702,58 @@ fn submission(summary: &str) -> Value {
     })
 }
 
+async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Auditor download evidence", "2099-01-01T00:00:00Z"),
+        )
+        .await;
+    let submission = app
+        .create_evidence_submission(
+            workspace_id,
+            uuid_field(&request["id"]),
+            &submission("auditor download submission"),
+        )
+        .await;
+
+    uuid_field(&submission["id"])
+}
+
+fn auditor_download_path(submission_id: Uuid, attachment_id: Uuid) -> String {
+    format!(
+        "/auditor-access/portal/evidence-submissions/{submission_id}/attachments/{attachment_id}/download"
+    )
+}
+
+async fn assert_auditor_download_not_found(
+    app: &TestApp,
+    raw_session: &str,
+    submission_id: Uuid,
+    attachment_id: Uuid,
+) {
+    app.server()
+        .get(&auditor_download_path(submission_id, attachment_id))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await
+        .assert_status_not_found();
+}
+
+async fn set_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE evidence_attachments SET upload_status = $2 WHERE id = $1",
+            &[&attachment_id, &status],
+        )
+        .await
+        .expect("attachment status updates");
+}
 fn uuid_field(value: &Value) -> Uuid {
     Uuid::parse_str(value.as_str().expect("UUID field is a string")).expect("field is a UUID")
 }
@@ -521,18 +809,71 @@ async fn archive_attachment(app: &TestApp, attachment_id: Uuid) {
 
 async fn finalize_attachment(
     app: &TestApp,
-    _workspace_id: Uuid,
-    _submission_id: Uuid,
+    workspace_id: Uuid,
+    submission_id: Uuid,
     attachment_id: Uuid,
-) {
-    app.postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .execute(
-            "UPDATE evidence_attachments SET upload_status = 'uploaded' WHERE id = $1",
+) -> String {
+    let client = app.postgres().get().await.expect("connection opens");
+    let row = client
+        .query_one(
+            "SELECT filename, object_key FROM evidence_attachments WHERE id = $1",
             &[&attachment_id],
         )
         .await
+        .expect("attachment reads");
+    let filename: String = row.get("filename");
+    let quarantine_key: String = row.get("object_key");
+    let final_key = format!(
+        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
+    );
+    copy_filesystem_object(app, &quarantine_key, &final_key);
+
+    client
+        .execute(
+            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
+            &[&attachment_id, &final_key],
+        )
+        .await
         .expect("attachment finalizes");
+
+    final_key
+}
+
+fn copy_filesystem_object(app: &TestApp, source_key: &str, destination_key: &str) {
+    let source_object = app.object_storage_root().join("objects").join(source_key);
+    let destination_object = app
+        .object_storage_root()
+        .join("objects")
+        .join(destination_key);
+    std::fs::create_dir_all(
+        destination_object
+            .parent()
+            .expect("destination object has parent"),
+    )
+    .expect("destination object parent creates");
+    std::fs::copy(&source_object, &destination_object).expect("object copies");
+
+    let source_metadata = app
+        .object_storage_root()
+        .join("metadata")
+        .join(format!("{source_key}.json"));
+    let destination_metadata = app
+        .object_storage_root()
+        .join("metadata")
+        .join(format!("{destination_key}.json"));
+    std::fs::create_dir_all(
+        destination_metadata
+            .parent()
+            .expect("destination metadata has parent"),
+    )
+    .expect("destination metadata parent creates");
+    let mut metadata: Value =
+        serde_json::from_slice(&std::fs::read(&source_metadata).expect("metadata reads"))
+            .expect("metadata parses");
+    metadata["key"] = Value::String(destination_key.to_owned());
+    std::fs::write(
+        destination_metadata,
+        serde_json::to_vec_pretty(&metadata).expect("metadata serializes"),
+    )
+    .expect("metadata writes");
 }

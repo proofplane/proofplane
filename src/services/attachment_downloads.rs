@@ -57,6 +57,12 @@ pub struct DownloadedAttachment {
     pub audit: DownloadGrantAuditContext,
 }
 
+pub struct WorkspaceDownloadedAttachment {
+    pub attachment: EvidenceAttachment,
+    pub object: ObjectStream,
+    pub audit: WorkspaceDownloadAuditContext,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DownloadGrantAuditContext {
     pub workspace_id: WorkspaceId,
@@ -77,6 +83,13 @@ impl DownloadGrantIssuer {
             Self::AgentConnection(id) => id,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceDownloadAuditContext {
+    pub workspace_id: WorkspaceId,
+    pub submission_id: EvidenceSubmissionId,
+    pub attachment_id: EvidenceAttachmentId,
 }
 
 #[derive(Clone)]
@@ -189,11 +202,34 @@ impl AttachmentDownloadService {
         let grant =
             VerifiedDownloadGrant::try_from(verified).map_err(|_| DownloadError::NotFound)?;
 
+        let downloaded = self
+            .download_for_workspace(grant.workspace_id, grant.submission_id, grant.attachment_id)
+            .await?;
+
+        Ok(DownloadedAttachment {
+            attachment: downloaded.attachment,
+            object: downloaded.object,
+            audit: DownloadGrantAuditContext {
+                workspace_id: grant.workspace_id,
+                submission_id: grant.submission_id,
+                attachment_id: grant.attachment_id,
+                issued_by_user_id: grant.issued_by_user_id,
+                issued_via: grant.issued_via,
+            },
+        })
+    }
+
+    pub async fn download_for_workspace(
+        &self,
+        workspace_id: WorkspaceId,
+        submission_id: EvidenceSubmissionId,
+        attachment_id: EvidenceAttachmentId,
+    ) -> Result<WorkspaceDownloadedAttachment, DownloadError> {
         let candidate = self
             .repository
-            .in_workspace_context_read(grant.workspace_id, async move |context| {
+            .in_workspace_context_read(workspace_id, async move |context| {
                 context
-                    .get_attachment_for_download_grant(grant.submission_id, grant.attachment_id)
+                    .get_attachment_for_download_grant(submission_id, attachment_id)
                     .await
             })
             .await?
@@ -212,15 +248,13 @@ impl AttachmentDownloadService {
             .map_err(storage_download_error)?;
         validate_metadata(&candidate.attachment, &object.metadata)?;
 
-        Ok(DownloadedAttachment {
+        Ok(WorkspaceDownloadedAttachment {
             attachment: candidate.attachment,
             object,
-            audit: DownloadGrantAuditContext {
-                workspace_id: grant.workspace_id,
-                submission_id: grant.submission_id,
-                attachment_id: grant.attachment_id,
-                issued_by_user_id: grant.issued_by_user_id,
-                issued_via: grant.issued_via,
+            audit: WorkspaceDownloadAuditContext {
+                workspace_id,
+                submission_id,
+                attachment_id,
             },
         })
     }

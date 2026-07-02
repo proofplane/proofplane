@@ -1,8 +1,11 @@
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{
-        header::{COOKIE, SET_COOKIE},
-        HeaderMap, HeaderValue, StatusCode,
+        header::{
+            CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, SET_COOKIE,
+        },
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
     },
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -20,6 +23,7 @@ use crate::{
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{error::ApiError, request_context::RequestId},
     services::{
+        attachment_downloads::{AttachmentDownloadService, DownloadError},
         auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
         auditor_portal::AuditorPortalReadModelService,
@@ -28,12 +32,14 @@ use crate::{
 use chrono::{DateTime, Utc};
 
 const AUDITOR_SESSION_COOKIE: &str = "proofplane_auditor_session";
+const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 
 #[derive(Clone)]
 pub struct AuditorAccessState {
     pub grants: AuditorAccessGrantService,
     pub sessions: AuditorAccessSessionService,
     pub portal: AuditorPortalReadModelService,
+    pub downloads: AttachmentDownloadService,
     pub secure_cookie: bool,
 }
 
@@ -55,6 +61,11 @@ struct StatusResponse {
 
 pub fn router(state: AuditorAccessState) -> Router {
     Router::new()
+        .route("/auditor-access/portal/data", get(portal_data))
+        .route(
+            "/auditor-access/portal/{*download_path}",
+            get(download_attachment),
+        )
         .route(
             "/auditor-access/{workspace_id}/otp/request",
             post(request_otp),
@@ -63,7 +74,6 @@ pub fn router(state: AuditorAccessState) -> Router {
             "/auditor-access/{workspace_id}/otp/verify",
             post(verify_otp),
         )
-        .route("/auditor-access/portal/data", get(portal_data))
         .route("/auditor-access/logout", post(logout))
         .with_state(state)
 }
@@ -205,6 +215,92 @@ async fn portal_data(
     Ok(Json(model.into()))
 }
 
+async fn download_attachment(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(download_path): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let (submission_id, attachment_id) = parse_download_path(&download_path)?;
+    let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
+    let session = state
+        .sessions
+        .load_session(raw_session)
+        .await
+        .map_err(session_error)?;
+    let downloaded = state
+        .downloads
+        .download_for_workspace(
+            session.workspace_id,
+            submission_id.into(),
+            attachment_id.into(),
+        )
+        .await
+        .map_err(download_error)?;
+
+    AuditEvent::new(
+        "auditor_attachment.downloaded",
+        AuditOutcome::Success,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "download_auditor_attachment",
+    )
+    .workspace_id(Uuid::from(downloaded.audit.workspace_id))
+    .request_id(request_id.0)
+    .metadata("auditor_email", &session.auditor_email)
+    .metadata(
+        "evidence_submission_id",
+        Uuid::from(downloaded.audit.submission_id),
+    )
+    .metadata(
+        "evidence_attachment_id",
+        Uuid::from(downloaded.audit.attachment_id),
+    )
+    .object(AuditObject::new(
+        "evidence_attachment",
+        downloaded.audit.attachment_id.into(),
+    ))
+    .emit();
+
+    let disposition =
+        crate::routes::attachment_downloads::content_disposition(&downloaded.attachment.filename);
+    let mut response = Body::from_stream(downloaded.object.chunks).into_response();
+    *response.status_mut() = StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(&downloaded.attachment.content_type)
+            .map_err(|_| ApiError::Internal)?,
+    );
+    headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&downloaded.attachment.content_length.to_string())
+            .map_err(|_| ApiError::Internal)?,
+    );
+    headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| ApiError::Internal)?,
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+
+    Ok(response)
+}
+
+fn parse_download_path(path: &str) -> Result<(Uuid, Uuid), ApiError> {
+    let segments = path.split('/').collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["evidence-submissions", submission_id, "attachments", attachment_id, "download"] => {
+            let submission_id = Uuid::parse_str(submission_id).map_err(|_| ApiError::NotFound)?;
+            let attachment_id = Uuid::parse_str(attachment_id).map_err(|_| ApiError::NotFound)?;
+            Ok((submission_id, attachment_id))
+        }
+        _ => Err(ApiError::NotFound),
+    }
+}
+
 fn session_cookie(token: &str, secure: bool) -> String {
     let mut cookie = format!(
         "{AUDITOR_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/auditor-access; Max-Age=604800"
@@ -297,6 +393,20 @@ fn session_error(error: AuditorAccessSessionError) -> ApiError {
 fn portal_error(error: crate::services::Error) -> ApiError {
     tracing::error!(%error, "auditor portal read model failure");
     ApiError::Internal
+}
+
+fn download_error(error: DownloadError) -> ApiError {
+    match error {
+        DownloadError::NotFound | DownloadError::NotReady => ApiError::NotFound,
+        DownloadError::MetadataMismatch | DownloadError::Internal => {
+            tracing::error!(%error, "auditor attachment download failed");
+            ApiError::Internal
+        }
+        DownloadError::Repository(repository_error) => {
+            tracing::error!(error = %repository_error, "auditor attachment download repository failure");
+            ApiError::Internal
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -171,7 +171,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .merge(attachment_upload_sessions::router(
             AttachmentUploadSessionState {
                 grants: attachment_upload_grant_service,
-                downloads: attachment_download_service,
+                downloads: attachment_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
                 secure_cookie: secure_upload_cookie,
@@ -182,6 +182,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             grants: auditor_grants,
             sessions: auditor_sessions,
             portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
+            downloads: attachment_download_service,
             secure_cookie: secure_auditor_cookie,
         }))
         .merge(me::router(MeState {

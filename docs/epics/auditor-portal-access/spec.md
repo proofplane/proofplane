@@ -87,10 +87,15 @@ Verified auditor sessions may download uploaded, unarchived attachments.
 Pending, finalizing, failed, malicious, archived, missing, or cross-workspace
 attachments are not downloadable.
 
+Ticket 006 ships the backend download route as
+`GET /auditor-access/portal/evidence-submissions/{submission_id}/attachments/{attachment_id}/download`,
+authenticated only by the auditor session cookie. It does not issue browser
+API tokens or new attachment download grants for auditors.
+
 Downloads stream through Proofplane, not directly from object storage. The
-download path rechecks session, grant, workspace, attachment status, and object
-metadata before streaming with safe `Cache-Control`, `Referrer-Policy`, and
-`Content-Disposition` headers.
+download path rechecks the session, underlying auditor access grant, workspace,
+attachment status, and object metadata before streaming with safe
+`Cache-Control`, `Referrer-Policy`, and `Content-Disposition` headers.
 
 ## Audit Logging
 
@@ -112,3 +117,6 @@ secure read-only browser surface.
   attachment downloads.
 - 2026-07-02: Recorded the shipped portal read model endpoint and clarified
   that archived attachments are omitted from portal metadata.
+- 2026-07-02: Recorded the shipped direct auditor attachment download route
+  and clarified that it uses the auditor session cookie rather than a new
+  attachment download grant.
