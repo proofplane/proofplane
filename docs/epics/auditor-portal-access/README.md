@@ -12,7 +12,7 @@ are lean handoff units that link into those sources of technical depth.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Auditor Access Grants](./tickets/001-auditor-access-grants.md) | Todo | Store the revocable email-bound permission behind each invite link. |
+| 001. [Auditor Access Grants](./tickets/001-auditor-access-grants.md) | Doing | Grant persistence/service is in place; caller-surface audit emission remains. |
 | 002. [MCP Auditor Link Tools](./tickets/002-mcp-auditor-link-tools.md) | Todo | Let audited users create, list, and revoke auditor links through MCP. |
 | 003. [Email OTP Verification](./tickets/003-email-otp-verification.md) | Todo | Prove the browser user controls the intended auditor email. |
 | 004. [Auditor Browser Sessions](./tickets/004-auditor-browser-sessions.md) | Todo | Create revocable seven-day browser sessions after OTP verification. |

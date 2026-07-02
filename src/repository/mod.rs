@@ -6,6 +6,7 @@ use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
 mod attachment_upload_grants;
+mod auditor_access_grants;
 pub mod constraints;
 mod controls;
 pub mod error;

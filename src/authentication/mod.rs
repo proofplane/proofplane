@@ -8,6 +8,7 @@ use crate::{
 
 pub mod auth0;
 mod jwks;
+pub mod opaque_token;
 pub mod paseto;
 
 /// An authenticated human management-plane identity.
