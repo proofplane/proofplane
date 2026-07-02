@@ -8,6 +8,7 @@ mod agent_connections;
 mod attachment_upload_grants;
 mod auditor_access_grants;
 mod auditor_access_sessions;
+mod auditor_portal;
 pub mod constraints;
 mod controls;
 pub mod error;

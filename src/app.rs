@@ -32,6 +32,7 @@ use crate::{
         attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
+        auditor_portal::AuditorPortalReadModelService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
@@ -180,6 +181,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .merge(auditor_access::router(AuditorAccessState {
             grants: auditor_grants,
             sessions: auditor_sessions,
+            portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
             secure_cookie: secure_auditor_cookie,
         }))
         .merge(me::router(MeState {

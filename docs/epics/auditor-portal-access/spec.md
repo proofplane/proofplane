@@ -71,9 +71,15 @@ historical Evidence Submissions, and attachment metadata in deterministic
 order. This is intentionally broader than the old latest-only packet idea:
 auditors need the submitted record, not a curated snapshot.
 
-Attachment metadata includes download eligibility, filename, content type,
-content length, checksums, and lifecycle status. Internal object keys and
-storage backend details are never serialized.
+Ticket 005 ships the backend read model as
+`GET /auditor-access/portal/data`, authenticated only by the auditor session
+cookie. The endpoint uses the session workspace as its scope rather than a
+workspace path parameter.
+
+Non-archived attachment metadata includes download eligibility, filename,
+content type, content length, checksums, and lifecycle status. Archived
+attachments are filtered out and do not appear in the portal response. Internal
+object keys and storage backend details are never serialized.
 
 ## Attachment Downloads
 
@@ -104,3 +110,5 @@ secure read-only browser surface.
 - 2026-07-01: Replaced the stale packet/export plan with email-bound
   auditor portal access, OTP verification, seven-day sessions, and direct
   attachment downloads.
+- 2026-07-02: Recorded the shipped portal read model endpoint and clarified
+  that archived attachments are omitted from portal metadata.
