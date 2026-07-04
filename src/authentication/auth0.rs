@@ -1,12 +1,8 @@
 use async_trait::async_trait;
-use jwtk::jwk::RemoteJwksVerifier;
 use jwtk::Claims;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
-use crate::config::Auth0Config;
-
-const JWKS_CACHE_DURATION: Duration = Duration::from_secs(3600);
+use crate::{authentication::jwks::JwksVerifier, config::Auth0Config};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedClaims {
@@ -54,28 +50,16 @@ struct Auth0ExtraClaims {
     name: Option<String>,
 }
 
-enum Backend {
-    Remote(RemoteJwksVerifier),
-    #[cfg(test)]
-    Local(jwtk::jwk::JwkSetVerifier),
-}
-
 pub struct Auth0TokenVerifier {
-    backend: Backend,
+    verifier: JwksVerifier,
     issuer: String,
     audience: String,
 }
 
 impl Auth0TokenVerifier {
     pub fn new(config: &Auth0Config) -> Self {
-        let backend = Backend::Remote(
-            RemoteJwksVerifier::builder(config.jwks_url.to_string())
-                .with_cache_duration(JWKS_CACHE_DURATION)
-                .build(),
-        );
-
         Self {
-            backend,
+            verifier: JwksVerifier::remote(config.jwks_url.to_string()),
             issuer: config.issuer.to_string(),
             audience: config.audience.clone(),
         }
@@ -85,12 +69,11 @@ impl Auth0TokenVerifier {
 #[async_trait]
 impl TokenVerifier for Auth0TokenVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
-        let verified = match &self.backend {
-            Backend::Remote(verifier) => verifier.verify::<Auth0ExtraClaims>(token).await,
-            #[cfg(test)]
-            Backend::Local(verifier) => verifier.verify::<Auth0ExtraClaims>(token),
-        }
-        .map_err(classify_jwtk_error)?;
+        let verified = self
+            .verifier
+            .verify::<Auth0ExtraClaims>(token)
+            .await
+            .map_err(classify_jwtk_error)?;
 
         validate_claims(verified.claims(), &self.issuer, &self.audience)
     }
@@ -142,7 +125,7 @@ mod tests {
     use jwtk::rsa::{RsaAlgorithm, RsaPrivateKey};
     use jwtk::{sign, HeaderAndClaims, PublicKeyToJwk};
 
-    use super::{Auth0ExtraClaims, Auth0TokenVerifier, Backend, TokenVerifier, VerifyError};
+    use super::{Auth0ExtraClaims, Auth0TokenVerifier, JwksVerifier, TokenVerifier, VerifyError};
 
     const ISSUER: &str = "https://proofplane.us.auth0.com/";
     const AUDIENCE: &str = "https://api.proofplane.com";
@@ -164,7 +147,7 @@ mod tests {
         Fixture {
             signing_key,
             verifier: Auth0TokenVerifier {
-                backend: Backend::Local(verifier),
+                verifier: JwksVerifier::local(verifier),
                 issuer: ISSUER.to_owned(),
                 audience: AUDIENCE.to_owned(),
             },

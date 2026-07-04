@@ -19,6 +19,10 @@ auth0:
   issuer: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/"
   audience: "https://api.proofplane.com"
   jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
+  mcp:
+    resource: http://127.0.0.1:3002/mcp
+    allowed_client_ids:
+      - "tpc_2fF3uw2EaHnos66XPFPjHP"
 
 paseto:
   download:

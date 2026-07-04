@@ -1,6 +1,10 @@
+use async_trait::async_trait;
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use proofplane::{
-    domain::WorkspacePermission, mcp::SESSION_ID_HEADER, routes::request_context::REQUEST_ID_HEADER,
+    authentication::mcp_auth0::{McpTokenVerifier, McpVerifyError, VerifiedMcpClaims},
+    domain::WorkspacePermission,
+    mcp::{PROTECTED_RESOURCE_METADATA_ENDPOINT, SESSION_ID_HEADER},
+    routes::request_context::REQUEST_ID_HEADER,
 };
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo, JsonObject},
@@ -12,11 +16,78 @@ use rmcp::{
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::support::{capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, TestApp};
 
 const MCP: &str = "/mcp";
+
+struct StubAuth0Verifier {
+    outcome: StubAuth0Outcome,
+}
+
+enum StubAuth0Outcome {
+    Verified,
+    RejectCredentials,
+    Unavailable,
+}
+
+#[async_trait]
+impl McpTokenVerifier for StubAuth0Verifier {
+    async fn verify(&self, token: &str) -> Result<VerifiedMcpClaims, McpVerifyError> {
+        match self.outcome {
+            StubAuth0Outcome::Verified => Ok(VerifiedMcpClaims {
+                subject: "auth0|integration-user".to_owned(),
+                client_id: "integration-mcp-client".to_owned(),
+                scopes: vec!["read_controls".to_owned()],
+            }),
+            StubAuth0Outcome::RejectCredentials if token == "client-credentials-jwt" => {
+                Err(McpVerifyError::MachineIdentity)
+            }
+            StubAuth0Outcome::RejectCredentials => Err(McpVerifyError::InvalidToken),
+            StubAuth0Outcome::Unavailable => Err(McpVerifyError::JwksUnavailable),
+        }
+    }
+}
+
+#[tokio::test]
+async fn auth0_principals_initialize_and_list_tools_but_cannot_call_protected_tools() {
+    let app = TestApp::start_without_default_auth().await;
+    let server = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
+        outcome: StubAuth0Outcome::Verified,
+    }));
+
+    initialize(&server, "auth0-access-token")
+        .await
+        .assert_status_ok();
+    let client = McpClient::connect(&server, "auth0-access-token").await;
+    assert!(!client.list_tools().await.is_empty());
+
+    let error = client.call_tool_error("list_controls", json!({})).await;
+    assert_eq!(error.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn malformed_and_client_credentials_tokens_are_unauthorized() {
+    let app = TestApp::start_without_default_auth().await;
+    let rejected = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
+        outcome: StubAuth0Outcome::RejectCredentials,
+    }));
+    assert_unauthorized(&initialize(&rejected, "invalid-jwt").await);
+    assert_unauthorized(&initialize(&rejected, "client-credentials-jwt").await);
+}
+
+#[tokio::test]
+async fn jwks_dependency_failure_is_a_server_error() {
+    let app = TestApp::start_without_default_auth().await;
+    let unavailable = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
+        outcome: StubAuth0Outcome::Unavailable,
+    }));
+    initialize(&unavailable, "auth0-jwt")
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+}
 
 #[tokio::test]
 async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() {
@@ -28,6 +99,22 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .await
         .expect("fixture database connection opens");
     let workspace_id = app.home_workspace_id();
+
+    let metadata = server.get(PROTECTED_RESOURCE_METADATA_ENDPOINT).await;
+    metadata.assert_status_ok();
+    metadata.assert_json(&json!({
+        "resource": "https://mcp.proofplane.test/mcp",
+        "authorization_servers": ["https://proofplane-integration.us.auth0.com/"],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": [
+            "read_evidence_requests",
+            "write_evidence_requests",
+            "read_evidence_submissions",
+            "write_evidence_submissions",
+            "read_controls",
+            "write_controls"
+        ]
+    }));
 
     let initialized = initialize(&server, app.api_token()).await;
     initialized.assert_status_ok();
@@ -1442,7 +1529,7 @@ fn assert_unauthorized(response: &axum_test::TestResponse) {
     response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.header(header::WWW_AUTHENTICATE),
-        "Bearer realm=\"proofplane-mcp\""
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls\""
     );
 }
 

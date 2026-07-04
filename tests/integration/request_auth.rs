@@ -6,6 +6,22 @@ use serde_json::Value;
 use super::support::{TestApp, INTEGRATION_API_TOKEN_ID};
 
 #[tokio::test]
+async fn proofplane_exposes_no_oauth_or_auth0_continuation_routes() {
+    let app = TestApp::start_without_default_auth().await;
+
+    for path in [
+        "/agent-connections/auth0/continue",
+        "/oauth/authorize",
+        "/oauth/token",
+        "/oauth/refresh",
+        "/oauth/revoke",
+    ] {
+        app.server().get(path).await.assert_status_not_found();
+        app.server().post(path).await.assert_status_not_found();
+    }
+}
+
+#[tokio::test]
 async fn data_plane_routes_require_valid_opaque_bearer_tokens() {
     let app = TestApp::builder()
         .without_default_auth()

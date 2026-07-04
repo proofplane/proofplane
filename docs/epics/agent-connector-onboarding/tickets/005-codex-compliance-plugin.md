@@ -24,7 +24,7 @@ custom-MCP form appears to require bearer-token configuration.
   credentials, when validated, then publication is rejected.
 - [ ] Given direct Codex MCP configuration already in use, when the plugin
   ships, then that advanced connection path remains supported.
-- [ ] Given the eight-hour access token expires, when Codex next uses the MCP
+- [ ] Given the 24-hour access token expires, when Codex next uses the MCP
   server, then automatic reauthorization or its reconnect path is verified and
   documented.
 

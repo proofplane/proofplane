@@ -13,10 +13,10 @@ use super::{
         public_api_base_url as validate_public_api_base_url, string_url, string_value,
         ConfigValidationExt,
     },
-    Auth0Config, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    Auth0Config, Auth0McpConfig, GcsObjectStorageConfig, HealthConfig, McpConfig,
+    ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+    PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
+    PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +72,13 @@ pub(super) struct RawAuth0Config {
     issuer: String,
     audience: String,
     jwks_url: String,
+    mcp: RawAuth0McpConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawAuth0McpConfig {
+    resource: String,
+    allowed_client_ids: Vec<String>,
 }
 
 impl RawAuth0Config {
@@ -80,13 +87,48 @@ impl RawAuth0Config {
             issuer <- string_url(self.issuer).at("auth0.issuer"),
             audience <- string_value(self.audience).at("auth0.audience"),
             jwks_url <- string_url(self.jwks_url).at("auth0.jwks_url"),
+            mcp <- self.mcp.validate(),
             => Auth0Config {
                 issuer,
                 audience,
                 jwks_url,
+                mcp,
             },
         }
     }
+}
+
+impl RawAuth0McpConfig {
+    pub(super) fn validate(self) -> Validation<Auth0McpConfig, ConfigFieldError> {
+        validate! {
+            resource <- canonical_url(self.resource).at("auth0.mcp.resource"),
+            allowed_client_ids <- validate_allowed_client_ids(self.allowed_client_ids)
+                .at("auth0.mcp.allowed_client_ids"),
+            => Auth0McpConfig {
+                resource,
+                allowed_client_ids,
+            },
+        }
+    }
+}
+
+fn canonical_url(value: String) -> Result<url::Url, String> {
+    let url = url::Url::parse(&value).map_err(|_| "must be a valid absolute URL".to_owned())?;
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("must not contain a query or fragment".to_owned());
+    }
+    Ok(url)
+}
+
+fn validate_allowed_client_ids(values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
+        return Err("must contain at least one non-empty client ID".to_owned());
+    }
+    let unique = values.iter().collect::<HashSet<_>>();
+    if unique.len() != values.len() {
+        return Err("client IDs must be unique".to_owned());
+    }
+    Ok(values)
 }
 
 #[derive(Debug, Deserialize)]

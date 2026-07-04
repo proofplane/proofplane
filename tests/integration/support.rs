@@ -26,10 +26,10 @@ use proofplane::{
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
-        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, Auth0McpConfig, HealthConfig, LogFormat, McpConfig,
+        ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+        PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
+        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
@@ -534,6 +534,17 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
     }
 
     fn mcp_app(&self) -> Router {
+        self.mcp_app_with_auth0_verifier(Arc::new(
+            proofplane::authentication::mcp_auth0::Auth0McpTokenVerifier::new(
+                &self.app_config.auth0,
+            ),
+        ))
+    }
+
+    fn mcp_app_with_auth0_verifier(
+        &self,
+        auth0_verifier: Arc<dyn proofplane::authentication::mcp_auth0::McpTokenVerifier>,
+    ) -> Router {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             "proofplane-attachment-download",
@@ -564,6 +575,9 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             object_store: self.object_store.clone(),
             metrics: recorder.handle(),
             authenticator: Arc::new(ApiTokenAuthenticator::new(self.postgres.clone())),
+            auth0_verifier,
+            auth0_issuer: self.app_config.auth0.issuer.clone(),
+            auth0_mcp: self.app_config.auth0.mcp.clone(),
             public_api_base_url: self.app_config.server.public_api_base_url.clone(),
             download_grant_encryptor,
             download_grant_decryptor,
@@ -580,6 +594,15 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
 
     pub fn mcp_http_server(&self) -> TestServer {
         TestServer::builder().http_transport().build(self.mcp_app())
+    }
+
+    pub fn mcp_http_server_with_auth0_verifier(
+        &self,
+        verifier: Arc<dyn proofplane::authentication::mcp_auth0::McpTokenVerifier>,
+    ) -> TestServer {
+        TestServer::builder()
+            .http_transport()
+            .build(self.mcp_app_with_auth0_verifier(verifier))
     }
 
     pub fn get(&self, path: &str) -> TestRequest {
@@ -1026,6 +1049,11 @@ fn config(
                 "https://proofplane-integration.us.auth0.com/.well-known/jwks.json",
             )
             .expect("auth0 jwks url parses"),
+            mcp: Auth0McpConfig {
+                resource: url::Url::parse("https://mcp.proofplane.test/mcp")
+                    .expect("MCP resource parses"),
+                allowed_client_ids: vec!["integration-mcp-client".to_owned()],
+            },
         },
         paseto: PasetoConfig {
             download: PasetoDownloadConfig {

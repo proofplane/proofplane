@@ -1,19 +1,27 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use axum::{middleware, Router};
+use axum::{
+    extract::MatchedPath, http::Request, middleware, response::Response, routing::get, Json, Router,
+};
 use metrics_exporter_prometheus::PrometheusHandle;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use tokio_util::sync::CancellationToken;
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
-use super::{auth::authenticate_request, server::ProofplaneMcp};
+use super::{
+    auth::{authenticate_request, AuthenticationState},
+    server::ProofplaneMcp,
+};
 use crate::authentication::paseto::{
     DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
-    authentication::ApiTokenAuthenticator,
-    config::HealthConfig,
+    authentication::{mcp_auth0::McpTokenVerifier, ApiTokenAuthenticator},
+    config::{Auth0McpConfig, HealthConfig},
+    domain::WorkspacePermission,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
@@ -26,9 +34,11 @@ use crate::{
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
 };
+use serde::Serialize;
 use url::Url;
 
 pub const ENDPOINT: &str = "/mcp";
+pub const PROTECTED_RESOURCE_METADATA_ENDPOINT: &str = "/.well-known/oauth-protected-resource/mcp";
 
 #[derive(Clone)]
 pub struct McpAppDependencies {
@@ -36,6 +46,9 @@ pub struct McpAppDependencies {
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: Arc<ApiTokenAuthenticator>,
+    pub auth0_verifier: Arc<dyn McpTokenVerifier>,
+    pub auth0_issuer: Url,
+    pub auth0_mcp: Auth0McpConfig,
     pub public_api_base_url: Url,
     pub download_grant_encryptor: DownloadGrantEncryptor,
     pub download_grant_decryptor: DownloadGrantDecryptor,
@@ -60,6 +73,8 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
     let controls = ControlService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
         dependencies.authenticator,
+        dependencies.auth0_verifier,
+        dependencies.auth0_mcp.clone(),
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
@@ -71,6 +86,28 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
 
     Router::new()
         .merge(protocol)
+        .route(
+            PROTECTED_RESOURCE_METADATA_ENDPOINT,
+            get({
+                let resource = dependencies.auth0_mcp.resource.to_string();
+                let issuer = dependencies.auth0_issuer.to_string();
+                move || {
+                    let resource = resource.clone();
+                    let issuer = issuer.clone();
+                    async move {
+                        Json(ProtectedResourceMetadata {
+                            resource,
+                            authorization_servers: vec![issuer],
+                            bearer_methods_supported: vec!["header"],
+                            scopes_supported: WorkspacePermission::ALL
+                                .iter()
+                                .map(|permission| permission.as_str())
+                                .collect(),
+                        })
+                    }
+                }
+            }),
+        )
         .nest(&dependencies.health.live_path, health::livez_router())
         .nest(
             &dependencies.health.ready_path,
@@ -86,10 +123,36 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
             }),
         )
         .layer(middleware::from_fn(attach_request_id))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    let method = request.method();
+                    let path = trace_path(request);
+
+                    tracing::info_span!(
+                        "http_request",
+                        %method,
+                        path,
+                        request_id = tracing::field::Empty,
+                        api_token_id = tracing::field::Empty,
+                        user_id = tracing::field::Empty
+                    )
+                })
+                .on_response(|response: &Response, latency: Duration, span: &Span| {
+                    tracing::info!(
+                        parent: span,
+                        status = response.status().as_u16(),
+                        latency_ms = latency.as_secs_f64() * 1000.0,
+                        "http request completed"
+                    );
+                }),
+        )
 }
 
 pub fn protocol_router(
     authenticator: Arc<ApiTokenAuthenticator>,
+    auth0_verifier: Arc<dyn McpTokenVerifier>,
+    auth0_config: Auth0McpConfig,
     server: ProofplaneMcp,
     cancellation_token: CancellationToken,
 ) -> Router {
@@ -104,7 +167,44 @@ pub fn protocol_router(
     Router::new()
         .nest_service(ENDPOINT, transport)
         .layer(middleware::from_fn_with_state(
-            authenticator,
+            AuthenticationState {
+                api_tokens: authenticator,
+                auth0: auth0_verifier,
+                auth0_config,
+            },
             authenticate_request,
         ))
+}
+
+#[derive(Serialize)]
+struct ProtectedResourceMetadata {
+    resource: String,
+    authorization_servers: Vec<String>,
+    bearer_methods_supported: Vec<&'static str>,
+    scopes_supported: Vec<&'static str>,
+}
+
+fn trace_path<B>(request: &Request<B>) -> &str {
+    request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, http::Request};
+
+    use super::trace_path;
+
+    #[test]
+    fn http_trace_path_never_contains_query_parameters() {
+        let request = Request::builder()
+            .uri("/mcp?session_id=secret")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(trace_path(&request), "/mcp");
+    }
 }

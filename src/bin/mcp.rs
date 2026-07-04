@@ -4,6 +4,7 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::{
+        mcp_auth0::Auth0McpTokenVerifier,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor,
@@ -94,6 +95,9 @@ async fn run() -> Result<(), Error> {
         object_store,
         metrics,
         authenticator,
+        auth0_verifier: Arc::new(Auth0McpTokenVerifier::new(&config.auth0)),
+        auth0_issuer: config.auth0.issuer.clone(),
+        auth0_mcp: config.auth0.mcp.clone(),
         public_api_base_url: config.server.public_api_base_url.clone(),
         download_grant_encryptor,
         download_grant_decryptor,

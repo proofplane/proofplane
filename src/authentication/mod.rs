@@ -14,6 +14,8 @@ use crate::{
 };
 
 pub mod auth0;
+mod jwks;
+pub mod mcp_auth0;
 pub mod opaque_token;
 pub mod paseto;
 
