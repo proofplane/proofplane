@@ -1,13 +1,14 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{rejection::QueryRejection, Form, Path, Query, State},
     http::{
         header::{
-            CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, SET_COOKIE,
+            CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
+            SET_COOKIE,
         },
         HeaderMap, HeaderName, HeaderValue, StatusCode,
     },
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -54,6 +55,22 @@ struct VerifyPayload {
     code: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct InviteQuery {
+    token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserInviteForm {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserVerifyForm {
+    token: String,
+    code: String,
+}
+
 #[derive(Debug, Serialize)]
 struct StatusResponse {
     status: &'static str,
@@ -61,11 +78,13 @@ struct StatusResponse {
 
 pub fn router(state: AuditorAccessState) -> Router {
     Router::new()
+        .route("/auditor-access/portal", get(portal_page))
         .route("/auditor-access/portal/data", get(portal_data))
         .route(
             "/auditor-access/portal/{*download_path}",
             get(download_attachment),
         )
+        .route("/auditor-access/{workspace_id}", get(open_invite))
         .route(
             "/auditor-access/{workspace_id}/otp/request",
             post(request_otp),
@@ -74,8 +93,45 @@ pub fn router(state: AuditorAccessState) -> Router {
             "/auditor-access/{workspace_id}/otp/verify",
             post(verify_otp),
         )
+        .route(
+            "/auditor-access/{workspace_id}/otp/request/browser",
+            post(request_otp_browser),
+        )
+        .route(
+            "/auditor-access/{workspace_id}/otp/verify/browser",
+            post(verify_otp_browser),
+        )
         .route("/auditor-access/logout", post(logout))
         .with_state(state)
+}
+
+async fn open_invite(
+    State(state): State<AuditorAccessState>,
+    Path(workspace_id): Path<Uuid>,
+    query: Result<Query<InviteQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return Ok(unavailable_response()),
+    };
+    let Some(token) = query.token.filter(|token| !token.trim().is_empty()) else {
+        return Ok(unavailable_response());
+    };
+    let grant = match state.grants.load_for_use(workspace_id.into(), &token).await {
+        Ok(grant) => grant,
+        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
+            return Ok(unavailable_response());
+        }
+        Err(error) => return Err(grant_error(error)),
+    };
+
+    Ok(Html(render_invite_page(
+        workspace_id,
+        &token,
+        &grant.auditor_email,
+        None,
+    ))
+    .into_response())
 }
 
 async fn request_otp(
@@ -104,6 +160,53 @@ async fn request_otp(
     );
 
     Ok(Json(StatusResponse { status: "sent" }))
+}
+
+async fn request_otp_browser(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(workspace_id): Path<Uuid>,
+    Form(payload): Form<BrowserInviteForm>,
+) -> Result<Response, ApiError> {
+    let token = payload.token.trim();
+    let grant = match state.grants.load_for_use(workspace_id.into(), token).await {
+        Ok(grant) => grant,
+        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
+            return Ok(unavailable_response());
+        }
+        Err(error) => return Err(grant_error(error)),
+    };
+
+    match state.sessions.request_otp(&grant).await {
+        Ok(()) => {
+            audit(
+                "auditor_access_otp.requested",
+                "request_auditor_access_otp",
+                request_id.0,
+                workspace_id,
+                Uuid::from(grant.id),
+                &grant.auditor_email,
+            );
+            Ok(Html(render_verify_page(
+                workspace_id,
+                token,
+                &grant.auditor_email,
+                Some("Code sent. Check the intended auditor inbox."),
+            ))
+            .into_response())
+        }
+        Err(AuditorAccessSessionError::RateLimited) => Ok((
+            StatusCode::CONFLICT,
+            Html(render_verify_page(
+                workspace_id,
+                token,
+                &grant.auditor_email,
+                Some("Too many code requests. Use the latest code or wait before trying again."),
+            )),
+        )
+            .into_response()),
+        Err(error) => Err(session_error(error)),
+    }
 }
 
 async fn verify_otp(
@@ -149,6 +252,66 @@ async fn verify_otp(
     Ok(response)
 }
 
+async fn verify_otp_browser(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(workspace_id): Path<Uuid>,
+    Form(payload): Form<BrowserVerifyForm>,
+) -> Result<Response, ApiError> {
+    let token = payload.token.trim();
+    let grant = match state.grants.load_for_use(workspace_id.into(), token).await {
+        Ok(grant) => grant,
+        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
+            return Ok(unavailable_response());
+        }
+        Err(error) => return Err(grant_error(error)),
+    };
+    let created = match state.sessions.verify_otp(&grant, payload.code.trim()).await {
+        Ok(created) => created,
+        Err(AuditorAccessSessionError::Unavailable) => {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Html(render_verify_page(
+                    workspace_id,
+                    token,
+                    &grant.auditor_email,
+                    Some("That code could not be verified. Request a new code if it expired."),
+                )),
+            )
+                .into_response());
+        }
+        Err(error) => return Err(session_error(error)),
+    };
+
+    audit(
+        "auditor_access_otp.verified",
+        "verify_auditor_access_otp",
+        request_id.0,
+        workspace_id,
+        Uuid::from(grant.id),
+        &grant.auditor_email,
+    );
+    audit(
+        "auditor_access_session.created",
+        "create_auditor_access_session",
+        request_id.0,
+        workspace_id,
+        Uuid::from(created.session.id),
+        &grant.auditor_email,
+    );
+
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response
+        .headers_mut()
+        .insert(LOCATION, HeaderValue::from_static("/auditor-access/portal"));
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&session_cookie(&created.raw_session, state.secure_cookie))
+            .map_err(|_| ApiError::Internal)?,
+    );
+    Ok(response)
+}
+
 async fn logout(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
@@ -186,6 +349,35 @@ async fn logout(
         ),
     );
     Ok(response)
+}
+
+async fn portal_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    Ok(Html(render_portal_page(&model)).into_response())
 }
 
 async fn portal_data(
@@ -309,6 +501,443 @@ fn session_cookie(token: &str, secure: bool) -> String {
         cookie.push_str("; Secure");
     }
     cookie
+}
+
+fn render_invite_page(
+    workspace_id: Uuid,
+    token: &str,
+    auditor_email: &str,
+    message: Option<&str>,
+) -> String {
+    render_shell(
+        "Auditor access",
+        &format!(
+            r#"<main class="narrow">
+<p class="eyebrow">Auditor verification</p>
+<h1>Verify access for {}</h1>
+<p class="lede">Proofplane will send a single-use code to this email before opening the read-only evidence portal.</p>
+{}
+<form class="panel form-panel" method="post" action="/auditor-access/{}/otp/request/browser">
+<input type="hidden" name="token" value="{}">
+<button type="submit">Send verification code</button>
+</form>
+</main>"#,
+            escape_html(auditor_email),
+            notice(message),
+            workspace_id,
+            escape_html(token),
+        ),
+    )
+}
+
+fn render_verify_page(
+    workspace_id: Uuid,
+    token: &str,
+    auditor_email: &str,
+    message: Option<&str>,
+) -> String {
+    render_shell(
+        "Enter auditor code",
+        &format!(
+            r#"<main class="narrow">
+<p class="eyebrow">Code required</p>
+<h1>Enter the code sent to {}</h1>
+<p class="lede">Codes expire after 10 minutes. A successful check creates a seven-day browser session for this portal only.</p>
+{}
+<form class="panel form-panel" method="post" action="/auditor-access/{}/otp/verify/browser">
+<input type="hidden" name="token" value="{}">
+<label for="code">Verification code</label>
+<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{{6}}" maxlength="6" required>
+<button type="submit">Open portal</button>
+</form>
+</main>"#,
+            escape_html(auditor_email),
+            notice(message),
+            workspace_id,
+            escape_html(token),
+        ),
+    )
+}
+
+fn render_portal_page(model: &AuditorPortalReadModel) -> String {
+    let controls = if model.controls.is_empty() {
+        r#"<p class="empty">No mapped controls are available for this auditor portal.</p>"#
+            .to_owned()
+    } else {
+        model
+            .controls
+            .iter()
+            .map(render_control)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    render_shell(
+        "Auditor portal",
+        &format!(
+            r#"<main class="portal">
+<header class="portal-header">
+<div>
+<p class="eyebrow">Auditor portal</p>
+<h1>Workspace evidence</h1>
+</div>
+<dl class="session-meta">
+<div><dt>Auditor</dt><dd>{}</dd></div>
+<div><dt>Workspace</dt><dd>{}</dd></div>
+</dl>
+</header>
+<section class="control-list" aria-label="Workspace controls">
+{}
+</section>
+</main>"#,
+            escape_html(&model.auditor_email),
+            Uuid::from(model.workspace_id),
+            controls,
+        ),
+    )
+}
+
+fn render_control(control: &AuditorPortalControl) -> String {
+    let requirements = if control.framework_requirements.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<ul class="chips" aria-label="Framework requirements">{}</ul>"#,
+            control
+                .framework_requirements
+                .iter()
+                .map(|requirement| format!(
+                    "<li>{}: {}</li>",
+                    escape_html(&requirement.code),
+                    escape_html(&requirement.title)
+                ))
+                .collect::<Vec<_>>()
+                .join("")
+        )
+    };
+    let requests = if control.evidence_requests.is_empty() {
+        r#"<p class="empty">No evidence requests are mapped to this control.</p>"#.to_owned()
+    } else {
+        control
+            .evidence_requests
+            .iter()
+            .map(render_evidence_request)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    format!(
+        r#"<article class="control">
+<header class="control-heading">
+<p class="control-code">{}</p>
+<div>
+<h2>{}</h2>
+<p>{}</p>
+{}
+</div>
+</header>
+<div class="request-list">{}</div>
+</article>"#,
+        escape_html(&control.code),
+        escape_html(&control.title),
+        escape_html(&control.description),
+        requirements,
+        requests,
+    )
+}
+
+fn render_evidence_request(request: &AuditorPortalEvidenceRequest) -> String {
+    let submissions = if request.submissions.is_empty() {
+        r#"<p class="empty">No submissions have been received for this request.</p>"#.to_owned()
+    } else {
+        request
+            .submissions
+            .iter()
+            .map(render_submission)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    format!(
+        r#"<section class="request" aria-labelledby="request-{}">
+<div class="request-heading">
+<div>
+<h3 id="request-{}">{}</h3>
+<p>{}</p>
+</div>
+<span class="status-chip">{}</span>
+</div>
+<dl class="details">
+<div><dt>Due</dt><dd>{}</dd></div>
+<div><dt>Cadence</dt><dd>{}</dd></div>
+<div><dt>Mapped</dt><dd>{}</dd></div>
+</dl>
+<p class="mapping">{}</p>
+<div class="submission-list">{}</div>
+</section>"#,
+        Uuid::from(request.request.id),
+        Uuid::from(request.request.id),
+        escape_html(&request.request.title),
+        escape_html(&request.request.description),
+        escape_html(request.request.status.as_str()),
+        format_date(request.request.due_at),
+        escape_html(request.request.cadence.as_str()),
+        format_date(request.mapping_created_at),
+        escape_html(&request.mapping_rationale),
+        submissions,
+    )
+}
+
+fn render_submission(submission: &AuditorPortalSubmission) -> String {
+    let attachments = if submission.attachments.is_empty() {
+        r#"<p class="empty compact">No attachments are available for this submission.</p>"#
+            .to_owned()
+    } else {
+        format!(
+            r#"<table><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
+            submission
+                .attachments
+                .iter()
+                .map(render_attachment)
+                .collect::<Vec<_>>()
+                .join("")
+        )
+    };
+    let summary = submission
+        .submission
+        .summary
+        .as_deref()
+        .map(|summary| format!(r#"<p>{}</p>"#, escape_html(summary)))
+        .unwrap_or_default();
+    let description = submission
+        .submission
+        .description
+        .as_deref()
+        .map(|description| format!(r#"<p class="muted">{}</p>"#, escape_html(description)))
+        .unwrap_or_default();
+
+    format!(
+        r#"<article class="submission">
+<header>
+<h4>Submission received {}</h4>
+<p class="muted">Coverage {} to {} from {}</p>
+</header>
+{}
+{}
+{}
+</article>"#,
+        format_datetime(submission.submission.received_at),
+        format_date(submission.submission.coverage_start_at),
+        format_date(submission.submission.coverage_end_at),
+        escape_html(&submission.submission.source_system),
+        summary,
+        description,
+        attachments,
+    )
+}
+
+fn render_attachment(attachment: &AuditorPortalAttachment) -> String {
+    let action = if attachment.download_eligible {
+        format!(
+            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/attachments/{}/download">Download {}</a>"#,
+            Uuid::from(attachment.evidence_submission_id),
+            Uuid::from(attachment.id),
+            escape_html(&attachment.filename),
+        )
+    } else {
+        "Unavailable".to_owned()
+    };
+
+    format!(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+        escape_html(&attachment.filename),
+        format_bytes(attachment.content_length),
+        escape_html(attachment.upload_status.as_str()),
+        action,
+    )
+}
+
+fn render_shell(title: &str, body: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{}</title>
+<style>
+:root {{
+  color-scheme: dark;
+  --canvas: oklch(17% 0.012 170);
+  --surface: oklch(24% 0.014 170);
+  --surface-raised: oklch(30% 0.018 170);
+  --line: oklch(39% 0.018 170);
+  --ink: oklch(94% 0.01 150);
+  --muted: oklch(76% 0.015 155);
+  --accent: oklch(78% 0.09 174);
+  --signal: oklch(78% 0.08 48);
+}}
+* {{ box-sizing: border-box; }}
+body {{
+  margin: 0;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}}
+main {{ width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }}
+.narrow {{ width: min(640px, calc(100% - 32px)); padding-top: 72px; }}
+h1, h2, h3, h4, p {{ margin-top: 0; letter-spacing: 0; }}
+h1 {{ margin-bottom: 12px; font-size: 2rem; line-height: 1.1; }}
+h2 {{ margin-bottom: 8px; font-size: 1.25rem; line-height: 1.2; }}
+h3 {{ margin-bottom: 6px; font-size: 1.05rem; line-height: 1.25; }}
+h4 {{ margin-bottom: 6px; font-size: 0.95rem; line-height: 1.25; }}
+p {{ color: var(--muted); line-height: 1.55; }}
+.lede {{ max-width: 68ch; }}
+.eyebrow, label, dt, th {{ color: var(--muted); font-size: 0.8125rem; font-weight: 620; line-height: 1.2; }}
+.eyebrow {{ margin-bottom: 8px; color: var(--accent); }}
+.panel, .control, .request, .submission {{
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+}}
+.form-panel {{ display: grid; gap: 14px; margin-top: 24px; padding: 24px; }}
+.notice {{
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: oklch(27% 0.03 170);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 22px;
+}}
+.notice p {{ margin: 0; }}
+input {{
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: inherit;
+}}
+button, .button {{
+  display: inline-block;
+  justify-self: start;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--canvas);
+  padding: 10px 16px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}}
+button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
+button:focus-visible, .button:focus-visible, input:focus-visible {{ outline: 2px solid var(--signal); outline-offset: 2px; }}
+.portal-header {{ display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }}
+.session-meta, .details {{ display: flex; flex-wrap: wrap; gap: 14px; margin: 0; }}
+.session-meta div, .details div {{ min-width: 120px; }}
+dd {{ margin: 4px 0 0; }}
+.session-meta dd, .details dd {{ color: var(--ink); }}
+.control-list {{ display: grid; gap: 20px; }}
+.control {{ padding: 22px; }}
+.control-heading {{ display: grid; grid-template-columns: minmax(80px, 120px) 1fr; gap: 20px; }}
+.control-code {{ color: var(--accent); font-weight: 700; }}
+.chips {{ display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 14px 0 0; list-style: none; }}
+.chips li, .status-chip {{
+  border-radius: 4px;
+  background: oklch(27% 0.035 170);
+  color: var(--accent);
+  padding: 5px 8px;
+  font-size: 0.8125rem;
+  font-weight: 620;
+}}
+.request-list {{ display: grid; gap: 14px; margin-top: 18px; }}
+.request {{ padding: 18px; background: var(--surface-raised); }}
+.request-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: start; }}
+.mapping {{ margin-top: 12px; }}
+.submission-list {{ display: grid; gap: 12px; margin-top: 16px; }}
+.submission {{ padding: 16px; background: var(--surface); }}
+.muted, .empty {{ color: var(--muted); }}
+.compact {{ margin-bottom: 0; }}
+table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+th, td {{ padding: 11px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }}
+th {{ background: var(--surface-raised); }}
+td {{ font-size: 0.95rem; }}
+@media (max-width: 720px) {{
+  main {{ width: min(100% - 24px, 1120px); padding: 32px 0; }}
+  .portal-header, .request-heading {{ display: block; }}
+  .session-meta {{ margin-top: 16px; }}
+  .control-heading {{ display: block; }}
+  table, thead, tbody, tr, th, td {{ display: block; }}
+  thead {{ display: none; }}
+  td {{ border-bottom: 0; padding: 8px 0; }}
+  tr {{ border-top: 1px solid var(--line); padding: 10px 0; }}
+}}
+</style>
+</head>
+<body>
+{}
+</body>
+</html>"#,
+        escape_html(title),
+        body,
+    )
+}
+
+fn unavailable_page() -> String {
+    render_shell(
+        "Auditor access unavailable",
+        r#"<main class="narrow">
+<p class="eyebrow">Access unavailable</p>
+<h1>This auditor portal is not available</h1>
+<p class="lede">The link or session may be expired or revoked. Ask the Proofplane workspace owner for a new auditor access link.</p>
+</main>"#,
+    )
+}
+
+fn unavailable_response() -> Response {
+    (StatusCode::NOT_FOUND, Html(unavailable_page())).into_response()
+}
+
+fn notice(message: Option<&str>) -> String {
+    message
+        .map(|message| {
+            format!(
+                r#"<section class="notice" role="status"><p>{}</p></section>"#,
+                escape_html(message)
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn format_bytes(bytes: i64) -> String {
+    const KB: i64 = 1024;
+    const MB: i64 = 1024 * KB;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_date(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d").to_string()
+}
+
+fn format_datetime(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub fn auditor_session_cookie(headers: &HeaderMap) -> Option<&str> {

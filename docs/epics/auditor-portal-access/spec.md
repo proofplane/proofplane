@@ -53,6 +53,11 @@ The mailer is a small adapter. Local and test environments capture outbound
 messages for assertions; production delivery can be wired to a provider without
 changing the portal contract.
 
+Ticket 007 ships the browser invite flow as
+`GET /auditor-access/{workspace_id}?token=...`, with server-rendered form posts
+for OTP request and verification. The existing JSON OTP endpoints remain
+available for API-style callers.
+
 ## Auditor Sessions
 
 Successful OTP verification creates a server-side auditor session and sets an
@@ -92,6 +97,10 @@ Ticket 006 ships the backend download route as
 authenticated only by the auditor session cookie. It does not issue browser
 API tokens or new attachment download grants for auditors.
 
+Ticket 007 ships the server-rendered portal page as
+`GET /auditor-access/portal`, authenticated by the same auditor session cookie
+and backed by the existing portal read model.
+
 Downloads stream through Proofplane, not directly from object storage. The
 download path rechecks the session, underlying auditor access grant, workspace,
 attachment status, and object metadata before streaming with safe
@@ -120,3 +129,5 @@ secure read-only browser surface.
 - 2026-07-02: Recorded the shipped direct auditor attachment download route
   and clarified that it uses the auditor session cookie rather than a new
   attachment download grant.
+- 2026-07-04: Recorded the shipped server-rendered browser invite and portal
+  routes.

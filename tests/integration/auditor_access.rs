@@ -602,6 +602,231 @@ async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_d
     assert!(!body.contains("mismatch bytes"));
 }
 
+#[tokio::test]
+async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    let invite = app
+        .server()
+        .get(&format!(
+            "/auditor-access/{workspace_id}?token={invite_token}"
+        ))
+        .await;
+    invite.assert_status_ok();
+    let invite_body = html_body(&invite);
+    assert!(invite_body.contains("Verify access for auditor@example.com"));
+    assert!(invite_body.contains("Send verification code"));
+    assert!(!invite_body.contains("Access reviews"));
+
+    let request = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await;
+    request.assert_status_ok();
+    assert_eq!(app.sent_mail().len(), 1);
+    let request_body = html_body(&request);
+    assert!(request_body.contains("Code sent"));
+    assert!(request_body.contains("Verification code"));
+
+    let code = app.sent_mail()[0].code.clone();
+    let verify = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", code.as_str())])
+        .await;
+    verify.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(verify.header("location"), "/auditor-access/portal");
+    let raw_session = cookie_value(
+        verify
+            .headers()
+            .get(SET_COOKIE)
+            .expect("session cookie set")
+            .to_str()
+            .expect("cookie is ASCII"),
+    )
+    .to_owned();
+
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("Access review evidence", "2026-03-01T00:00:00Z"),
+        )
+        .await;
+    let request_id = uuid_field(&request["id"]);
+    insert_control_mapping(
+        &app,
+        request_id,
+        control_id,
+        "Shows access reviews were performed.",
+    )
+    .await;
+    let submission = app
+        .create_evidence_submission(
+            workspace_id,
+            request_id,
+            &submission("browser portal submission"),
+        )
+        .await;
+    let submission_id = uuid_field(&submission["id"]);
+    let uploaded = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "auditor-evidence.txt",
+        b"eligible",
+    )
+    .await;
+    let uploaded_id = uuid_field(&uploaded["id"]);
+    finalize_attachment(&app, workspace_id, submission_id, uploaded_id).await;
+    let pending = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "pending-evidence.txt",
+        b"pending",
+    )
+    .await;
+    let pending_id = uuid_field(&pending["id"]);
+
+    let portal = app
+        .server()
+        .get("/auditor-access/portal")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    portal.assert_status_ok();
+    let body = html_body(&portal);
+
+    assert!(body.contains("Workspace evidence"));
+    assert!(body.contains("auditor@example.com"));
+    assert!(body.contains("PP-AC-01"));
+    assert!(body.contains("Access review evidence"));
+    assert!(body.contains("browser portal submission"));
+    assert!(body.contains("auditor-evidence.txt"));
+    assert!(body.contains(&auditor_download_path(submission_id, uploaded_id)));
+    assert!(body.contains("pending-evidence.txt"));
+    assert!(!body.contains(&auditor_download_path(submission_id, pending_id)));
+    assert!(!body.contains(invite_token));
+    assert!(!body.contains(&raw_session));
+}
+
+#[tokio::test]
+async fn browser_unavailable_states_do_not_leak_workspace_data() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+
+    let invalid_invite = app
+        .server()
+        .get(&format!("/auditor-access/{workspace_id}?token=not-a-token"))
+        .await;
+    invalid_invite.assert_status_not_found();
+    let body = html_body(&invalid_invite);
+    assert!(body.contains("This auditor portal is not available"));
+    assert!(!body.contains("Auditor access workspace"));
+    assert!(!body.contains("Access reviews"));
+
+    AuditorAccessGrantService::new(app.postgres_arc())
+        .revoke(
+            &agent_connection_context(&app, workspace_id),
+            grant.grant.id,
+        )
+        .await
+        .expect("grant revokes");
+    let revoked_session = app
+        .server()
+        .get("/auditor-access/portal")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    revoked_session.assert_status_not_found();
+    let body = html_body(&revoked_session);
+    assert!(body.contains("This auditor portal is not available"));
+    assert!(!body.contains("Auditor access workspace"));
+    assert!(!body.contains("Access reviews"));
+}
+
+#[tokio::test]
+async fn browser_portal_escapes_untrusted_content() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+
+    let request = app
+        .create_evidence_request(
+            workspace_id,
+            &evidence_request("<script>alert('request')</script>", "2026-03-01T00:00:00Z"),
+        )
+        .await;
+    let request_id = uuid_field(&request["id"]);
+    insert_control_mapping(&app, request_id, control_id, "<b>mapped</b>").await;
+    let submission = app
+        .create_evidence_submission(
+            workspace_id,
+            request_id,
+            &json!({
+            "coverage_start_at": "2026-01-01T00:00:00Z",
+            "coverage_end_at": "2026-03-31T23:59:59Z",
+            "source_system": "<source>",
+            "collection_method": "manual",
+            "summary": "<img src=x onerror=alert(1)>",
+            "description": "Description with <strong>markup</strong>."
+            }),
+        )
+        .await;
+    let submission_id = uuid_field(&submission["id"]);
+    let uploaded = upload_attachment(
+        &app,
+        workspace_id,
+        submission_id,
+        "portable evidence.txt",
+        b"eligible",
+    )
+    .await;
+    let uploaded_id = uuid_field(&uploaded["id"]);
+    finalize_attachment(&app, workspace_id, submission_id, uploaded_id).await;
+
+    let portal = app
+        .server()
+        .get("/auditor-access/portal")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    portal.assert_status_ok();
+    let body = html_body(&portal);
+
+    assert!(body.contains("&lt;script&gt;alert(&#39;request&#39;)&lt;/script&gt;"));
+    assert!(body.contains("&lt;b&gt;mapped&lt;/b&gt;"));
+    assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    assert!(body.contains("&lt;source&gt;"));
+    assert!(body.contains("Description with &lt;strong&gt;markup&lt;/strong&gt;."));
+    assert!(!body.contains("<script>alert"));
+    assert!(!body.contains("<b>mapped</b>"));
+    assert!(!body.contains("<img src=x"));
+    assert!(!body.contains("<source>"));
+    assert!(!body.contains("<strong>markup</strong>"));
+}
+
 async fn verified_session_cookie(app: &TestApp, workspace_id: Uuid, invite_token: &str) -> String {
     app.server()
         .post(&format!("/auditor-access/{workspace_id}/otp/request"))
@@ -615,6 +840,38 @@ async fn verified_session_cookie(app: &TestApp, workspace_id: Uuid, invite_token
         .json(&serde_json::json!({ "token": invite_token, "code": code }))
         .await;
     response.assert_status_ok();
+    cookie_value(
+        response
+            .headers()
+            .get(SET_COOKIE)
+            .expect("cookie set")
+            .to_str()
+            .expect("cookie is ASCII"),
+    )
+    .to_owned()
+}
+
+async fn verified_browser_session_cookie(
+    app: &TestApp,
+    workspace_id: Uuid,
+    invite_token: &str,
+) -> String {
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await
+        .assert_status_ok();
+    let code = app.sent_mail().last().expect("OTP sent").code.clone();
+    let response = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", code.as_str())])
+        .await;
+    response.assert_status(StatusCode::SEE_OTHER);
     cookie_value(
         response
             .headers()
@@ -669,6 +926,10 @@ fn cookie_value(set_cookie: &str) -> &str {
         .split_once('=')
         .expect("cookie has value")
         .1
+}
+
+fn html_body(response: &axum_test::TestResponse) -> String {
+    String::from_utf8_lossy(response.as_bytes().as_ref()).into_owned()
 }
 
 fn assert_unavailable(result: Result<impl std::fmt::Debug, AuditorAccessSessionError>) {

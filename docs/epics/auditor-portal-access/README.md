@@ -18,7 +18,7 @@ are lean handoff units that link into those sources of technical depth.
 | 004. [Auditor Browser Sessions](./tickets/004-auditor-browser-sessions.md) | Absorbed | Folded into 003 to avoid a temporary verification credential. |
 | 005. [Portal Read Model](./tickets/005-portal-read-model.md) | Done | Session-authenticated portal data endpoint now returns the read-only graph. |
 | 006. [Auditor Attachment Downloads](./tickets/006-auditor-attachment-downloads.md) | Done | Direct session-cookie downloads stream eligible attachments through Proofplane. |
-| 007. [Auditor Portal UI](./tickets/007-auditor-portal-ui.md) | Todo | Add the minimal server-rendered browser portal. |
+| 007. [Auditor Portal UI](./tickets/007-auditor-portal-ui.md) | Done | Server-rendered browser invite and portal pages are in place. |
 
 ## Sequencing
 
