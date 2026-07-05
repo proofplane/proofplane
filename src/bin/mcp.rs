@@ -4,7 +4,7 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::{
-        mcp_auth0::Auth0McpTokenVerifier,
+        auth0::Auth0McpTokenVerifier,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor,

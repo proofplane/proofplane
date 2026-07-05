@@ -17,7 +17,9 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
-        auth0::{TokenVerifier, VerifiedClaims, VerifyError},
+        auth0::{
+            Auth0McpTokenVerifier, TokenVerifier, VerifiedClaims, VerifiedMcpClaims, VerifyError,
+        },
         opaque_token::generate_opaque_token,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
@@ -223,6 +225,8 @@ pub struct FakeTokenVerifier;
 
 #[async_trait]
 impl TokenVerifier for FakeTokenVerifier {
+    type Claims = VerifiedClaims;
+
     async fn verify(&self, token: &str) -> Result<VerifiedClaims, VerifyError> {
         if token.is_empty() || token == "invalid" {
             return Err(VerifyError::InvalidToken);
@@ -534,17 +538,15 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
     }
 
     fn mcp_app(&self) -> Router {
-        self.mcp_app_with_auth0_verifier(Arc::new(
-            proofplane::authentication::mcp_auth0::Auth0McpTokenVerifier::new(
-                &self.app_config.auth0,
-            ),
-        ))
+        self.mcp_app_with_auth0_verifier(Arc::new(Auth0McpTokenVerifier::new(
+            &self.app_config.auth0,
+        )))
     }
 
-    fn mcp_app_with_auth0_verifier(
-        &self,
-        auth0_verifier: Arc<dyn proofplane::authentication::mcp_auth0::McpTokenVerifier>,
-    ) -> Router {
+    fn mcp_app_with_auth0_verifier<V>(&self, auth0_verifier: Arc<V>) -> Router
+    where
+        V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
+    {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             "proofplane-attachment-download",
@@ -596,10 +598,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
         TestServer::builder().http_transport().build(self.mcp_app())
     }
 
-    pub fn mcp_http_server_with_auth0_verifier(
-        &self,
-        verifier: Arc<dyn proofplane::authentication::mcp_auth0::McpTokenVerifier>,
-    ) -> TestServer {
+    pub fn mcp_http_server_with_auth0_verifier<V>(&self, verifier: Arc<V>) -> TestServer
+    where
+        V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
+    {
         TestServer::builder()
             .http_transport()
             .build(self.mcp_app_with_auth0_verifier(verifier))

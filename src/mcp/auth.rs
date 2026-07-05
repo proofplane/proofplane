@@ -10,7 +10,7 @@ use tracing::Span;
 
 use crate::{
     authentication::{
-        mcp_auth0::{McpTokenVerifier, VerifiedMcpClaims},
+        auth0::{TokenVerifier, VerifiedMcpClaims},
         ApiTokenAuthenticator, ApiTokenContext,
     },
     config::Auth0McpConfig,
@@ -23,15 +23,24 @@ pub enum McpPrincipal {
     Auth0(VerifiedMcpClaims),
 }
 
-#[derive(Clone)]
-pub(crate) struct AuthenticationState {
+pub(crate) struct AuthenticationState<V> {
     pub api_tokens: Arc<ApiTokenAuthenticator>,
-    pub auth0: Arc<dyn McpTokenVerifier>,
+    pub auth0: Arc<V>,
     pub auth0_config: Auth0McpConfig,
 }
 
-pub(crate) async fn authenticate_request(
-    State(state): State<AuthenticationState>,
+impl<V> Clone for AuthenticationState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            api_tokens: self.api_tokens.clone(),
+            auth0: self.auth0.clone(),
+            auth0_config: self.auth0_config.clone(),
+        }
+    }
+}
+
+pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpClaims>>(
+    State(state): State<AuthenticationState<V>>,
     mut request: Request,
     next: Next,
 ) -> Response {

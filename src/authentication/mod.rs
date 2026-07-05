@@ -4,7 +4,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
-    authentication::auth0::{TokenVerifier, VerifyError},
+    authentication::auth0::{TokenVerifier, VerifiedClaims, VerifyError},
     authentication::opaque_token::parse,
     domain::{
         ApiTokenId, ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission,
@@ -15,7 +15,6 @@ use crate::{
 
 pub mod auth0;
 mod jwks;
-pub mod mcp_auth0;
 pub mod opaque_token;
 pub mod paseto;
 
@@ -113,12 +112,12 @@ impl UserContext {
     }
 }
 
-pub struct UserAuthenticator<V: TokenVerifier> {
+pub struct UserAuthenticator<V: TokenVerifier<Claims = VerifiedClaims>> {
     verifier: Arc<V>,
     repository: Arc<repository::Postgres>,
 }
 
-impl<V: TokenVerifier> Clone for UserAuthenticator<V> {
+impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for UserAuthenticator<V> {
     fn clone(&self) -> Self {
         Self {
             verifier: self.verifier.clone(),
@@ -127,7 +126,7 @@ impl<V: TokenVerifier> Clone for UserAuthenticator<V> {
     }
 }
 
-impl<V: TokenVerifier> UserAuthenticator<V> {
+impl<V: TokenVerifier<Claims = VerifiedClaims>> UserAuthenticator<V> {
     pub fn new(verifier: Arc<V>, repository: Arc<repository::Postgres>) -> Self {
         Self {
             verifier,

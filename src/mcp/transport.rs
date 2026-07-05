@@ -19,7 +19,10 @@ use crate::authentication::paseto::{
     DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
-    authentication::{mcp_auth0::McpTokenVerifier, ApiTokenAuthenticator},
+    authentication::{
+        auth0::{TokenVerifier, VerifiedMcpClaims},
+        ApiTokenAuthenticator,
+    },
     config::{Auth0McpConfig, HealthConfig},
     domain::WorkspacePermission,
     object_storage::FilesystemObjectStore,
@@ -40,13 +43,12 @@ use url::Url;
 pub const ENDPOINT: &str = "/mcp";
 pub const PROTECTED_RESOURCE_METADATA_ENDPOINT: &str = "/.well-known/oauth-protected-resource/mcp";
 
-#[derive(Clone)]
-pub struct McpAppDependencies {
+pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub authenticator: Arc<ApiTokenAuthenticator>,
-    pub auth0_verifier: Arc<dyn McpTokenVerifier>,
+    pub auth0_verifier: Arc<V>,
     pub auth0_issuer: Url,
     pub auth0_mcp: Auth0McpConfig,
     pub public_api_base_url: Url,
@@ -58,7 +60,31 @@ pub struct McpAppDependencies {
     pub cancellation_token: CancellationToken,
 }
 
-pub fn create_app(dependencies: McpAppDependencies) -> Router {
+impl<V> Clone for McpAppDependencies<V> {
+    fn clone(&self) -> Self {
+        Self {
+            postgres: self.postgres.clone(),
+            object_store: self.object_store.clone(),
+            metrics: self.metrics.clone(),
+            authenticator: self.authenticator.clone(),
+            auth0_verifier: self.auth0_verifier.clone(),
+            auth0_issuer: self.auth0_issuer.clone(),
+            auth0_mcp: self.auth0_mcp.clone(),
+            public_api_base_url: self.public_api_base_url.clone(),
+            download_grant_encryptor: self.download_grant_encryptor.clone(),
+            download_grant_decryptor: self.download_grant_decryptor.clone(),
+            upload_grant_encryptor: self.upload_grant_encryptor.clone(),
+            upload_grant_decryptor: self.upload_grant_decryptor.clone(),
+            health: self.health.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+        }
+    }
+}
+
+pub fn create_app<V>(dependencies: McpAppDependencies<V>) -> Router
+where
+    V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
+{
     let evidence_requests = EvidenceRequestService::new(dependencies.postgres.clone());
     let evidence_submissions = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
@@ -149,13 +175,16 @@ pub fn create_app(dependencies: McpAppDependencies) -> Router {
         )
 }
 
-pub fn protocol_router(
+pub fn protocol_router<V>(
     authenticator: Arc<ApiTokenAuthenticator>,
-    auth0_verifier: Arc<dyn McpTokenVerifier>,
+    auth0_verifier: Arc<V>,
     auth0_config: Auth0McpConfig,
     server: ProofplaneMcp,
     cancellation_token: CancellationToken,
-) -> Router {
+) -> Router
+where
+    V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
+{
     let server_factory = move || Ok(server.clone());
     let transport = StreamableHttpService::<ProofplaneMcp, LocalSessionManager>::new(
         server_factory,

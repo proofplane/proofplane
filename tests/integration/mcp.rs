@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use proofplane::{
-    authentication::mcp_auth0::{McpTokenVerifier, McpVerifyError, VerifiedMcpClaims},
+    authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
     domain::WorkspacePermission,
     mcp::{PROTECTED_RESOURCE_METADATA_ENDPOINT, SESSION_ID_HEADER},
     routes::request_context::REQUEST_ID_HEADER,
@@ -34,8 +34,10 @@ enum StubAuth0Outcome {
 }
 
 #[async_trait]
-impl McpTokenVerifier for StubAuth0Verifier {
-    async fn verify(&self, token: &str) -> Result<VerifiedMcpClaims, McpVerifyError> {
+impl TokenVerifier for StubAuth0Verifier {
+    type Claims = VerifiedMcpClaims;
+
+    async fn verify(&self, token: &str) -> Result<VerifiedMcpClaims, VerifyError> {
         match self.outcome {
             StubAuth0Outcome::Verified => Ok(VerifiedMcpClaims {
                 subject: "auth0|integration-user".to_owned(),
@@ -43,10 +45,10 @@ impl McpTokenVerifier for StubAuth0Verifier {
                 scopes: vec!["read_controls".to_owned()],
             }),
             StubAuth0Outcome::RejectCredentials if token == "client-credentials-jwt" => {
-                Err(McpVerifyError::MachineIdentity)
+                Err(VerifyError::MachineIdentity)
             }
-            StubAuth0Outcome::RejectCredentials => Err(McpVerifyError::InvalidToken),
-            StubAuth0Outcome::Unavailable => Err(McpVerifyError::JwksUnavailable),
+            StubAuth0Outcome::RejectCredentials => Err(VerifyError::InvalidToken),
+            StubAuth0Outcome::Unavailable => Err(VerifyError::JwksUnavailable),
         }
     }
 }
