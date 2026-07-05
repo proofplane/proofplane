@@ -5,8 +5,7 @@ use axum::{
     http::{header::InvalidHeaderValue, HeaderValue, Request},
     middleware,
     response::Response,
-    routing::get,
-    Json, Router,
+    Router,
 };
 use metrics_exporter_prometheus::PrometheusHandle;
 use rmcp::transport::streamable_http_server::{
@@ -35,6 +34,9 @@ use crate::{
     routes::{
         health::{self, ReadyState},
         metrics::{self, MetricsState},
+        protected_resource_metadata::{
+            self, ProtectedResourceMetadataState, PROTECTED_RESOURCE_METADATA_ENDPOINT,
+        },
         request_context::attach_request_id,
     },
     services::{
@@ -42,11 +44,9 @@ use crate::{
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
 };
-use serde::Serialize;
 use url::Url;
 
 pub const ENDPOINT: &str = "/mcp";
-pub const PROTECTED_RESOURCE_METADATA_ENDPOINT: &str = "/.well-known/oauth-protected-resource/mcp";
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpAppError {
@@ -122,31 +122,15 @@ where
         ),
         dependencies.cancellation_token.clone(),
     )?;
+    let protected_resource_metadata =
+        protected_resource_metadata::router(ProtectedResourceMetadataState {
+            resource: dependencies.auth0_mcp.resource.clone(),
+            authorization_server: dependencies.auth0_issuer.clone(),
+        });
 
     Ok(Router::new()
         .merge(protocol)
-        .route(
-            PROTECTED_RESOURCE_METADATA_ENDPOINT,
-            get({
-                let resource = dependencies.auth0_mcp.resource.to_string();
-                let issuer = dependencies.auth0_issuer.to_string();
-                move || {
-                    let resource = resource.clone();
-                    let issuer = issuer.clone();
-                    async move {
-                        Json(ProtectedResourceMetadata {
-                            resource,
-                            authorization_servers: vec![issuer],
-                            bearer_methods_supported: vec!["header"],
-                            scopes_supported: WorkspacePermission::ALL
-                                .iter()
-                                .map(|permission| permission.as_str())
-                                .collect(),
-                        })
-                    }
-                }
-            }),
-        )
+        .merge(protected_resource_metadata)
         .nest(&dependencies.health.live_path, health::livez_router())
         .nest(
             &dependencies.health.ready_path,
@@ -233,14 +217,6 @@ fn authentication_challenge(config: &Auth0McpConfig) -> Result<HeaderValue, McpA
         "Bearer realm=\"proofplane-mcp\", resource_metadata=\"{metadata}\", scope=\"{scopes}\""
     );
     HeaderValue::from_str(&challenge).map_err(McpAppError::AuthenticationChallenge)
-}
-
-#[derive(Serialize)]
-struct ProtectedResourceMetadata {
-    resource: String,
-    authorization_servers: Vec<String>,
-    bearer_methods_supported: Vec<&'static str>,
-    scopes_supported: Vec<&'static str>,
 }
 
 fn trace_path<B>(request: &Request<B>) -> &str {

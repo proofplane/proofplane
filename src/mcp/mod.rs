@@ -5,7 +5,4 @@ mod transport;
 
 pub use context::{McpRequestContext, SESSION_ID_HEADER};
 pub use server::ProofplaneMcp;
-pub use transport::{
-    create_app, protocol_router, McpAppDependencies, McpAppError, ENDPOINT,
-    PROTECTED_RESOURCE_METADATA_ENDPOINT,
-};
+pub use transport::{create_app, protocol_router, McpAppDependencies, McpAppError, ENDPOINT};

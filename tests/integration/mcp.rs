@@ -3,8 +3,11 @@ use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use proofplane::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
     domain::WorkspacePermission,
-    mcp::{PROTECTED_RESOURCE_METADATA_ENDPOINT, SESSION_ID_HEADER},
-    routes::request_context::REQUEST_ID_HEADER,
+    mcp::SESSION_ID_HEADER,
+    routes::{
+        protected_resource_metadata::PROTECTED_RESOURCE_METADATA_ENDPOINT,
+        request_context::REQUEST_ID_HEADER,
+    },
 };
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo, JsonObject},
