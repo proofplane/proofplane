@@ -1,3 +1,4 @@
+use super::auth::McpPrincipal;
 use crate::{
     authentication::ApiTokenContext,
     domain::{WorkspaceId, WorkspacePermission},
@@ -23,10 +24,7 @@ impl McpRequestContext {
         headers: &http::HeaderMap,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = extensions
-            .get::<ApiTokenContext>()
-            .copied()
-            .ok_or_else(internal_context_error)?;
+        let token = api_token_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
@@ -52,10 +50,7 @@ impl McpRequestContext {
         workspace_id: WorkspaceId,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = extensions
-            .get::<ApiTokenContext>()
-            .copied()
-            .ok_or_else(internal_context_error)?;
+        let token = api_token_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
@@ -73,6 +68,14 @@ impl McpRequestContext {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned),
         })
+    }
+}
+
+fn api_token_principal(extensions: &http::Extensions) -> Result<ApiTokenContext, rmcp::ErrorData> {
+    match extensions.get::<McpPrincipal>() {
+        Some(McpPrincipal::ApiToken(token)) => Ok(*token),
+        Some(McpPrincipal::Auth0(_)) => Err(not_found()),
+        None => Err(internal_context_error()),
     }
 }
 
@@ -111,7 +114,7 @@ mod tests {
     fn authorization_conceals_workspace_and_permission_failures() {
         let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(api_token_context(workspace_id));
+        extensions.insert(McpPrincipal::ApiToken(api_token_context(workspace_id)));
         extensions.insert(RequestId(uuid::Uuid::new_v4()));
         let headers = http::HeaderMap::new();
 
@@ -141,7 +144,7 @@ mod tests {
         let token = api_token_context(workspace_id);
         let request_id = RequestId(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(token);
+        extensions.insert(McpPrincipal::ApiToken(token));
         extensions.insert(request_id);
         let mut headers = http::HeaderMap::new();
         headers.insert(SESSION_ID_HEADER, HeaderValue::from_static("session-1"));
@@ -165,7 +168,7 @@ mod tests {
         let token = api_token_context(workspace_id);
         let request_id = RequestId(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(token);
+        extensions.insert(McpPrincipal::ApiToken(token));
         extensions.insert(request_id);
         let headers = http::HeaderMap::new();
 

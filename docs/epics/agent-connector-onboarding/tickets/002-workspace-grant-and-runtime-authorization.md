@@ -35,8 +35,9 @@ on repeated authorization and enforce it on every MCP request.
 
 **Tasks**
 
-- [ ] Implement the post-login Action for interactive redirects, continuation,
-  active-connection lookup, and access-token claims.
+- [ ] Add claim-namespace and Redirect Action shared-secret configuration.
+- [ ] Implement the post-login Action, signed continuation endpoint,
+  active-connection lookup, and namespaced access-token claims.
 - [ ] Add the signed, single-use consent contract and secure workspace
   picker with approve/deny handling.
 - [ ] Add transactional pending/active agent-connection and audit persistence
@@ -52,6 +53,9 @@ on repeated authorization and enforce it on every MCP request.
 
 **Notes**
 
+- 2026-07-02: The spec correction makes this ticket the sole owner of Redirect
+  Actions, continuation handling, custom workspace claims, and related
+  secrets; ticket 001 intentionally ships none of that infrastructure.
 - 2026-07-02: The spec removes `offline_access`; repeated authorization looks
   up the one active user/client/resource connection and reuses it when safe.
 - Auth0 Organizations are excluded because current third-party application

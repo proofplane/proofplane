@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::{
     authentication::{
-        auth0::TokenVerifier, ApiTokenAuthenticator, ApiTokenContext, AuthError, UserAuthenticator,
-        UserContext,
+        auth0::{TokenVerifier, VerifiedClaims},
+        ApiTokenAuthenticator, ApiTokenContext, AuthError, UserAuthenticator, UserContext,
     },
     domain::WorkspaceId,
     routes::error::ApiError,
@@ -44,7 +44,7 @@ pub(in crate::routes) async fn authorize_workspace_route(
     Ok(token_context)
 }
 
-pub(in crate::routes) async fn authenticate_user<V: TokenVerifier>(
+pub(in crate::routes) async fn authenticate_user<V: TokenVerifier<Claims = VerifiedClaims>>(
     authenticator: &UserAuthenticator<V>,
     request: &mut Request,
 ) -> Result<(), ApiError> {

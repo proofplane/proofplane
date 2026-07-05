@@ -8,31 +8,71 @@ use axum::{
 };
 use tracing::Span;
 
-use crate::authentication::{opaque_token, ApiTokenAuthenticator};
+use crate::authentication::{
+    auth0::{TokenVerifier, VerifiedMcpClaims},
+    ApiTokenAuthenticator, ApiTokenContext,
+};
 
-pub(crate) const AUTHENTICATE_CHALLENGE: &str = "Bearer realm=\"proofplane-mcp\"";
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpPrincipal {
+    ApiToken(ApiTokenContext),
+    Auth0(VerifiedMcpClaims),
+}
 
-pub(crate) async fn authenticate_request(
-    State(authenticator): State<Arc<ApiTokenAuthenticator>>,
+pub(crate) struct AuthenticationState<V> {
+    pub api_tokens: Arc<ApiTokenAuthenticator>,
+    pub auth0: Arc<V>,
+    pub challenge: HeaderValue,
+}
+
+impl<V> Clone for AuthenticationState<V> {
+    fn clone(&self) -> Self {
+        Self {
+            api_tokens: self.api_tokens.clone(),
+            auth0: self.auth0.clone(),
+            challenge: self.challenge.clone(),
+        }
+    }
+}
+
+pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpClaims>>(
+    State(state): State<AuthenticationState<V>>,
     mut request: Request,
     next: Next,
 ) -> Response {
     let Some(raw_token) = bearer_token(&request) else {
-        return unauthorized();
+        return unauthorized(&state.challenge);
     };
 
-    let context = match authenticator.authenticate(raw_token).await {
-        Ok(Some(context)) => context,
-        Ok(None) => return unauthorized(),
-        Err(error) => {
-            tracing::error!(%error, "MCP API token authentication failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response();
+    let principal = if raw_token.starts_with("ppat_") {
+        match state.api_tokens.authenticate(raw_token).await {
+            Ok(Some(context)) => McpPrincipal::ApiToken(context),
+            Ok(None) => return unauthorized(&state.challenge),
+            Err(error) => {
+                tracing::error!(%error, "MCP API token authentication failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                    .into_response();
+            }
+        }
+    } else {
+        match state.auth0.verify(raw_token).await {
+            Ok(claims) => McpPrincipal::Auth0(claims),
+            Err(error) if error.is_token_rejection() => {
+                return unauthorized(&state.challenge);
+            }
+            Err(error) => {
+                tracing::error!(%error, "MCP Auth0 token verification failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                    .into_response();
+            }
         }
     };
 
-    Span::current().record("user_id", context.user_id.to_string());
-    Span::current().record("api_token_id", context.api_token_id.to_string());
-    request.extensions_mut().insert(context);
+    if let McpPrincipal::ApiToken(context) = principal {
+        Span::current().record("user_id", context.user_id.to_string());
+        Span::current().record("api_token_id", context.api_token_id.to_string());
+    }
+    request.extensions_mut().insert(principal);
     next.run(request).await
 }
 
@@ -43,18 +83,17 @@ fn bearer_token(request: &Request) -> Option<&str> {
         .to_str()
         .ok()?;
     let token = value.strip_prefix("Bearer ")?;
-    if token.trim() != token || opaque_token::parse(token).is_err() {
+    if token.is_empty() || token.trim() != token {
         return None;
     }
     Some(token)
 }
 
-fn unauthorized() -> Response {
+fn unauthorized(challenge: &HeaderValue) -> Response {
     let mut response = (StatusCode::UNAUTHORIZED, "authentication required").into_response();
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_static(AUTHENTICATE_CHALLENGE),
-    );
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, challenge.clone());
     response
 }
 
@@ -62,26 +101,26 @@ fn unauthorized() -> Response {
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use secrecy::ExposeSecret;
-
     #[test]
-    fn bearer_token_accepts_valid_api_tokens() {
-        let raw_token = opaque_token::generate_opaque_token()
-            .expect("token is generated")
-            .raw_token
-            .expose_secret()
-            .to_owned();
-        let request = Request::builder()
-            .header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
-            .body(Body::empty())
-            .expect("request builds");
+    fn bearer_token_accepts_api_tokens_and_jwts() {
+        for raw_token in ["ppat_example", "eyJhbGciOiJSUzI1NiJ9.payload.signature"] {
+            let request = Request::builder()
+                .header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
+                .body(Body::empty())
+                .expect("request builds");
 
-        assert_eq!(bearer_token(&request), Some(raw_token.as_str()));
+            assert_eq!(bearer_token(&request), Some(raw_token));
+        }
     }
 
     #[test]
     fn bearer_token_rejects_missing_wrong_or_malformed_credentials() {
-        for authorization in [None, Some("Basic abc"), Some("Bearer not-a-token")] {
+        for authorization in [
+            None,
+            Some("Basic abc"),
+            Some("Bearer "),
+            Some("Bearer padded "),
+        ] {
             let mut builder = Request::builder();
             if let Some(authorization) = authorization {
                 builder = builder.header(header::AUTHORIZATION, authorization);

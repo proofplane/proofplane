@@ -10,19 +10,22 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{auth0::TokenVerifier, UserAuthenticator, UserContext},
+    authentication::{
+        auth0::{TokenVerifier, VerifiedClaims},
+        UserAuthenticator, UserContext,
+    },
     domain::User,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{authentication::authenticate_user, error::ApiError, request_context::RequestId},
     services::user::UserService,
 };
 
-pub struct MeState<V: TokenVerifier> {
+pub struct MeState<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub service: UserService,
     pub route_auth: UserRouteAuthState<V>,
 }
 
-impl<V: TokenVerifier> Clone for MeState<V> {
+impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for MeState<V> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
@@ -31,11 +34,11 @@ impl<V: TokenVerifier> Clone for MeState<V> {
     }
 }
 
-pub struct UserRouteAuthState<V: TokenVerifier> {
+pub struct UserRouteAuthState<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub authenticator: UserAuthenticator<V>,
 }
 
-impl<V: TokenVerifier> Clone for UserRouteAuthState<V> {
+impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for UserRouteAuthState<V> {
     fn clone(&self) -> Self {
         Self {
             authenticator: self.authenticator.clone(),
@@ -43,7 +46,7 @@ impl<V: TokenVerifier> Clone for UserRouteAuthState<V> {
     }
 }
 
-pub fn router<V: TokenVerifier + 'static>(state: MeState<V>) -> Router {
+pub fn router<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(state: MeState<V>) -> Router {
     let route_auth = state.route_auth.clone();
 
     Router::new()
@@ -56,7 +59,7 @@ pub fn router<V: TokenVerifier + 'static>(state: MeState<V>) -> Router {
         .with_state(state)
 }
 
-async fn authenticate_user_route<V: TokenVerifier>(
+async fn authenticate_user_route<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<UserRouteAuthState<V>>,
     mut request: Request,
     next: Next,
@@ -66,7 +69,7 @@ async fn authenticate_user_route<V: TokenVerifier>(
     Ok(next.run(request).await)
 }
 
-async fn get_me<V: TokenVerifier>(
+async fn get_me<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<MeState<V>>,
     Extension(user): Extension<UserContext>,
 ) -> Result<Json<UserResponse>, ApiError> {
@@ -79,7 +82,7 @@ async fn get_me<V: TokenVerifier>(
     Ok(Json(user.into()))
 }
 
-async fn login<V: TokenVerifier>(
+async fn login<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<MeState<V>>,
     Extension(user): Extension<UserContext>,
     Extension(request_id): Extension<RequestId>,

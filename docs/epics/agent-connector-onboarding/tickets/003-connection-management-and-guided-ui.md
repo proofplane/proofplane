@@ -23,7 +23,7 @@ agent connections.
 - [ ] Given an owned connection, when it is revoked, then it is marked revoked
   locally before remote Auth0 cleanup and unrelated clients and API tokens are
   unchanged.
-- [ ] Given an expired eight-hour access token, when the client cannot restart
+- [ ] Given an expired 24-hour access token, when the client cannot restart
   OAuth automatically, then the user receives an accurate reconnect path
   instead of a generic tool failure.
 - [ ] Given another user's or workspace's connection, when list or revocation
@@ -49,6 +49,6 @@ agent connections.
 
 - 2026-07-02: Auth0 owns OAuth consent and tokens; Proofplane UI owns only the
   workspace-specific grant step and connection management.
-- 2026-07-02: OAuth connections use eight-hour access tokens and may require a
+- 2026-07-02: OAuth connections use 24-hour access tokens and may require a
   visible reconnect when the client does not restart authorization.
 - The harness remains authoritative for transport health and mounted tools.

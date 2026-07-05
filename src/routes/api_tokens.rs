@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    authentication::{auth0::TokenVerifier, UserContext},
+    authentication::{
+        auth0::{TokenVerifier, VerifiedClaims},
+        UserContext,
+    },
     domain::{
         canonical_permissions, required_text, ApiTokenId, ApiTokenWithPermissions, DomainError,
         WorkspaceId, WorkspacePermission,
@@ -29,12 +32,12 @@ use crate::{
     validation::Validation,
 };
 
-pub struct ApiTokensState<V: TokenVerifier> {
+pub struct ApiTokensState<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub service: ApiTokenService,
     pub route_auth: UserRouteAuthState<V>,
 }
 
-impl<V: TokenVerifier> Clone for ApiTokensState<V> {
+impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for ApiTokensState<V> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
@@ -43,7 +46,9 @@ impl<V: TokenVerifier> Clone for ApiTokensState<V> {
     }
 }
 
-pub fn router<V: TokenVerifier + 'static>(state: ApiTokensState<V>) -> Router {
+pub fn router<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
+    state: ApiTokensState<V>,
+) -> Router {
     let route_auth = state.route_auth.clone();
 
     Router::new()
@@ -62,7 +67,7 @@ pub fn router<V: TokenVerifier + 'static>(state: ApiTokensState<V>) -> Router {
         .with_state(state)
 }
 
-async fn authenticate_user_route<V: TokenVerifier>(
+async fn authenticate_user_route<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<UserRouteAuthState<V>>,
     mut request: Request,
     next: Next,
@@ -72,7 +77,7 @@ async fn authenticate_user_route<V: TokenVerifier>(
     Ok(next.run(request).await)
 }
 
-async fn create_api_token<V: TokenVerifier>(
+async fn create_api_token<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
     Extension(request_id): Extension<RequestId>,
@@ -103,7 +108,7 @@ async fn create_api_token<V: TokenVerifier>(
     Ok(Json(issued.into()))
 }
 
-async fn list_api_tokens<V: TokenVerifier>(
+async fn list_api_tokens<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
     Path(workspace_id): Path<Uuid>,
@@ -116,7 +121,7 @@ async fn list_api_tokens<V: TokenVerifier>(
     Ok(Json(tokens.into_iter().map(Into::into).collect()))
 }
 
-async fn revoke_api_token<V: TokenVerifier>(
+async fn revoke_api_token<V: TokenVerifier<Claims = VerifiedClaims>>(
     State(state): State<ApiTokensState<V>>,
     Extension(user): Extension<UserContext>,
     Extension(request_id): Extension<RequestId>,

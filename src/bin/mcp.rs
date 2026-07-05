@@ -4,6 +4,7 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::{
+        auth0::Auth0McpTokenVerifier,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor,
@@ -42,6 +43,8 @@ enum Error {
     DownloadGrantToken(#[from] proofplane::authentication::paseto::Error),
     #[error("MCP listener error")]
     Listener(#[from] std::io::Error),
+    #[error("MCP application initialization error")]
+    App(#[from] proofplane::mcp::McpAppError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -94,6 +97,9 @@ async fn run() -> Result<(), Error> {
         object_store,
         metrics,
         authenticator,
+        auth0_verifier: Arc::new(Auth0McpTokenVerifier::new(&config.auth0)),
+        auth0_issuer: config.auth0.issuer.clone(),
+        auth0_mcp: config.auth0.mcp.clone(),
         public_api_base_url: config.server.public_api_base_url.clone(),
         download_grant_encryptor,
         download_grant_decryptor,
@@ -101,7 +107,7 @@ async fn run() -> Result<(), Error> {
         upload_grant_decryptor,
         health: config.health.clone(),
         cancellation_token: sessions.clone(),
-    });
+    })?;
 
     // All fallible dependency construction is complete before the socket accepts traffic.
     let listener = TcpListener::bind(config.server.mcp_bind).await?;

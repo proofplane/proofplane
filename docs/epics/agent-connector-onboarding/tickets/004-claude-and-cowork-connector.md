@@ -15,7 +15,7 @@ submission.
   consent, and uses only allowed tools.
 - [ ] Given a denied or revoked Proofplane grant, when Claude invokes a tool,
   then access fails without falling back to a shared credential.
-- [ ] Given the eight-hour access token expires, when Claude or Cowork next
+- [ ] Given the 24-hour access token expires, when Claude or Cowork next
   invokes Proofplane, then automatic reauthorization or the exact user-visible
   reconnect behavior is verified and documented.
 - [ ] Given the connector is not yet directory-approved, when a customer sets

@@ -7,7 +7,7 @@ use tracing::Span;
 
 use crate::{
     authentication::{
-        auth0::TokenVerifier,
+        auth0::{TokenVerifier, VerifiedClaims},
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
@@ -45,7 +45,7 @@ use crate::{
     },
 };
 
-pub struct AppDependencies<V: TokenVerifier> {
+pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
@@ -54,7 +54,7 @@ pub struct AppDependencies<V: TokenVerifier> {
     pub user_authenticator: UserAuthenticator<V>,
 }
 
-pub fn create_app<V: TokenVerifier + 'static>(
+pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, crate::authentication::Error> {
     let api_token_authenticator = dependencies.api_token_authenticator.clone();

@@ -52,11 +52,18 @@ pub struct PubSubSubscriptionsConfig {
     pub worker_max_delivery_attempts: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Auth0Config {
     pub issuer: Url,
     pub audience: String,
     pub jwks_url: Url,
+    pub mcp: Auth0McpConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct Auth0McpConfig {
+    pub resource: Url,
+    pub allowed_client_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -383,6 +390,9 @@ auth0:
   issuer: ""
   audience: ""
   jwks_url: "not-a-url"
+  mcp:
+    resource: "not-a-url"
+    allowed_client_ids: []
 paseto:
   download:
     active_key_id: ""
@@ -439,6 +449,8 @@ health:
                 assert!(paths.contains(&"auth0.issuer"));
                 assert!(paths.contains(&"auth0.audience"));
                 assert!(paths.contains(&"auth0.jwks_url"));
+                assert!(paths.contains(&"auth0.mcp.resource"));
+                assert!(paths.contains(&"auth0.mcp.allowed_client_ids"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));

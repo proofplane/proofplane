@@ -13,6 +13,13 @@ without exposing them to the user or model.
 
 ## Architecture Decision
 
+> **Revision — 2026-07-02:** Ticket 001 now establishes only standard Auth0
+> OAuth discovery and user access-token verification. Redirect Actions,
+> continuation handling, custom workspace claims, persistence, and runtime
+> workspace authorization all begin in ticket 002. This prevents a
+> development-only synthetic grant mechanism from becoming a ticket 001
+> contract.
+
 Auth0 is the OAuth authorization server for remote MCP clients, following
 [Auth0's direct MCP authorization flow](https://auth0.com/ai/docs/mcp/intro/why-auth-for-mcp).
 Auth0 owns:
@@ -29,7 +36,7 @@ Auth0 owns:
 Proofplane does not implement `/oauth/authorize`, `/oauth/token`,
 authorization-code storage, or a token-signing keyring. The initial release
 does not request `offline_access` and Auth0 does not issue an MCP refresh token.
-Auth0 access tokens expire after eight hours.
+Auth0 access tokens expire after 24 hours.
 
 Proofplane remains responsible for:
 
@@ -127,7 +134,7 @@ flowchart LR
     W -->|create workspace grant| A
     A --> D
     W -->|resume transaction| I
-    I -->|Eight-hour Auth0 access token| C
+    I -->|24-hour Auth0 access token| C
     C -->|Auth0 bearer access token| M
     M -->|live grant and membership check| D
 ```
@@ -142,7 +149,7 @@ flowchart LR
 5. Auth0 authenticates the user and pauses at the Proofplane Redirect Action.
 6. Proofplane shows the requested permissions and lets the user choose one
    accessible workspace.
-7. Auth0 completes the authorization code flow and returns an eight-hour
+7. Auth0 completes the authorization code flow and returns a 24-hour
    access token to the MCP client.
 8. The client calls `/mcp`; Proofplane verifies the Auth0 token and the live
    workspace grant.
@@ -196,7 +203,7 @@ sequenceDiagram
     U->>I: Approve requested MCP scopes
     I-->>C: Authorization code at registered redirect URI
     C->>I: Exchange code and PKCE verifier
-    I-->>C: Eight-hour Auth0 access token
+    I-->>C: 24-hour Auth0 access token
 
     C->>M: /mcp with Auth0 bearer access token
     M->>D: Validate and activate connection, membership, and scopes
@@ -221,6 +228,10 @@ The MCP server owns this endpoint under
 [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728). Auth0 owns
 authorization-server metadata under
 [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
+
+Proofplane constructs and validates the complete `WWW-Authenticate` header
+when the MCP application is assembled. An invalid metadata URL or header value
+fails startup; request handling only clones the validated header.
 
 The Auth0 tenant must enable the Resource Parameter Compatibility Profile so
 the MCP `resource` parameter becomes the access-token audience as required by
@@ -259,9 +270,9 @@ https://mcp.proofplane.com/mcp
 
 It uses:
 
-- RS256 access tokens and the RFC 9068 authorization token dialect;
+- RS256 access tokens and Auth0's default `access_token` dialect;
 - the concrete MCP scopes defined below;
-- an eight-hour access-token lifetime;
+- a 24-hour access-token lifetime;
 - offline access disabled for the MCP resource; and
 - domain-level identity connections usable by third-party clients.
 
@@ -272,6 +283,25 @@ Proofplane never receives Auth0 signing keys.
 
 Auth0 does not know Proofplane workspace membership. A post-login Redirect
 Action integrates that domain decision without taking over OAuth.
+
+### Ticket 001/002 delivery boundary
+
+Ticket 001 ships Protected Resource Metadata, Authorization Code with PKCE
+tenant configuration, and standard Auth0 user access-token validation. It
+requires an RS256 signature from configured JWKS; exact issuer and MCP
+audience; valid `exp`, `iat`, non-machine `sub`, and allowlisted `azp`; and
+only the six known workspace scopes. Client-credentials identities,
+`offline_access`, and unknown scopes are rejected. It has no Redirect Action,
+continuation endpoint, claim namespace, Action shared secret, synthetic
+workspace identifier, grant, or connection.
+
+Verified ticket 001 Auth0 users may initialize MCP and list tools. Every
+protected tool call fails closed because no workspace authorization exists.
+Existing `ppat_` authorization and API-token audit actors remain unchanged.
+
+Ticket 002 adds the complete grant bridge described below: Redirect Action,
+workspace picker, signed continuation, namespaced connection and workspace
+claims, persistence, membership checks, and protected-tool authorization.
 
 ### Initial authorization and connection reuse
 
@@ -320,7 +350,7 @@ replay.
 
 ### Access-token expiry and reauthorization
 
-Auth0 issues no MCP refresh token. When the eight-hour access token expires,
+Auth0 issues no MCP refresh token. When the 24-hour access token expires,
 the MCP server returns `401 Unauthorized` and the client must start
 Authorization Code with PKCE again.
 
@@ -344,8 +374,8 @@ beyond the token lifetime; those callers use `ppat_` credentials.
 
 ## Access Token Contract
 
-The MCP server accepts only Auth0 access JWTs with all required standard and
-Proofplane claims:
+In ticket 001, the MCP server accepts only Auth0 user access JWTs with these
+standard Auth0 claims:
 
 | Claim | Meaning |
 | --- | --- |
@@ -355,10 +385,25 @@ Proofplane claims:
 | `azp` | Authorized MCP client ID |
 | `exp`, `iat` | Token lifetime |
 | `scope` | Auth0-approved MCP scopes |
+
+The subject must identify a user. Auth0 client-credentials subjects and grant
+markers are rejected. `azp` must be allowlisted, and every scope must be one
+of the six MCP workspace scopes.
+
+Ticket 002 extends the signed token contract with:
+
+| Claim | Meaning |
+| --- | --- |
 | `https://proofplane.com/connection_id` | Durable Proofplane agent connection |
 | `https://proofplane.com/workspace_id` | Workspace selected during consent |
 
-The claim namespace is configuration and must be collision-resistant. Tokens
+The Auth0 dialect is intentional. It identifies the authorized client with
+`azp`; Proofplane does not require the RFC 9068-only `client_id`, `jti`, or
+`typ: at+jwt` fields. This is an Auth0-specific integration, so the RFC 9068
+interoperability profile does not add a required capability.
+
+Starting in ticket 002, the claim namespace is configuration and must be
+collision-resistant. Tokens
 contain identifiers and scopes only, never Auth0 credentials, user content, or
 workspace data.
 
@@ -387,7 +432,7 @@ flowchart TD
 For every Auth0-backed MCP request, Proofplane:
 
 1. verifies the JWT signature against cached Auth0 JWKS;
-2. validates `iss`, `aud`, `exp`, `sub`, `azp`, and required custom claims;
+2. validates `iss`, `aud`, `exp`, `iat`, user `sub`, `azp`, and known scopes;
 3. loads the named pending or active connection;
 4. requires its user, workspace, client, resource, and permissions to match;
 5. atomically activates a valid, unexpired pending connection or requires an
@@ -397,6 +442,10 @@ For every Auth0-backed MCP request, Proofplane:
 
 The database check makes revocation and membership removal immediate even
 while an Auth0 JWT remains cryptographically valid.
+
+Steps 3-7 are introduced by ticket 002. During ticket 001, successful standard
+token validation creates a protocol-level principal only: initialization and
+tool discovery work, while protected tools fail closed before domain access.
 
 Invalid credentials return a generic `401`. Workspace and permission failures
 inside tools remain concealed as not-found responses where the existing MCP
@@ -432,7 +481,7 @@ sequenceDiagram
         X->>X: Add existing connection and workspace claims
         I-->>C: Authorization code without Proofplane redirect
         C->>I: Exchange code and PKCE verifier
-        I-->>C: New eight-hour access token
+        I-->>C: New 24-hour access token
         C->>M: Retry MCP request
     else No reusable connection
         alt Silent authorization request
@@ -454,7 +503,7 @@ after the user approves a workspace.
 
 Proofplane may also revoke the Auth0 user grant as credential hygiene. Local
 revocation remains authoritative because an already-issued access token is
-otherwise valid until its eight-hour expiry.
+otherwise valid until its 24-hour expiry.
 
 An expired access token cannot be refreshed. Reauthorization always produces
 a new authorization code and access token.
@@ -543,7 +592,7 @@ The website:
 - hosts the workspace-consent route invoked by the Auth0 Action;
 - clearly displays client identity, requested permissions, and workspace;
 - lists authorized connections and supports local revocation;
-- explains that OAuth connections may require reconnection after eight hours;
+- explains that OAuth connections may require reconnection after 24 hours;
 - provides an explicit Authenticate or Reconnect action when the client cannot
   restart OAuth automatically;
 - distinguishes "authorized" from external client connection health;
@@ -615,8 +664,10 @@ permissions, cleanup, and client-display behavior are specified and tested.
 
 ## Testing
 
-- Unit tests validate Auth0 JWT signature, issuer, audience, lifetime, client,
-  connection, workspace, and scope claims with local JWK fixtures.
+- Ticket 001 unit tests validate Auth0 JWT signature, algorithm, issuer,
+  audience, lifetime, user subject, authorized client, and scope claims with
+  local JWK fixtures. Ticket 002 adds custom claim, live grant, and membership
+  cases.
 - MCP protocol tests validate `401` challenges and Protected Resource Metadata.
 - Action tests cover initial redirect, signed continuation, scope filtering,
   active-connection reuse, silent interaction requirements, denial, and
@@ -637,14 +688,25 @@ validation, expiry, and Proofplane policy.
 
 ## Delivery Gates And Open Decisions
 
-Implementation must not begin until these tenant capabilities are confirmed in
-a development Auth0 tenant:
+Ticket 001 confirmed these capabilities in a development Auth0 tenant:
 
 1. MCP Resource Parameter Compatibility Profile.
 2. Third-party client access to the MCP resource server.
-3. Post-login Redirect Actions for those third-party clients.
-4. An eight-hour access-token configuration without `offline_access`.
-5. Active-connection lookup and claim injection on repeated authorization.
+3. Authorization Code with PKCE through MCP Inspector.
+4. Browser authorization through the return from Auth0 to MCP Inspector.
+5. A 24-hour access-token configuration without `offline_access`.
+
+The Inspector 0.22.0 callback then bypassed its configured proxy. That external
+harness limitation does not block the authorization foundation: Proofplane
+discovery reached Auth0, browser authentication completed, and repository
+tests cover Auth0 token validation and the ticket 001 fail-closed boundary.
+Connection reuse during repeated authorization remains ticket 002 scope.
+Recovery after token expiry is a client-specific delivery check in tickets 003
+through 006.
+
+Ticket 002 must separately prove post-login Redirect Actions for those
+third-party clients, signed continuation, active-connection lookup, and claim
+injection.
 
 The remaining client questions are:
 
@@ -684,10 +746,30 @@ authentication.
 
 ## Revisions
 
+- 2026-07-05: Closed ticket 001 after the development tenant and Inspector
+  demonstrated discovery, PKCE browser authorization, and return from Auth0.
+  Inspector 0.22.0's proxy-bypassing callback behavior is recorded as an
+  external harness limitation. Kept repeated-authorization connection reuse in
+  ticket 002 and post-expiry reconnect validation in the downstream client
+  delivery tickets.
+- 2026-07-04: Moved MCP authentication-challenge construction to application
+  assembly so invalid metadata URLs or header values fail startup instead of
+  panicking while handling an unauthorized request.
+- 2026-07-02: Adopted Auth0's default 86,400-second (24-hour) MCP access-token
+  lifetime. Live grant and membership checks in ticket 002 remain the
+  immediate-revocation boundary.
+- 2026-07-02: Selected Auth0's default `access_token` dialect for the MCP
+  resource. The token contract uses Auth0's `azp` client identifier; RFC 9068
+  fields are not required.
+- 2026-07-02: Defined the 001/002 boundary. Ticket 001 admits verified Auth0
+  principals for MCP initialization and tool discovery but denies protected
+  tools; ticket 002 adds durable grants and live authorization.
 - 2026-07-02: Removed `offline_access` and connection-bound refresh metadata
-  from the initial release. Auth0 now issues eight-hour access tokens. Repeat
-  authorization reuses the one active user/client/resource connection without
-  a Proofplane redirect when possible; otherwise the user reconnects visibly.
+  from the initial release. This revision originally selected eight-hour
+  access tokens; the later 24-hour revision above supersedes that lifetime.
+  Repeat authorization reuses the one active user/client/resource connection
+  without a Proofplane redirect when possible; otherwise the user reconnects
+  visibly.
 - 2026-07-02: Replaced the proposed Proofplane OAuth facade and PASETO token
   service with direct Auth0 MCP authorization. Added the Redirect Action
   workspace-grant bridge, connection-bound refresh metadata, runtime claim
