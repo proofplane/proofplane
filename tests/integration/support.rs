@@ -592,6 +592,7 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             },
             cancellation_token: CancellationToken::new(),
         })
+        .expect("MCP application initializes")
     }
 
     pub fn mcp_http_server(&self) -> TestServer {

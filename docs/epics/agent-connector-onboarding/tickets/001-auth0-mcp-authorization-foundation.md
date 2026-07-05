@@ -73,3 +73,5 @@ protocol or token-issuance endpoints to Proofplane.
   static third-party Inspector client, user-delegated client grant, and domain
   connection with Auth0 CLI. It follows Auth0's confidential
   `client_secret_post` Inspector contract; Inspector supplies mandatory PKCE.
+- 2026-07-04: The spec now records startup validation for the preconstructed
+  MCP authentication challenge.

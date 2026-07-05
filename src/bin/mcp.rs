@@ -43,6 +43,8 @@ enum Error {
     DownloadGrantToken(#[from] proofplane::authentication::paseto::Error),
     #[error("MCP listener error")]
     Listener(#[from] std::io::Error),
+    #[error("MCP application initialization error")]
+    App(#[from] proofplane::mcp::McpAppError),
 }
 
 async fn run() -> Result<(), Error> {
@@ -105,7 +107,7 @@ async fn run() -> Result<(), Error> {
         upload_grant_decryptor,
         health: config.health.clone(),
         cancellation_token: sessions.clone(),
-    });
+    })?;
 
     // All fallible dependency construction is complete before the socket accepts traffic.
     let listener = TcpListener::bind(config.server.mcp_bind).await?;

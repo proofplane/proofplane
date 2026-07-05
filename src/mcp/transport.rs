@@ -1,7 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
-    extract::MatchedPath, http::Request, middleware, response::Response, routing::get, Json, Router,
+    extract::MatchedPath,
+    http::{header::InvalidHeaderValue, HeaderValue, Request},
+    middleware,
+    response::Response,
+    routing::get,
+    Json, Router,
 };
 use metrics_exporter_prometheus::PrometheusHandle;
 use rmcp::transport::streamable_http_server::{
@@ -43,6 +48,14 @@ use url::Url;
 pub const ENDPOINT: &str = "/mcp";
 pub const PROTECTED_RESOURCE_METADATA_ENDPOINT: &str = "/.well-known/oauth-protected-resource/mcp";
 
+#[derive(Debug, thiserror::Error)]
+pub enum McpAppError {
+    #[error("MCP resource metadata URL cannot be constructed")]
+    ResourceMetadataUrl(#[source] url::ParseError),
+    #[error("MCP authentication challenge is not a valid HTTP header")]
+    AuthenticationChallenge(#[source] InvalidHeaderValue),
+}
+
 pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
@@ -81,7 +94,7 @@ impl<V> Clone for McpAppDependencies<V> {
     }
 }
 
-pub fn create_app<V>(dependencies: McpAppDependencies<V>) -> Router
+pub fn create_app<V>(dependencies: McpAppDependencies<V>) -> Result<Router, McpAppError>
 where
     V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
 {
@@ -108,9 +121,9 @@ where
             controls,
         ),
         dependencies.cancellation_token.clone(),
-    );
+    )?;
 
-    Router::new()
+    Ok(Router::new()
         .merge(protocol)
         .route(
             PROTECTED_RESOURCE_METADATA_ENDPOINT,
@@ -172,7 +185,7 @@ where
                         "http request completed"
                     );
                 }),
-        )
+        ))
 }
 
 pub fn protocol_router<V>(
@@ -181,10 +194,11 @@ pub fn protocol_router<V>(
     auth0_config: Auth0McpConfig,
     server: ProofplaneMcp,
     cancellation_token: CancellationToken,
-) -> Router
+) -> Result<Router, McpAppError>
 where
     V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
 {
+    let challenge = authentication_challenge(&auth0_config)?;
     let server_factory = move || Ok(server.clone());
     let transport = StreamableHttpService::<ProofplaneMcp, LocalSessionManager>::new(
         server_factory,
@@ -193,16 +207,32 @@ where
             .with_cancellation_token(cancellation_token.child_token()),
     );
 
-    Router::new()
+    Ok(Router::new()
         .nest_service(ENDPOINT, transport)
         .layer(middleware::from_fn_with_state(
             AuthenticationState {
                 api_tokens: authenticator,
                 auth0: auth0_verifier,
-                auth0_config,
+                challenge,
             },
             authenticate_request,
-        ))
+        )))
+}
+
+fn authentication_challenge(config: &Auth0McpConfig) -> Result<HeaderValue, McpAppError> {
+    let scopes = WorkspacePermission::ALL
+        .iter()
+        .map(|permission| permission.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let metadata = config
+        .resource
+        .join(PROTECTED_RESOURCE_METADATA_ENDPOINT)
+        .map_err(McpAppError::ResourceMetadataUrl)?;
+    let challenge = format!(
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"{metadata}\", scope=\"{scopes}\""
+    );
+    HeaderValue::from_str(&challenge).map_err(McpAppError::AuthenticationChallenge)
 }
 
 #[derive(Serialize)]
@@ -224,8 +254,9 @@ fn trace_path<B>(request: &Request<B>) -> &str {
 #[cfg(test)]
 mod tests {
     use axum::{body::Body, http::Request};
+    use url::Url;
 
-    use super::trace_path;
+    use super::{authentication_challenge, trace_path, Auth0McpConfig, McpAppError};
 
     #[test]
     fn http_trace_path_never_contains_query_parameters() {
@@ -235,5 +266,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(trace_path(&request), "/mcp");
+    }
+
+    #[test]
+    fn authentication_challenge_rejects_non_hierarchical_resource_url() {
+        let config = Auth0McpConfig {
+            resource: Url::parse("mailto:mcp@proofplane.com").unwrap(),
+            allowed_client_ids: vec!["client-123".to_owned()],
+        };
+
+        assert!(matches!(
+            authentication_challenge(&config),
+            Err(McpAppError::ResourceMetadataUrl(_))
+        ));
     }
 }

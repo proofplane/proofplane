@@ -8,13 +8,9 @@ use axum::{
 };
 use tracing::Span;
 
-use crate::{
-    authentication::{
-        auth0::{TokenVerifier, VerifiedMcpClaims},
-        ApiTokenAuthenticator, ApiTokenContext,
-    },
-    config::Auth0McpConfig,
-    domain::WorkspacePermission,
+use crate::authentication::{
+    auth0::{TokenVerifier, VerifiedMcpClaims},
+    ApiTokenAuthenticator, ApiTokenContext,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +22,7 @@ pub enum McpPrincipal {
 pub(crate) struct AuthenticationState<V> {
     pub api_tokens: Arc<ApiTokenAuthenticator>,
     pub auth0: Arc<V>,
-    pub auth0_config: Auth0McpConfig,
+    pub challenge: HeaderValue,
 }
 
 impl<V> Clone for AuthenticationState<V> {
@@ -34,7 +30,7 @@ impl<V> Clone for AuthenticationState<V> {
         Self {
             api_tokens: self.api_tokens.clone(),
             auth0: self.auth0.clone(),
-            auth0_config: self.auth0_config.clone(),
+            challenge: self.challenge.clone(),
         }
     }
 }
@@ -45,13 +41,13 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
     next: Next,
 ) -> Response {
     let Some(raw_token) = bearer_token(&request) else {
-        return unauthorized(&state.auth0_config);
+        return unauthorized(&state.challenge);
     };
 
     let principal = if raw_token.starts_with("ppat_") {
         match state.api_tokens.authenticate(raw_token).await {
             Ok(Some(context)) => McpPrincipal::ApiToken(context),
-            Ok(None) => return unauthorized(&state.auth0_config),
+            Ok(None) => return unauthorized(&state.challenge),
             Err(error) => {
                 tracing::error!(%error, "MCP API token authentication failed");
                 return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
@@ -62,7 +58,7 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
         match state.auth0.verify(raw_token).await {
             Ok(claims) => McpPrincipal::Auth0(claims),
             Err(error) if error.is_token_rejection() => {
-                return unauthorized(&state.auth0_config);
+                return unauthorized(&state.challenge);
             }
             Err(error) => {
                 tracing::error!(%error, "MCP Auth0 token verification failed");
@@ -93,24 +89,11 @@ fn bearer_token(request: &Request) -> Option<&str> {
     Some(token)
 }
 
-fn unauthorized(config: &Auth0McpConfig) -> Response {
+fn unauthorized(challenge: &HeaderValue) -> Response {
     let mut response = (StatusCode::UNAUTHORIZED, "authentication required").into_response();
-    let scopes = WorkspacePermission::ALL
-        .iter()
-        .map(|permission| permission.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let metadata = config
-        .resource
-        .join("/.well-known/oauth-protected-resource/mcp")
-        .expect("validated resource URL joins");
-    let challenge = format!(
-        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"{metadata}\", scope=\"{scopes}\""
-    );
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_str(&challenge).expect("validated URLs form a header value"),
-    );
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, challenge.clone());
     response
 }
 

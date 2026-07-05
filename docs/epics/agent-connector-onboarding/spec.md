@@ -229,6 +229,10 @@ The MCP server owns this endpoint under
 authorization-server metadata under
 [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
 
+Proofplane constructs and validates the complete `WWW-Authenticate` header
+when the MCP application is assembled. An invalid metadata URL or header value
+fails startup; request handling only clones the validated header.
+
 The Auth0 tenant must enable the Resource Parameter Compatibility Profile so
 the MCP `resource` parameter becomes the access-token audience as required by
 [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707).
@@ -735,6 +739,9 @@ authentication.
 
 ## Revisions
 
+- 2026-07-04: Moved MCP authentication-challenge construction to application
+  assembly so invalid metadata URLs or header values fail startup instead of
+  panicking while handling an unauthorized request.
 - 2026-07-02: Adopted Auth0's default 86,400-second (24-hour) MCP access-token
   lifetime. Live grant and membership checks in ticket 002 remain the
   immediate-revocation boundary.
