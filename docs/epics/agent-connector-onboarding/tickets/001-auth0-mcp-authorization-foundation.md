@@ -26,8 +26,6 @@ protocol or token-issuance endpoints to Proofplane.
 - [x] Given a verified Auth0 user without a ticket 002 workspace grant, when it
   initializes MCP or lists tools, then those protocol operations succeed and
   every protected tool remains denied.
-- [x] Given the Auth0-backed flow, when repository routes are inspected, then
-  Proofplane exposes no OAuth authorize, token, refresh, or revoke endpoint.
 - [x] Given an existing valid `ppat_` caller, when OAuth support ships, then its
   REST and MCP authentication behavior is unchanged.
 
