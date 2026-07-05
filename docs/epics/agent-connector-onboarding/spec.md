@@ -688,14 +688,21 @@ validation, expiry, and Proofplane policy.
 
 ## Delivery Gates And Open Decisions
 
-Ticket 001 remains `Doing` until these tenant capabilities are confirmed in a
-development Auth0 tenant:
+Ticket 001 confirmed these capabilities in a development Auth0 tenant:
 
 1. MCP Resource Parameter Compatibility Profile.
 2. Third-party client access to the MCP resource server.
 3. Authorization Code with PKCE through MCP Inspector.
-4. Initial and repeated authorization with standard Auth0 user access tokens.
+4. Browser authorization through the return from Auth0 to MCP Inspector.
 5. A 24-hour access-token configuration without `offline_access`.
+
+The Inspector 0.22.0 callback then bypassed its configured proxy. That external
+harness limitation does not block the authorization foundation: Proofplane
+discovery reached Auth0, browser authentication completed, and repository
+tests cover Auth0 token validation and the ticket 001 fail-closed boundary.
+Connection reuse during repeated authorization remains ticket 002 scope.
+Recovery after token expiry is a client-specific delivery check in tickets 003
+through 006.
 
 Ticket 002 must separately prove post-login Redirect Actions for those
 third-party clients, signed continuation, active-connection lookup, and claim
@@ -739,6 +746,12 @@ authentication.
 
 ## Revisions
 
+- 2026-07-05: Closed ticket 001 after the development tenant and Inspector
+  demonstrated discovery, PKCE browser authorization, and return from Auth0.
+  Inspector 0.22.0's proxy-bypassing callback behavior is recorded as an
+  external harness limitation. Kept repeated-authorization connection reuse in
+  ticket 002 and post-expiry reconnect validation in the downstream client
+  delivery tickets.
 - 2026-07-04: Moved MCP authentication-challenge construction to application
   assembly so invalid metadata URLs or header values fail startup instead of
   panicking while handling an unauthorized request.

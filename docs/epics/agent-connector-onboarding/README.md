@@ -15,7 +15,7 @@ handoff units that link into it.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Doing | Implementing standard Auth0 discovery and user-token verification; live MCP Inspector evidence remains. |
+| 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Done | Established Auth0 discovery, tenant capability, and user-token verification; client-specific reconnect validation remains downstream. |
 | 002. [Workspace Grant And Runtime Authorization](./tickets/002-workspace-grant-and-runtime-authorization.md) | Todo | Add the Redirect Action and bind Auth0 tokens to one live Proofplane workspace connection. |
 | 003. [Connection Management And Guided UI](./tickets/003-connection-management-and-guided-ui.md) | Todo | Add connection lifecycle UI, revocation, and client-specific setup. |
 | 004. [Claude And Cowork Connector](./tickets/004-claude-and-cowork-connector.md) | Todo | Validate the remote connector path and prepare directory distribution. |
