@@ -68,6 +68,26 @@ pub struct ConsumeContinuationPayload {
     pub nonce: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the approved policy outcome intentionally owns the repository result"
+)]
+pub enum ConsumeContinuationOutcome {
+    Approved(AgentConnection),
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the activated policy outcome intentionally owns the repository result"
+)]
+pub enum ActivationOutcome {
+    Activated(AgentConnection),
+    Rejected,
+}
+
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
@@ -126,14 +146,18 @@ impl AgentConnectionService {
     pub async fn consume_continuation(
         &self,
         payload: ConsumeContinuationPayload,
-    ) -> Result<Option<AgentConnection>, AgentConnectionError> {
-        Ok(self
+    ) -> Result<ConsumeContinuationOutcome, AgentConnectionError> {
+        let connection = self
             .repository
             .consume_agent_connection_continuation(
                 digest_secret(&payload.continuation_token),
                 digest_secret(&payload.nonce),
             )
-            .await?)
+            .await?;
+        Ok(match connection {
+            Some(connection) => ConsumeContinuationOutcome::Approved(connection),
+            None => ConsumeContinuationOutcome::Invalid,
+        })
     }
 
     pub async fn find_reusable(
@@ -154,8 +178,12 @@ impl AgentConnectionService {
     pub async fn activate(
         &self,
         id: AgentConnectionId,
-    ) -> Result<Option<AgentConnection>, AgentConnectionError> {
-        Ok(self.repository.activate_agent_connection(id).await?)
+    ) -> Result<ActivationOutcome, AgentConnectionError> {
+        let connection = self.repository.activate_agent_connection(id).await?;
+        Ok(match connection {
+            Some(connection) => ActivationOutcome::Activated(connection),
+            None => ActivationOutcome::Rejected,
+        })
     }
 
     pub async fn touch_last_used(

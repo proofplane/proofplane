@@ -13,8 +13,8 @@ use crate::{
     domain::{canonical_permissions, AgentConnection, WorkspacePermission},
     routes::error::ApiError,
     services::agent_connections::{
-        AgentConnectionError, AgentConnectionService, ConsumeContinuationPayload,
-        FindReusableConnectionPayload,
+        AgentConnectionError, AgentConnectionService, ConsumeContinuationOutcome,
+        ConsumeContinuationPayload, FindReusableConnectionPayload,
     },
     validate,
     validation::Validation,
@@ -151,7 +151,7 @@ async fn consume_continuation(
         .map_err(service_error)?;
 
     Ok(Json(match connection {
-        Some(connection) => {
+        ConsumeContinuationOutcome::Approved(connection) => {
             let scopes = scope_strings(&connection);
             ConsumeContinuationResponse::Approved {
                 connection_id: connection.id.to_string(),
@@ -162,7 +162,7 @@ async fn consume_continuation(
                 scopes,
             }
         }
-        None => ConsumeContinuationResponse::InvalidContinuation,
+        ConsumeContinuationOutcome::Invalid => ConsumeContinuationResponse::InvalidContinuation,
     }))
 }
 

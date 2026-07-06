@@ -342,6 +342,11 @@ Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
 use, and revocation. Reuse requires exact subject, client, resource, canonical
 scopes, active status, and a current workspace membership.
+Conditional repository operations return `Option` to represent whether a row
+matched. At the service policy boundary, continuation consumption instead
+returns `ConsumeContinuationOutcome::{Approved, Invalid}` and activation
+returns `ActivationOutcome::{Activated, Rejected}`, keeping expected policy
+rejection distinct from repository failure.
 
 The API exposes bearer-secret-protected internal JSON endpoints to resolve a
 reusable connection and consume an approved pending continuation. Expected
@@ -799,6 +804,9 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Made continuation-consumption and activation policy outcomes
+  explicit at the service boundary while retaining repository `Option`
+  row-match semantics.
 - 2026-07-06: Made `agent_connections.pending_expires_at` the sole pending
   authorization deadline and removed the duplicate expiration from
   authorization transactions.

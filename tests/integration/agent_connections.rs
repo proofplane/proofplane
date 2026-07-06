@@ -69,6 +69,21 @@ async fn internal_routes_authenticate_validate_and_return_tagged_outcomes() {
     assert_eq!(missing.json::<Value>()["outcome"], "interaction_required");
 
     let pending = seed_pending(&app, user_id, workspace_id, "route-token", "route-nonce").await;
+    let wrong_nonce = authorized_post(
+        server,
+        continuation_path,
+        json!({
+            "continuation_token": "route-token",
+            "nonce": "wrong-route-nonce"
+        }),
+    )
+    .await;
+    wrong_nonce.assert_status_ok();
+    assert_eq!(
+        wrong_nonce.json::<Value>()["outcome"],
+        "invalid_continuation"
+    );
+
     let approved = authorized_post(
         server,
         continuation_path,

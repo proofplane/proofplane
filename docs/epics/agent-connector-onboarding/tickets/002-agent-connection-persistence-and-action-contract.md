@@ -66,3 +66,6 @@ truth without changing current MCP authorization.
 - 2026-07-06: The spec now makes the connection's pending expiration the sole
   authorization deadline; authorization transactions retain only replay
   protection and consumption state.
+- 2026-07-06: The spec now records explicit service policy outcomes for
+  continuation consumption and activation, distinct from repository failures;
+  repository `Option` results retain conditional row-match semantics.
