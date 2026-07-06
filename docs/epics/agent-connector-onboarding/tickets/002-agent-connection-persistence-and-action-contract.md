@@ -56,3 +56,5 @@ truth without changing current MCP authorization.
   [pr-40-review.md](../pr-40-review.md).
 - 2026-07-06: The spec now records the shared workspace-permission lookup
   introduced while addressing PR 40 review feedback.
+- 2026-07-06: The spec now assigns syntactic validation to exposed Action
+  route conversions and defers pending-creation DTO validation to ticket 003.

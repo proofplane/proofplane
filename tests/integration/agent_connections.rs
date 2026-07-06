@@ -8,7 +8,8 @@ use proofplane::{
     repository::{Error as RepositoryError, Postgres},
     routes::internal_agent_connections::{self, InternalAgentConnectionsState},
     services::agent_connections::{
-        AgentConnectionError, AgentConnectionService, CreatePendingConnection,
+        AgentConnectionError, AgentConnectionService, ConsumeContinuationPayload,
+        CreatePendingConnectionPayload, FindReusableConnectionPayload,
     },
     store,
 };
@@ -26,7 +27,7 @@ const RESOURCE: &str = "https://mcp.proofplane.test/mcp";
 #[tokio::test]
 async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
     let (app, service, user_id, workspace_id) = fixture().await;
-    let mut wrong_subject = pending_request(
+    let mut wrong_subject = pending_payload(
         user_id,
         workspace_id,
         "wrong-subject",
@@ -35,10 +36,20 @@ async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
     wrong_subject.auth0_subject = "auth0|someone-else".to_owned();
     assert!(matches!(
         service.create_pending(wrong_subject).await,
-        Err(AgentConnectionError::Invalid(_))
+        Err(AgentConnectionError::PolicyRejected)
+    ));
+    let missing_membership = pending_payload(
+        user_id,
+        Uuid::new_v4(),
+        "missing-membership",
+        "missing-membership-nonce",
+    );
+    assert!(matches!(
+        service.create_pending(missing_membership).await,
+        Err(AgentConnectionError::PolicyRejected)
     ));
     let pending = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "continue-1",
@@ -54,13 +65,13 @@ async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
         .is_none());
 
     let consumed = service
-        .consume_continuation("continue-1", "nonce-1")
+        .consume_continuation(continuation_payload("continue-1", "nonce-1"))
         .await
         .expect("continuation consumption succeeds")
         .expect("continuation is approved");
     assert_eq!(consumed.id, pending.id);
     assert!(service
-        .consume_continuation("continue-1", "nonce-1")
+        .consume_continuation(continuation_payload("continue-1", "nonce-1"))
         .await
         .expect("replay resolves")
         .is_none());
@@ -72,17 +83,12 @@ async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
         .expect("pending connection activates");
     assert_eq!(active.status, AgentConnectionStatus::Active);
     assert!(service
-        .find_reusable(SUBJECT, CLIENT_ID, RESOURCE, canonical_test_permissions(),)
+        .find_reusable(reusable_payload(canonical_test_permissions()))
         .await
         .expect("reuse lookup succeeds")
         .is_some());
     assert!(service
-        .find_reusable(
-            SUBJECT,
-            CLIENT_ID,
-            RESOURCE,
-            vec![WorkspacePermission::ReadControls],
-        )
+        .find_reusable(reusable_payload(vec![WorkspacePermission::ReadControls]))
         .await
         .expect("scope mismatch resolves")
         .is_none());
@@ -98,7 +104,7 @@ async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
         .await
         .expect("membership removes");
     assert!(service
-        .find_reusable(SUBJECT, CLIENT_ID, RESOURCE, canonical_test_permissions(),)
+        .find_reusable(reusable_payload(canonical_test_permissions()))
         .await
         .expect("membership-less lookup resolves")
         .is_none());
@@ -108,7 +114,7 @@ async fn pending_continuation_is_single_use_and_active_reuse_is_exact() {
 async fn expired_pending_is_replaced_and_live_concurrent_creation_has_one_winner() {
     let (app, service, user_id, workspace_id) = fixture().await;
     let first = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "expired",
@@ -147,7 +153,7 @@ WHERE id = $1
         .expect("pending expires");
 
     let replacement = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "replacement",
@@ -163,11 +169,11 @@ WHERE id = $1
         .expect("replacement revokes");
     let left = service.clone();
     let right = service.clone();
-    let left_request = pending_request(user_id, workspace_id, "left", "left-nonce");
-    let right_request = pending_request(user_id, workspace_id, "right", "right-nonce");
+    let left_payload = pending_payload(user_id, workspace_id, "left", "left-nonce");
+    let right_payload = pending_payload(user_id, workspace_id, "right", "right-nonce");
     let (left, right) = tokio::join!(
-        left.create_pending(left_request),
-        right.create_pending(right_request)
+        left.create_pending(left_payload),
+        right.create_pending(right_payload)
     );
     let results = [left, right];
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
@@ -184,7 +190,7 @@ WHERE id = $1
 async fn denial_and_revocation_prevent_continuation_and_reuse() {
     let (_app, service, user_id, workspace_id) = fixture().await;
     let denied = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "denied",
@@ -197,7 +203,7 @@ async fn denial_and_revocation_prevent_continuation_and_reuse() {
         .await
         .expect("denial succeeds"));
     assert!(service
-        .consume_continuation("denied", "denied-nonce")
+        .consume_continuation(continuation_payload("denied", "denied-nonce"))
         .await
         .expect("denied continuation resolves")
         .is_none());
@@ -208,7 +214,7 @@ async fn denial_and_revocation_prevent_continuation_and_reuse() {
         .is_none());
 
     let pending = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "revoked",
@@ -217,7 +223,7 @@ async fn denial_and_revocation_prevent_continuation_and_reuse() {
         .await
         .expect("new pending creates");
     service
-        .consume_continuation("revoked", "revoked-nonce")
+        .consume_continuation(continuation_payload("revoked", "revoked-nonce"))
         .await
         .expect("continuation consumes");
     service
@@ -229,7 +235,7 @@ async fn denial_and_revocation_prevent_continuation_and_reuse() {
         .await
         .expect("connection revokes"));
     assert!(service
-        .find_reusable(SUBJECT, CLIENT_ID, RESOURCE, canonical_test_permissions(),)
+        .find_reusable(reusable_payload(canonical_test_permissions()))
         .await
         .expect("revoked lookup resolves")
         .is_none());
@@ -239,7 +245,7 @@ async fn denial_and_revocation_prevent_continuation_and_reuse() {
 async fn migration_enforces_digests_permissions_lifecycle_and_live_tuple() {
     let (app, service, user_id, workspace_id) = fixture().await;
     let pending = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "stored-token",
@@ -323,7 +329,7 @@ WHERE id = $1
         .is_err());
 
     let duplicate = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "duplicate",
@@ -363,7 +369,7 @@ async fn internal_routes_authenticate_validate_and_return_tagged_outcomes() {
 
     server
         .post(resolve_path)
-        .json(&valid_resolve_body())
+        .json(&json!({"subject": ""}))
         .await
         .assert_status_unauthorized();
     server
@@ -372,12 +378,26 @@ async fn internal_routes_authenticate_validate_and_return_tagged_outcomes() {
         .json(&valid_resolve_body())
         .await
         .assert_status_unauthorized();
-    server
+    let malformed = server
         .post(resolve_path)
         .add_header(header::AUTHORIZATION, format!("Bearer {ACTION_SECRET}"))
-        .json(&json!({"subject": ""}))
-        .await
-        .assert_status_bad_request();
+        .json(&json!({
+            "subject": "",
+            "client_id": " ",
+            "resource": "not-a-url",
+            "scopes": []
+        }))
+        .await;
+    malformed.assert_status_bad_request();
+    assert_eq!(
+        malformed.json::<Value>()["error"]["details"],
+        json!([
+            "subject must not be blank",
+            "client_id must not be blank",
+            "resource must be an absolute URL",
+            "scopes must not be empty"
+        ])
+    );
 
     let response = server
         .post(resolve_path)
@@ -388,7 +408,7 @@ async fn internal_routes_authenticate_validate_and_return_tagged_outcomes() {
     assert_eq!(response.json::<Value>()["outcome"], "interaction_required");
 
     let pending = service
-        .create_pending(pending_request(
+        .create_pending(pending_payload(
             user_id,
             workspace_id,
             "route-token",
@@ -465,13 +485,13 @@ async fn fixture() -> (TestApp, AgentConnectionService, Uuid, Uuid) {
     (app, service, user_id, workspace_id)
 }
 
-fn pending_request(
+fn pending_payload(
     user_id: Uuid,
     workspace_id: Uuid,
     continuation_token: &str,
     nonce: &str,
-) -> CreatePendingConnection {
-    CreatePendingConnection {
+) -> CreatePendingConnectionPayload {
+    CreatePendingConnectionPayload {
         user_id: UserId::from(user_id),
         workspace_id: WorkspaceId::from(workspace_id),
         auth0_subject: SUBJECT.to_owned(),
@@ -490,6 +510,22 @@ fn canonical_test_permissions() -> Vec<WorkspacePermission> {
         WorkspacePermission::ReadEvidenceRequests,
         WorkspacePermission::WriteControls,
     ]
+}
+
+fn reusable_payload(permissions: Vec<WorkspacePermission>) -> FindReusableConnectionPayload {
+    FindReusableConnectionPayload {
+        auth0_subject: SUBJECT.to_owned(),
+        auth0_client_id: CLIENT_ID.to_owned(),
+        resource: RESOURCE.to_owned(),
+        permissions,
+    }
+}
+
+fn continuation_payload(continuation_token: &str, nonce: &str) -> ConsumeContinuationPayload {
+    ConsumeContinuationPayload {
+        continuation_token: continuation_token.to_owned(),
+        nonce: nonce.to_owned(),
+    }
 }
 
 fn valid_resolve_body() -> Value {

@@ -339,6 +339,12 @@ reusable connection and consume an approved pending continuation. Expected
 policy misses, including `interaction_required` and invalid continuation,
 return tagged `200` responses. Malformed input returns `400`, invalid Action
 authentication returns `401`, and repository failure returns `500`.
+Each exposed Action route authenticates before converting its request DTO into
+a validated payload with `validate!`; required fields, canonical resource
+URLs, and canonical non-empty scope sets are request-boundary concerns. The
+ticket 003 consent route must apply the same conversion pattern to every
+pending-creation field before calling the service. Subject matching, user
+existence, and current membership remain service authorization policy.
 
 ### Initial authorization and connection reuse
 
@@ -784,6 +790,9 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Moved syntactic Action request validation into accumulating
+  route DTO conversions. Deferred pending-creation validation to ticket 003's
+  consent route while retaining identity and membership policy in the service.
 - 2026-07-06: Centralized the workspace permission vocabulary in a lookup table
   referenced by both API-token and agent-connection permission mappings while
   retaining separate owner relationships.

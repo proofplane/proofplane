@@ -26,6 +26,8 @@ connection and namespaced token claims.
 - [ ] Implement the post-login Redirect Action and namespaced claim injection.
 - [ ] Add signed, short-lived transaction input and continuation output.
 - [ ] Add a minimal API-served workspace consent page with approve and deny.
+- [ ] Validate all pending-creation request fields in the consent route with
+  an accumulating `validate!` DTO conversion before calling the service.
 - [ ] Recheck subject, client, resource, scopes, state, and membership on
   approval.
 - [ ] Connect approval and denial to ticket 002 lifecycle operations.
@@ -35,3 +37,5 @@ connection and namespaced token claims.
 
 - Polished React integration remains ticket 005.
 - Auth0 Action deployment automation is not part of this ticket.
+- Ticket 002 deliberately exposes no pending-creation endpoint; syntactic
+  pending-payload validation belongs to this ticket's consent route.

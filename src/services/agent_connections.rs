@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        canonical_permissions, AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
+        AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
         CreatePendingAgentConnection, SecretDigest, UserId, WorkspaceId, WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
@@ -20,8 +20,8 @@ pub struct AgentConnectionService {
 
 #[derive(Debug, Error)]
 pub enum AgentConnectionError {
-    #[error("agent connection request is invalid: {0}")]
-    Invalid(String),
+    #[error("agent connection request was rejected by policy")]
+    PolicyRejected,
     #[error("a live agent connection already exists")]
     AlreadyExists,
     #[error("repository error")]
@@ -41,7 +41,7 @@ impl From<RepositoryError> for AgentConnectionError {
 }
 
 #[derive(Debug, Clone)]
-pub struct CreatePendingConnection {
+pub struct CreatePendingConnectionPayload {
     pub user_id: UserId,
     pub workspace_id: WorkspaceId,
     pub auth0_subject: String,
@@ -54,6 +54,20 @@ pub struct CreatePendingConnection {
     pub nonce: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct FindReusableConnectionPayload {
+    pub auth0_subject: String,
+    pub auth0_client_id: String,
+    pub resource: String,
+    pub permissions: Vec<WorkspacePermission>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumeContinuationPayload {
+    pub continuation_token: String,
+    pub nonce: String,
+}
+
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
@@ -61,64 +75,23 @@ impl AgentConnectionService {
 
     pub async fn create_pending(
         &self,
-        request: CreatePendingConnection,
+        payload: CreatePendingConnectionPayload,
     ) -> Result<AgentConnection, AgentConnectionError> {
-        if request.expires_at <= Utc::now() {
-            return Err(AgentConnectionError::Invalid(
-                "expires_at must be in the future".to_owned(),
-            ));
-        }
-        for (name, value) in [
-            ("auth0_subject", request.auth0_subject.as_str()),
-            ("auth0_client_id", request.auth0_client_id.as_str()),
-            ("client_display_name", request.client_display_name.as_str()),
-            ("resource", request.resource.as_str()),
-            ("continuation_token", request.continuation_token.as_str()),
-            ("nonce", request.nonce.as_str()),
-        ] {
-            if value.trim().is_empty() {
-                return Err(AgentConnectionError::Invalid(format!(
-                    "{name} must not be blank"
-                )));
-            }
-        }
-        let permissions = canonical_permissions(request.permissions)
-            .map_err(|error| AgentConnectionError::Invalid(error.to_string()))?;
-        if permissions.is_empty() {
-            return Err(AgentConnectionError::Invalid(
-                "permissions must not be empty".to_owned(),
-            ));
-        }
-        let resource = url::Url::parse(&request.resource).map_err(|_| {
-            AgentConnectionError::Invalid("resource must be an absolute URL".to_owned())
-        })?;
-        if resource.query().is_some()
-            || resource.fragment().is_some()
-            || resource.as_str() != request.resource
-        {
-            return Err(AgentConnectionError::Invalid(
-                "resource must be a canonical URL without query or fragment".to_owned(),
-            ));
-        }
         let user = self
             .repository
-            .get_user(request.user_id)
+            .get_user(payload.user_id)
             .await?
-            .ok_or_else(|| AgentConnectionError::Invalid("user does not exist".to_owned()))?;
-        if user.auth0_sub != request.auth0_subject {
-            return Err(AgentConnectionError::Invalid(
-                "auth0_subject does not match the user".to_owned(),
-            ));
+            .ok_or(AgentConnectionError::PolicyRejected)?;
+        if user.auth0_sub != payload.auth0_subject {
+            return Err(AgentConnectionError::PolicyRejected);
         }
         if self
             .repository
-            .get_membership_role(request.workspace_id, request.user_id)
+            .get_membership_role(payload.workspace_id, payload.user_id)
             .await?
             .is_none()
         {
-            return Err(AgentConnectionError::Invalid(
-                "workspace membership does not exist".to_owned(),
-            ));
+            return Err(AgentConnectionError::PolicyRejected);
         }
 
         Ok(self
@@ -126,16 +99,16 @@ impl AgentConnectionService {
             .create_pending_agent_connection(&CreatePendingAgentConnection {
                 id: AgentConnectionId::from(Uuid::new_v4()),
                 transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
-                user_id: request.user_id,
-                workspace_id: request.workspace_id,
-                auth0_subject: request.auth0_subject,
-                auth0_client_id: request.auth0_client_id,
-                client_display_name: request.client_display_name,
-                resource: request.resource,
-                permissions,
-                pending_expires_at: request.expires_at,
-                continuation_digest: digest_secret(&request.continuation_token),
-                nonce_digest: digest_secret(&request.nonce),
+                user_id: payload.user_id,
+                workspace_id: payload.workspace_id,
+                auth0_subject: payload.auth0_subject,
+                auth0_client_id: payload.auth0_client_id,
+                client_display_name: payload.client_display_name,
+                resource: payload.resource,
+                permissions: payload.permissions,
+                pending_expires_at: payload.expires_at,
+                continuation_digest: digest_secret(&payload.continuation_token),
+                nonce_digest: digest_secret(&payload.nonce),
             })
             .await?)
     }
@@ -152,32 +125,30 @@ impl AgentConnectionService {
 
     pub async fn consume_continuation(
         &self,
-        continuation_token: &str,
-        nonce: &str,
+        payload: ConsumeContinuationPayload,
     ) -> Result<Option<AgentConnection>, AgentConnectionError> {
         Ok(self
             .repository
             .consume_agent_connection_continuation(
-                digest_secret(continuation_token),
-                digest_secret(nonce),
+                digest_secret(&payload.continuation_token),
+                digest_secret(&payload.nonce),
             )
             .await?)
     }
 
     pub async fn find_reusable(
         &self,
-        auth0_subject: &str,
-        auth0_client_id: &str,
-        resource: &str,
-        permissions: Vec<WorkspacePermission>,
+        payload: FindReusableConnectionPayload,
     ) -> Result<Option<AgentConnection>, AgentConnectionError> {
-        let permissions = canonical_permissions(permissions)
-            .map_err(|error| AgentConnectionError::Invalid(error.to_string()))?;
         let connection = self
             .repository
-            .find_reusable_agent_connection(auth0_subject, auth0_client_id, resource)
+            .find_reusable_agent_connection(
+                &payload.auth0_subject,
+                &payload.auth0_client_id,
+                &payload.resource,
+            )
             .await?;
-        Ok(connection.filter(|connection| connection.permissions == permissions))
+        Ok(connection.filter(|connection| connection.permissions == payload.permissions))
     }
 
     pub async fn activate(

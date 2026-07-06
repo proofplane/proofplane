@@ -7,11 +7,17 @@ use axum::{
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::{
     domain::{canonical_permissions, AgentConnection, WorkspacePermission},
     routes::error::ApiError,
-    services::agent_connections::{AgentConnectionError, AgentConnectionService},
+    services::agent_connections::{
+        AgentConnectionError, AgentConnectionService, ConsumeContinuationPayload,
+        FindReusableConnectionPayload,
+    },
+    validate,
+    validation::Validation,
 };
 
 #[derive(Clone)]
@@ -41,6 +47,23 @@ struct ResolveRequest {
     scopes: Vec<String>,
 }
 
+impl ResolveRequest {
+    fn into_payload(self) -> Validation<FindReusableConnectionPayload, String> {
+        validate! {
+            auth0_subject <- required("subject", self.subject),
+            auth0_client_id <- required("client_id", self.client_id),
+            resource <- canonical_resource(self.resource),
+            permissions <- parse_scopes(self.scopes),
+            => FindReusableConnectionPayload {
+                auth0_subject,
+                auth0_client_id,
+                resource,
+                permissions,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 enum ResolveResponse {
@@ -58,15 +81,15 @@ async fn resolve(
     payload: Result<Json<ResolveRequest>, JsonRejection>,
 ) -> Result<Json<ResolveResponse>, ApiError> {
     authenticate_action(&headers, &state.action_shared_secret)?;
-    let Json(request) = payload.map_err(json_rejection)?;
-    let subject = required("subject", request.subject)?;
-    let client_id = required("client_id", request.client_id)?;
-    let resource = canonical_resource(request.resource)?;
-    let scopes = parse_scopes(request.scopes)?;
+    let Json(payload) = payload.map_err(json_rejection)?;
+    let payload = payload
+        .into_payload()
+        .into_result()
+        .map_err(ApiError::BadRequest)?;
 
     let connection = state
         .service
-        .find_reusable(&subject, &client_id, &resource, scopes)
+        .find_reusable(payload)
         .await
         .map_err(service_error)?;
 
@@ -80,6 +103,19 @@ async fn resolve(
 struct ConsumeContinuationRequest {
     continuation_token: String,
     nonce: String,
+}
+
+impl ConsumeContinuationRequest {
+    fn into_payload(self) -> Validation<ConsumeContinuationPayload, String> {
+        validate! {
+            continuation_token <- required("continuation_token", self.continuation_token),
+            nonce <- required("nonce", self.nonce),
+            => ConsumeContinuationPayload {
+                continuation_token,
+                nonce,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -102,13 +138,15 @@ async fn consume_continuation(
     payload: Result<Json<ConsumeContinuationRequest>, JsonRejection>,
 ) -> Result<Json<ConsumeContinuationResponse>, ApiError> {
     authenticate_action(&headers, &state.action_shared_secret)?;
-    let Json(request) = payload.map_err(json_rejection)?;
-    let continuation_token = required("continuation_token", request.continuation_token)?;
-    let nonce = required("nonce", request.nonce)?;
+    let Json(payload) = payload.map_err(json_rejection)?;
+    let payload = payload
+        .into_payload()
+        .into_result()
+        .map_err(ApiError::BadRequest)?;
 
     let connection = state
         .service
-        .consume_continuation(&continuation_token, &nonce)
+        .consume_continuation(payload)
         .await
         .map_err(service_error)?;
 
@@ -144,38 +182,54 @@ fn scope_strings(connection: &AgentConnection) -> Vec<String> {
         .collect()
 }
 
-fn parse_scopes(values: Vec<String>) -> Result<Vec<WorkspacePermission>, ApiError> {
+fn parse_scopes(values: Vec<String>) -> Validation<Vec<WorkspacePermission>, String> {
     if values.is_empty() {
-        return Err(bad_request("scopes must not be empty"));
+        return Validation::invalid("scopes must not be empty".to_owned());
     }
-    let parsed = values
-        .into_iter()
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|_| bad_request(format!("unknown scope: {value}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    canonical_permissions(parsed).map_err(|error| bad_request(error.to_string()))
+    let mut parsed = Vec::with_capacity(values.len());
+    let mut errors = Vec::new();
+    for value in values {
+        match value.parse::<WorkspacePermission>() {
+            Ok(permission) if parsed.contains(&permission) => {
+                errors.push(format!("scopes contains duplicate value {value}"));
+            }
+            Ok(permission) => parsed.push(permission),
+            Err(_) => errors.push(format!("unknown scope: {value}")),
+        }
+    }
+    if !errors.is_empty() {
+        return Validation::invalid_many(errors);
+    }
+
+    Validation::valid(
+        canonical_permissions(parsed).expect("validated scopes contain no duplicate permissions"),
+    )
 }
 
-fn canonical_resource(value: String) -> Result<String, ApiError> {
-    let value = required("resource", value)?;
-    let url =
-        url::Url::parse(&value).map_err(|_| bad_request("resource must be an absolute URL"))?;
+fn canonical_resource(value: String) -> Validation<String, String> {
+    let value = match required("resource", value) {
+        Validation::Valid(value) => value,
+        Validation::Invalid(errors) => return Validation::Invalid(errors),
+    };
+    let url = match Url::parse(&value) {
+        Ok(url) => url,
+        Err(_) => {
+            return Validation::invalid("resource must be an absolute URL".to_owned());
+        }
+    };
     if url.query().is_some() || url.fragment().is_some() || url.as_str() != value {
-        return Err(bad_request(
-            "resource must be a canonical URL without query or fragment",
-        ));
+        return Validation::invalid(
+            "resource must be a canonical URL without query or fragment".to_owned(),
+        );
     }
-    Ok(value)
+    Validation::valid(value)
 }
 
-fn required(field: &str, value: String) -> Result<String, ApiError> {
+fn required(field: &str, value: String) -> Validation<String, String> {
     if value.trim().is_empty() {
-        return Err(bad_request(format!("{field} must not be blank")));
+        return Validation::invalid(format!("{field} must not be blank"));
     }
-    Ok(value)
+    Validation::valid(value)
 }
 
 fn authenticate_action(headers: &HeaderMap, expected: &SecretString) -> Result<(), ApiError> {
@@ -206,8 +260,9 @@ fn json_rejection(error: JsonRejection) -> ApiError {
 
 fn service_error(error: AgentConnectionError) -> ApiError {
     match error {
-        AgentConnectionError::Invalid(message) => bad_request(message),
-        AgentConnectionError::AlreadyExists | AgentConnectionError::Repository(_) => {
+        AgentConnectionError::PolicyRejected
+        | AgentConnectionError::AlreadyExists
+        | AgentConnectionError::Repository(_) => {
             tracing::error!(%error, "internal agent connection request failed");
             ApiError::Internal
         }
@@ -223,7 +278,11 @@ mod tests {
     use axum::http::{header, HeaderMap, HeaderValue};
     use secrecy::SecretString;
 
-    use super::authenticate_action;
+    use super::{authenticate_action, ConsumeContinuationRequest, ResolveRequest};
+    use crate::{
+        domain::WorkspacePermission,
+        services::agent_connections::{ConsumeContinuationPayload, FindReusableConnectionPayload},
+    };
 
     #[test]
     fn action_authentication_requires_exact_bearer_secret() {
@@ -242,5 +301,134 @@ mod tests {
             HeaderValue::from_static("Bearer 01234567890123456789012345678901"),
         );
         assert!(authenticate_action(&headers, &expected).is_ok());
+    }
+
+    #[test]
+    fn resolve_request_maps_to_canonical_payload() {
+        let payload = ResolveRequest {
+            subject: "auth0|user".to_owned(),
+            client_id: "mcp-client".to_owned(),
+            resource: "https://mcp.proofplane.com/mcp".to_owned(),
+            scopes: vec![
+                "write_controls".to_owned(),
+                "read_evidence_requests".to_owned(),
+            ],
+        }
+        .into_payload()
+        .into_result()
+        .expect("request validates");
+
+        assert_find_reusable(
+            payload,
+            vec![
+                WorkspacePermission::ReadEvidenceRequests,
+                WorkspacePermission::WriteControls,
+            ],
+        );
+    }
+
+    #[test]
+    fn resolve_request_accumulates_required_url_and_empty_scope_errors() {
+        let errors = ResolveRequest {
+            subject: " ".to_owned(),
+            client_id: "\t".to_owned(),
+            resource: "not-an-absolute-url".to_owned(),
+            scopes: Vec::new(),
+        }
+        .into_payload()
+        .into_result()
+        .expect_err("request is invalid");
+
+        assert_eq!(
+            errors,
+            vec![
+                "subject must not be blank",
+                "client_id must not be blank",
+                "resource must be an absolute URL",
+                "scopes must not be empty",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_request_rejects_noncanonical_resource_and_unknown_scopes() {
+        let errors = ResolveRequest {
+            subject: "auth0|user".to_owned(),
+            client_id: "mcp-client".to_owned(),
+            resource: "https://mcp.proofplane.com/mcp?query=value".to_owned(),
+            scopes: vec!["delete_everything".to_owned(), "admin".to_owned()],
+        }
+        .into_payload()
+        .into_result()
+        .expect_err("request is invalid");
+
+        assert_eq!(
+            errors,
+            vec![
+                "resource must be a canonical URL without query or fragment",
+                "unknown scope: delete_everything",
+                "unknown scope: admin",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_request_rejects_duplicate_scopes() {
+        let errors = ResolveRequest {
+            subject: "auth0|user".to_owned(),
+            client_id: "mcp-client".to_owned(),
+            resource: "https://mcp.proofplane.com/mcp".to_owned(),
+            scopes: vec!["read_controls".to_owned(), "read_controls".to_owned()],
+        }
+        .into_payload()
+        .into_result()
+        .expect_err("request is invalid");
+
+        assert_eq!(
+            errors,
+            vec!["scopes contains duplicate value read_controls"]
+        );
+    }
+
+    #[test]
+    fn continuation_request_maps_to_payload_and_accumulates_blank_fields() {
+        let payload = ConsumeContinuationRequest {
+            continuation_token: "continuation".to_owned(),
+            nonce: "nonce".to_owned(),
+        }
+        .into_payload()
+        .into_result()
+        .expect("request validates");
+        let ConsumeContinuationPayload {
+            continuation_token,
+            nonce,
+        } = payload;
+        assert_eq!(continuation_token, "continuation");
+        assert_eq!(nonce, "nonce");
+
+        let errors = ConsumeContinuationRequest {
+            continuation_token: " ".to_owned(),
+            nonce: "\t".to_owned(),
+        }
+        .into_payload()
+        .into_result()
+        .expect_err("request is invalid");
+        assert_eq!(
+            errors,
+            vec![
+                "continuation_token must not be blank",
+                "nonce must not be blank",
+            ]
+        );
+    }
+
+    fn assert_find_reusable(
+        payload: FindReusableConnectionPayload,
+        expected_permissions: Vec<WorkspacePermission>,
+    ) {
+        assert_eq!(payload.auth0_subject, "auth0|user");
+        assert_eq!(payload.auth0_client_id, "mcp-client");
+        assert_eq!(payload.resource, "https://mcp.proofplane.com/mcp");
+        assert_eq!(payload.permissions, expected_permissions);
     }
 }
