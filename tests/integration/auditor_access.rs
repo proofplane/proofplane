@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::support::{capture_audit_logs, upload_attachment, TestApp};
+use super::support::{capture_audit_logs, cc61_id, upload_attachment, TestApp};
 
 #[tokio::test]
 async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_secrets() {
@@ -279,9 +279,11 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_attachments() 
     let body = response.json::<Value>();
     let serialized = serde_json::to_string(&body).expect("portal response serializes");
 
-    assert_eq!(body["workspace_id"], workspace_id.to_string());
+    assert_eq!(body["workspace_name"], "Auditor access workspace");
+    assert!(body.get("workspace_id").is_none());
     assert_eq!(body["auditor_email"], "auditor@example.com");
     assert!(serialized.contains("Access review evidence"));
+    assert!(!serialized.contains(&workspace_id.to_string()));
     assert!(!serialized.contains("Unmapped evidence"));
     assert!(!serialized.contains("Other auditor access workspace"));
     assert!(!serialized.contains("archived.txt"));
@@ -296,6 +298,10 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_attachments() 
         .iter()
         .find(|control| control["code"] == "PP-AC-01")
         .expect("mapped control appears");
+    let requirement = &control["framework_requirements"][0];
+    assert_eq!(requirement["framework_name"], "SOC 2");
+    assert_eq!(requirement["code"], "CC6.1");
+    assert_eq!(requirement["title"], "Logical access security");
     let portal_request = &control["evidence_requests"][0];
     assert_eq!(
         portal_request["mapping_rationale"],
@@ -708,7 +714,18 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     portal.assert_status_ok();
     let body = html_body(&portal);
 
-    assert!(body.contains("Workspace evidence"));
+    assert!(body.contains("Auditor access workspace"));
+    assert!(!body.contains(&workspace_id.to_string()));
+    assert!(body.contains("Framework coverage"));
+    assert!(body.contains("Framework"));
+    assert!(body.contains("Framework requirement"));
+    assert!(body.contains("SOC 2"));
+    assert!(body.contains("CC6.1"));
+    assert!(body.contains("Logical access security"));
+    assert!(body.contains("Control"));
+    assert!(body.contains("Evidence request"));
+    assert!(body.contains("Evidence submissions"));
+    assert!(body.contains("Evidence attachments"));
     assert!(body.contains("auditor@example.com"));
     assert!(body.contains("PP-AC-01"));
     assert!(body.contains("Access review evidence"));
@@ -886,8 +903,9 @@ async fn verified_browser_session_cookie(
 async fn auditor_app() -> TestApp {
     TestApp::builder()
         .without_default_auth()
+        .with_soc2_reference_data()
         .workspace("workspace", "Auditor access workspace")
-        .with_control("PP-AC-01", "Access reviews", vec![])
+        .with_control("PP-AC-01", "Access reviews", vec![cc61_id()])
         .with_default_membership()
         .workspace("other", "Other auditor access workspace")
         .with_control("PP-OTHER", "Other control", vec![])

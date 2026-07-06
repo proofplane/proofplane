@@ -26,9 +26,19 @@ impl AuditorPortalReadModelService {
                 context.auditor_portal_controls().await
             })
             .await?;
+        let workspace = self
+            .repository
+            .get_workspace(session.workspace_id)
+            .await?
+            .ok_or(Error::Repository(
+                crate::repository::Error::InvariantViolation(
+                    "auditor session workspace is missing",
+                ),
+            ))?;
 
         Ok(AuditorPortalReadModel {
             workspace_id: session.workspace_id,
+            workspace_name: workspace.name,
             auditor_email: session.auditor_email.clone(),
             controls,
         })

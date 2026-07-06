@@ -119,8 +119,14 @@ Auditor comments, request/response workflows, review status tracking, bulk ZIP
 exports, firm branding, and a separate SPA are deferred. The v1 portal is a
 secure read-only browser surface.
 
+Worker-backed auditor OTP mail delivery is deferred until production mail is
+added. The worker should own OTP generation, digest persistence, and mail send
+so raw OTP codes are never stored in durable queue payloads.
+
 ## Revisions
 
+- 2026-07-06: Added deferred worker-backed OTP mail delivery so production
+  mail wiring does not leave the request path responsible for provider retries.
 - 2026-07-01: Replaced the stale packet/export plan with email-bound
   auditor portal access, OTP verification, seven-day sessions, and direct
   attachment downloads.

@@ -19,6 +19,7 @@ are lean handoff units that link into those sources of technical depth.
 | 005. [Portal Read Model](./tickets/005-portal-read-model.md) | Done | Session-authenticated portal data endpoint now returns the read-only graph. |
 | 006. [Auditor Attachment Downloads](./tickets/006-auditor-attachment-downloads.md) | Done | Direct session-cookie downloads stream eligible attachments through Proofplane. |
 | 007. [Auditor Portal UI](./tickets/007-auditor-portal-ui.md) | Done | Server-rendered browser invite and portal pages are in place. |
+| 008. [Worker OTP Email Delivery](./tickets/008-worker-otp-email-delivery.md) | Todo | Move OTP mail to the worker when production mail delivery is added. |
 
 ## Sequencing
 
@@ -32,9 +33,11 @@ are lean handoff units that link into those sources of technical depth.
   behavior.
 - **007** depends on 003, 005, and 006 and keeps the first browser UI thin over shipped
   backend flows.
+- **008** depends on 003 and should happen with the production mail adapter.
 
 ## Deferred Work
 
 Auditor comments, review statuses, auditor requests back to the workspace,
 bulk ZIP exports, firm-branded portals, and a separate SPA are deferred until
-auditors need workflow features beyond secure read-only review.
+auditors need workflow features beyond secure read-only review. Worker-backed
+OTP mail delivery is deferred until production mail delivery is added.

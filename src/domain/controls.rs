@@ -24,6 +24,8 @@ pub struct Framework {
 pub struct FrameworkRequirement {
     pub id: FrameworkRequirementId,
     pub framework_id: FrameworkId,
+    pub framework_code: String,
+    pub framework_name: String,
     pub code: String,
     pub title: String,
     pub description: String,

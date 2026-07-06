@@ -560,6 +560,7 @@ fn render_verify_page(
 }
 
 fn render_portal_page(model: &AuditorPortalReadModel) -> String {
+    let control_count = model.controls.len();
     let controls = if model.controls.is_empty() {
         r#"<p class="empty">No mapped controls are available for this auditor portal.</p>"#
             .to_owned()
@@ -579,19 +580,27 @@ fn render_portal_page(model: &AuditorPortalReadModel) -> String {
 <header class="portal-header">
 <div>
 <p class="eyebrow">Auditor portal</p>
-<h1>Workspace evidence</h1>
+<h1>{}</h1>
+<p class="lede">Read-only review of mapped controls, framework requirements, evidence requests, submissions, and attachments.</p>
 </div>
 <dl class="session-meta">
 <div><dt>Auditor</dt><dd>{}</dd></div>
 <div><dt>Workspace</dt><dd>{}</dd></div>
+<div><dt>Controls</dt><dd>{}</dd></div>
 </dl>
 </header>
+<div class="section-heading">
+<p class="eyebrow">Review scope</p>
+<h2>Controls and evidence</h2>
+</div>
 <section class="control-list" aria-label="Workspace controls">
 {}
 </section>
 </main>"#,
+            escape_html(&model.workspace_name),
             escape_html(&model.auditor_email),
-            Uuid::from(model.workspace_id),
+            escape_html(&model.workspace_name),
+            control_count,
             controls,
         ),
     )
@@ -599,18 +608,15 @@ fn render_portal_page(model: &AuditorPortalReadModel) -> String {
 
 fn render_control(control: &AuditorPortalControl) -> String {
     let requirements = if control.framework_requirements.is_empty() {
-        String::new()
+        r#"<p class="empty compact">No framework requirements are mapped to this control.</p>"#
+            .to_owned()
     } else {
         format!(
-            r#"<ul class="chips" aria-label="Framework requirements">{}</ul>"#,
+            r#"<div class="requirement-list">{}</div>"#,
             control
                 .framework_requirements
                 .iter()
-                .map(|requirement| format!(
-                    "<li>{}: {}</li>",
-                    escape_html(&requirement.code),
-                    escape_html(&requirement.title)
-                ))
+                .map(render_framework_requirement)
                 .collect::<Vec<_>>()
                 .join("")
         )
@@ -629,20 +635,44 @@ fn render_control(control: &AuditorPortalControl) -> String {
     format!(
         r#"<article class="control">
 <header class="control-heading">
-<p class="control-code">{}</p>
 <div>
-<h2>{}</h2>
+<p class="object-label">Control</p>
+<h2><span class="control-code">{}</span>{}</h2>
 <p>{}</p>
-{}
 </div>
 </header>
+<section class="framework-panel" aria-label="Framework coverage for {}">
+<p class="object-label">Framework coverage</p>
+{}
+</section>
+<section class="evidence-panel" aria-label="Evidence mapped to {}">
+<p class="object-label">Evidence requests</p>
 <div class="request-list">{}</div>
+</section>
 </article>"#,
         escape_html(&control.code),
         escape_html(&control.title),
         escape_html(&control.description),
+        escape_html(&control.title),
         requirements,
+        escape_html(&control.title),
         requests,
+    )
+}
+
+fn render_framework_requirement(requirement: &FrameworkRequirement) -> String {
+    format!(
+        r#"<article class="requirement">
+<dl class="details">
+<div><dt>Framework</dt><dd>{}</dd></div>
+<div><dt>Framework requirement</dt><dd><span class="requirement-code">{}</span>{}</dd></div>
+</dl>
+<p>{}</p>
+</article>"#,
+        escape_html(&requirement.framework_name),
+        escape_html(&requirement.code),
+        escape_html(&requirement.title),
+        escape_html(&requirement.description),
     )
 }
 
@@ -662,17 +692,19 @@ fn render_evidence_request(request: &AuditorPortalEvidenceRequest) -> String {
         r#"<section class="request" aria-labelledby="request-{}">
 <div class="request-heading">
 <div>
+<p class="object-label">Evidence request</p>
 <h3 id="request-{}">{}</h3>
 <p>{}</p>
 </div>
-<span class="status-chip">{}</span>
+<span class="status-chip">Status: {}</span>
 </div>
 <dl class="details">
-<div><dt>Due</dt><dd>{}</dd></div>
+<div><dt>Due date</dt><dd>{}</dd></div>
 <div><dt>Cadence</dt><dd>{}</dd></div>
-<div><dt>Mapped</dt><dd>{}</dd></div>
+<div><dt>Mapped to control</dt><dd>{}</dd></div>
 </dl>
-<p class="mapping">{}</p>
+<dl class="mapping"><dt>Control mapping rationale</dt><dd>{}</dd></dl>
+<p class="object-label submissions-label">Evidence submissions</p>
 <div class="submission-list">{}</div>
 </section>"#,
         Uuid::from(request.request.id),
@@ -694,7 +726,7 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
             .to_owned()
     } else {
         format!(
-            r#"<table><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
+            r#"<table><caption>Evidence attachments</caption><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
             submission
                 .attachments
                 .iter()
@@ -719,9 +751,14 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
     format!(
         r#"<article class="submission">
 <header>
-<h4>Submission received {}</h4>
-<p class="muted">Coverage {} to {} from {}</p>
+<p class="object-label">Evidence submission</p>
+<h4>Received {}</h4>
 </header>
+<dl class="details">
+<div><dt>Coverage period</dt><dd>{} to {}</dd></div>
+<div><dt>Source system</dt><dd>{}</dd></div>
+<div><dt>Collection method</dt><dd>{}</dd></div>
+</dl>
 {}
 {}
 {}
@@ -730,6 +767,7 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
         format_date(submission.submission.coverage_start_at),
         format_date(submission.submission.coverage_end_at),
         escape_html(&submission.submission.source_system),
+        escape_html(&submission.submission.collection_method),
         summary,
         description,
         attachments,
@@ -739,17 +777,16 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
 fn render_attachment(attachment: &AuditorPortalAttachment) -> String {
     let action = if attachment.download_eligible {
         format!(
-            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/attachments/{}/download">Download {}</a>"#,
+            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/attachments/{}/download">Download evidence</a>"#,
             Uuid::from(attachment.evidence_submission_id),
             Uuid::from(attachment.id),
-            escape_html(&attachment.filename),
         )
     } else {
         "Unavailable".to_owned()
     };
 
     format!(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+        r#"<tr><td data-label="Attachment">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td data-label="Action">{}</td></tr>"#,
         escape_html(&attachment.filename),
         format_bytes(attachment.content_length),
         escape_html(attachment.upload_status.as_str()),
@@ -794,9 +831,10 @@ h3 {{ margin-bottom: 6px; font-size: 1.05rem; line-height: 1.25; }}
 h4 {{ margin-bottom: 6px; font-size: 0.95rem; line-height: 1.25; }}
 p {{ color: var(--muted); line-height: 1.55; }}
 .lede {{ max-width: 68ch; }}
-.eyebrow, label, dt, th {{ color: var(--muted); font-size: 0.8125rem; font-weight: 620; line-height: 1.2; }}
+.eyebrow, label, dt, th, .object-label, caption {{ color: var(--muted); font-size: 0.8125rem; font-weight: 620; line-height: 1.2; }}
 .eyebrow {{ margin-bottom: 8px; color: var(--accent); }}
-.panel, .control, .request, .submission {{
+.object-label {{ margin-bottom: 8px; }}
+.panel, .control, .request, .submission, .requirement {{
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: 8px;
@@ -834,15 +872,20 @@ button, .button {{
 }}
 button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
 button:focus-visible, .button:focus-visible, input:focus-visible {{ outline: 2px solid var(--signal); outline-offset: 2px; }}
-.portal-header {{ display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }}
+.portal-header {{ display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 28px; }}
+.section-heading {{ margin-bottom: 14px; }}
 .session-meta, .details {{ display: flex; flex-wrap: wrap; gap: 14px; margin: 0; }}
 .session-meta div, .details div {{ min-width: 120px; }}
 dd {{ margin: 4px 0 0; }}
 .session-meta dd, .details dd {{ color: var(--ink); }}
 .control-list {{ display: grid; gap: 20px; }}
 .control {{ padding: 22px; }}
-.control-heading {{ display: grid; grid-template-columns: minmax(80px, 120px) 1fr; gap: 20px; }}
-.control-code {{ color: var(--accent); font-weight: 700; }}
+.control-heading {{ margin-bottom: 18px; }}
+.control-code, .requirement-code {{ display: inline-block; margin-right: 8px; color: var(--accent); font-weight: 700; }}
+.framework-panel, .evidence-panel {{ border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }}
+.requirement-list {{ display: grid; gap: 10px; }}
+.requirement {{ padding: 14px; background: var(--surface-raised); }}
+.requirement p {{ margin: 10px 0 0; }}
 .chips {{ display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 14px 0 0; list-style: none; }}
 .chips li, .status-chip {{
   border-radius: 4px;
@@ -855,12 +898,15 @@ dd {{ margin: 4px 0 0; }}
 .request-list {{ display: grid; gap: 14px; margin-top: 18px; }}
 .request {{ padding: 18px; background: var(--surface-raised); }}
 .request-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: start; }}
-.mapping {{ margin-top: 12px; }}
+.mapping {{ margin: 14px 0 0; }}
+.mapping dd {{ color: var(--ink); line-height: 1.5; }}
+.submissions-label {{ margin-top: 18px; }}
 .submission-list {{ display: grid; gap: 12px; margin-top: 16px; }}
 .submission {{ padding: 16px; background: var(--surface); }}
 .muted, .empty {{ color: var(--muted); }}
 .compact {{ margin-bottom: 0; }}
 table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+caption {{ caption-side: top; margin-bottom: 8px; text-align: left; color: var(--accent); }}
 th, td {{ padding: 11px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }}
 th {{ background: var(--surface-raised); }}
 td {{ font-size: 0.95rem; }}
@@ -872,6 +918,7 @@ td {{ font-size: 0.95rem; }}
   table, thead, tbody, tr, th, td {{ display: block; }}
   thead {{ display: none; }}
   td {{ border-bottom: 0; padding: 8px 0; }}
+  td::before {{ content: attr(data-label); display: block; color: var(--muted); font-size: 0.8125rem; font-weight: 620; margin-bottom: 3px; }}
   tr {{ border-top: 1px solid var(--line); padding: 10px 0; }}
 }}
 </style>
@@ -1040,7 +1087,7 @@ fn download_error(error: DownloadError) -> ApiError {
 
 #[derive(Debug, Serialize)]
 struct AuditorPortalReadModelResponse {
-    workspace_id: Uuid,
+    workspace_name: String,
     auditor_email: String,
     controls: Vec<AuditorPortalControlResponse>,
 }
@@ -1048,7 +1095,7 @@ struct AuditorPortalReadModelResponse {
 impl From<AuditorPortalReadModel> for AuditorPortalReadModelResponse {
     fn from(model: AuditorPortalReadModel) -> Self {
         Self {
-            workspace_id: Uuid::from(model.workspace_id),
+            workspace_name: model.workspace_name,
             auditor_email: model.auditor_email,
             controls: model.controls.into_iter().map(Into::into).collect(),
         }
@@ -1090,6 +1137,8 @@ impl From<AuditorPortalControl> for AuditorPortalControlResponse {
 struct FrameworkRequirementResponse {
     id: Uuid,
     framework_id: Uuid,
+    framework_code: String,
+    framework_name: String,
     code: String,
     title: String,
     description: String,
@@ -1100,6 +1149,8 @@ impl From<FrameworkRequirement> for FrameworkRequirementResponse {
         Self {
             id: Uuid::from(requirement.id),
             framework_id: Uuid::from(requirement.framework_id),
+            framework_code: requirement.framework_code,
+            framework_name: requirement.framework_name,
             code: requirement.code,
             title: requirement.title,
             description: requirement.description,
@@ -1129,7 +1180,6 @@ impl From<AuditorPortalEvidenceRequest> for AuditorPortalEvidenceRequestResponse
 #[derive(Debug, Serialize)]
 struct EvidenceRequestResponse {
     id: Uuid,
-    workspace_id: Uuid,
     title: String,
     description: String,
     collection_instructions: String,
@@ -1146,7 +1196,6 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
     fn from(request: EvidenceRequest) -> Self {
         Self {
             id: Uuid::from(request.id),
-            workspace_id: Uuid::from(request.workspace_id),
             title: request.title,
             description: request.description,
             collection_instructions: request.collection_instructions,

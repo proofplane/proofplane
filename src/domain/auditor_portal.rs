@@ -8,6 +8,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalReadModel {
     pub workspace_id: WorkspaceId,
+    pub workspace_name: String,
     pub auditor_email: String,
     pub controls: Vec<AuditorPortalControl>,
 }
