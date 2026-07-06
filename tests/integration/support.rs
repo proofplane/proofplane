@@ -28,8 +28,8 @@ use proofplane::{
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, Auth0McpConfig, HealthConfig, LogFormat, McpConfig,
-        ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+        AppConfig, Auth0ActionConfig, Auth0Config, Auth0McpConfig, HealthConfig, LogFormat,
+        McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
         PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
         PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
@@ -1056,6 +1056,9 @@ fn config(
                 resource: url::Url::parse("https://mcp.proofplane.test/mcp")
                     .expect("MCP resource parses"),
                 allowed_client_ids: vec!["integration-mcp-client".to_owned()],
+            },
+            action: Auth0ActionConfig {
+                shared_secret: SecretString::from("integration-action-shared-secret-001"),
             },
         },
         paseto: PasetoConfig {

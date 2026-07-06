@@ -2,6 +2,7 @@ use deadpool_postgres::{Object, Pool};
 
 use crate::domain::{ApiTokenId, UserId, WorkspaceId};
 
+mod agent_connections;
 mod api_tokens;
 mod attachment_upload_grants;
 pub mod constraints;

@@ -1,6 +1,6 @@
-# 003 - Connection Management And Guided UI
+# 005 - Connection Management And Guided UI
 
-**Status:** Todo · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#website-experience)
+**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#website-experience)
 
 **Summary** - Replace the token-centric MCP preview with a guided setup that
 launches each client's verified Auth0 connection path, securely hosts the

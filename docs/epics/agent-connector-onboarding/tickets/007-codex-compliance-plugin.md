@@ -1,6 +1,6 @@
-# 005 - Codex Compliance Plugin
+# 007 - Codex Compliance Plugin
 
-**Status:** Todo · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#codex)
+**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#codex)
 
 **Summary** - Package Proofplane's hosted MCP connection with focused SOC 2
 skills and safe first-run guidance so a user can add one Codex plugin instead

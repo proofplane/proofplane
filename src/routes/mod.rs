@@ -7,6 +7,7 @@ pub mod error;
 pub mod evidence_requests;
 pub mod evidence_submissions;
 pub mod health;
+pub mod internal_agent_connections;
 pub mod me;
 pub mod metrics;
 pub mod protected_resource_metadata;

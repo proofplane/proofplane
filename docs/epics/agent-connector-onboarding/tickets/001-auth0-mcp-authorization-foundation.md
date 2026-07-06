@@ -59,7 +59,8 @@ protocol or token-issuance endpoints to Proofplane.
   validates the authorized client through `azp`; RFC 9068 is not required.
 - 2026-07-02: The spec uses Auth0's default 86,400-second access-token lifetime.
 - 2026-07-02: The spec correction moves Redirect Actions, continuation,
-  namespaced workspace claims, and related secrets entirely to ticket 002.
+  namespaced workspace claims, and related secrets downstream of ticket 001
+  (now split across tickets 002-004).
   Ticket 001 accepts standard Auth0 user access tokens and denies protected
   tools until that workspace authorization exists.
 - 2026-07-03: The development tenant uses a static third-party Inspector

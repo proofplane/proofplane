@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+pub mod agent_connections;
 pub mod api_tokens;
 pub mod attachment_downloads;
 pub mod attachment_upload_grants;

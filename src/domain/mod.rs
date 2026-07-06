@@ -1,3 +1,4 @@
+mod agent_connection;
 mod api_token;
 mod controls;
 mod error;
@@ -9,6 +10,10 @@ mod user;
 mod validation;
 mod workspace;
 
+pub use agent_connection::{
+    AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
+    CreatePendingAgentConnection, SecretDigest,
+};
 pub use api_token::{
     canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
 };
