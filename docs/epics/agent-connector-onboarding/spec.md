@@ -337,6 +337,9 @@ continuation consumption, activation, and expired-row replacement. A shared
 vocabulary referenced by both API-token and agent-connection permission
 mappings; the mappings remain separate so each retains direct foreign-key
 ownership and cascade behavior.
+API-token, continuation, and nonce digests use one redacted `Sha256Digest`
+domain value type; their database columns continue to store the same 32-byte
+SHA-256 output.
 
 Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
@@ -804,6 +807,9 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Consolidated API-token, continuation, and nonce digest wrappers
+  into one redacted `Sha256Digest` domain value type without changing
+  persisted bytes.
 - 2026-07-06: Made continuation-consumption and activation policy outcomes
   explicit at the service boundary while retaining repository `Option`
   row-match semantics.

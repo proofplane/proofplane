@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, UserId, WorkspaceId, WorkspacePermission};
+use super::{ids::uuid_id, Sha256Digest, UserId, WorkspaceId, WorkspacePermission};
 
 uuid_id!(AgentConnectionId);
 uuid_id!(AgentAuthorizationTransactionId);
@@ -53,19 +53,6 @@ pub struct AgentConnection {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SecretDigest([u8; 32]);
-
-impl SecretDigest {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatePendingAgentConnection {
     pub id: AgentConnectionId,
@@ -78,6 +65,6 @@ pub struct CreatePendingAgentConnection {
     pub resource: String,
     pub permissions: Vec<WorkspacePermission>,
     pub pending_expires_at: DateTime<Utc>,
-    pub continuation_digest: SecretDigest,
-    pub nonce_digest: SecretDigest,
+    pub continuation_digest: Sha256Digest,
+    pub nonce_digest: Sha256Digest,
 }

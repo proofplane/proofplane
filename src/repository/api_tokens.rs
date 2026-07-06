@@ -2,12 +2,9 @@ use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::{
-    authentication::opaque_token::ApiTokenDigest,
-    domain::{
-        ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, UserId, WorkspaceId,
-        WorkspacePermission,
-    },
+use crate::domain::{
+    ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload, Sha256Digest, UserId,
+    WorkspaceId, WorkspacePermission,
 };
 
 use super::{Error, Postgres};
@@ -112,7 +109,7 @@ ORDER BY created_at DESC, id DESC
 
     pub async fn get_api_token_by_digest(
         &self,
-        digest: ApiTokenDigest,
+        digest: Sha256Digest,
     ) -> Result<Option<ApiTokenWithPermissions>, Error> {
         let client = self.get().await?;
         let digest: &[u8] = digest.as_bytes();

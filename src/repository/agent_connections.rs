@@ -3,7 +3,7 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentConnection, AgentConnectionId, CreatePendingAgentConnection, SecretDigest,
+    AgentConnection, AgentConnectionId, CreatePendingAgentConnection, Sha256Digest,
     WorkspacePermission,
 };
 
@@ -106,7 +106,7 @@ VALUES ($1, $2, $3, $4)
 
     pub async fn deny_pending_agent_connection(
         &self,
-        continuation_digest: SecretDigest,
+        continuation_digest: Sha256Digest,
     ) -> Result<bool, Error> {
         let client = self.get().await?;
         let digest: &[u8] = continuation_digest.as_bytes();
@@ -128,8 +128,8 @@ WHERE t.agent_connection_id = c.id
 
     pub async fn consume_agent_connection_continuation(
         &self,
-        continuation_digest: SecretDigest,
-        nonce_digest: SecretDigest,
+        continuation_digest: Sha256Digest,
+        nonce_digest: Sha256Digest,
     ) -> Result<Option<AgentConnection>, Error> {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;

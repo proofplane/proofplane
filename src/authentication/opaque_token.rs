@@ -1,8 +1,7 @@
-use std::fmt;
-
 use crc32fast::Hasher;
 use secrecy::SecretString;
-use sha2::{Digest, Sha256};
+
+use crate::domain::Sha256Digest;
 
 pub const PREFIX: &str = "ppat_";
 pub const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -12,25 +11,10 @@ pub const TOKEN_LENGTH: usize = PREFIX.len() + RANDOM_LENGTH + CHECKSUM_LENGTH;
 
 const ACCEPTED_RANDOM_BYTE_BOUND: u8 = 248;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ApiTokenDigest([u8; 32]);
-
-impl ApiTokenDigest {
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl fmt::Debug for ApiTokenDigest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ApiTokenDigest([redacted])")
-    }
-}
-
 #[derive(Debug)]
 pub struct GeneratedOpaqueToken {
     pub raw_token: SecretString,
-    pub digest: ApiTokenDigest,
+    pub digest: Sha256Digest,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -59,7 +43,7 @@ pub fn generate_opaque_token() -> Result<GeneratedOpaqueToken, OpaqueTokenError>
     })
 }
 
-pub fn parse(raw_token: &str) -> Result<ApiTokenDigest, OpaqueTokenError> {
+pub fn parse(raw_token: &str) -> Result<Sha256Digest, OpaqueTokenError> {
     if raw_token.len() != TOKEN_LENGTH || !raw_token.starts_with(PREFIX) {
         return Err(OpaqueTokenError::Malformed);
     }
@@ -80,10 +64,8 @@ pub fn parse(raw_token: &str) -> Result<ApiTokenDigest, OpaqueTokenError> {
     Ok(digest_token(raw_token))
 }
 
-fn digest_token(raw_token: &str) -> ApiTokenDigest {
-    let mut hasher = Sha256::new();
-    hasher.update(raw_token.as_bytes());
-    ApiTokenDigest(hasher.finalize().into())
+fn digest_token(raw_token: &str) -> Sha256Digest {
+    Sha256Digest::digest(raw_token.as_bytes())
 }
 
 fn get_checksum(input: &str) -> String {
@@ -243,7 +225,7 @@ mod tests {
         assert!(!digest_debug.contains(raw_token));
         assert!(!generated_debug.contains(raw_token));
         assert!(!error_debug.contains(raw_token));
-        assert_eq!(digest_debug, "ApiTokenDigest([redacted])");
+        assert_eq!(digest_debug, "Sha256Digest([redacted])");
     }
 
     fn different_base62_byte(byte: u8) -> u8 {

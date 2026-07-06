@@ -69,3 +69,5 @@ truth without changing current MCP authorization.
 - 2026-07-06: The spec now records explicit service policy outcomes for
   continuation consumption and activation, distinct from repository failures;
   repository `Option` results retain conditional row-match semantics.
+- 2026-07-06: The spec now records the shared redacted `Sha256Digest` used by
+  API-token, continuation, and nonce digests without changing persisted bytes.

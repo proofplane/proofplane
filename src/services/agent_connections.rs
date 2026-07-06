@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        CreatePendingAgentConnection, SecretDigest, UserId, WorkspaceId, WorkspacePermission,
+        CreatePendingAgentConnection, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -201,8 +200,8 @@ impl AgentConnectionService {
     }
 }
 
-pub fn digest_secret(value: &str) -> SecretDigest {
-    SecretDigest::from_bytes(Sha256::digest(value.as_bytes()).into())
+pub fn digest_secret(value: &str) -> Sha256Digest {
+    Sha256Digest::digest(value.as_bytes())
 }
 
 #[cfg(test)]
