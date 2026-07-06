@@ -31,11 +31,11 @@ use proofplane::{
         UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat, McpConfig,
-        ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
-        PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
-        PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig,
-        UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat,
+        MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+        PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig,
+        PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
+        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, CreateEvidenceRequestPayload,
@@ -1166,6 +1166,9 @@ fn config(
         },
         uploads: UploadsConfig {
             max_attachment_bytes,
+        },
+        mail: MailConfig {
+            adapter: MailAdapterConfig::Disabled,
         },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,

@@ -144,7 +144,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         dependencies.postgres.clone(),
         dependencies
             .mail_adapter
-            .unwrap_or_else(crate::mailer::from_env),
+            .unwrap_or_else(|| crate::mailer::from_config(&dependencies.config.mail.adapter)),
     );
 
     Ok(Router::new()

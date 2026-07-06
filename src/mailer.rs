@@ -1,10 +1,9 @@
-use std::{
-    env,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use thiserror::Error;
+
+use crate::config::MailAdapterConfig;
 
 #[derive(Debug, Error)]
 pub enum MailError {
@@ -21,10 +20,10 @@ pub trait MailAdapter: Send + Sync {
 
 pub type SharedMailAdapter = Arc<dyn MailAdapter>;
 
-pub fn from_env() -> SharedMailAdapter {
-    match env::var("PROOFPLANE_MAIL_ADAPTER").as_deref() {
-        Ok("local_stdout") => Arc::new(LocalStdoutMailAdapter),
-        _ => Arc::new(DisabledMailAdapter),
+pub fn from_config(config: &MailAdapterConfig) -> SharedMailAdapter {
+    match config {
+        MailAdapterConfig::Disabled => Arc::new(DisabledMailAdapter),
+        MailAdapterConfig::LocalStdout => Arc::new(LocalStdoutMailAdapter),
     }
 }
 
