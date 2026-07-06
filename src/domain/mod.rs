@@ -13,7 +13,7 @@ mod workspace;
 
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
-    CreatePendingAgentConnection,
+    NewPendingAgentConnection,
 };
 pub use api_token::{
     canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,

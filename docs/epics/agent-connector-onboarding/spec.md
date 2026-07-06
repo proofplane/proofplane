@@ -345,6 +345,8 @@ Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
 use, and revocation. Reuse requires exact subject, client, resource, canonical
 scopes, active status, and a current workspace membership.
+The repository insertion payload is named `NewPendingAgentConnection` to
+distinguish generated insert data from the persisted `AgentConnection`.
 Conditional repository operations return `Option` to represent whether a row
 matched. At the service policy boundary, continuation consumption instead
 returns `ConsumeContinuationOutcome::{Approved, Invalid}` and activation
@@ -807,6 +809,8 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Renamed the pending connection repository insertion payload to
+  `NewPendingAgentConnection` to distinguish it from the persisted entity.
 - 2026-07-06: Consolidated API-token, continuation, and nonce digest wrappers
   into one redacted `Sha256Digest` domain value type without changing
   persisted bytes.

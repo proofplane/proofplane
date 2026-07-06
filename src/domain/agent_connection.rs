@@ -54,7 +54,7 @@ pub struct AgentConnection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreatePendingAgentConnection {
+pub struct NewPendingAgentConnection {
     pub id: AgentConnectionId,
     pub transaction_id: AgentAuthorizationTransactionId,
     pub user_id: UserId,

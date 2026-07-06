@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        CreatePendingAgentConnection, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
+        NewPendingAgentConnection, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -115,7 +115,7 @@ impl AgentConnectionService {
 
         Ok(self
             .repository
-            .create_pending_agent_connection(&CreatePendingAgentConnection {
+            .create_pending_agent_connection(&NewPendingAgentConnection {
                 id: AgentConnectionId::from(Uuid::new_v4()),
                 transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
                 user_id: payload.user_id,

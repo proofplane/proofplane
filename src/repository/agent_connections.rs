@@ -3,7 +3,7 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentConnection, AgentConnectionId, CreatePendingAgentConnection, Sha256Digest,
+    AgentConnection, AgentConnectionId, NewPendingAgentConnection, Sha256Digest,
     WorkspacePermission,
 };
 
@@ -16,7 +16,7 @@ const CONNECTION_COLUMNS: &str = "c.id, c.user_id, c.workspace_id, c.auth0_subje
 impl Postgres {
     pub async fn create_pending_agent_connection(
         &self,
-        pending: &CreatePendingAgentConnection,
+        pending: &NewPendingAgentConnection,
     ) -> Result<AgentConnection, Error> {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;

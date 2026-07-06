@@ -71,3 +71,5 @@ truth without changing current MCP authorization.
   repository `Option` results retain conditional row-match semantics.
 - 2026-07-06: The spec now records the shared redacted `Sha256Digest` used by
   API-token, continuation, and nonce digests without changing persisted bytes.
+- 2026-07-06: The spec now names the generated repository insertion payload
+  `NewPendingAgentConnection`, distinct from the persisted connection entity.

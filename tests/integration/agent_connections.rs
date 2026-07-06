@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use proofplane::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        CreatePendingAgentConnection, UserId, WorkspaceId, WorkspacePermission,
+        NewPendingAgentConnection, UserId, WorkspaceId, WorkspacePermission,
     },
     repository::Postgres,
     routes::internal_agent_connections::{self, InternalAgentConnectionsState},
@@ -183,7 +183,7 @@ async fn seed_pending(
     nonce: &str,
 ) -> AgentConnection {
     app.postgres()
-        .create_pending_agent_connection(&CreatePendingAgentConnection {
+        .create_pending_agent_connection(&NewPendingAgentConnection {
             id: AgentConnectionId::from(Uuid::new_v4()),
             transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
             user_id: UserId::from(user_id),

@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use proofplane::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, AgentConnectionStatus,
-        CreatePendingAgentConnection, UserId, WorkspaceId, WorkspacePermission,
+        NewPendingAgentConnection, UserId, WorkspaceId, WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError},
     services::agent_connections::digest_secret,
@@ -402,7 +402,7 @@ WHERE id = $1
 
     let repository_error = app
         .postgres()
-        .create_pending_agent_connection(&CreatePendingAgentConnection {
+        .create_pending_agent_connection(&NewPendingAgentConnection {
             id: AgentConnectionId::from(Uuid::new_v4()),
             transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
             user_id: UserId::from(Uuid::new_v4()),
@@ -437,8 +437,8 @@ fn new_pending(
     workspace_id: Uuid,
     continuation_token: &str,
     nonce: &str,
-) -> CreatePendingAgentConnection {
-    CreatePendingAgentConnection {
+) -> NewPendingAgentConnection {
+    NewPendingAgentConnection {
         id: AgentConnectionId::from(Uuid::new_v4()),
         transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
         user_id: UserId::from(user_id),
