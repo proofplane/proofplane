@@ -84,16 +84,15 @@ VALUES ($1, $2)
             .execute(
                 r#"
 INSERT INTO agent_authorization_transactions (
-    id, agent_connection_id, continuation_digest, nonce_digest, expires_at
+    id, agent_connection_id, continuation_digest, nonce_digest
 )
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, $4)
 "#,
                 &[
                     &Uuid::from(pending.transaction_id),
                     &Uuid::from(pending.id),
                     &continuation_digest,
                     &nonce_digest,
-                    &pending.pending_expires_at,
                 ],
             )
             .await
@@ -148,7 +147,6 @@ WITH consumed AS (
       AND t.continuation_digest = $1
       AND t.nonce_digest = $2
       AND t.consumed_at IS NULL
-      AND t.expires_at > now()
       AND candidate.status = 'pending'
       AND candidate.pending_expires_at > now()
       AND EXISTS (

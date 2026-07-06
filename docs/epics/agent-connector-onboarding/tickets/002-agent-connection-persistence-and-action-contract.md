@@ -40,7 +40,8 @@ truth without changing current MCP authorization.
 - [x] Add validated Action shared-secret configuration.
 - [x] Add bearer-protected internal resolve and continuation endpoints with
   tagged outcomes.
-- [x] Add migration, repository/service, configuration, and route tests.
+- [x] Add migration, repository/service, configuration, black-box route, and
+  dedicated repository integration tests.
 - [x] Run focused integration tests and `make check`.
 
 **Notes**
@@ -58,3 +59,10 @@ truth without changing current MCP authorization.
   introduced while addressing PR 40 review feedback.
 - 2026-07-06: The spec now assigns syntactic validation to exposed Action
   route conversions and defers pending-creation DTO validation to ticket 003.
+- 2026-07-06: The spec now records the integration-test boundary: Action
+  routes are tested through HTTP, repository lifecycle behavior has a
+  dedicated module, and repository setup is limited to otherwise unreachable
+  route preconditions.
+- 2026-07-06: The spec now makes the connection's pending expiration the sole
+  authorization deadline; authorization transactions retain only replay
+  protection and consumption state.

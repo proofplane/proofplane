@@ -320,14 +320,23 @@ user/client/resource tuple. Pending creation transactionally removes an
 expired pending row before inserting its replacement; a concurrent live
 creation loses to the database constraint.
 
+Ticket 002 tests keep the same interface boundary as the implementation:
+Action route contracts are exercised through the HTTP test server, while
+persistence and lifecycle behavior are exercised through a dedicated
+repository integration suite. Route fixture setup may use repository
+operations only to establish pending or active states that ticket 002 exposes
+no API to create.
+
 Connection records contain the Proofplane user and workspace, Auth0 subject
 and client, client display-name snapshot, exact resource, lifecycle
 timestamps, and no credential. Authorization transactions contain only
-SHA-256 continuation and nonce digests, an expiry, and a consumption
-timestamp. A shared `workspace_permissions` lookup table defines the canonical
-permission vocabulary referenced by both API-token and agent-connection
-permission mappings; the mappings remain separate so each retains direct
-foreign-key ownership and cascade behavior.
+SHA-256 continuation and nonce digests plus a consumption timestamp. The
+connection's pending expiration is the single authorization deadline used for
+continuation consumption, activation, and expired-row replacement. A shared
+`workspace_permissions` lookup table defines the canonical permission
+vocabulary referenced by both API-token and agent-connection permission
+mappings; the mappings remain separate so each retains direct foreign-key
+ownership and cascade behavior.
 
 Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
@@ -790,6 +799,12 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Made `agent_connections.pending_expires_at` the sole pending
+  authorization deadline and removed the duplicate expiration from
+  authorization transactions.
+- 2026-07-06: Separated ticket 002 black-box Action route tests from repository
+  lifecycle tests. Repository setup remains permitted only for route
+  preconditions unavailable through ticket 002 APIs.
 - 2026-07-06: Moved syntactic Action request validation into accumulating
   route DTO conversions. Deferred pending-creation validation to ticket 003's
   consent route while retaining identity and membership policy in the service.

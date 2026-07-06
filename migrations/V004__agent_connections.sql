@@ -71,13 +71,7 @@ CREATE TABLE agent_authorization_transactions (
         CHECK (octet_length(continuation_digest) = 32),
     nonce_digest BYTEA NOT NULL UNIQUE
         CHECK (octet_length(nonce_digest) = 32),
-    expires_at TIMESTAMPTZ NOT NULL,
     consumed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (expires_at > created_at),
     CHECK (consumed_at IS NULL OR consumed_at >= created_at)
 );
-
-CREATE INDEX idx_agent_authorization_transactions_expiry
-    ON agent_authorization_transactions (expires_at)
-    WHERE consumed_at IS NULL;
