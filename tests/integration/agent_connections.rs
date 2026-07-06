@@ -271,6 +271,25 @@ WHERE agent_connection_id = $1
     assert_ne!(continuation, b"stored-token");
     assert_ne!(nonce, b"stored-nonce");
 
+    let permission_rows = client
+        .query(
+            "SELECT permission FROM workspace_permissions ORDER BY permission",
+            &[],
+        )
+        .await
+        .expect("workspace permission lookup loads");
+    let mut persisted_permissions = permission_rows
+        .into_iter()
+        .map(|row| row.get::<_, String>("permission"))
+        .collect::<Vec<_>>();
+    let mut expected_permissions = WorkspacePermission::ALL
+        .into_iter()
+        .map(|permission| permission.as_str().to_owned())
+        .collect::<Vec<_>>();
+    persisted_permissions.sort();
+    expected_permissions.sort();
+    assert_eq!(persisted_permissions, expected_permissions);
+
     assert!(client
         .execute(
             r#"
@@ -278,6 +297,16 @@ INSERT INTO agent_connection_permissions (agent_connection_id, permission)
 VALUES ($1, 'delete_everything')
 "#,
             &[&Uuid::from(pending.id)],
+        )
+        .await
+        .is_err());
+    assert!(client
+        .execute(
+            r#"
+INSERT INTO api_token_permissions (api_token_id, permission)
+VALUES ($1, 'delete_everything')
+"#,
+            &[&app.api_token_id()],
         )
         .await
         .is_err());

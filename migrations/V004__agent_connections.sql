@@ -1,3 +1,21 @@
+CREATE TABLE workspace_permissions (
+    permission TEXT PRIMARY KEY
+);
+
+INSERT INTO workspace_permissions (permission)
+VALUES
+    ('read_evidence_requests'),
+    ('write_evidence_requests'),
+    ('read_evidence_submissions'),
+    ('write_evidence_submissions'),
+    ('read_controls'),
+    ('write_controls');
+
+ALTER TABLE api_token_permissions
+    DROP CONSTRAINT api_token_permissions_permission_check,
+    ADD CONSTRAINT api_token_permissions_permission_fkey
+        FOREIGN KEY (permission) REFERENCES workspace_permissions(permission);
+
 CREATE TABLE agent_connections (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -41,14 +59,7 @@ CREATE INDEX idx_agent_connections_reusable
 CREATE TABLE agent_connection_permissions (
     agent_connection_id UUID NOT NULL
         REFERENCES agent_connections(id) ON DELETE CASCADE,
-    permission TEXT NOT NULL CHECK (permission IN (
-        'read_evidence_requests',
-        'write_evidence_requests',
-        'read_evidence_submissions',
-        'write_evidence_submissions',
-        'read_controls',
-        'write_controls'
-    )),
+    permission TEXT NOT NULL REFERENCES workspace_permissions(permission),
     PRIMARY KEY (agent_connection_id, permission)
 );
 

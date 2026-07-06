@@ -324,7 +324,10 @@ Connection records contain the Proofplane user and workspace, Auth0 subject
 and client, client display-name snapshot, exact resource, lifecycle
 timestamps, and no credential. Authorization transactions contain only
 SHA-256 continuation and nonce digests, an expiry, and a consumption
-timestamp. Permission rows use the canonical workspace permission vocabulary.
+timestamp. A shared `workspace_permissions` lookup table defines the canonical
+permission vocabulary referenced by both API-token and agent-connection
+permission mappings; the mappings remain separate so each retains direct
+foreign-key ownership and cascade behavior.
 
 Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
@@ -781,6 +784,9 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Centralized the workspace permission vocabulary in a lookup table
+  referenced by both API-token and agent-connection permission mappings while
+  retaining separate owner relationships.
 - 2026-07-05: Split the former grant-delivery ticket into 002 connection
   persistence and internal Action contracts, 003 workspace consent and
   Redirect Action behavior, and 004 MCP runtime enforcement. Renumbered the
