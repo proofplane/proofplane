@@ -4,6 +4,7 @@ use axum::{extract::MatchedPath, http::Request, middleware, response::Response, 
 use metrics_exporter_prometheus::PrometheusHandle;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::Span;
+use url::ParseError;
 
 use crate::{
     authentication::{
@@ -58,9 +59,21 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub user_authenticator: UserAuthenticator<V>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateAppError {
+    #[error("authentication initialization error")]
+    Authentication(#[from] crate::authentication::Error),
+
+    #[error("invalid consent URL configuration")]
+    ConsentUrl(#[source] ParseError),
+
+    #[error("invalid Auth0 continuation URL configuration")]
+    Auth0ContinuationUrl(#[source] ParseError),
+}
+
 pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     dependencies: AppDependencies<V>,
-) -> Result<Router, crate::authentication::Error> {
+) -> Result<Router, CreateAppError> {
     let api_token_authenticator = dependencies.api_token_authenticator.clone();
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
@@ -123,13 +136,13 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .server
         .public_api_base_url
         .join("agent-connections/consent")
-        .expect("validated public API base URL accepts consent path");
+        .map_err(CreateAppError::ConsentUrl)?;
     let auth0_continue_url = dependencies
         .config
         .auth0
         .issuer
         .join("continue")
-        .expect("validated Auth0 issuer accepts continue path");
+        .map_err(CreateAppError::Auth0ContinuationUrl)?;
     let consent_token_codec = Arc::new(RedirectTokenCodec::new(
         dependencies.config.auth0.action.shared_secret.clone(),
         dependencies.config.auth0.issuer.to_string(),

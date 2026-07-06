@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use axum::{
-    extract::{Form, Query, State},
+    extract::{rejection::QueryRejection, Form, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -39,21 +39,36 @@ impl ConsentResultSigner for RedirectTokenCodec {
     }
 }
 
-#[derive(Clone)]
-pub struct AgentConnectionConsentState {
+pub struct AgentConnectionConsentState<S> {
     pub service: AgentConnectionService,
     pub token_codec: Arc<RedirectTokenCodec>,
-    pub result_signer: Arc<dyn ConsentResultSigner>,
+    pub result_signer: Arc<S>,
     pub resource: String,
     pub allowed_client_ids: HashSet<String>,
     pub auth0_continue_url: Url,
 }
 
-pub fn router(state: AgentConnectionConsentState) -> Router {
+impl<S> Clone for AgentConnectionConsentState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+            token_codec: self.token_codec.clone(),
+            result_signer: self.result_signer.clone(),
+            resource: self.resource.clone(),
+            allowed_client_ids: self.allowed_client_ids.clone(),
+            auth0_continue_url: self.auth0_continue_url.clone(),
+        }
+    }
+}
+
+pub fn router<S>(state: AgentConnectionConsentState<S>) -> Router
+where
+    S: ConsentResultSigner + 'static,
+{
     Router::new()
         .route(
             "/agent-connections/consent",
-            get(show_consent).post(submit_consent),
+            get(show_consent::<S>).post(submit_consent::<S>),
         )
         .with_state(state)
 }
@@ -72,10 +87,13 @@ struct ConsentForm {
     workspace_id: Option<String>,
 }
 
-async fn show_consent(
-    State(state): State<AgentConnectionConsentState>,
-    query: Result<Query<ConsentQuery>, axum::extract::rejection::QueryRejection>,
-) -> Response {
+async fn show_consent<S>(
+    State(state): State<AgentConnectionConsentState<S>>,
+    query: Result<Query<ConsentQuery>, QueryRejection>,
+) -> Response
+where
+    S: ConsentResultSigner + 'static,
+{
     let Ok(Query(query)) = query else {
         return unavailable();
     };
@@ -97,10 +115,13 @@ async fn show_consent(
     )
 }
 
-async fn submit_consent(
-    State(state): State<AgentConnectionConsentState>,
+async fn submit_consent<S>(
+    State(state): State<AgentConnectionConsentState<S>>,
     form: Result<Form<ConsentForm>, axum::extract::rejection::FormRejection>,
-) -> Response {
+) -> Response
+where
+    S: ConsentResultSigner + 'static,
+{
     let Ok(Form(form)) = form else {
         return unavailable();
     };
@@ -168,8 +189,8 @@ async fn submit_consent(
     }
 }
 
-fn verify_transaction(
-    state: &AgentConnectionConsentState,
+fn verify_transaction<S>(
+    state: &AgentConnectionConsentState<S>,
     token: &str,
 ) -> Result<ConsentTransactionClaims, ()> {
     let claims = state
@@ -308,19 +329,22 @@ fn result_claims(
     }
 }
 
-fn redirect_with_result(
-    state: &AgentConnectionConsentState,
+fn redirect_with_result<S>(
+    state: &AgentConnectionConsentState<S>,
     auth0_state: &str,
     result: ConsentResultClaims,
-) -> Response {
+) -> Response
+where
+    S: ConsentResultSigner,
+{
     match state.result_signer.sign_result(result) {
         Ok(token) => redirect_to_auth0(state, auth0_state, &token),
         Err(_) => unavailable(),
     }
 }
 
-fn redirect_to_auth0(
-    state: &AgentConnectionConsentState,
+fn redirect_to_auth0<S>(
+    state: &AgentConnectionConsentState<S>,
     auth0_state: &str,
     result_token: &str,
 ) -> Response {
@@ -431,7 +455,10 @@ fn parse_scopes(values: Vec<String>) -> Validation<Vec<WorkspacePermission>, Str
     if !errors.is_empty() {
         return Validation::invalid_many(errors);
     }
-    Validation::valid(canonical_permissions(permissions).expect("scopes are unique"))
+    match canonical_permissions(permissions) {
+        Ok(permissions) => Validation::valid(permissions),
+        Err(error) => Validation::invalid(error.to_string()),
+    }
 }
 
 fn required(field: &str, value: String) -> Validation<String, String> {

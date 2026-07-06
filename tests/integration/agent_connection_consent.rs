@@ -252,11 +252,10 @@ fn make_codec() -> RedirectTokenCodec {
     RedirectTokenCodec::new(SecretString::from(SECRET), ISSUER, CONSENT_URL)
 }
 
-fn consent_server(
-    app: &TestApp,
-    codec: Arc<RedirectTokenCodec>,
-    signer: Arc<dyn ConsentResultSigner>,
-) -> TestServer {
+fn consent_server<S>(app: &TestApp, codec: Arc<RedirectTokenCodec>, signer: Arc<S>) -> TestServer
+where
+    S: ConsentResultSigner + 'static,
+{
     TestServer::new(agent_connection_consent::router(
         AgentConnectionConsentState {
             service: AgentConnectionService::new(app.postgres_arc()),
