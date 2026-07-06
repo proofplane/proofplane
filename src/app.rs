@@ -26,6 +26,7 @@ use crate::{
         evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
         evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
+        internal_agent_connections::{self, InternalAgentConnectionsState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
         request_context::attach_request_id,
@@ -33,6 +34,7 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
+        agent_connections::AgentConnectionService,
         api_tokens::ApiTokenService,
         attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService,
@@ -186,6 +188,12 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
+        .merge(internal_agent_connections::router(
+            InternalAgentConnectionsState {
+                service: AgentConnectionService::new(dependencies.postgres.clone()),
+                action_shared_secret: dependencies.config.auth0.action.shared_secret.clone(),
+            },
+        ))
         .nest("/version", version::router())
         .fallback(not_found)
         .layer(middleware::from_fn(attach_request_id))

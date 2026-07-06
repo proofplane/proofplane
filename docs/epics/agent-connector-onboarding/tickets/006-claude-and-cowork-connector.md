@@ -1,6 +1,6 @@
-# 004 - Claude And Cowork Connector
+# 006 - Claude And Cowork Connector
 
-**Status:** Todo · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#claude-and-cowork)
+**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#claude-and-cowork)
 
 **Summary** - Make the hosted Proofplane MCP endpoint usable as a remote
 connector across Claude and Cowork, then prepare the material required for

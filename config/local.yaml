@@ -23,6 +23,8 @@ auth0:
     resource: http://127.0.0.1:3002/mcp
     allowed_client_ids:
       - "tpc_2fF3uw2EaHnos66XPFPjHP"
+  action:
+    shared_secret: "local-action-shared-secret-change-me-001"
 
 paseto:
   download:

@@ -1,3 +1,4 @@
+mod agent_connection;
 mod api_token;
 mod controls;
 mod error;
@@ -5,10 +6,15 @@ mod evidence_request;
 mod evidence_submission;
 mod ids;
 mod permission;
+mod sha256_digest;
 mod user;
 mod validation;
 mod workspace;
 
+pub use agent_connection::{
+    AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
+    NewPendingAgentConnection,
+};
 pub use api_token::{
     canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
 };
@@ -28,6 +34,7 @@ pub use evidence_submission::{
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
 };
 pub use permission::{WorkspacePermission, WorkspacePermissions};
+pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{
     optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,

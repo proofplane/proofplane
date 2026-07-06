@@ -4,6 +4,7 @@ use super::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictKind {
+    AgentConnectionExists,
     WorkspaceSlugTaken,
     ControlCodeTaken,
     WorkspaceMembershipExists,
@@ -13,6 +14,7 @@ pub enum ConflictKind {
 impl ConflictKind {
     pub fn code(self) -> &'static str {
         match self {
+            Self::AgentConnectionExists => "agent_connection_exists",
             Self::WorkspaceSlugTaken => "slug_taken",
             Self::ControlCodeTaken => "control_code_taken",
             Self::WorkspaceMembershipExists => "membership_exists",
@@ -22,6 +24,9 @@ impl ConflictKind {
 
     pub fn message(self) -> &'static str {
         match self {
+            Self::AgentConnectionExists => {
+                "a live agent connection already exists for this user, client, and resource"
+            }
             Self::WorkspaceSlugTaken => "a workspace with this slug already exists",
             Self::ControlCodeTaken => "a control with this code already exists in the workspace",
             Self::WorkspaceMembershipExists => "the user is already a member of this workspace",
@@ -34,6 +39,7 @@ impl ConflictKind {
 
 fn conflict_kind_for_constraint(constraint: &str) -> Option<ConflictKind> {
     match constraint {
+        "agent_connections_live_tuple_key" => Some(ConflictKind::AgentConnectionExists),
         "workspaces_slug_key" => Some(ConflictKind::WorkspaceSlugTaken),
         "controls_workspace_id_code_key" => Some(ConflictKind::ControlCodeTaken),
         "workspace_memberships_pkey" => Some(ConflictKind::WorkspaceMembershipExists),

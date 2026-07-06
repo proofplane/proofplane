@@ -19,6 +19,12 @@ without exposing them to the user or model.
 > workspace authorization all begin in ticket 002. This prevents a
 > development-only synthetic grant mechanism from becoming a ticket 001
 > contract.
+>
+> **Revision — 2026-07-05:** The former combined ticket 002 is split into
+> connection persistence and Action-facing contracts (002), browser consent
+> and Redirect Action claim injection (003), and MCP runtime enforcement
+> (004). This lets the persistence contract ship without changing MCP
+> authorization or requiring browser code.
 
 Auth0 is the OAuth authorization server for remote MCP clients, following
 [Auth0's direct MCP authorization flow](https://auth0.com/ai/docs/mcp/intro/why-auth-for-mcp).
@@ -299,9 +305,65 @@ Verified ticket 001 Auth0 users may initialize MCP and list tools. Every
 protected tool call fails closed because no workspace authorization exists.
 Existing `ppat_` authorization and API-token audit actors remain unchanged.
 
-Ticket 002 adds the complete grant bridge described below: Redirect Action,
-workspace picker, signed continuation, namespaced connection and workspace
-claims, persistence, membership checks, and protected-tool authorization.
+Ticket 002 adds durable connection persistence, lifecycle operations, Action
+shared-secret configuration, and authenticated internal resolve and
+continuation contracts. Ticket 003 adds the Redirect Action, workspace picker,
+signed browser transaction, and namespaced connection and workspace claims.
+Ticket 004 adds protected-tool authorization and actor provenance.
+
+## Agent Connection Foundation
+
+Ticket 002 persists `agent_connections`, normalized permission rows, and
+single-use authorization transactions. A partial unique constraint permits at
+most one non-revoked pending or active connection for each
+user/client/resource tuple. Pending creation transactionally removes an
+expired pending row before inserting its replacement; a concurrent live
+creation loses to the database constraint.
+
+Ticket 002 tests keep the same interface boundary as the implementation:
+Action route contracts are exercised through the HTTP test server, while
+persistence and lifecycle behavior are exercised through a dedicated
+repository integration suite. Route fixture setup may use repository
+operations only to establish pending or active states that ticket 002 exposes
+no API to create.
+
+Connection records contain the Proofplane user and workspace, Auth0 subject
+and client, client display-name snapshot, exact resource, lifecycle
+timestamps, and no credential. Authorization transactions contain only
+SHA-256 continuation and nonce digests plus a consumption timestamp. The
+connection's pending expiration is the single authorization deadline used for
+continuation consumption, activation, and expired-row replacement. A shared
+`workspace_permissions` lookup table defines the canonical permission
+vocabulary referenced by both API-token and agent-connection permission
+mappings; the mappings remain separate so each retains direct foreign-key
+ownership and cascade behavior.
+API-token, continuation, and nonce digests use one redacted `Sha256Digest`
+domain value type; their database columns continue to store the same 32-byte
+SHA-256 output.
+
+Repository and service operations support pending creation, denial,
+single-use continuation consumption, exact reusable lookup, activation, last
+use, and revocation. Reuse requires exact subject, client, resource, canonical
+scopes, active status, and a current workspace membership.
+The repository insertion payload is named `NewPendingAgentConnection` to
+distinguish generated insert data from the persisted `AgentConnection`.
+Conditional repository operations return `Option` to represent whether a row
+matched. At the service policy boundary, continuation consumption instead
+returns `ConsumeContinuationOutcome::{Approved, Invalid}` and activation
+returns `ActivationOutcome::{Activated, Rejected}`, keeping expected policy
+rejection distinct from repository failure.
+
+The API exposes bearer-secret-protected internal JSON endpoints to resolve a
+reusable connection and consume an approved pending continuation. Expected
+policy misses, including `interaction_required` and invalid continuation,
+return tagged `200` responses. Malformed input returns `400`, invalid Action
+authentication returns `401`, and repository failure returns `500`.
+Each exposed Action route authenticates before converting its request DTO into
+a validated payload with `validate!`; required fields, canonical resource
+URLs, and canonical non-empty scope sets are request-boundary concerns. The
+ticket 003 consent route must apply the same conversion pattern to every
+pending-creation field before calling the service. Subject matching, user
+existence, and current membership remain service authorization policy.
 
 ### Initial authorization and connection reuse
 
@@ -390,7 +452,7 @@ The subject must identify a user. Auth0 client-credentials subjects and grant
 markers are rejected. `azp` must be allowlisted, and every scope must be one
 of the six MCP workspace scopes.
 
-Ticket 002 extends the signed token contract with:
+Ticket 003 extends the signed token contract with:
 
 | Claim | Meaning |
 | --- | --- |
@@ -402,7 +464,7 @@ The Auth0 dialect is intentional. It identifies the authorized client with
 `typ: at+jwt` fields. This is an Auth0-specific integration, so the RFC 9068
 interoperability profile does not add a required capability.
 
-Starting in ticket 002, the claim namespace is configuration and must be
+Starting in ticket 003, the claim namespace is configuration and must be
 collision-resistant. Tokens
 contain identifiers and scopes only, never Auth0 credentials, user content, or
 workspace data.
@@ -443,7 +505,7 @@ For every Auth0-backed MCP request, Proofplane:
 The database check makes revocation and membership removal immediate even
 while an Auth0 JWT remains cryptographically valid.
 
-Steps 3-7 are introduced by ticket 002. During ticket 001, successful standard
+Steps 3-7 are introduced by ticket 004. During tickets 001-003, successful standard
 token validation creates a protocol-level principal only: initialization and
 tool discovery work, while protected tools fail closed before domain access.
 
@@ -666,8 +728,8 @@ permissions, cleanup, and client-display behavior are specified and tested.
 
 - Ticket 001 unit tests validate Auth0 JWT signature, algorithm, issuer,
   audience, lifetime, user subject, authorized client, and scope claims with
-  local JWK fixtures. Ticket 002 adds custom claim, live grant, and membership
-  cases.
+  local JWK fixtures. Ticket 002 adds persistence and Action-contract cases;
+  ticket 004 adds custom claim, live grant, and membership cases.
 - MCP protocol tests validate `401` challenges and Protected Resource Metadata.
 - Action tests cover initial redirect, signed continuation, scope filtering,
   active-connection reuse, silent interaction requirements, denial, and
@@ -700,13 +762,13 @@ The Inspector 0.22.0 callback then bypassed its configured proxy. That external
 harness limitation does not block the authorization foundation: Proofplane
 discovery reached Auth0, browser authentication completed, and repository
 tests cover Auth0 token validation and the ticket 001 fail-closed boundary.
-Connection reuse during repeated authorization remains ticket 002 scope.
-Recovery after token expiry is a client-specific delivery check in tickets 003
-through 006.
+Connection reuse during repeated authorization spans tickets 002 and 003.
+Recovery after token expiry is a client-specific delivery check in tickets 005
+through 008.
 
-Ticket 002 must separately prove post-login Redirect Actions for those
-third-party clients, signed continuation, active-connection lookup, and claim
-injection.
+Tickets 002 and 003 must separately prove active-connection lookup, signed
+continuation, post-login Redirect Actions for those third-party clients, and
+claim injection.
 
 The remaining client questions are:
 
@@ -726,11 +788,12 @@ authentication.
 ## Distribution Order
 
 1. Validate the Auth0 capability gates with MCP Inspector.
-2. Ship MCP discovery, Auth0 JWT validation, and workspace grant binding.
-3. Ship connection listing, revocation, and guided website setup.
-4. Validate Claude/Cowork custom connector behavior.
-5. Validate the Codex plugin preview.
-6. Prepare directory or broader marketplace submission.
+2. Ship connection persistence and the internal Action contract.
+3. Ship workspace consent, claim injection, and MCP workspace grant binding.
+4. Ship connection listing, revocation, and guided website setup.
+5. Validate Claude/Cowork custom connector behavior.
+6. Validate the Codex plugin preview.
+7. Prepare directory or broader marketplace submission.
 
 ## Reference Material
 
@@ -746,24 +809,48 @@ authentication.
 
 ## Revisions
 
+- 2026-07-06: Renamed the pending connection repository insertion payload to
+  `NewPendingAgentConnection` to distinguish it from the persisted entity.
+- 2026-07-06: Consolidated API-token, continuation, and nonce digest wrappers
+  into one redacted `Sha256Digest` domain value type without changing
+  persisted bytes.
+- 2026-07-06: Made continuation-consumption and activation policy outcomes
+  explicit at the service boundary while retaining repository `Option`
+  row-match semantics.
+- 2026-07-06: Made `agent_connections.pending_expires_at` the sole pending
+  authorization deadline and removed the duplicate expiration from
+  authorization transactions.
+- 2026-07-06: Separated ticket 002 black-box Action route tests from repository
+  lifecycle tests. Repository setup remains permitted only for route
+  preconditions unavailable through ticket 002 APIs.
+- 2026-07-06: Moved syntactic Action request validation into accumulating
+  route DTO conversions. Deferred pending-creation validation to ticket 003's
+  consent route while retaining identity and membership policy in the service.
+- 2026-07-06: Centralized the workspace permission vocabulary in a lookup table
+  referenced by both API-token and agent-connection permission mappings while
+  retaining separate owner relationships.
+- 2026-07-05: Split the former grant-delivery ticket into 002 connection
+  persistence and internal Action contracts, 003 workspace consent and
+  Redirect Action behavior, and 004 MCP runtime enforcement. Renumbered the
+  prior tickets 003-006 to 005-008.
 - 2026-07-05: Closed ticket 001 after the development tenant and Inspector
   demonstrated discovery, PKCE browser authorization, and return from Auth0.
   Inspector 0.22.0's proxy-bypassing callback behavior is recorded as an
   external harness limitation. Kept repeated-authorization connection reuse in
-  ticket 002 and post-expiry reconnect validation in the downstream client
+  tickets 002-003 and post-expiry reconnect validation in the downstream client
   delivery tickets.
 - 2026-07-04: Moved MCP authentication-challenge construction to application
   assembly so invalid metadata URLs or header values fail startup instead of
   panicking while handling an unauthorized request.
 - 2026-07-02: Adopted Auth0's default 86,400-second (24-hour) MCP access-token
-  lifetime. Live grant and membership checks in ticket 002 remain the
+  lifetime. Live grant and membership checks in ticket 004 remain the
   immediate-revocation boundary.
 - 2026-07-02: Selected Auth0's default `access_token` dialect for the MCP
   resource. The token contract uses Auth0's `azp` client identifier; RFC 9068
   fields are not required.
 - 2026-07-02: Defined the 001/002 boundary. Ticket 001 admits verified Auth0
   principals for MCP initialization and tool discovery but denies protected
-  tools; ticket 002 adds durable grants and live authorization.
+  tools; tickets 002-004 add durable grants and live authorization.
 - 2026-07-02: Removed `offline_access` and connection-bound refresh metadata
   from the initial release. This revision originally selected eight-hour
   access tokens; the later 24-hour revision above supersedes that lifetime.

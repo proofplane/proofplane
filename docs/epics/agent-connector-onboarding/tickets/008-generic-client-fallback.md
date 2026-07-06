@@ -1,4 +1,4 @@
-# 006 - Generic Client Fallback
+# 008 - Generic Client Fallback
 
 **Status:** Todo · **Depends on:** 001 · **Spec:** [spec.md](../spec.md#other-clients)
 

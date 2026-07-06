@@ -58,12 +58,18 @@ pub struct Auth0Config {
     pub audience: String,
     pub jwks_url: Url,
     pub mcp: Auth0McpConfig,
+    pub action: Auth0ActionConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct Auth0McpConfig {
     pub resource: Url,
     pub allowed_client_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Auth0ActionConfig {
+    pub shared_secret: SecretString,
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +399,8 @@ auth0:
   mcp:
     resource: "not-a-url"
     allowed_client_ids: []
+  action:
+    shared_secret: "short"
 paseto:
   download:
     active_key_id: ""
@@ -451,6 +459,7 @@ health:
                 assert!(paths.contains(&"auth0.jwks_url"));
                 assert!(paths.contains(&"auth0.mcp.resource"));
                 assert!(paths.contains(&"auth0.mcp.allowed_client_ids"));
+                assert!(paths.contains(&"auth0.action.shared_secret"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));
