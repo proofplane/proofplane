@@ -35,9 +35,9 @@ Docker must be available for integration tests because they use Testcontainers.
 Use standard Rust formatting (`cargo fmt`) and four-space indentation. Name
 modules, functions, and tests in `snake_case`; types and traits in `PascalCase`;
 constants in `SCREAMING_SNAKE_CASE`. Keep domain and application interfaces
-independent of generated AuthZed protobuf types. Prefer existing concrete
-Postgres gateways for internal persistence and traits for genuine external
-adapter boundaries.
+independent of generated adapter types. Prefer existing concrete Postgres
+gateways for internal persistence and traits for genuine external adapter
+boundaries.
 
 ## Testing Guidelines
 

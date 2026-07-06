@@ -34,9 +34,18 @@ Docker must be available for integration tests because they use Testcontainers.
 Use standard Rust formatting (`cargo fmt`) and four-space indentation. Name
 modules, functions, and tests in `snake_case`; types and traits in `PascalCase`;
 constants in `SCREAMING_SNAKE_CASE`. Keep domain and application interfaces
-independent of generated AuthZed protobuf types. Prefer existing concrete
-Postgres gateways for internal persistence and traits for genuine external
-adapter boundaries.
+independent of generated adapter types. Prefer existing concrete Postgres
+gateways for internal persistence and traits for genuine external adapter
+boundaries.
+
+Never call `.expect(...)` in long-running server or runtime paths where a panic
+could cause application downtime. This includes the API, MCP server, worker,
+dequeuer, and shared library code reachable by those processes. Propagate
+recoverable failures with `Result` and `?`, and handle invariants without a
+panic path. Tests and one-shot utilities such as seed, migration, and local
+development commands may use `expect` when aborting is the intended behavior
+and the message is actionable. Before completing a change, search modified
+runtime code for `.expect(` and remove every occurrence.
 
 ## Testing Guidelines
 
