@@ -17,7 +17,7 @@ handoff units that link into it.
 | --- | --- | --- |
 | 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Done | Established Auth0 discovery, tenant capability, and user-token verification; client-specific reconnect validation remains downstream. |
 | 002. [Agent Connection Persistence And Action Contract](./tickets/002-agent-connection-persistence-and-action-contract.md) | Doing | Add the transactional connection lifecycle and authenticated internal Action contract. |
-| 003. [Workspace Consent And Auth0 Redirect Action](./tickets/003-workspace-consent-and-auth0-redirect-action.md) | Todo | Add minimal secure consent, continuation, and Auth0 claim injection. |
+| 003. [Workspace Consent And Auth0 Redirect Action](./tickets/003-workspace-consent-and-auth0-redirect-action.md) | Doing | Consent, continuation, and Action code are implemented; development-tenant smoke verification remains. |
 | 004. [MCP Agent Connection Runtime Authorization](./tickets/004-mcp-agent-connection-runtime-authorization.md) | Todo | Enforce connection claims, membership, scopes, and provenance in MCP. |
 | 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Todo | Add connection lifecycle UI, revocation, and client-specific setup. |
 | 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Todo | Validate the remote connector path and prepare directory distribution. |

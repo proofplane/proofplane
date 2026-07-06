@@ -25,6 +25,12 @@ without exposing them to the user or model.
 > and Redirect Action claim injection (003), and MCP runtime enforcement
 > (004). This lets the persistence contract ship without changing MCP
 > authorization or requiring browser code.
+>
+> **Revision — 2026-07-06:** Ticket 003 uses Auth0's native HS256 redirect
+> tokens with the existing Action secret. Approval alone creates a pending
+> connection; denial is a signed result with no persistence. Silent
+> authorization still calls the redirect API when interaction is required so
+> Auth0 returns its native `interaction_required` response.
 
 Auth0 is the OAuth authorization server for remote MCP clients, following
 [Auth0's direct MCP authorization flow](https://auth0.com/ai/docs/mcp/intro/why-auth-for-mcp).
@@ -389,8 +395,9 @@ For every authorization transaction targeting the MCP resource, the Action:
 
 An authorization request using `prompt=none` may succeed only through step 4.
 If workspace selection, reconnection, or any other interaction is required,
-the Action fails with `interaction_required` instead of attempting a redirect.
-The client must then start a visible authorization flow.
+the Action calls `api.redirect.sendUserTo` normally. Auth0 does not perform the
+redirect for a silent request and returns `interaction_required` to the
+client. The client must then start a visible authorization flow.
 
 The consent endpoint must not trust a workspace, scope, client, or user value
 submitted by the browser. It verifies the Auth0-signed transaction, loads the
@@ -406,9 +413,32 @@ abandoned, or no valid request arrives before the pending deadline, the record
 expires and is removed. This prevents workspace approval from being mistaken
 for completed OAuth authorization.
 
-The continuation token is short-lived, single-use, bound to Auth0 state, and
-contains only identifiers. Proofplane stores its digest or nonce to prevent
-replay.
+The redirect bridge uses compact HS256 JWTs signed with the same secret that
+authenticates the Action-facing internal API. The Action-created input token
+has a maximum five-minute lifetime and contains purpose/version, Auth0
+transaction ID, the client's OAuth `event.transaction.state`, client ID and
+display name, resource, canonical scopes, and Auth0's native subject, issuer,
+issued-at, and expiry claims. Its audience is the canonical Proofplane consent
+URL. Proofplane requires the configured Auth0 issuer host, consent audience,
+purpose, version, resource, allowlisted client, canonical scopes, transaction
+fields, and lifetime exactly.
+
+The Proofplane-created result token contains purpose/version, approved or
+denied decision, subject, transaction ID, client OAuth state, and Auth0's
+opaque redirect `state`. Approved results additionally contain independent
+256-bit continuation and nonce secrets; denied results contain neither.
+Proofplane signs the result with the consent URL as issuer and configured
+Auth0 issuer as audience. The consent route echoes the same opaque state in
+the `/continue` query, and Auth0 `validateToken` validates the signed state
+against that parameter.
+
+Only approval creates a pending connection. Denial signs and returns a denied
+result without a database write. If result signing fails after an approved
+pending insert, the route best-effort deletes that pending record through the
+ticket 002 denial operation.
+
+The continuation secret is short-lived and single-use. Proofplane stores only
+SHA-256 continuation and nonce digests to prevent replay.
 
 ### Access-token expiry and reauthorization
 

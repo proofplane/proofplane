@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -8,6 +8,7 @@ use tracing::Span;
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
+        auth0_redirect_token::RedirectTokenCodec,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
@@ -18,6 +19,7 @@ use crate::{
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
+        agent_connection_consent::{self, AgentConnectionConsentState},
         api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
@@ -116,6 +118,24 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
+    let consent_url = dependencies
+        .config
+        .server
+        .public_api_base_url
+        .join("agent-connections/consent")
+        .expect("validated public API base URL accepts consent path");
+    let auth0_continue_url = dependencies
+        .config
+        .auth0
+        .issuer
+        .join("continue")
+        .expect("validated Auth0 issuer accepts continue path");
+    let consent_token_codec = Arc::new(RedirectTokenCodec::new(
+        dependencies.config.auth0.action.shared_secret.clone(),
+        dependencies.config.auth0.issuer.to_string(),
+        consent_url.to_string(),
+    ));
+    let agent_connection_service = AgentConnectionService::new(dependencies.postgres.clone());
 
     Ok(Router::new()
         .nest(
@@ -188,9 +208,26 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
+        .merge(agent_connection_consent::router(
+            AgentConnectionConsentState {
+                service: agent_connection_service.clone(),
+                token_codec: consent_token_codec.clone(),
+                result_signer: consent_token_codec,
+                resource: dependencies.config.auth0.mcp.resource.to_string(),
+                allowed_client_ids: dependencies
+                    .config
+                    .auth0
+                    .mcp
+                    .allowed_client_ids
+                    .iter()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                auth0_continue_url,
+            },
+        ))
         .merge(internal_agent_connections::router(
             InternalAgentConnectionsState {
-                service: AgentConnectionService::new(dependencies.postgres.clone()),
+                service: agent_connection_service,
                 action_shared_secret: dependencies.config.auth0.action.shared_secret.clone(),
             },
         ))

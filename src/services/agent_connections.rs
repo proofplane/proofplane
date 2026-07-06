@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        NewPendingAgentConnection, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
+        NewPendingAgentConnection, Sha256Digest, User, UserId, WorkspaceId, WorkspacePermission,
+        WorkspaceWithRole,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -87,9 +88,41 @@ pub enum ActivationOutcome {
     Rejected,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsentContext {
+    pub user: User,
+    pub workspaces: Vec<WorkspaceWithRole>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsentContextOutcome {
+    Available(ConsentContext),
+    Unavailable,
+}
+
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
+    }
+
+    pub async fn consent_context(
+        &self,
+        auth0_subject: &str,
+    ) -> Result<ConsentContextOutcome, AgentConnectionError> {
+        let Some(user) = self.repository.get_user_by_auth0_sub(auth0_subject).await? else {
+            return Ok(ConsentContextOutcome::Unavailable);
+        };
+        let workspaces = self
+            .repository
+            .list_workspaces_with_role_for_user(user.id)
+            .await?;
+        if workspaces.is_empty() {
+            return Ok(ConsentContextOutcome::Unavailable);
+        }
+        Ok(ConsentContextOutcome::Available(ConsentContext {
+            user,
+            workspaces,
+        }))
     }
 
     pub async fn create_pending(

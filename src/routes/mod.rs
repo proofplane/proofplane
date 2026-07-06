@@ -1,3 +1,4 @@
+pub mod agent_connection_consent;
 pub mod api_tokens;
 pub mod attachment_downloads;
 pub mod attachment_upload_sessions;
