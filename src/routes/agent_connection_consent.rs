@@ -381,7 +381,7 @@ fn render_consent(
         .map(|scope| format!("<li>{}</li>", escape_html(scope)))
         .collect::<String>();
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize agent connection</title></head><body><main><h1>Authorize {client}</h1><p>Select one workspace for this connection.</p><ul>{scopes}</ul><form method=\"post\"><input type=\"hidden\" name=\"session_token\" value=\"{token}\"><input type=\"hidden\" name=\"state\" value=\"{state}\"><label>Workspace<select name=\"workspace_id\" required>{options}</select></label><button type=\"submit\" name=\"decision\" value=\"approve\">Approve</button><button type=\"submit\" name=\"decision\" value=\"deny\">Deny</button></form></main></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize agent connection</title></head><body><main><h1>Authorize {client}</h1><p>Select one workspace for this connection.</p><ul>{scopes}</ul><form method=\"post\" action=\"/agent-connections/consent\"><input type=\"hidden\" name=\"session_token\" value=\"{token}\"><input type=\"hidden\" name=\"state\" value=\"{state}\"><label>Workspace<select name=\"workspace_id\" required>{options}</select></label><button type=\"submit\" name=\"decision\" value=\"approve\">Approve</button><button type=\"submit\" name=\"decision\" value=\"deny\">Deny</button></form></main></body></html>",
         client = escape_html(&claims.client_name),
         token = escape_html(&query.session_token),
         state = escape_html(&query.state),
@@ -486,9 +486,7 @@ fn secure_response(status: StatusCode, body: String) -> Response {
     );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-        ),
+        HeaderValue::from_static("default-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
     );
     headers.insert(
         header::HeaderName::from_static("x-frame-options"),

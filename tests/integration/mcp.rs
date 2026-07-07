@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use axum::http::{header, HeaderName, HeaderValue, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use proofplane::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
     domain::WorkspacePermission,
@@ -334,6 +334,27 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .to_str()
         .expect("content type is text")
         .starts_with("text/plain"));
+}
+
+#[tokio::test]
+async fn mcp_cors_is_available_for_browser_based_clients() {
+    let app = TestApp::builder().without_default_auth().build().await;
+    let server = app.mcp_http_server();
+
+    let metadata = server
+        .get(PROTECTED_RESOURCE_METADATA_ENDPOINT)
+        .add_header(header::ORIGIN.as_str(), "http://localhost:6274")
+        .await;
+    metadata.assert_status_ok();
+    metadata.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+
+    let preflight = server
+        .method(Method::OPTIONS, PROTECTED_RESOURCE_METADATA_ENDPOINT)
+        .add_header(header::ORIGIN.as_str(), "http://localhost:6274")
+        .add_header(header::ACCESS_CONTROL_REQUEST_METHOD.as_str(), "GET")
+        .await;
+    preflight.assert_status_ok();
+    preflight.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
 }
 
 #[tokio::test]

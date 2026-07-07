@@ -43,3 +43,5 @@ connection and namespaced token claims.
   tests remain before this ticket can move to Done.
 - 2026-07-06: The spec was reconciled with the shipped redirect-token,
   denial-without-persistence, and native `prompt=none` contracts.
+- 2026-07-06: Manual development-tenant verification is documented in
+  [003-local-auth0-mcp-consent.md](../runbooks/003-local-auth0-mcp-consent.md).

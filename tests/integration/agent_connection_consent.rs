@@ -42,9 +42,14 @@ async fn page_escapes_content_and_approval_creates_single_use_continuation() {
         .await;
     page.assert_status_ok();
     page.assert_header(header::CACHE_CONTROL, "no-store, max-age=0");
+    page.assert_header(
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    );
     let html = page.text();
     assert!(html.contains("Client &lt;unsafe&gt;"));
     assert!(html.contains("Workspace &lt;unsafe&gt;"));
+    assert!(html.contains("action=\"/agent-connections/consent\""));
     assert!(!html.contains("<unsafe>"));
 
     let approved = post_form(
@@ -137,8 +142,13 @@ async fn denial_and_invalid_browser_requests_create_no_pending_record() {
         .await
         .assert_status_bad_request();
     let mut tampered = token.clone();
-    let replacement = if tampered.ends_with('A') { "B" } else { "A" };
-    tampered.replace_range(tampered.len() - 1.., replacement);
+    let signature_start = tampered.rfind('.').unwrap() + 1;
+    let replacement = if tampered[signature_start..].starts_with('A') {
+        "B"
+    } else {
+        "A"
+    };
+    tampered.replace_range(signature_start..signature_start + 1, replacement);
     server
         .get("/agent-connections/consent")
         .add_query_param("session_token", tampered)
