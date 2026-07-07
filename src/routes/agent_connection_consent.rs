@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     extract::{rejection::QueryRejection, Form, Query, State},
@@ -44,7 +44,6 @@ pub struct AgentConnectionConsentState<S> {
     pub token_codec: Arc<RedirectTokenCodec>,
     pub result_signer: Arc<S>,
     pub resource: String,
-    pub allowed_client_ids: HashSet<String>,
     pub auth0_continue_url: Url,
 }
 
@@ -55,7 +54,6 @@ impl<S> Clone for AgentConnectionConsentState<S> {
             token_codec: self.token_codec.clone(),
             result_signer: self.result_signer.clone(),
             resource: self.resource.clone(),
-            allowed_client_ids: self.allowed_client_ids.clone(),
             auth0_continue_url: self.auth0_continue_url.clone(),
         }
     }
@@ -198,7 +196,7 @@ fn verify_transaction<S>(
         .verify_transaction(token, Utc::now().timestamp())
         .map_err(|_| ())?;
     if claims.resource != state.resource
-        || !state.allowed_client_ids.contains(&claims.client_id)
+        || required("client_id", claims.client_id.clone()).is_invalid()
         || required("subject", claims.sub.clone()).is_invalid()
         || required("transaction_id", claims.transaction_id.clone()).is_invalid()
         || required("oauth_state", claims.oauth_state.clone()).is_invalid()

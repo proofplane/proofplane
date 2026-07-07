@@ -26,10 +26,14 @@ use crate::{
         request_context::RequestId,
     },
     services::{
+        attachment_downloads::DownloadGrantIssuer,
         attachment_downloads::{AttachmentDownloadService, DownloadError},
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
         evidence_submissions::EvidenceSubmissionService,
-        upload_sessions::{UploadSessionError, UploadSessionTokenService, VerifiedUploadSession},
+        upload_sessions::{
+            UploadSessionError, UploadSessionIssuer, UploadSessionTokenService,
+            VerifiedUploadSession,
+        },
     },
 };
 
@@ -142,7 +146,7 @@ async fn upload_file(
         .submissions
         .create_attachment(&token, request_id.0, session.submission_id, payload)
         .await?;
-    emit_upload_audit(&token, request_id.0, session.submission_id, &attachment);
+    emit_upload_audit(&session, request_id.0, &attachment);
 
     let mut response = StatusCode::SEE_OTHER.into_response();
     response.headers_mut().insert(
@@ -163,23 +167,30 @@ async fn download_file(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
-    let token = session.api_token_context();
     let grant = state
         .downloads
-        .issue(&token, session.submission_id, attachment_id.into())
+        .issue_for_issuer(
+            session.workspace_id,
+            session.issued_by_user_id,
+            match session.issued_via {
+                UploadSessionIssuer::ApiToken(id) => DownloadGrantIssuer::ApiToken(id),
+                UploadSessionIssuer::AgentConnection(id) => {
+                    DownloadGrantIssuer::AgentConnection(id)
+                }
+            },
+            session.submission_id,
+            attachment_id.into(),
+        )
         .await
         .map_err(upload_session_download_error)?;
     AuditEvent::new(
         "evidence_attachment_download_grant.issued",
         AuditOutcome::Success,
-        AuditActor::ApiToken {
-            user_id: token.user_id.into(),
-            api_token_id: token.api_token_id.into(),
-        },
+        session_audit_actor(&session),
         AuditClientType::Rest,
         "issue_attachment_download_grant_via_upload_session",
     )
-    .workspace_id(token.workspace_id.into())
+    .workspace_id(session.workspace_id.into())
     .request_id(request_id.0)
     .metadata(
         "evidence_submission_id",
@@ -267,7 +278,14 @@ async fn redeem_grant(
             grant.workspace_id,
             grant.submission_id,
             grant.issued_by_user_id,
-            grant.issued_via_api_token_id,
+            match grant.issued_via {
+                crate::services::attachment_upload_grants::UploadGrantIssuer::ApiToken(id) => {
+                    UploadSessionIssuer::ApiToken(id)
+                }
+                crate::services::attachment_upload_grants::UploadGrantIssuer::AgentConnection(
+                    id,
+                ) => UploadSessionIssuer::AgentConnection(id),
+            },
             grant.expires_at,
         )
         .map_err(upload_session_error)?;
@@ -322,24 +340,20 @@ fn verify_session(
 }
 
 fn emit_upload_audit(
-    token: &ApiTokenContext,
+    session: &VerifiedUploadSession,
     request_id: Uuid,
-    submission_id: EvidenceSubmissionId,
     attachment: &EvidenceAttachment,
 ) {
     AuditEvent::new(
         "evidence_attachment.accepted",
         AuditOutcome::Success,
-        AuditActor::ApiToken {
-            user_id: token.user_id.into(),
-            api_token_id: token.api_token_id.into(),
-        },
+        session_audit_actor(session),
         AuditClientType::Rest,
         "upload_evidence_attachment_via_upload_session",
     )
-    .workspace_id(token.workspace_id.into())
+    .workspace_id(session.workspace_id.into())
     .request_id(request_id)
-    .metadata("evidence_submission_id", Uuid::from(submission_id))
+    .metadata("evidence_submission_id", Uuid::from(session.submission_id))
     .metadata("evidence_attachment_id", Uuid::from(attachment.id))
     .metadata("lifecycle_status", attachment.upload_status.as_str())
     .object(AuditObject::new(
@@ -347,6 +361,19 @@ fn emit_upload_audit(
         attachment.id.into(),
     ))
     .emit();
+}
+
+fn session_audit_actor(session: &VerifiedUploadSession) -> AuditActor {
+    match session.issued_via {
+        UploadSessionIssuer::ApiToken(api_token_id) => AuditActor::ApiToken {
+            user_id: session.issued_by_user_id.into(),
+            api_token_id: api_token_id.into(),
+        },
+        UploadSessionIssuer::AgentConnection(agent_connection_id) => AuditActor::AgentConnection {
+            user_id: session.issued_by_user_id.into(),
+            agent_connection_id: agent_connection_id.into(),
+        },
+    }
 }
 
 fn render_upload_page(

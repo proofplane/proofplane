@@ -18,7 +18,7 @@ use crate::{
         EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus,
         WorkspacePermission,
     },
-    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     validate,
     validation::Validation,
 };
@@ -47,10 +47,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "evidence_request.created",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "create_evidence_request",
         )

@@ -157,6 +157,13 @@ async fn continuation_is_single_use_and_requires_membership_and_pending_state() 
         .expect("continuation consumption succeeds")
         .expect("continuation is valid");
     assert_eq!(consumed.id, pending.id);
+    assert_eq!(consumed.status, AgentConnectionStatus::Authorized);
+    assert!(app
+        .postgres()
+        .find_reusable_agent_connection(SUBJECT, CLIENT_ID, RESOURCE)
+        .await
+        .expect("authorized lookup succeeds")
+        .is_some());
     assert!(app
         .postgres()
         .consume_agent_connection_continuation(digest_secret("continue"), digest_secret("nonce"),)
@@ -370,6 +377,17 @@ INSERT INTO api_token_permissions (api_token_id, permission)
 VALUES ($1, 'delete_everything')
 "#,
             &[&app.api_token_id()],
+        )
+        .await
+        .is_err());
+    assert!(client
+        .execute(
+            r#"
+UPDATE agent_connections
+SET status = 'authorized', activated_at = now()
+WHERE id = $1
+"#,
+            &[&Uuid::from(pending.id)],
         )
         .await
         .is_err());

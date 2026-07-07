@@ -1,21 +1,31 @@
 use super::auth::McpPrincipal;
+use crate::services::agent_connections::AgentConnectionContext;
 use crate::{
     authentication::ApiTokenContext,
-    domain::{WorkspaceId, WorkspacePermission},
+    domain::{AgentConnectionId, ApiTokenId, WorkspaceId, WorkspacePermission},
+    observability::audit::AuditActor,
     routes::request_context::RequestId,
 };
 use serde_json::json;
+use uuid::Uuid;
 
 #[cfg(test)]
-use crate::domain::{ApiTokenId, UserId, WorkspacePermissions};
+use crate::domain::{UserId, WorkspacePermissions};
 
 pub const SESSION_ID_HEADER: &str = "mcp-session-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpRequestContext {
     pub token: ApiTokenContext,
+    actor: McpRequestActor,
     pub request_id: RequestId,
     pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpRequestActor {
+    ApiToken,
+    AgentConnection { connection_id: AgentConnectionId },
 }
 
 impl McpRequestContext {
@@ -24,7 +34,7 @@ impl McpRequestContext {
         headers: &http::HeaderMap,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = api_token_principal(extensions)?;
+        let (token, actor) = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
@@ -36,6 +46,7 @@ impl McpRequestContext {
 
         Ok(Self {
             token,
+            actor,
             request_id,
             session_id: headers
                 .get(SESSION_ID_HEADER)
@@ -50,7 +61,7 @@ impl McpRequestContext {
         workspace_id: WorkspaceId,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = api_token_principal(extensions)?;
+        let (token, actor) = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
@@ -62,6 +73,7 @@ impl McpRequestContext {
 
         Ok(Self {
             token,
+            actor,
             request_id,
             session_id: headers
                 .get(SESSION_ID_HEADER)
@@ -69,11 +81,56 @@ impl McpRequestContext {
                 .map(str::to_owned),
         })
     }
+
+    pub fn audit_actor(&self) -> AuditActor {
+        match self.actor {
+            McpRequestActor::ApiToken => AuditActor::ApiToken {
+                user_id: self.token.user_id.into(),
+                api_token_id: self.token.api_token_id.into(),
+            },
+            McpRequestActor::AgentConnection { connection_id } => AuditActor::AgentConnection {
+                user_id: self.token.user_id.into(),
+                agent_connection_id: connection_id.into(),
+            },
+        }
+    }
+
+    pub fn require_api_token_actor(&self) -> Result<(), rmcp::ErrorData> {
+        match self.actor {
+            McpRequestActor::ApiToken => Ok(()),
+            McpRequestActor::AgentConnection { .. } => Err(not_found()),
+        }
+    }
+
+    pub fn agent_connection_context(&self) -> Option<AgentConnectionContext> {
+        match self.actor {
+            McpRequestActor::ApiToken => None,
+            McpRequestActor::AgentConnection { connection_id } => Some(AgentConnectionContext {
+                user_id: self.token.user_id,
+                connection_id,
+                workspace_id: self.token.workspace_id,
+                permissions: self.token.permissions,
+            }),
+        }
+    }
 }
 
-fn api_token_principal(extensions: &http::Extensions) -> Result<ApiTokenContext, rmcp::ErrorData> {
+fn workspace_principal(
+    extensions: &http::Extensions,
+) -> Result<(ApiTokenContext, McpRequestActor), rmcp::ErrorData> {
     match extensions.get::<McpPrincipal>() {
-        Some(McpPrincipal::ApiToken(token)) => Ok(*token),
+        Some(McpPrincipal::ApiToken(token)) => Ok((*token, McpRequestActor::ApiToken)),
+        Some(McpPrincipal::AgentConnection(connection)) => Ok((
+            ApiTokenContext {
+                user_id: connection.user_id,
+                api_token_id: ApiTokenId::from(Uuid::from(connection.connection_id)),
+                workspace_id: connection.workspace_id,
+                permissions: connection.permissions,
+            },
+            McpRequestActor::AgentConnection {
+                connection_id: connection.connection_id,
+            },
+        )),
         Some(McpPrincipal::Auth0(_)) => Err(not_found()),
         None => Err(internal_context_error()),
     }

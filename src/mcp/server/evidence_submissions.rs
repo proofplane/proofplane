@@ -16,9 +16,9 @@ use crate::{
     domain::{
         optional_text, required_text, CreateEvidenceSubmissionPayload, DomainError,
         EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, WorkspaceId, WorkspacePermission,
+        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId, WorkspacePermission,
     },
-    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     validate,
     validation::Validation,
 };
@@ -40,20 +40,22 @@ impl ProofplaneMcp {
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
         let workspace_id = context.token.workspace_id;
-        let submission = self
-            .evidence_submissions
-            .create(context.token, evidence_request_id, payload)
-            .await
-            .map_err(service_error)?
-            .ok_or_else(not_found)?;
+        let submission = if let Some(connection) = context.agent_connection_context() {
+            self.evidence_submissions
+                .create_for_agent(connection, evidence_request_id, payload)
+                .await
+        } else {
+            self.evidence_submissions
+                .create(context.token, evidence_request_id, payload)
+                .await
+        }
+        .map_err(service_error)?
+        .ok_or_else(not_found)?;
 
         AuditEvent::new(
             "evidence_submission.created",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "create_evidence_submission",
         )
@@ -225,10 +227,7 @@ impl EvidenceSubmissionResponseDTO {
         Self {
             id: submission.id.to_string(),
             evidence_request_id: submission.evidence_request_id.to_string(),
-            submitted_by: EvidenceSubmitterResponseDTO {
-                api_token_id: submission.submitted_by.api_token_id.to_string(),
-                user_id: submission.submitted_by.user_id.to_string(),
-            },
+            submitted_by: EvidenceSubmitterResponseDTO::from(submission.submitted_by),
             received_at: direct.then_some(format_datetime(submission.received_at)),
             coverage_start_at: format_datetime(submission.coverage_start_at),
             coverage_end_at: format_datetime(submission.coverage_end_at),
@@ -242,8 +241,21 @@ impl EvidenceSubmissionResponseDTO {
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct EvidenceSubmitterResponseDTO {
-    api_token_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_token_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_connection_id: Option<String>,
     user_id: String,
+}
+
+impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
+    fn from(submitter: EvidenceSubmitter) -> Self {
+        Self {
+            api_token_id: submitter.api_token_id().map(|id| id.to_string()),
+            agent_connection_id: submitter.agent_connection_id().map(|id| id.to_string()),
+            user_id: submitter.user_id().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -8,7 +8,7 @@ use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
         NewPendingAgentConnection, Sha256Digest, User, UserId, WorkspaceId, WorkspacePermission,
-        WorkspaceWithRole,
+        WorkspacePermissions, WorkspaceWithRole,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -63,6 +63,16 @@ pub struct FindReusableConnectionPayload {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuthorizeMcpConnectionPayload {
+    pub connection_id: AgentConnectionId,
+    pub workspace_id: WorkspaceId,
+    pub auth0_subject: String,
+    pub auth0_client_id: String,
+    pub resource: String,
+    pub permissions: Vec<WorkspacePermission>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConsumeContinuationPayload {
     pub continuation_token: String,
     pub nonce: String,
@@ -92,6 +102,14 @@ pub enum ActivationOutcome {
 pub struct ConsentContext {
     pub user: User,
     pub workspaces: Vec<WorkspaceWithRole>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentConnectionContext {
+    pub user_id: UserId,
+    pub connection_id: AgentConnectionId,
+    pub workspace_id: WorkspaceId,
+    pub permissions: WorkspacePermissions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +223,38 @@ impl AgentConnectionService {
             )
             .await?;
         Ok(connection.filter(|connection| connection.permissions == payload.permissions))
+    }
+
+    pub async fn authorize_mcp_connection(
+        &self,
+        payload: AuthorizeMcpConnectionPayload,
+    ) -> Result<Option<AgentConnectionContext>, AgentConnectionError> {
+        let permission_strings = payload
+            .permissions
+            .iter()
+            .map(|permission| permission.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let Some(connection) = self
+            .repository
+            .authorize_agent_connection(
+                payload.connection_id,
+                payload.workspace_id,
+                &payload.auth0_subject,
+                &payload.auth0_client_id,
+                &payload.resource,
+                &permission_strings,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(AgentConnectionContext {
+            user_id: connection.user_id,
+            connection_id: connection.id,
+            workspace_id: connection.workspace_id,
+            permissions: WorkspacePermissions::from_iter(connection.permissions),
+        }))
     }
 
     pub async fn activate(

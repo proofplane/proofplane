@@ -13,6 +13,22 @@ const KNOWN_SCOPES = [
   "read_controls",
   "write_controls",
 ];
+const IGNORED_OIDC_SCOPES = new Set([
+  "openid",
+  "profile",
+  "offline_access",
+  "name",
+  "given_name",
+  "family_name",
+  "nickname",
+  "email",
+  "email_verified",
+  "picture",
+  "created_at",
+  "identities",
+  "phone",
+  "address",
+]);
 
 exports.onExecutePostLogin = async (event, api) => {
   const config = readConfig(event);
@@ -34,6 +50,7 @@ exports.onExecutePostLogin = async (event, api) => {
 
     if (resolution.outcome === "reusable") {
       requireExactScopes(resolution.scopes, transaction.scopes);
+      normalizeAccessTokenScopes(api, transaction);
       setClaims(api, resolution.connection_id, resolution.workspace_id);
       return;
     }
@@ -102,6 +119,7 @@ exports.onContinuePostLogin = async (event, api) => {
       throw new Error("continuation mismatch");
     }
     requireExactScopes(consumed.scopes, transaction.scopes);
+    normalizeAccessTokenScopes(api, transaction);
     setClaims(api, consumed.connection_id, consumed.workspace_id);
   } catch (_error) {
     api.access.deny("access_denied");
@@ -115,27 +133,18 @@ function readConfig(event) {
   );
   const resource = required(event.secrets.PROOFPLANE_MCP_RESOURCE);
   const sharedSecret = required(event.secrets.PROOFPLANE_ACTION_SHARED_SECRET);
-  const allowedClients = new Set(
-    required(event.secrets.PROOFPLANE_ALLOWED_CLIENT_IDS)
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
-  );
   return {
     apiBaseUrl,
     consentUrl: `${apiBaseUrl}/agent-connections/consent`,
     resource,
     sharedSecret,
-    allowedClients,
   };
 }
 
 function activeTransaction(event, config) {
   const clientId = required(event.client && event.client.client_id);
-  if (!config.allowedClients.has(clientId)) throw new Error("client rejected");
-  const scopes = canonicalScopes(
-    (event.transaction && event.transaction.requested_scopes) || [],
-  );
+  const requestedScopes = (event.transaction && event.transaction.requested_scopes) || [];
+  const scopes = requestedMcpScopes(requestedScopes);
   return {
     sub: required(event.user && event.user.user_id),
     clientId,
@@ -144,6 +153,7 @@ function activeTransaction(event, config) {
     ),
     resource: config.resource,
     scopes,
+    requestedScopes,
     transactionId: required(event.transaction && event.transaction.id),
     oauthState: required(event.transaction && event.transaction.state),
     issuer: `https://${required(event.request && event.request.hostname)}/`,
@@ -189,6 +199,24 @@ function canonicalScopes(scopes) {
   return KNOWN_SCOPES.filter((scope) => unique.has(scope));
 }
 
+function requestedMcpScopes(scopes) {
+  if (!Array.isArray(scopes) || scopes.length === 0) {
+    throw new Error("missing scopes");
+  }
+  const unique = new Set(scopes);
+  if (unique.size !== scopes.length) {
+    throw new Error("invalid scopes");
+  }
+  const unknown = scopes.filter(
+    (scope) => !KNOWN_SCOPES.includes(scope) && !IGNORED_OIDC_SCOPES.has(scope),
+  );
+  if (unknown.length > 0) {
+    throw new Error("invalid scopes");
+  }
+  const requested = KNOWN_SCOPES.filter((scope) => unique.has(scope));
+  return requested.length > 0 ? requested : KNOWN_SCOPES.slice();
+}
+
 function requireExactScopes(actual, expected) {
   const canonicalActual = canonicalScopes(actual);
   if (
@@ -196,6 +224,17 @@ function requireExactScopes(actual, expected) {
     canonicalActual.some((scope, index) => scope !== expected[index])
   ) {
     throw new Error("scope mismatch");
+  }
+}
+
+function normalizeAccessTokenScopes(api, transaction) {
+  for (const scope of transaction.requestedScopes) {
+    if (!transaction.scopes.includes(scope)) {
+      api.accessToken.removeScope(scope);
+    }
+  }
+  for (const scope of transaction.scopes) {
+    api.accessToken.addScope(scope);
   }
 }
 

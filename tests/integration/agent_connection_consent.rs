@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::http::{header, StatusCode};
 use axum_test::TestServer;
@@ -105,6 +102,28 @@ async fn page_escapes_content_and_approval_creates_single_use_continuation() {
 }
 
 #[tokio::test]
+async fn approval_accepts_new_dynamic_client_id() {
+    let (app, workspace_id) = fixture("Workspace").await;
+    let codec = Arc::new(make_codec());
+    let server = consent_server(&app, codec.clone(), codec.clone());
+    let mut claims = transaction_claims("Dynamic Client");
+    claims.client_id = "dynamic-client".to_owned();
+    let token = codec.sign_transaction(claims).unwrap();
+
+    post_form(
+        &server,
+        &token,
+        "auth0-state",
+        "approve",
+        Some(&workspace_id.to_string()),
+    )
+    .await
+    .assert_status(StatusCode::SEE_OTHER);
+
+    assert_eq!(pending_client_ids(&app).await, vec!["dynamic-client"]);
+}
+
+#[tokio::test]
 async fn denial_and_invalid_browser_requests_create_no_pending_record() {
     let (app, workspace_id) = fixture("Workspace").await;
     let codec = Arc::new(make_codec());
@@ -159,7 +178,7 @@ async fn denial_and_invalid_browser_requests_create_no_pending_record() {
 }
 
 #[tokio::test]
-async fn expired_wrong_client_resource_subject_and_scopes_are_unavailable() {
+async fn expired_blank_client_wrong_resource_subject_and_scopes_are_unavailable() {
     let (app, _) = fixture("Workspace").await;
     let codec = Arc::new(make_codec());
     let server = consent_server(&app, codec.clone(), codec.clone());
@@ -171,9 +190,9 @@ async fn expired_wrong_client_resource_subject_and_scopes_are_unavailable() {
     expired.exp = now - 1;
     cases.push(expired);
 
-    let mut wrong_client = transaction_claims("Client");
-    wrong_client.client_id = "other-client".to_owned();
-    cases.push(wrong_client);
+    let mut blank_client = transaction_claims("Client");
+    blank_client.client_id = " \t ".to_owned();
+    cases.push(blank_client);
 
     let mut wrong_resource = transaction_claims("Client");
     wrong_resource.resource = "https://other.example/mcp".to_owned();
@@ -272,7 +291,6 @@ where
             token_codec: codec,
             result_signer: signer,
             resource: RESOURCE.to_owned(),
-            allowed_client_ids: HashSet::from([CLIENT_ID.to_owned()]),
             auth0_continue_url: Url::parse("https://tenant.auth0.com/continue").unwrap(),
         },
     ))
@@ -336,4 +354,20 @@ async fn pending_count(app: &TestApp) -> i64 {
         .await
         .unwrap()
         .get(0)
+}
+
+async fn pending_client_ids(app: &TestApp) -> Vec<String> {
+    app.postgres()
+        .get()
+        .await
+        .unwrap()
+        .query(
+            "SELECT auth0_client_id FROM agent_connections WHERE status = 'pending' ORDER BY auth0_client_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
 }

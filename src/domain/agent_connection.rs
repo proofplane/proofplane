@@ -8,6 +8,7 @@ uuid_id!(AgentAuthorizationTransactionId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentConnectionStatus {
     Pending,
+    Authorized,
     Active,
     Revoked,
 }
@@ -16,6 +17,7 @@ impl AgentConnectionStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Authorized => "authorized",
             Self::Active => "active",
             Self::Revoked => "revoked",
         }
@@ -28,6 +30,7 @@ impl std::str::FromStr for AgentConnectionStatus {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "pending" => Ok(Self::Pending),
+            "authorized" => Ok(Self::Authorized),
             "active" => Ok(Self::Active),
             "revoked" => Ok(Self::Revoked),
             _ => Err(()),

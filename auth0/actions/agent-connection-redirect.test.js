@@ -12,7 +12,6 @@ function event(overrides = {}) {
     secrets: {
       PROOFPLANE_API_BASE_URL: "https://api.proofplane.test",
       PROOFPLANE_MCP_RESOURCE: RESOURCE,
-      PROOFPLANE_ALLOWED_CLIENT_IDS: "allowed-client,second-client",
       PROOFPLANE_ACTION_SHARED_SECRET: "01234567890123456789012345678901",
     },
     resource_server: { identifier: RESOURCE },
@@ -32,12 +31,25 @@ function event(overrides = {}) {
 }
 
 function api(result = {}) {
-  const calls = { claims: [], redirects: [], denied: [], encoded: [] };
+  const calls = {
+    claims: [],
+    redirects: [],
+    denied: [],
+    encoded: [],
+    addedScopes: [],
+    removedScopes: [],
+  };
   return {
     calls,
     accessToken: {
       setCustomClaim(name, value) {
         calls.claims.push([name, value]);
+      },
+      addScope(scope) {
+        calls.addedScopes.push(scope);
+      },
+      removeScope(scope) {
+        calls.removedScopes.push(scope);
       },
     },
     access: {
@@ -76,7 +88,12 @@ test("ignores authorization for an unrelated resource", async () => {
     actionApi,
   );
   assert.deepEqual(actionApi.calls, {
-    claims: [], redirects: [], denied: [], encoded: [],
+    claims: [],
+    redirects: [],
+    denied: [],
+    encoded: [],
+    addedScopes: [],
+    removedScopes: [],
   });
 });
 
@@ -94,6 +111,67 @@ test("reusable connection injects both namespaced claims without redirect", asyn
     ["https://proofplane.com/connection_id", "connection"],
     ["https://proofplane.com/workspace_id", "workspace"],
   ]);
+  assert.deepEqual(actionApi.calls.addedScopes, SCOPES);
+  assert.deepEqual(actionApi.calls.removedScopes, []);
+  assert.equal(actionApi.calls.redirects.length, 0);
+});
+
+test("codex oidc scopes fall back to the mcp scope set and are removed from access token", async () => {
+  let requestBody;
+  global.fetch = async (_url, request) => {
+    requestBody = JSON.parse(request.body);
+    return response({
+      outcome: "reusable",
+      connection_id: "connection",
+      workspace_id: "workspace",
+      scopes: [
+        "read_evidence_requests",
+        "write_evidence_requests",
+        "read_evidence_submissions",
+        "write_evidence_submissions",
+        "read_controls",
+        "write_controls",
+      ],
+    });
+  };
+  const actionApi = api();
+
+  await action.onExecutePostLogin(
+    event({
+      client: { client_id: "dynamic-client", name: "Codex" },
+      transaction: {
+        id: "transaction",
+        state: "oauth-state",
+        requested_scopes: [
+          "openid",
+          "profile",
+          "offline_access",
+          "email",
+          "picture",
+        ],
+      },
+    }),
+    actionApi,
+  );
+
+  assert.deepEqual(requestBody.scopes, [
+    "read_evidence_requests",
+    "write_evidence_requests",
+    "read_evidence_submissions",
+    "write_evidence_submissions",
+    "read_controls",
+    "write_controls",
+  ]);
+  assert.deepEqual(actionApi.calls.addedScopes, requestBody.scopes);
+  assert.deepEqual(actionApi.calls.removedScopes, [
+    "openid",
+    "profile",
+    "offline_access",
+    "email",
+    "picture",
+  ]);
+  assert.equal(actionApi.calls.claims.length, 2);
+  assert.deepEqual(actionApi.calls.denied, []);
   assert.equal(actionApi.calls.redirects.length, 0);
 });
 
@@ -133,6 +211,8 @@ test("approved continuation is consumed and compared before claims are set", asy
   });
   await action.onContinuePostLogin(event(), actionApi);
   assert.equal(actionApi.calls.claims.length, 2);
+  assert.deepEqual(actionApi.calls.addedScopes, SCOPES);
+  assert.deepEqual(actionApi.calls.removedScopes, []);
   assert.deepEqual(actionApi.calls.denied, []);
 });
 

@@ -14,24 +14,24 @@ use axum_test::{TestRequest, TestServer};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use proofplane::services::oauth::OAuthService;
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
-        auth0::{
-            Auth0McpTokenVerifier, TokenVerifier, VerifiedClaims, VerifiedMcpClaims, VerifyError,
-        },
+        auth0::{TokenVerifier, VerifiedClaims, VerifiedMcpClaims, VerifyError},
         opaque_token::generate_opaque_token,
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor,
         },
         ApiTokenAuthenticator, UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0ActionConfig, Auth0Config, Auth0McpConfig, HealthConfig, LogFormat,
-        McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
-        PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
-        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        AppConfig, Auth0ActionConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
+        LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
+        PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         ApiTokenId, CreateApiTokenPayload, CreateWorkspacePayload, ProvisionUserPayload, UserId,
@@ -538,8 +538,24 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
     }
 
     fn mcp_app(&self) -> Router {
-        self.mcp_app_with_auth0_verifier(Arc::new(Auth0McpTokenVerifier::new(
-            &self.app_config.auth0,
+        let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            self.app_config.mcp.resource.to_string(),
+            &self.app_config.paseto.mcp_oauth,
+        )
+        .expect("MCP OAuth encryptor initializes");
+        let mcp_oauth_decryptor = McpOAuthDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            self.app_config.mcp.resource.to_string(),
+            &self.app_config.paseto.mcp_oauth,
+        )
+        .expect("MCP OAuth decryptor initializes");
+        self.mcp_app_with_auth0_verifier(Arc::new(OAuthService::new(
+            self.postgres.clone(),
+            self.app_config.server.public_api_base_url.clone(),
+            self.app_config.mcp.resource.clone(),
+            mcp_oauth_encryptor,
+            mcp_oauth_decryptor,
         )))
     }
 
@@ -577,9 +593,9 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             object_store: self.object_store.clone(),
             metrics: recorder.handle(),
             authenticator: Arc::new(ApiTokenAuthenticator::new(self.postgres.clone())),
-            auth0_verifier,
-            auth0_issuer: self.app_config.auth0.issuer.clone(),
-            auth0_mcp: self.app_config.auth0.mcp.clone(),
+            oauth_verifier: auth0_verifier,
+            authorization_server: self.app_config.server.public_api_base_url.clone(),
+            resource: self.app_config.mcp.resource.clone(),
             public_api_base_url: self.app_config.server.public_api_base_url.clone(),
             download_grant_encryptor,
             download_grant_decryptor,
@@ -1052,10 +1068,10 @@ fn config(
                 "https://proofplane-integration.us.auth0.com/.well-known/jwks.json",
             )
             .expect("auth0 jwks url parses"),
-            mcp: Auth0McpConfig {
-                resource: url::Url::parse("https://mcp.proofplane.test/mcp")
-                    .expect("MCP resource parses"),
-                allowed_client_ids: vec!["integration-mcp-client".to_owned()],
+            upstream_oauth: Auth0UpstreamOAuthConfig {
+                client_id: "integration-auth0-client".to_owned(),
+                client_secret: SecretString::from("integration-auth0-secret"),
+                callback_path: "/oauth/auth0/callback".to_owned(),
             },
             action: Auth0ActionConfig {
                 shared_secret: SecretString::from("integration-action-shared-secret-001"),
@@ -1080,6 +1096,15 @@ fn config(
                     ),
                 }],
             },
+            mcp_oauth: PasetoMcpOAuthConfig {
+                active_key_id: "integration-mcp-oauth-001".to_owned(),
+                keys: vec![PasetoMcpOAuthKey {
+                    id: "integration-mcp-oauth-001".to_owned(),
+                    secret: SecretString::from(
+                        "k4.local.BMyQa9GmLofWmmvtYCedLfePwmuJsMgNn96nW1PtMp0",
+                    ),
+                }],
+            },
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         scanner: ScannerConfig {
@@ -1101,6 +1126,8 @@ fn config(
         },
         mcp: McpConfig {
             shutdown_grace_seconds: 1,
+            resource: url::Url::parse("https://mcp.proofplane.test/mcp")
+                .expect("MCP resource parses"),
         },
         health: HealthConfig {
             live_path: "/livez".to_owned(),

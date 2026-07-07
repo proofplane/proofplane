@@ -5,6 +5,7 @@ mod error;
 mod evidence_request;
 mod evidence_submission;
 mod ids;
+mod oauth;
 mod permission;
 mod sha256_digest;
 mod user;
@@ -32,6 +33,10 @@ pub use evidence_submission::{
     AttachmentUploadGrantId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
     CreateEvidenceSubmissionPayload, EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmission,
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
+};
+pub use oauth::{
+    NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, NewOAuthClient,
+    OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient,
 };
 pub use permission::{WorkspacePermission, WorkspacePermissions};
 pub use sha256_digest::Sha256Digest;

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -11,8 +11,9 @@ use crate::{
         auth0::{TokenVerifier, VerifiedClaims},
         auth0_redirect_token::RedirectTokenCodec,
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
+            UploadSessionEncryptor,
         },
         ApiTokenAuthenticator, UserAuthenticator,
     },
@@ -32,6 +33,7 @@ use crate::{
         internal_agent_connections::{self, InternalAgentConnectionsState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
+        oauth::{self, OAuthState},
         request_context::attach_request_id,
         version,
         workspaces::{self, WorkspacesState},
@@ -44,6 +46,7 @@ use crate::{
         controls::ControlService,
         evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService,
+        oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
         workspaces::WorkspaceService,
@@ -130,6 +133,25 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let mcp_oauth_decryptor = McpOAuthDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let oauth_service = OAuthService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.clone(),
+        mcp_oauth_encryptor,
+        mcp_oauth_decryptor,
+    );
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let consent_url = dependencies
         .config
@@ -226,18 +248,17 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 service: agent_connection_service.clone(),
                 token_codec: consent_token_codec.clone(),
                 result_signer: consent_token_codec,
-                resource: dependencies.config.auth0.mcp.resource.to_string(),
-                allowed_client_ids: dependencies
-                    .config
-                    .auth0
-                    .mcp
-                    .allowed_client_ids
-                    .iter()
-                    .cloned()
-                    .collect::<HashSet<_>>(),
+                resource: dependencies.config.mcp.resource.to_string(),
                 auth0_continue_url,
             },
         ))
+        .merge(oauth::router(OAuthState {
+            service: oauth_service,
+            user_authenticator: dependencies.user_authenticator.clone(),
+            auth0: dependencies.config.auth0.clone(),
+            issuer: dependencies.config.server.public_api_base_url.clone(),
+            http: reqwest::Client::new(),
+        }))
         .merge(internal_agent_connections::router(
             InternalAgentConnectionsState {
                 service: agent_connection_service,

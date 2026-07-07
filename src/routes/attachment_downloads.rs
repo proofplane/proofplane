@@ -174,10 +174,10 @@ async fn redeem_download_grant(
     AuditEvent::new(
         "evidence_attachment_download_grant.redeemed",
         AuditOutcome::Success,
-        AuditActor::ApiToken {
-            user_id: downloaded.audit.issued_by_user_id.into(),
-            api_token_id: downloaded.audit.issued_via_api_token_id.into(),
-        },
+        download_audit_actor(
+            downloaded.audit.issued_by_user_id,
+            downloaded.audit.issued_via,
+        ),
         AuditClientType::Rest,
         "redeem_attachment_download_grant",
     )
@@ -222,6 +222,26 @@ async fn redeem_download_grant(
 
 fn content_disposition(filename: &str) -> String {
     format!("attachment; filename=\"{filename}\"")
+}
+
+fn download_audit_actor(
+    user_id: crate::domain::UserId,
+    issued_via: crate::services::attachment_downloads::DownloadGrantIssuer,
+) -> AuditActor {
+    match issued_via {
+        crate::services::attachment_downloads::DownloadGrantIssuer::ApiToken(api_token_id) => {
+            AuditActor::ApiToken {
+                user_id: user_id.into(),
+                api_token_id: api_token_id.into(),
+            }
+        }
+        crate::services::attachment_downloads::DownloadGrantIssuer::AgentConnection(
+            agent_connection_id,
+        ) => AuditActor::AgentConnection {
+            user_id: user_id.into(),
+            agent_connection_id: agent_connection_id.into(),
+        },
+    }
 }
 
 fn download_error(error: DownloadError) -> ApiError {

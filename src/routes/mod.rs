@@ -11,6 +11,7 @@ pub mod health;
 pub mod internal_agent_connections;
 pub mod me;
 pub mod metrics;
+pub mod oauth;
 pub mod protected_resource_metadata;
 pub mod request_context;
 pub mod version;

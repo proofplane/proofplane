@@ -4,16 +4,17 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::{
-        auth0::Auth0McpTokenVerifier,
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor,
         },
         ApiTokenAuthenticator,
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage, observability, repository, store,
+    object_storage, observability, repository,
+    services::oauth::OAuthService,
+    store,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -89,6 +90,23 @@ async fn run() -> Result<(), Error> {
         "proofplane-attachment-upload-grant",
         &config.paseto.upload_grant,
     )?;
+    let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        config.mcp.resource.to_string(),
+        &config.paseto.mcp_oauth,
+    )?;
+    let mcp_oauth_decryptor = McpOAuthDecryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        config.mcp.resource.to_string(),
+        &config.paseto.mcp_oauth,
+    )?;
+    let oauth_service = OAuthService::new(
+        postgres.clone(),
+        config.server.public_api_base_url.clone(),
+        config.mcp.resource.clone(),
+        mcp_oauth_encryptor,
+        mcp_oauth_decryptor,
+    );
     let metrics = PrometheusBuilder::new().install_recorder()?;
     let authenticator = Arc::new(ApiTokenAuthenticator::new(postgres.clone()));
     let sessions = CancellationToken::new();
@@ -97,9 +115,9 @@ async fn run() -> Result<(), Error> {
         object_store,
         metrics,
         authenticator,
-        auth0_verifier: Arc::new(Auth0McpTokenVerifier::new(&config.auth0)),
-        auth0_issuer: config.auth0.issuer.clone(),
-        auth0_mcp: config.auth0.mcp.clone(),
+        oauth_verifier: Arc::new(oauth_service),
+        authorization_server: config.server.public_api_base_url.clone(),
+        resource: config.mcp.resource.clone(),
         public_api_base_url: config.server.public_api_base_url.clone(),
         download_grant_encryptor,
         download_grant_decryptor,
@@ -117,10 +135,10 @@ async fn run() -> Result<(), Error> {
         listener,
         app,
         async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to listen for ctrl-c");
-            info!("received shutdown signal");
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => info!("received shutdown signal"),
+                Err(error) => error!(%error, "failed to listen for ctrl-c"),
+            }
         },
         Duration::from_secs(config.mcp.shutdown_grace_seconds),
         sessions,
