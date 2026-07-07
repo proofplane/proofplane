@@ -341,7 +341,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "read_evidence_submissions",
             "write_evidence_submissions",
             "read_controls",
-            "write_controls"
+            "write_controls",
+            "manage_auditor_access"
         ]
     }));
 
@@ -2034,7 +2035,7 @@ fn assert_unauthorized(response: &axum_test::TestResponse) {
     response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.header(header::WWW_AUTHENTICATE),
-        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls\""
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls manage_auditor_access\""
     );
 }
 
