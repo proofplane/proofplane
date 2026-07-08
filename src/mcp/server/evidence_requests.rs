@@ -37,10 +37,10 @@ impl ProofplaneMcp {
     ) -> Result<Json<GetEvidenceRequestResponse>, rmcp::ErrorData> {
         let payload = parse_create_evidence_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceRequests)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let request = self
             .evidence_requests
-            .create(context.token, payload)
+            .create(context.agent_connection_context(), payload)
             .await
             .map_err(service_error)?;
 
@@ -73,7 +73,7 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let requests = self
             .evidence_requests
-            .list_by_workspace(context.token)
+            .list_by_workspace(context.agent_connection_context())
             .await
             .map_err(service_error)?;
 
@@ -95,7 +95,7 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let request = self
             .evidence_requests
-            .get(context.token, evidence_request_id)
+            .get(context.agent_connection_context(), evidence_request_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -118,7 +118,10 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceRequests)?;
         let requests = self
             .evidence_requests
-            .list_due(context.token, now.unwrap_or_else(Utc::now))
+            .list_due(
+                context.agent_connection_context(),
+                now.unwrap_or_else(Utc::now),
+            )
             .await
             .map_err(service_error)?;
 

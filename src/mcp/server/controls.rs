@@ -83,7 +83,7 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let controls = self
             .controls
-            .list_controls(context.token)
+            .list_controls(context.agent_connection_context())
             .await
             .map_err(service_error)?;
 
@@ -102,7 +102,7 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let control = self
             .controls
-            .get_control(context.token, control_id)
+            .get_control(context.agent_connection_context(), control_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -121,10 +121,10 @@ impl ProofplaneMcp {
     ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
         let payload = parse_create_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let control = self
             .controls
-            .create_control(context.token, payload)
+            .create_control(context.agent_connection_context(), payload)
             .await
             .map_err(control_mutation_error)?;
 
@@ -155,10 +155,10 @@ impl ProofplaneMcp {
     ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
         let (control_id, payload) = parse_replace_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let control = self
             .controls
-            .replace_control(context.token, control_id, payload)
+            .replace_control(context.agent_connection_context(), control_id, payload)
             .await
             .map_err(control_mutation_error)?
             .ok_or_else(not_found)?;
@@ -192,7 +192,10 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let mappings = self
             .controls
-            .list_evidence_request_control_mappings(context.token, evidence_request_id)
+            .list_evidence_request_control_mappings(
+                context.agent_connection_context(),
+                evidence_request_id,
+            )
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -213,10 +216,10 @@ impl ProofplaneMcp {
     ) -> Result<Json<EvidenceRequestControlMappingResponseDTO>, rmcp::ErrorData> {
         let payload = parse_map_evidence_request_to_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let mapping = self
             .controls
-            .create_evidence_request_control_mapping(context.token, payload)
+            .create_evidence_request_control_mapping(context.agent_connection_context(), payload)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -256,10 +259,14 @@ impl ProofplaneMcp {
         let (evidence_request_id, control_id) =
             parse_remove_evidence_request_control_mapping_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let deleted = self
             .controls
-            .delete_evidence_request_control_mapping(context.token, evidence_request_id, control_id)
+            .delete_evidence_request_control_mapping(
+                context.agent_connection_context(),
+                evidence_request_id,
+                control_id,
+            )
             .await
             .map_err(service_error)?;
 

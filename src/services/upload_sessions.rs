@@ -9,11 +9,9 @@ use crate::{
         paseto::{
             RegisteredClaims, UploadSessionDecryptor, UploadSessionEncryptor, VerifiedPasetoToken,
         },
-        ApiTokenContext,
     },
     domain::{
-        AgentConnectionId, ApiTokenId, EvidenceSubmissionId, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions,
+        AgentConnectionId, EvidenceSubmissionId, UserId, WorkspaceId,
     },
 };
 
@@ -27,6 +25,7 @@ struct UploadSessionClaims {
     workspace_id: String,
     submission_id: String,
     issued_by_user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issued_via_api_token_id: Option<String>,
     issued_via_agent_connection_id: Option<String>,
 }
@@ -42,22 +41,13 @@ pub struct VerifiedUploadSession {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadSessionIssuer {
-    ApiToken(ApiTokenId),
     AgentConnection(AgentConnectionId),
 }
 
 impl UploadSessionIssuer {
-    pub fn api_token_id(self) -> Option<ApiTokenId> {
+    pub fn agent_connection_id(self) -> AgentConnectionId {
         match self {
-            Self::ApiToken(id) => Some(id),
-            Self::AgentConnection(_) => None,
-        }
-    }
-
-    pub fn agent_connection_id(self) -> Option<AgentConnectionId> {
-        match self {
-            Self::ApiToken(_) => None,
-            Self::AgentConnection(id) => Some(id),
+            Self::AgentConnection(id) => id,
         }
     }
 }
@@ -74,25 +64,6 @@ impl UploadSessionTokenService {
             encryptor,
             decryptor,
         }
-    }
-
-    pub fn issue(
-        &self,
-        workspace_id: WorkspaceId,
-        submission_id: EvidenceSubmissionId,
-        issued_by_user_id: UserId,
-        issued_via_api_token_id: ApiTokenId,
-    ) -> Result<String, UploadSessionError> {
-        let expires_at = Utc::now()
-            + chrono::Duration::from_std(UPLOAD_SESSION_TTL)
-                .map_err(|_| UploadSessionError::Internal)?;
-        self.issue_until(
-            workspace_id,
-            submission_id,
-            issued_by_user_id,
-            UploadSessionIssuer::ApiToken(issued_via_api_token_id),
-            expires_at,
-        )
     }
 
     pub fn issue_until(
@@ -116,10 +87,10 @@ impl UploadSessionTokenService {
                     workspace_id: workspace_id.to_string(),
                     submission_id: submission_id.to_string(),
                     issued_by_user_id: issued_by_user_id.to_string(),
-                    issued_via_api_token_id: issued_via.api_token_id().map(|id| id.to_string()),
-                    issued_via_agent_connection_id: issued_via
-                        .agent_connection_id()
-                        .map(|id| id.to_string()),
+                    issued_via_api_token_id: None,
+                    issued_via_agent_connection_id: Some(
+                        issued_via.agent_connection_id().to_string(),
+                    ),
                 },
             )
             .map_err(|_| UploadSessionError::Internal)?;
@@ -133,20 +104,6 @@ impl UploadSessionTokenService {
             .decrypt::<UploadSessionClaims>(token)
             .map_err(|_| UploadSessionError::Unavailable)?;
         VerifiedUploadSession::try_from(verified).map_err(|_| UploadSessionError::Unavailable)
-    }
-}
-
-impl VerifiedUploadSession {
-    pub fn api_token_context(self) -> ApiTokenContext {
-        ApiTokenContext {
-            user_id: self.issued_by_user_id,
-            api_token_id: match self.issued_via {
-                UploadSessionIssuer::ApiToken(id) => id,
-                UploadSessionIssuer::AgentConnection(id) => ApiTokenId::from(Uuid::from(id)),
-            },
-            workspace_id: self.workspace_id,
-            permissions: WorkspacePermissions::from_iter(WorkspacePermission::ALL),
-        }
     }
 }
 
@@ -187,9 +144,6 @@ fn upload_session_issuer_from_claims(
     agent_connection_id: Option<&str>,
 ) -> Result<UploadSessionIssuer, InvalidUploadSessionClaims> {
     match (api_token_id, agent_connection_id) {
-        (Some(id), None) => Ok(UploadSessionIssuer::ApiToken(ApiTokenId::from(parse_uuid(
-            id,
-        )?))),
         (None, Some(id)) => Ok(UploadSessionIssuer::AgentConnection(
             AgentConnectionId::from(parse_uuid(id)?),
         )),
@@ -255,10 +209,16 @@ mod tests {
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
         let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
         let user_id = UserId::from(Uuid::new_v4());
-        let api_token_id = ApiTokenId::from(Uuid::new_v4());
+        let agent_connection_id = AgentConnectionId::from(Uuid::new_v4());
 
         let token = service
-            .issue(workspace_id, submission_id, user_id, api_token_id)
+            .issue_until(
+                workspace_id,
+                submission_id,
+                user_id,
+                UploadSessionIssuer::AgentConnection(agent_connection_id),
+                Utc::now() + chrono::Duration::minutes(15),
+            )
             .unwrap();
         let session = service.verify(&token).unwrap();
 
@@ -267,7 +227,7 @@ mod tests {
         assert_eq!(session.issued_by_user_id, user_id);
         assert_eq!(
             session.issued_via,
-            UploadSessionIssuer::ApiToken(api_token_id)
+            UploadSessionIssuer::AgentConnection(agent_connection_id)
         );
         assert!(session.expires_at > Utc::now());
     }
@@ -276,11 +236,12 @@ mod tests {
     fn upload_session_rejects_wrong_audience_and_implicit_assertion() {
         let config = config();
         let token = service()
-            .issue(
+            .issue_until(
                 WorkspaceId::from(Uuid::new_v4()),
                 EvidenceSubmissionId::from(Uuid::new_v4()),
                 UserId::from(Uuid::new_v4()),
-                ApiTokenId::from(Uuid::new_v4()),
+                UploadSessionIssuer::AgentConnection(AgentConnectionId::from(Uuid::new_v4())),
+                Utc::now() + chrono::Duration::minutes(15),
             )
             .unwrap();
 
@@ -304,8 +265,8 @@ mod tests {
                         workspace_id: Uuid::new_v4().to_string(),
                         submission_id: Uuid::new_v4().to_string(),
                         issued_by_user_id: Uuid::new_v4().to_string(),
-                        issued_via_api_token_id: Some(Uuid::new_v4().to_string()),
-                        issued_via_agent_connection_id: None,
+                        issued_via_api_token_id: None,
+                        issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
                     },
                 )
                 .unwrap();
@@ -320,8 +281,8 @@ mod tests {
             workspace_id: Uuid::new_v4().to_string(),
             submission_id: Uuid::new_v4().to_string(),
             issued_by_user_id: subject.to_string(),
-            issued_via_api_token_id: Some(Uuid::new_v4().to_string()),
-            issued_via_agent_connection_id: None,
+            issued_via_api_token_id: None,
+            issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
         };
 
         let mut wrong_version = valid.clone();
@@ -333,7 +294,7 @@ mod tests {
             |claims: &mut UploadSessionClaims| claims.submission_id = "bad".to_owned(),
             |claims: &mut UploadSessionClaims| claims.issued_by_user_id = "bad".to_owned(),
             |claims: &mut UploadSessionClaims| {
-                claims.issued_via_api_token_id = Some("bad".to_owned())
+                claims.issued_via_agent_connection_id = Some("bad".to_owned())
             },
         ] {
             let mut claims = valid.clone();
@@ -360,8 +321,8 @@ mod tests {
                     workspace_id: Uuid::new_v4().to_string(),
                     submission_id: Uuid::new_v4().to_string(),
                     issued_by_user_id: Uuid::new_v4().to_string(),
-                    issued_via_api_token_id: Some(Uuid::new_v4().to_string()),
-                    issued_via_agent_connection_id: None,
+                    issued_via_api_token_id: None,
+                    issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
                 },
             )
             .unwrap()

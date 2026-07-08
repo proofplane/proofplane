@@ -34,17 +34,12 @@ impl ProofplaneMcp {
         let submission_id = parse_attachment_grant_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
-        let workspace_id = context.token.workspace_id;
-        let grant = if let Some(connection) = context.agent_connection_context() {
-            self.attachment_upload_grants
-                .issue_for_agent(&connection, submission_id)
-                .await
-        } else {
-            self.attachment_upload_grants
-                .issue(&context.token, submission_id)
-                .await
-        }
-        .map_err(upload_grant_error)?;
+        let workspace_id = context.connection.workspace_id;
+        let grant = self
+            .attachment_upload_grants
+            .issue(&context.agent_connection_context(), submission_id)
+            .await
+            .map_err(upload_grant_error)?;
 
         AuditEvent::new(
             "evidence_attachment_upload_grant.issued",

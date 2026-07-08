@@ -23,10 +23,7 @@ use crate::authentication::paseto::{
     DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
-    authentication::{
-        auth0::{TokenVerifier, VerifiedMcpClaims},
-        ApiTokenAuthenticator,
-    },
+    authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
     config::HealthConfig,
     domain::WorkspacePermission,
     object_storage::FilesystemObjectStore,
@@ -61,7 +58,6 @@ pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub authenticator: Arc<ApiTokenAuthenticator>,
     pub oauth_verifier: Arc<V>,
     pub authorization_server: Url,
     pub resource: Url,
@@ -80,7 +76,6 @@ impl<V> Clone for McpAppDependencies<V> {
             postgres: self.postgres.clone(),
             object_store: self.object_store.clone(),
             metrics: self.metrics.clone(),
-            authenticator: self.authenticator.clone(),
             oauth_verifier: self.oauth_verifier.clone(),
             authorization_server: self.authorization_server.clone(),
             resource: self.resource.clone(),
@@ -113,7 +108,6 @@ where
     let controls = ControlService::new(dependencies.postgres.clone());
     let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
-        dependencies.authenticator,
         dependencies.oauth_verifier,
         dependencies.resource.clone(),
         agent_connections,
@@ -161,7 +155,6 @@ where
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })
@@ -177,7 +170,6 @@ where
 }
 
 pub fn protocol_router<V>(
-    authenticator: Arc<ApiTokenAuthenticator>,
     oauth_verifier: Arc<V>,
     resource: Url,
     agent_connections: AgentConnectionService,
@@ -200,7 +192,6 @@ where
         .nest_service(ENDPOINT, transport)
         .layer(middleware::from_fn_with_state(
             AuthenticationState {
-                api_tokens: authenticator,
                 auth0: oauth_verifier,
                 agent_connections,
                 resource: resource.to_string(),

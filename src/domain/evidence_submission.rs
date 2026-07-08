@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, AgentConnectionId, ApiTokenId, DomainError, EvidenceRequestId, UserId};
+use super::{ids::uuid_id, AgentConnectionId, DomainError, EvidenceRequestId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(EvidenceAttachmentId);
@@ -73,10 +73,6 @@ pub struct EvidenceSubmission {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceSubmitter {
-    ApiToken {
-        api_token_id: ApiTokenId,
-        user_id: UserId,
-    },
     AgentConnection {
         agent_connection_id: AgentConnectionId,
         user_id: UserId,
@@ -86,20 +82,12 @@ pub enum EvidenceSubmitter {
 impl EvidenceSubmitter {
     pub fn user_id(self) -> UserId {
         match self {
-            Self::ApiToken { user_id, .. } | Self::AgentConnection { user_id, .. } => user_id,
-        }
-    }
-
-    pub fn api_token_id(self) -> Option<ApiTokenId> {
-        match self {
-            Self::ApiToken { api_token_id, .. } => Some(api_token_id),
-            Self::AgentConnection { .. } => None,
+            Self::AgentConnection { user_id, .. } => user_id,
         }
     }
 
     pub fn agent_connection_id(self) -> Option<AgentConnectionId> {
         match self {
-            Self::ApiToken { .. } => None,
             Self::AgentConnection {
                 agent_connection_id,
                 ..

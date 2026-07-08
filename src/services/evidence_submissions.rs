@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::{
-    authentication::ApiTokenContext,
     domain::{
         CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
         EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
@@ -56,25 +55,6 @@ impl EvidenceSubmissionService {
 
     pub async fn create(
         &self,
-        token: ApiTokenContext,
-        evidence_request_id: EvidenceRequestId,
-        mut payload: CreateEvidenceSubmissionPayload,
-    ) -> Result<Option<EvidenceSubmission>, Error> {
-        payload.evidence_request_id = evidence_request_id;
-
-        Ok(self
-            .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
-                async move |context| context.create_evidence_submission(&payload).await,
-            )
-            .await?)
-    }
-
-    pub async fn create_for_agent(
-        &self,
         connection: AgentConnectionContext,
         evidence_request_id: EvidenceRequestId,
         mut payload: CreateEvidenceSubmissionPayload,
@@ -94,12 +74,12 @@ impl EvidenceSubmissionService {
 
     pub async fn get(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         id: EvidenceSubmissionId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async move |context| {
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context.get_evidence_submission(id).await
             })
             .await?)
@@ -107,12 +87,12 @@ impl EvidenceSubmissionService {
 
     pub async fn latest_for_request(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         evidence_request_id: EvidenceRequestId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async move |context| {
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context
                     .latest_evidence_submission_for_request(evidence_request_id)
                     .await
@@ -122,12 +102,12 @@ impl EvidenceSubmissionService {
 
     pub async fn evidence_submission_exists(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
         id: EvidenceSubmissionId,
     ) -> Result<bool, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async move |context| {
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context.evidence_submission_exists(id).await
             })
             .await?)
@@ -135,7 +115,7 @@ impl EvidenceSubmissionService {
 
     pub async fn upload_attachment<S>(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
         filename: String,
         content_type: String,
@@ -147,7 +127,7 @@ impl EvidenceSubmissionService {
         let upload_id = Uuid::new_v4();
         let stable_prefix =
             format!("quarantine/evidence-submissions/{submission_id}/attachments/{upload_id}");
-        let key = ObjectKey::new(token.workspace_id, stable_prefix, &filename)?;
+        let key = ObjectKey::new(connection.workspace_id, stable_prefix, &filename)?;
 
         let metadata = self
             .object_store
@@ -186,7 +166,7 @@ impl EvidenceSubmissionService {
 
     pub async fn create_attachment(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
         mut payload: UploadEvidenceAttachmentPayload,
@@ -205,10 +185,10 @@ impl EvidenceSubmissionService {
 
         let result = self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| {
                     let attachment = context.create_evidence_attachment(&create_payload).await?;
                     context
@@ -236,7 +216,7 @@ impl EvidenceSubmissionService {
 
     pub async fn create_first_attachment(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
         mut payload: UploadEvidenceAttachmentPayload,
@@ -255,10 +235,10 @@ impl EvidenceSubmissionService {
 
         let result = self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| {
                     let Some(attachment) = context
                         .create_first_evidence_attachment(&create_payload)
@@ -297,16 +277,16 @@ impl EvidenceSubmissionService {
 
     pub async fn archive_attachment(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
         attachment_id: EvidenceAttachmentId,
     ) -> Result<ArchiveAttachmentResult, Error> {
         Ok(self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| {
                     context
                         .archive_evidence_attachment(submission_id, attachment_id)

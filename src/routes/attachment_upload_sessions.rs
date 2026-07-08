@@ -1,5 +1,9 @@
 use axum::{
-    extract::{rejection::QueryRejection, DefaultBodyLimit, Multipart, Path, Query, State},
+    extract::{
+        multipart::{Field, MultipartError},
+        rejection::QueryRejection,
+        DefaultBodyLimit, Multipart, Path, Query, State,
+    },
     http::{
         header::{COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
@@ -8,28 +12,35 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures_core::Stream;
+use futures_util::stream;
 use serde::Deserialize;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 use uuid::Uuid;
 
 use crate::{
-    authentication::ApiTokenContext,
     domain::{
-        AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmissionDetail,
-        EvidenceSubmissionId,
+        validate_attachment_filename, AttachmentUploadStatus, EvidenceAttachment,
+        EvidenceAttachmentId, EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     repository::ArchiveAttachmentResult,
     routes::{
-        error::ApiError,
-        evidence_submissions::{attachment_upload_from_multipart, AttachmentUploadDigest},
+        error::{domain_errors, ApiError},
         request_context::RequestId,
     },
     services::{
+        agent_connections::AgentConnectionContext,
         attachment_downloads::DownloadGrantIssuer,
         attachment_downloads::{AttachmentDownloadService, DownloadError},
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
-        evidence_submissions::EvidenceSubmissionService,
+        evidence_submissions::{EvidenceSubmissionService, UploadEvidenceAttachmentPayload},
         upload_sessions::{
             UploadSessionError, UploadSessionIssuer, UploadSessionTokenService,
             VerifiedUploadSession,
@@ -38,6 +49,11 @@ use crate::{
 };
 
 const UPLOAD_SESSION_COOKIE: &str = "proofplane_attachment_upload_session";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachmentUploadDigest {
+    ComputeOnly,
+}
 
 #[derive(Clone)]
 pub struct AttachmentUploadSessionState {
@@ -101,12 +117,8 @@ async fn open_upload_session(
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
     let body = render_upload_page(
-        &inventory(
-            &state.submissions,
-            session.submission_id,
-            session.api_token_context(),
-        )
-        .await?,
+            &inventory(&state.submissions, session.submission_id, session_context(&session))
+                .await?,
         None,
     );
     Ok(Html(body).into_response())
@@ -123,12 +135,12 @@ async fn upload_file(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
-    let token = session.api_token_context();
-    let before = detail(&state.submissions, session.submission_id, token).await?;
+    let connection = session_context(&session);
+    let before = detail(&state.submissions, session.submission_id, connection).await?;
 
     let payload = match attachment_upload_from_multipart(
         &state.submissions,
-        &token,
+        &connection,
         session.submission_id,
         multipart,
         AttachmentUploadDigest::ComputeOnly,
@@ -144,7 +156,7 @@ async fn upload_file(
 
     let attachment = state
         .submissions
-        .create_attachment(&token, request_id.0, session.submission_id, payload)
+        .create_attachment(&connection, request_id.0, session.submission_id, payload)
         .await?;
     emit_upload_audit(&session, request_id.0, &attachment);
 
@@ -169,15 +181,10 @@ async fn download_file(
     };
     let grant = state
         .downloads
-        .issue_for_issuer(
+        .issue(
             session.workspace_id,
             session.issued_by_user_id,
-            match session.issued_via {
-                UploadSessionIssuer::ApiToken(id) => DownloadGrantIssuer::ApiToken(id),
-                UploadSessionIssuer::AgentConnection(id) => {
-                    DownloadGrantIssuer::AgentConnection(id)
-                }
-            },
+            DownloadGrantIssuer::AgentConnection(session.issued_via.agent_connection_id()),
             session.submission_id,
             attachment_id.into(),
         )
@@ -224,11 +231,11 @@ async fn archive_file(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
-    let token = session.api_token_context();
+    let connection = session_context(&session);
     match state
         .submissions
         .archive_attachment(
-            &token,
+            &connection,
             session.submission_id,
             EvidenceAttachmentId::from(attachment_id),
         )
@@ -244,7 +251,8 @@ async fn archive_file(
         }
         ArchiveAttachmentResult::NotFound => Ok(unavailable_response()),
         ArchiveAttachmentResult::NotTerminal => {
-            let attachments = inventory(&state.submissions, session.submission_id, token).await?;
+            let attachments =
+                inventory(&state.submissions, session.submission_id, connection).await?;
             Ok((
                 StatusCode::CONFLICT,
                 Html(render_upload_page(
@@ -278,14 +286,7 @@ async fn redeem_grant(
             grant.workspace_id,
             grant.submission_id,
             grant.issued_by_user_id,
-            match grant.issued_via {
-                crate::services::attachment_upload_grants::UploadGrantIssuer::ApiToken(id) => {
-                    UploadSessionIssuer::ApiToken(id)
-                }
-                crate::services::attachment_upload_grants::UploadGrantIssuer::AgentConnection(
-                    id,
-                ) => UploadSessionIssuer::AgentConnection(id),
-            },
+            UploadSessionIssuer::AgentConnection(grant.issued_via.agent_connection_id()),
             grant.expires_at,
         )
         .map_err(upload_session_error)?;
@@ -309,9 +310,9 @@ async fn redeem_grant(
 async fn inventory(
     submissions: &EvidenceSubmissionService,
     submission_id: EvidenceSubmissionId,
-    token: ApiTokenContext,
+    connection: AgentConnectionContext,
 ) -> Result<Vec<UploadSessionAttachmentResponse>, ApiError> {
-    Ok(detail(submissions, submission_id, token)
+    Ok(detail(submissions, submission_id, connection)
         .await?
         .attachments
         .into_iter()
@@ -322,10 +323,10 @@ async fn inventory(
 async fn detail(
     submissions: &EvidenceSubmissionService,
     submission_id: EvidenceSubmissionId,
-    token: ApiTokenContext,
+    connection: AgentConnectionContext,
 ) -> Result<EvidenceSubmissionDetail, ApiError> {
     submissions
-        .get(token, submission_id)
+        .get(connection, submission_id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(unavailable)
@@ -364,15 +365,18 @@ fn emit_upload_audit(
 }
 
 fn session_audit_actor(session: &VerifiedUploadSession) -> AuditActor {
-    match session.issued_via {
-        UploadSessionIssuer::ApiToken(api_token_id) => AuditActor::ApiToken {
-            user_id: session.issued_by_user_id.into(),
-            api_token_id: api_token_id.into(),
-        },
-        UploadSessionIssuer::AgentConnection(agent_connection_id) => AuditActor::AgentConnection {
-            user_id: session.issued_by_user_id.into(),
-            agent_connection_id: agent_connection_id.into(),
-        },
+    AuditActor::AgentConnection {
+        user_id: session.issued_by_user_id.into(),
+        agent_connection_id: session.issued_via.agent_connection_id().into(),
+    }
+}
+
+fn session_context(session: &VerifiedUploadSession) -> AgentConnectionContext {
+    AgentConnectionContext {
+        user_id: session.issued_by_user_id,
+        connection_id: session.issued_via.agent_connection_id(),
+        workspace_id: session.workspace_id,
+        permissions: crate::domain::WorkspacePermissions::all(),
     }
 }
 
@@ -528,6 +532,119 @@ button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
 </body>
 </html>"#
     )
+}
+
+async fn attachment_upload_from_multipart(
+    service: &EvidenceSubmissionService,
+    connection: &AgentConnectionContext,
+    evidence_submission_id: EvidenceSubmissionId,
+    mut multipart: Multipart,
+    digest: AttachmentUploadDigest,
+) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(multipart_error)?
+        .ok_or(ApiError::BadRequest(vec![
+            "multipart upload requires at least one field".to_owned(),
+        ]))?;
+
+    let field_name = field.name().ok_or(ApiError::BadRequest(vec![
+        "multipart upload field must be named".to_owned(),
+    ]))?;
+
+    if field_name != "file" {
+        return Err(ApiError::BadRequest(vec![
+            "multipart upload field for file must have correct name".to_owned(),
+        ]));
+    }
+
+    let filename = field
+        .file_name()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::BadRequest(vec!["file filename is required".to_owned()]))?;
+    let content_type = field
+        .content_type()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let filename = validate_attachment_filename(filename)
+        .into_result()
+        .map_err(domain_errors)?;
+
+    let crc32c = Arc::new(AtomicU32::new(0));
+    let chunks = file_chunks(field, Arc::clone(&crc32c));
+    let mut uploaded_file = service
+        .upload_attachment(
+            connection,
+            evidence_submission_id,
+            filename,
+            content_type,
+            chunks,
+        )
+        .await?;
+
+    let actual_crc32c = crc32c.load(Ordering::Relaxed);
+
+    if digest == AttachmentUploadDigest::ComputeOnly
+        && multipart
+            .next_field()
+            .await
+            .map_err(multipart_error)?
+            .is_some()
+    {
+        maybe_delete_uploaded_file(service, uploaded_file.object_key).await;
+        return Err(ApiError::BadRequest(vec![
+            "browser upload requires exactly one file field".to_owned(),
+        ]));
+    }
+
+    uploaded_file.checksum_crc32c = BASE64_STANDARD.encode(actual_crc32c.to_be_bytes());
+    Ok(uploaded_file)
+}
+
+fn multipart_error(error: MultipartError) -> ApiError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return ApiError::PayloadTooLarge;
+    }
+
+    ApiError::BadRequest(vec![format!(
+        "invalid multipart body: {}",
+        error.body_text()
+    )])
+}
+
+fn file_chunks(
+    field: Field<'_>,
+    crc32c: Arc<AtomicU32>,
+) -> impl Stream<Item = Result<Bytes, crate::object_storage::StorageError>> + Send + '_ {
+    stream::try_unfold(field, move |mut field| {
+        let crc32c = Arc::clone(&crc32c);
+        async move {
+            match field.chunk().await.map_err(multipart_stream_error)? {
+                Some(chunk) => {
+                    let current = crc32c.load(Ordering::Relaxed);
+                    crc32c.store(crc32c::crc32c_append(current, &chunk), Ordering::Relaxed);
+                    Ok(Some((chunk, field)))
+                }
+                None => Ok(None),
+            }
+        }
+    })
+}
+
+fn multipart_stream_error(error: MultipartError) -> crate::object_storage::StorageError {
+    crate::object_storage::StorageError::StreamRead {
+        payload_too_large: error.status() == StatusCode::PAYLOAD_TOO_LARGE,
+        message: if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            "request payload is too large".to_owned()
+        } else {
+            format!("invalid multipart body: {}", error.body_text())
+        },
+    }
+}
+
+async fn maybe_delete_uploaded_file(service: &EvidenceSubmissionService, key: String) {
+    let _ = service.delete_uploaded_attachment_object(&key).await;
 }
 
 fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> Response {

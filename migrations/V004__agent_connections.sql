@@ -11,11 +11,6 @@ VALUES
     ('read_controls'),
     ('write_controls');
 
-ALTER TABLE api_token_permissions
-    DROP CONSTRAINT api_token_permissions_permission_check,
-    ADD CONSTRAINT api_token_permissions_permission_fkey
-        FOREIGN KEY (permission) REFERENCES workspace_permissions(permission);
-
 CREATE TABLE agent_connections (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -81,30 +76,10 @@ CREATE TABLE agent_authorization_transactions (
 );
 
 ALTER TABLE evidence_submissions
-    ADD COLUMN submitted_by_agent_connection_id UUID REFERENCES agent_connections(id);
-
-ALTER TABLE evidence_submissions
-    ALTER COLUMN submitted_by_api_token_id DROP NOT NULL;
-
-ALTER TABLE evidence_submissions
-    ADD CONSTRAINT evidence_submissions_submitter_source
-    CHECK (
-        (submitted_by_api_token_id IS NOT NULL)::integer
-        + (submitted_by_agent_connection_id IS NOT NULL)::integer = 1
-    );
+    ADD COLUMN submitted_by_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
 
 ALTER TABLE attachment_upload_grants
-    ADD COLUMN issued_via_agent_connection_id UUID REFERENCES agent_connections(id);
-
-ALTER TABLE attachment_upload_grants
-    ALTER COLUMN issued_via_api_token_id DROP NOT NULL;
-
-ALTER TABLE attachment_upload_grants
-    ADD CONSTRAINT attachment_upload_grants_issuer_source
-    CHECK (
-        (issued_via_api_token_id IS NOT NULL)::integer
-        + (issued_via_agent_connection_id IS NOT NULL)::integer = 1
-    );
+    ADD COLUMN issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
 
 CREATE TABLE oauth_clients (
     id TEXT PRIMARY KEY,

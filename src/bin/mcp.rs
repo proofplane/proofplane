@@ -8,7 +8,6 @@ use proofplane::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             UploadGrantDecryptor, UploadGrantEncryptor,
         },
-        ApiTokenAuthenticator,
     },
     config,
     mcp::{self, McpAppDependencies},
@@ -108,13 +107,11 @@ async fn run() -> Result<(), Error> {
         mcp_oauth_decryptor,
     );
     let metrics = PrometheusBuilder::new().install_recorder()?;
-    let authenticator = Arc::new(ApiTokenAuthenticator::new(postgres.clone()));
     let sessions = CancellationToken::new();
     let app = mcp::create_app(McpAppDependencies {
         postgres,
         object_store,
         metrics,
-        authenticator,
         oauth_verifier: Arc::new(oauth_service),
         authorization_server: config.server.public_api_base_url.clone(),
         resource: config.mcp.resource.clone(),

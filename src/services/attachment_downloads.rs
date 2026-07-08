@@ -10,10 +10,9 @@ use crate::{
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, RegisteredClaims, VerifiedPasetoToken,
         },
-        ApiTokenContext,
     },
     domain::{
-        AgentConnectionId, ApiTokenId, AttachmentUploadStatus, EvidenceAttachment,
+        AgentConnectionId, AttachmentUploadStatus, EvidenceAttachment,
         EvidenceAttachmentId, EvidenceSubmissionId, UserId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
@@ -30,6 +29,7 @@ struct DownloadClaims {
     submission_id: String,
     attachment_id: String,
     issued_by_user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issued_via_api_token_id: Option<String>,
     issued_via_agent_connection_id: Option<String>,
 }
@@ -70,22 +70,13 @@ pub struct DownloadGrantAuditContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadGrantIssuer {
-    ApiToken(ApiTokenId),
     AgentConnection(AgentConnectionId),
 }
 
 impl DownloadGrantIssuer {
-    pub fn api_token_id(self) -> Option<ApiTokenId> {
+    pub fn agent_connection_id(self) -> AgentConnectionId {
         match self {
-            Self::ApiToken(id) => Some(id),
-            Self::AgentConnection(_) => None,
-        }
-    }
-
-    pub fn agent_connection_id(self) -> Option<AgentConnectionId> {
-        match self {
-            Self::ApiToken(_) => None,
-            Self::AgentConnection(id) => Some(id),
+            Self::AgentConnection(id) => id,
         }
     }
 }
@@ -117,22 +108,6 @@ impl AttachmentDownloadService {
     }
 
     pub async fn issue(
-        &self,
-        token: &ApiTokenContext,
-        submission_id: EvidenceSubmissionId,
-        attachment_id: EvidenceAttachmentId,
-    ) -> Result<IssuedDownloadGrant, DownloadError> {
-        self.issue_for_issuer(
-            token.workspace_id,
-            token.user_id,
-            DownloadGrantIssuer::ApiToken(token.api_token_id),
-            submission_id,
-            attachment_id,
-        )
-        .await
-    }
-
-    pub async fn issue_for_issuer(
         &self,
         workspace_id: WorkspaceId,
         user_id: UserId,
@@ -178,10 +153,10 @@ impl AttachmentDownloadService {
                     submission_id: submission_id.to_string(),
                     attachment_id: candidate.attachment.id.to_string(),
                     issued_by_user_id: user_id.to_string(),
-                    issued_via_api_token_id: issued_via.api_token_id().map(|id| id.to_string()),
-                    issued_via_agent_connection_id: issued_via
-                        .agent_connection_id()
-                        .map(|id| id.to_string()),
+                    issued_via_api_token_id: None,
+                    issued_via_agent_connection_id: Some(
+                        issued_via.agent_connection_id().to_string(),
+                    ),
                 },
             )
             .map_err(|_| DownloadError::Internal)?;
@@ -303,9 +278,6 @@ fn download_grant_issuer_from_claims(
     agent_connection_id: Option<&str>,
 ) -> Result<DownloadGrantIssuer, InvalidDownloadClaims> {
     match (api_token_id, agent_connection_id) {
-        (Some(id), None) => Ok(DownloadGrantIssuer::ApiToken(ApiTokenId::from(parse_uuid(
-            id,
-        )?))),
         (None, Some(id)) => Ok(DownloadGrantIssuer::AgentConnection(
             AgentConnectionId::from(parse_uuid(id)?),
         )),
@@ -397,8 +369,10 @@ mod tests {
             submission_id: "00000000-0000-4000-8000-000000000002".to_owned(),
             attachment_id: "00000000-0000-4000-8000-000000000003".to_owned(),
             issued_by_user_id: "00000000-0000-4000-8000-000000000004".to_owned(),
-            issued_via_api_token_id: Some("00000000-0000-4000-8000-000000000005".to_owned()),
-            issued_via_agent_connection_id: None,
+            issued_via_api_token_id: None,
+            issued_via_agent_connection_id: Some(
+                "00000000-0000-4000-8000-000000000005".to_owned(),
+            ),
         }
     }
 
@@ -415,8 +389,8 @@ mod tests {
             claims.issued_by_user_id
         );
         assert_eq!(
-            grant.issued_via.api_token_id().map(|id| id.to_string()),
-            claims.issued_via_api_token_id
+            grant.issued_via.agent_connection_id().to_string(),
+            claims.issued_via_agent_connection_id.unwrap()
         );
     }
 
@@ -436,7 +410,7 @@ mod tests {
             |claims: &mut DownloadClaims| claims.attachment_id = "invalid".to_owned(),
             |claims: &mut DownloadClaims| claims.issued_by_user_id = "invalid".to_owned(),
             |claims: &mut DownloadClaims| {
-                claims.issued_via_api_token_id = Some("invalid".to_owned())
+                claims.issued_via_agent_connection_id = Some("invalid".to_owned())
             },
         ] {
             let mut claims = claims();

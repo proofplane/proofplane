@@ -3,7 +3,6 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    authentication::ApiTokenContext,
     domain::{
         CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestId,
         UpdateEvidenceRequestPayload,
@@ -11,6 +10,8 @@ use crate::{
     repository::Postgres,
     services::Error,
 };
+
+use super::agent_connections::AgentConnectionContext;
 
 #[derive(Clone)]
 pub struct EvidenceRequestService {
@@ -24,15 +25,15 @@ impl EvidenceRequestService {
 
     pub async fn create(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         request: CreateEvidenceRequestPayload,
     ) -> Result<EvidenceRequest, Error> {
         Ok(self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| context.create_evidence_request(&request).await,
             )
             .await?)
@@ -40,12 +41,12 @@ impl EvidenceRequestService {
 
     pub async fn get(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         id: EvidenceRequestId,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async move |context| {
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context.get_evidence_request(id).await
             })
             .await?)
@@ -53,11 +54,11 @@ impl EvidenceRequestService {
 
     pub async fn list_by_workspace(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async |context| {
+            .in_workspace_context_read(connection.workspace_id, async |context| {
                 context.list_evidence_requests().await
             })
             .await?)
@@ -65,16 +66,16 @@ impl EvidenceRequestService {
 
     pub async fn replace(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         id: EvidenceRequestId,
         update: UpdateEvidenceRequestPayload,
     ) -> Result<Option<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| context.replace_evidence_request(id, &update).await,
             )
             .await?)
@@ -82,12 +83,12 @@ impl EvidenceRequestService {
 
     pub async fn list_due(
         &self,
-        token: ApiTokenContext,
+        connection: AgentConnectionContext,
         now: DateTime<Utc>,
     ) -> Result<Vec<EvidenceRequest>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(token.workspace_id, async move |context| {
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context.list_due_evidence_requests(now).await
             })
             .await?)

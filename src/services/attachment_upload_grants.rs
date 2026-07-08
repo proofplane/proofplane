@@ -10,11 +10,9 @@ use crate::{
         paseto::{
             RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
         },
-        ApiTokenContext,
     },
     domain::{
-        AgentConnectionId, ApiTokenId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId,
-        WorkspaceId,
+        AgentConnectionId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId,
     },
     repository::{NewAttachmentUploadGrant, Postgres},
 };
@@ -31,6 +29,7 @@ struct UploadGrantClaims {
     workspace_id: String,
     submission_id: String,
     issued_by_user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issued_via_api_token_id: Option<String>,
     issued_via_agent_connection_id: Option<String>,
 }
@@ -73,22 +72,13 @@ pub struct UploadGrantAuditContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadGrantIssuer {
-    ApiToken(ApiTokenId),
     AgentConnection(AgentConnectionId),
 }
 
 impl UploadGrantIssuer {
-    pub fn api_token_id(self) -> Option<ApiTokenId> {
+    pub fn agent_connection_id(self) -> AgentConnectionId {
         match self {
-            Self::ApiToken(id) => Some(id),
-            Self::AgentConnection(_) => None,
-        }
-    }
-
-    pub fn agent_connection_id(self) -> Option<AgentConnectionId> {
-        match self {
-            Self::ApiToken(_) => None,
-            Self::AgentConnection(id) => Some(id),
+            Self::AgentConnection(id) => id,
         }
     }
 }
@@ -118,20 +108,6 @@ impl AttachmentUploadGrantService {
 
     pub async fn issue(
         &self,
-        token: &ApiTokenContext,
-        submission_id: EvidenceSubmissionId,
-    ) -> Result<IssuedUploadGrant, UploadGrantError> {
-        self.issue_with_context(
-            token.workspace_id,
-            token.user_id,
-            UploadGrantIssuer::ApiToken(token.api_token_id),
-            submission_id,
-        )
-        .await
-    }
-
-    pub async fn issue_for_agent(
-        &self,
         connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
     ) -> Result<IssuedUploadGrant, UploadGrantError> {
@@ -155,44 +131,24 @@ impl AttachmentUploadGrantService {
             + chrono::Duration::from_std(UPLOAD_GRANT_TTL)
                 .map_err(|_| UploadGrantError::Internal)?;
         let grant_id = AttachmentUploadGrantId::from(Uuid::new_v4());
-        let grant = match issued_via {
-            UploadGrantIssuer::ApiToken(api_token_id) => {
-                self.repository
-                    .in_workspace_context(
-                        workspace_id,
-                        user_id,
-                        api_token_id,
-                        async move |context| {
-                            context
-                                .create_attachment_upload_grant(NewAttachmentUploadGrant {
-                                    id: grant_id,
-                                    evidence_submission_id: submission_id,
-                                    expires_at,
-                                })
-                                .await
-                        },
-                    )
-                    .await?
-            }
-            UploadGrantIssuer::AgentConnection(agent_connection_id) => {
-                self.repository
-                    .in_agent_connection_workspace_context(
-                        workspace_id,
-                        user_id,
-                        agent_connection_id,
-                        async move |context| {
-                            context
-                                .create_attachment_upload_grant(NewAttachmentUploadGrant {
-                                    id: grant_id,
-                                    evidence_submission_id: submission_id,
-                                    expires_at,
-                                })
-                                .await
-                        },
-                    )
-                    .await?
-            }
-        }
+        let agent_connection_id = issued_via.agent_connection_id();
+        let grant = self
+            .repository
+            .in_agent_connection_workspace_context(
+                workspace_id,
+                user_id,
+                agent_connection_id,
+                async move |context| {
+                    context
+                        .create_attachment_upload_grant(NewAttachmentUploadGrant {
+                            id: grant_id,
+                            evidence_submission_id: submission_id,
+                            expires_at,
+                        })
+                        .await
+                },
+            )
+            .await?
         .ok_or(UploadGrantError::Unavailable)?;
 
         let issued = self
@@ -209,7 +165,7 @@ impl AttachmentUploadGrantService {
                     workspace_id: grant.workspace_id.to_string(),
                     submission_id: grant.evidence_submission_id.to_string(),
                     issued_by_user_id: grant.issued_by_user_id.to_string(),
-                    issued_via_api_token_id: grant.issued_via_api_token_id.map(|id| id.to_string()),
+                    issued_via_api_token_id: None,
                     issued_via_agent_connection_id: grant
                         .issued_via_agent_connection_id
                         .map(|id| id.to_string()),
@@ -255,7 +211,6 @@ impl AttachmentUploadGrantService {
             submission_id: redeemed.evidence_submission_id,
             issued_by_user_id: redeemed.issued_by_user_id,
             issued_via: upload_grant_issuer_from_record(
-                redeemed.issued_via_api_token_id,
                 redeemed.issued_via_agent_connection_id,
             )?,
             expires_at: redeemed.expires_at,
@@ -301,14 +256,11 @@ impl TryFrom<VerifiedPasetoToken<UploadGrantClaims>> for VerifiedUploadGrant {
 }
 
 fn upload_grant_issuer_from_record(
-    api_token_id: Option<ApiTokenId>,
     agent_connection_id: Option<AgentConnectionId>,
 ) -> Result<UploadGrantIssuer, UploadGrantError> {
-    match (api_token_id, agent_connection_id) {
-        (Some(id), None) => Ok(UploadGrantIssuer::ApiToken(id)),
-        (None, Some(id)) => Ok(UploadGrantIssuer::AgentConnection(id)),
-        _ => Err(UploadGrantError::Internal),
-    }
+    agent_connection_id
+        .map(UploadGrantIssuer::AgentConnection)
+        .ok_or(UploadGrantError::Internal)
 }
 
 fn upload_grant_issuer_from_claims(
@@ -316,9 +268,6 @@ fn upload_grant_issuer_from_claims(
     agent_connection_id: Option<&str>,
 ) -> Result<UploadGrantIssuer, InvalidUploadGrantClaims> {
     match (api_token_id, agent_connection_id) {
-        (Some(id), None) => Ok(UploadGrantIssuer::ApiToken(ApiTokenId::from(parse_uuid(
-            id,
-        )?))),
         (None, Some(id)) => Ok(UploadGrantIssuer::AgentConnection(AgentConnectionId::from(
             parse_uuid(id)?,
         ))),
@@ -369,8 +318,8 @@ mod tests {
             workspace_id: Uuid::new_v4().to_string(),
             submission_id: Uuid::new_v4().to_string(),
             issued_by_user_id: Uuid::new_v4().to_string(),
-            issued_via_api_token_id: Some(Uuid::new_v4().to_string()),
-            issued_via_agent_connection_id: None,
+            issued_via_api_token_id: None,
+            issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
         }
     }
 
@@ -383,8 +332,8 @@ mod tests {
         assert_eq!(grant.workspace_id.to_string(), claims.workspace_id);
         assert_eq!(grant.submission_id.to_string(), claims.submission_id);
         assert_eq!(
-            grant.issued_via.api_token_id().map(|id| id.to_string()),
-            claims.issued_via_api_token_id
+            grant.issued_via.agent_connection_id().to_string(),
+            claims.issued_via_agent_connection_id.unwrap()
         );
     }
 
@@ -399,7 +348,7 @@ mod tests {
             |claims: &mut UploadGrantClaims| claims.workspace_id = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| claims.submission_id = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| {
-                claims.issued_via_api_token_id = Some("bad".to_owned())
+                claims.issued_via_agent_connection_id = Some("bad".to_owned())
             },
         ] {
             let mut claims = claims();

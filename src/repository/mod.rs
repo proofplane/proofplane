@@ -2,10 +2,9 @@ use deadpool_postgres::{Object, Pool};
 
 use uuid::Uuid;
 
-use crate::domain::{AgentConnectionId, ApiTokenId, UserId, WorkspaceId};
+use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
-mod api_tokens;
 mod attachment_upload_grants;
 pub mod constraints;
 mod controls;
@@ -45,21 +44,12 @@ pub struct WorkspaceTransactionContext<'transaction> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCredential {
-    ApiToken(ApiTokenId),
     AgentConnection(AgentConnectionId),
 }
 
 impl WorkspaceCredential {
-    pub fn api_token_uuid(self) -> Option<Uuid> {
-        match self {
-            Self::ApiToken(id) => Some(id.into()),
-            Self::AgentConnection(_) => None,
-        }
-    }
-
     pub fn agent_connection_uuid(self) -> Option<Uuid> {
         match self {
-            Self::ApiToken(_) => None,
             Self::AgentConnection(id) => Some(id.into()),
         }
     }
@@ -122,35 +112,6 @@ impl Postgres {
         let result = operation(&mut context).await?;
 
         context.transaction.commit().await?;
-
-        Ok(result)
-    }
-
-    pub async fn in_workspace_context<T, F>(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: UserId,
-        api_token_id: ApiTokenId,
-        operation: F,
-    ) -> Result<T, Error>
-    where
-        T: Send,
-        F: for<'context, 'transaction> AsyncFnOnce(
-                &'context mut WorkspaceTransactionContext<'transaction>,
-            ) -> Result<T, Error>
-            + Send,
-    {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let mut context = WorkspaceTransactionContext::new(
-            workspace_id,
-            user_id,
-            WorkspaceCredential::ApiToken(api_token_id),
-            transaction,
-        );
-        let result = operation(&mut context).await?;
-
-        context.commit().await?;
 
         Ok(result)
     }

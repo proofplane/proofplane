@@ -235,7 +235,6 @@ impl WorkspaceTransactionContext<'_> {
         &self,
         payload: &CreateEvidenceSubmissionPayload,
     ) -> Result<Option<EvidenceSubmission>, Error> {
-        let api_token_id = self.credential.api_token_uuid();
         let agent_connection_id = self.credential.agent_connection_uuid();
         let rows = self
             .transaction
@@ -244,7 +243,6 @@ impl WorkspaceTransactionContext<'_> {
 WITH inserted AS (
 	    INSERT INTO evidence_submissions (
 	        evidence_request_id,
-	        submitted_by_api_token_id,
 	        submitted_by_agent_connection_id,
 	        coverage_start_at,
 	        coverage_end_at,
@@ -253,14 +251,13 @@ WITH inserted AS (
 	        summary,
 	        description
 	    )
-	    SELECT er.id, $2, $3, $4, $5, $6, $7, $8, $9
+	    SELECT er.id, $2, $3, $4, $5, $6, $7, $8
 	    FROM evidence_requests er
 	    WHERE er.id = $1
-	      AND er.workspace_id = $10
+	      AND er.workspace_id = $9
 	    RETURNING
 	        id,
 	        evidence_request_id,
-	        submitted_by_api_token_id,
 	        submitted_by_agent_connection_id,
 	        received_at,
 	        coverage_start_at,
@@ -273,9 +270,8 @@ WITH inserted AS (
 SELECT
 	    inserted.id,
 	    inserted.evidence_request_id,
-	    inserted.submitted_by_api_token_id,
 	    inserted.submitted_by_agent_connection_id,
-	    COALESCE(t.user_id, c.user_id) AS submitted_by_user_id,
+	    c.user_id AS submitted_by_user_id,
 	    inserted.received_at,
     inserted.coverage_start_at,
     inserted.coverage_end_at,
@@ -284,12 +280,10 @@ SELECT
 	    inserted.summary,
 	    inserted.description
 	FROM inserted
-	LEFT JOIN api_tokens t ON t.id = inserted.submitted_by_api_token_id
 	LEFT JOIN agent_connections c ON c.id = inserted.submitted_by_agent_connection_id
 	"#,
                 &[
                     &Uuid::from(payload.evidence_request_id),
-                    &api_token_id,
                     &agent_connection_id,
                     &payload.coverage_start_at,
                     &payload.coverage_end_at,
@@ -385,9 +379,8 @@ LIMIT 1
 SELECT
 	    s.id,
 	    s.evidence_request_id,
-	    s.submitted_by_api_token_id,
 	    s.submitted_by_agent_connection_id,
-	    COALESCE(t.user_id, c.user_id) AS submitted_by_user_id,
+	    c.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -406,7 +399,6 @@ SELECT
     a.upload_status
 	FROM evidence_submissions s
 	JOIN evidence_requests er ON er.id = s.evidence_request_id
-	LEFT JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
     AND a.archived = false
@@ -441,9 +433,8 @@ WITH latest_submission AS (
 SELECT
 	    s.id,
 	    s.evidence_request_id,
-	    s.submitted_by_api_token_id,
 	    s.submitted_by_agent_connection_id,
-	    COALESCE(t.user_id, c.user_id) AS submitted_by_user_id,
+	    c.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -462,7 +453,6 @@ SELECT
     a.upload_status
 	FROM latest_submission latest
 	JOIN evidence_submissions s ON s.id = latest.id
-	LEFT JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
 	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
     AND a.archived = false
@@ -708,20 +698,15 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
 
 fn evidence_submitter_from_row(row: &Row) -> Result<EvidenceSubmitter, Error> {
     let user_id = row.try_get::<_, Uuid>("submitted_by_user_id")?.into();
-    let api_token_id = row.try_get::<_, Option<Uuid>>("submitted_by_api_token_id")?;
     let agent_connection_id = row.try_get::<_, Option<Uuid>>("submitted_by_agent_connection_id")?;
 
-    match (api_token_id, agent_connection_id) {
-        (Some(api_token_id), None) => Ok(EvidenceSubmitter::ApiToken {
-            api_token_id: api_token_id.into(),
-            user_id,
-        }),
-        (None, Some(agent_connection_id)) => Ok(EvidenceSubmitter::AgentConnection {
+    match agent_connection_id {
+        Some(agent_connection_id) => Ok(EvidenceSubmitter::AgentConnection {
             agent_connection_id: agent_connection_id.into(),
             user_id,
         }),
-        _ => Err(Error::InvariantViolation(
-            "evidence submission must have exactly one submitter source",
+        None => Err(Error::InvariantViolation(
+            "evidence submission must have an agent connection submitter",
         )),
     }
 }

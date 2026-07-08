@@ -4,8 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AgentConnectionId, ApiTokenId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId,
-        WorkspaceId,
+        AgentConnectionId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId,
     },
     repository::WorkspaceTransactionContext,
 };
@@ -25,7 +24,6 @@ pub struct AttachmentUploadGrant {
     pub workspace_id: WorkspaceId,
     pub evidence_submission_id: EvidenceSubmissionId,
     pub issued_by_user_id: UserId,
-    pub issued_via_api_token_id: Option<ApiTokenId>,
     pub issued_via_agent_connection_id: Option<AgentConnectionId>,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -37,7 +35,6 @@ impl WorkspaceTransactionContext<'_> {
         &self,
         grant: NewAttachmentUploadGrant,
     ) -> Result<Option<AttachmentUploadGrant>, Error> {
-        let api_token_id = self.credential.api_token_uuid();
         let agent_connection_id = self.credential.agent_connection_uuid();
         let rows = self
             .transaction
@@ -56,18 +53,16 @@ inserted AS (
         workspace_id,
 	        evidence_submission_id,
 	        issued_by_user_id,
-	        issued_via_api_token_id,
 	        issued_via_agent_connection_id,
 	        expires_at
 	    )
-	    SELECT $1, $3, scoped_submission.id, $4, $5, $6, $7
+	    SELECT $1, $3, scoped_submission.id, $4, $5, $6
 	    FROM scoped_submission
     RETURNING
         id,
         workspace_id,
 	        evidence_submission_id,
 	        issued_by_user_id,
-	        issued_via_api_token_id,
 	        issued_via_agent_connection_id,
 	        issued_at,
         expires_at,
@@ -81,7 +76,6 @@ FROM inserted
                     &Uuid::from(grant.evidence_submission_id),
                     &Uuid::from(self.workspace_id),
                     &Uuid::from(self.user_id),
-                    &api_token_id,
                     &agent_connection_id,
                     &grant.expires_at,
                 ],
@@ -118,7 +112,6 @@ RETURNING
     workspace_id,
 	    evidence_submission_id,
 	    issued_by_user_id,
-	    issued_via_api_token_id,
 	    issued_via_agent_connection_id,
 	    issued_at,
     expires_at,
@@ -147,9 +140,6 @@ fn attachment_upload_grant_from_row(row: &Row) -> Result<AttachmentUploadGrant, 
             row.try_get::<_, Uuid>("evidence_submission_id")?,
         ),
         issued_by_user_id: UserId::from(row.try_get::<_, Uuid>("issued_by_user_id")?),
-        issued_via_api_token_id: row
-            .try_get::<_, Option<Uuid>>("issued_via_api_token_id")?
-            .map(ApiTokenId::from),
         issued_via_agent_connection_id: row
             .try_get::<_, Option<Uuid>>("issued_via_agent_connection_id")?
             .map(AgentConnectionId::from),

@@ -1,30 +1,21 @@
-use std::collections::HashMap;
-
 use axum::{
     body::Body,
-    extract::{rejection::QueryRejection, Path, Query, Request, State},
+    extract::{rejection::QueryRejection, Query, State},
     http::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
-        HeaderName, HeaderValue, Method, StatusCode,
+        HeaderName, HeaderValue, StatusCode,
     },
-    middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Extension, Json, Router,
+    routing::get,
+    Extension, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{ApiTokenAuthenticator, ApiTokenContext},
-    domain::{EvidenceAttachmentId, EvidenceSubmissionId, WorkspacePermission},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    routes::{
-        authentication::authorize_workspace_route, error::ApiError, request_context::RequestId,
-    },
-    services::attachment_downloads::{
-        AttachmentDownloadService, DownloadError, IssuedDownloadGrant,
-    },
+    routes::{error::ApiError, request_context::RequestId},
+    services::attachment_downloads::{AttachmentDownloadService, DownloadError},
 };
 
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
@@ -32,128 +23,17 @@ const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 #[derive(Clone)]
 pub struct AttachmentDownloadState {
     pub service: AttachmentDownloadService,
-    pub route_auth: AttachmentDownloadRouteAuthState,
-}
-
-#[derive(Clone)]
-pub struct AttachmentDownloadRouteAuthState {
-    pub authenticator: ApiTokenAuthenticator,
 }
 
 pub fn router(state: AttachmentDownloadState) -> Router {
-    let authenticated = Router::new()
-        .route(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/download-grants",
-            post(issue_download_grant),
-        )
-        .route_layer(middleware::from_fn_with_state(
-            state.route_auth.clone(),
-            authorize_download_grant_route,
-        ));
-
     Router::new()
-        .merge(authenticated)
         .route("/attachment-downloads", get(redeem_download_grant))
         .with_state(state)
-}
-
-async fn authorize_download_grant_route(
-    State(state): State<AttachmentDownloadRouteAuthState>,
-    Path(path): Path<HashMap<String, String>>,
-    mut request: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
-    if request.method() != Method::POST {
-        return Err(ApiError::MethodNotAllowed);
-    }
-
-    let token = authorize_workspace_route(&state.authenticator, &path, &mut request).await?;
-    if !token
-        .permissions
-        .has(WorkspacePermission::ReadEvidenceSubmissions)
-    {
-        return Err(ApiError::NotFound);
-    }
-
-    Ok(next.run(request).await)
-}
-
-#[derive(Debug, Deserialize)]
-struct DownloadGrantPath {
-    workspace_id: Uuid,
-    submission_id: Uuid,
-    attachment_id: Uuid,
-}
-
-#[derive(Debug, Serialize)]
-struct DownloadGrantResponse {
-    url: String,
-    expires_at: chrono::DateTime<chrono::Utc>,
-    filename: String,
-    content_type: String,
-    content_length: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct DownloadGrantQuery {
     token: String,
-}
-
-impl From<IssuedDownloadGrant> for DownloadGrantResponse {
-    fn from(grant: IssuedDownloadGrant) -> Self {
-        Self {
-            url: grant.url.to_string(),
-            expires_at: grant.expires_at,
-            filename: grant.filename,
-            content_type: grant.content_type,
-            content_length: grant.content_length,
-        }
-    }
-}
-
-async fn issue_download_grant(
-    State(state): State<AttachmentDownloadState>,
-    Path(path): Path<DownloadGrantPath>,
-    Extension(token): Extension<ApiTokenContext>,
-    Extension(request_id): Extension<RequestId>,
-) -> Result<Json<DownloadGrantResponse>, ApiError> {
-    let grant = state
-        .service
-        .issue(
-            &token,
-            EvidenceSubmissionId::from(path.submission_id),
-            EvidenceAttachmentId::from(path.attachment_id),
-        )
-        .await
-        .map_err(download_error)?;
-
-    AuditEvent::new(
-        "evidence_attachment_download_grant.issued",
-        AuditOutcome::Success,
-        AuditActor::ApiToken {
-            user_id: token.user_id.into(),
-            api_token_id: token.api_token_id.into(),
-        },
-        AuditClientType::Rest,
-        "issue_attachment_download_grant",
-    )
-    .workspace_id(path.workspace_id)
-    .request_id(request_id.0)
-    .metadata(
-        "evidence_submission_id",
-        Uuid::from(grant.audit.submission_id),
-    )
-    .metadata(
-        "evidence_attachment_id",
-        Uuid::from(grant.audit.attachment_id),
-    )
-    .object(AuditObject::new(
-        "evidence_attachment",
-        grant.audit.attachment_id.into(),
-    ))
-    .emit();
-
-    Ok(Json(grant.into()))
 }
 
 async fn redeem_download_grant(
@@ -228,19 +108,9 @@ fn download_audit_actor(
     user_id: crate::domain::UserId,
     issued_via: crate::services::attachment_downloads::DownloadGrantIssuer,
 ) -> AuditActor {
-    match issued_via {
-        crate::services::attachment_downloads::DownloadGrantIssuer::ApiToken(api_token_id) => {
-            AuditActor::ApiToken {
-                user_id: user_id.into(),
-                api_token_id: api_token_id.into(),
-            }
-        }
-        crate::services::attachment_downloads::DownloadGrantIssuer::AgentConnection(
-            agent_connection_id,
-        ) => AuditActor::AgentConnection {
-            user_id: user_id.into(),
-            agent_connection_id: agent_connection_id.into(),
-        },
+    AuditActor::AgentConnection {
+        user_id: user_id.into(),
+        agent_connection_id: issued_via.agent_connection_id().into(),
     }
 }
 

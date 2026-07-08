@@ -15,20 +15,16 @@ use crate::{
             UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
             UploadSessionEncryptor,
         },
-        ApiTokenAuthenticator, UserAuthenticator,
+        UserAuthenticator,
     },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
         agent_connection_consent::{self, AgentConnectionConsentState},
-        api_tokens::{self, ApiTokensState},
-        attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
+        attachment_downloads::{self, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
-        controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
-        evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
-        evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
         internal_agent_connections::{self, InternalAgentConnectionsState},
         me::{self, MeState, UserRouteAuthState},
@@ -40,11 +36,8 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        api_tokens::ApiTokenService,
         attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService,
-        controls::ControlService,
-        evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
@@ -58,7 +51,6 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub api_token_authenticator: ApiTokenAuthenticator,
     pub user_authenticator: UserAuthenticator<V>,
 }
 
@@ -77,7 +69,6 @@ pub enum CreateAppError {
 pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     dependencies: AppDependencies<V>,
 ) -> Result<Router, CreateAppError> {
-    let api_token_authenticator = dependencies.api_token_authenticator.clone();
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -190,24 +181,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 handle: dependencies.metrics,
             }),
         )
-        .merge(evidence_requests::router(EvidenceRequestState {
-            service: EvidenceRequestService::new(dependencies.postgres.clone()),
-            route_auth: EvidenceRequestRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
-        }))
-        .merge(evidence_submissions::router(EvidenceSubmissionState {
-            service: evidence_submission_service.clone(),
-            max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
-            route_auth: EvidenceSubmissionRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
-        }))
         .merge(attachment_downloads::router(AttachmentDownloadState {
             service: attachment_download_service.clone(),
-            route_auth: AttachmentDownloadRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
         }))
         .merge(attachment_upload_sessions::router(
             AttachmentUploadSessionState {
@@ -219,12 +194,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             },
         ))
-        .merge(controls::router(ControlState {
-            service: ControlService::new(dependencies.postgres.clone()),
-            route_auth: ControlRouteAuthState {
-                authenticator: api_token_authenticator,
-            },
-        }))
         .merge(me::router(MeState {
             service: UserService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
@@ -233,12 +202,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         }))
         .merge(workspaces::router(WorkspacesState {
             service: WorkspaceService::new(dependencies.postgres.clone()),
-            route_auth: UserRouteAuthState {
-                authenticator: dependencies.user_authenticator.clone(),
-            },
-        }))
-        .merge(api_tokens::router(ApiTokensState {
-            service: ApiTokenService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },
@@ -280,7 +243,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })

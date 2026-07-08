@@ -1,5 +1,4 @@
 mod agent_connection;
-mod api_token;
 mod controls;
 mod error;
 mod evidence_request;
@@ -15,9 +14,6 @@ mod workspace;
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
     NewPendingAgentConnection,
-};
-pub use api_token::{
-    canonical_permissions, ApiToken, ApiTokenId, ApiTokenWithPermissions, CreateApiTokenPayload,
 };
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload,
@@ -38,7 +34,7 @@ pub use oauth::{
     NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, NewOAuthClient,
     OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient,
 };
-pub use permission::{WorkspacePermission, WorkspacePermissions};
+pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{

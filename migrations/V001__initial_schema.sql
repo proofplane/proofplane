@@ -33,34 +33,6 @@ CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user_id
 CREATE INDEX IF NOT EXISTS idx_workspace_memberships_workspace_role
     ON workspace_memberships (workspace_id, role);
 
-CREATE TABLE IF NOT EXISTS api_tokens (
-    id UUID PRIMARY KEY,
-    digest BYTEA NOT NULL UNIQUE,
-    user_id UUID NOT NULL REFERENCES users(id),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id),
-    name TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_api_tokens_owner_workspace_created
-    ON api_tokens (user_id, workspace_id, created_at DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS api_token_permissions (
-    api_token_id UUID NOT NULL REFERENCES api_tokens(id) ON DELETE CASCADE,
-    permission TEXT NOT NULL CHECK (permission IN (
-        'read_evidence_requests',
-        'write_evidence_requests',
-        'read_evidence_submissions',
-        'write_evidence_submissions',
-        'read_controls',
-        'write_controls'
-    )),
-    PRIMARY KEY (api_token_id, permission)
-);
-
 CREATE TABLE IF NOT EXISTS outbox_messages (
     id BIGSERIAL PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -156,7 +128,6 @@ CREATE INDEX IF NOT EXISTS idx_evidence_request_control_mappings_control
 CREATE TABLE IF NOT EXISTS evidence_submissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
-    submitted_by_api_token_id UUID NOT NULL REFERENCES api_tokens(id),
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     coverage_start_at TIMESTAMPTZ NOT NULL,
     coverage_end_at TIMESTAMPTZ NOT NULL,
