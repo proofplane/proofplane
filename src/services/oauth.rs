@@ -17,8 +17,8 @@ use crate::{
     domain::{
         canonical_permissions, AgentConnection, NewOAuthAuthorizationCode,
         NewOAuthAuthorizationRequest, NewOAuthClient, OAuthAuthorizationCode,
-        OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient, WorkspaceId,
-        WorkspacePermission, WorkspaceWithRole,
+        OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient, WorkspacePermission,
+        WorkspaceWithRole,
     },
     repository::{Error as RepositoryError, Postgres},
 };
@@ -88,20 +88,19 @@ pub struct PreparedAuthorization {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallbackOutcome {
     Reusable { redirect_uri: Url },
-    ConsentRequired { context: OAuthConsentContext },
+    ConsentRequired { context: Box<OAuthConsentContext> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthConsentContext {
     pub request: OAuthAuthorizationRequest,
     pub client_name: String,
-    pub workspaces: Vec<WorkspaceWithRole>,
+    pub workspace: WorkspaceWithRole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApproveConsentPayload {
     pub request_id: OAuthAuthorizationRequestId,
-    pub workspace_id: WorkspaceId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,7 +249,7 @@ impl OAuthService {
             });
         }
         Ok(CallbackOutcome::ConsentRequired {
-            context: self.consent_context(request).await?,
+            context: Box::new(self.consent_context(request).await?),
         })
     }
 
@@ -283,12 +282,17 @@ impl OAuthService {
             .get_oauth_client(&request.client_id)
             .await?
             .ok_or(OAuthError::InvalidClient)?;
+        let workspace = self
+            .repository
+            .get_workspace_with_role_for_user(user_id)
+            .await?
+            .ok_or(OAuthError::InvalidGrant)?;
         let continuation_token = random_secret(32)?;
         let nonce = random_secret(32)?;
         self.agent_connections
             .create_pending(CreatePendingConnectionPayload {
                 user_id,
-                workspace_id: payload.workspace_id,
+                workspace_id: workspace.workspace.id,
                 auth0_subject: auth0_subject.clone(),
                 auth0_client_id: request.client_id.clone(),
                 client_display_name: client.client_name,
@@ -381,17 +385,15 @@ impl OAuthService {
             .get_oauth_client(&request.client_id)
             .await?
             .ok_or(OAuthError::InvalidClient)?;
-        let workspaces = self
+        let workspace = self
             .repository
-            .list_workspaces_with_role_for_user(user_id)
-            .await?;
-        if workspaces.is_empty() {
-            return Err(OAuthError::InvalidGrant);
-        }
+            .get_workspace_with_role_for_user(user_id)
+            .await?
+            .ok_or(OAuthError::InvalidGrant)?;
         Ok(OAuthConsentContext {
             request,
             client_name: client.client_name,
-            workspaces,
+            workspace,
         })
     }
 

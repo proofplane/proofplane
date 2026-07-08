@@ -3,11 +3,9 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    authentication::{
-        paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-            UploadGrantDecryptor, UploadGrantEncryptor,
-        },
+    authentication::paseto::{
+        DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+        UploadGrantDecryptor, UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},

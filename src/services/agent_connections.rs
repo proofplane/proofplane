@@ -101,7 +101,7 @@ pub enum ActivationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsentContext {
     pub user: User,
-    pub workspaces: Vec<WorkspaceWithRole>,
+    pub workspace: WorkspaceWithRole,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,16 +130,16 @@ impl AgentConnectionService {
         let Some(user) = self.repository.get_user_by_auth0_sub(auth0_subject).await? else {
             return Ok(ConsentContextOutcome::Unavailable);
         };
-        let workspaces = self
+        let Some(workspace) = self
             .repository
-            .list_workspaces_with_role_for_user(user.id)
-            .await?;
-        if workspaces.is_empty() {
+            .get_workspace_with_role_for_user(user.id)
+            .await?
+        else {
             return Ok(ConsentContextOutcome::Unavailable);
-        }
+        };
         Ok(ConsentContextOutcome::Available(ConsentContext {
             user,
-            workspaces,
+            workspace,
         }))
     }
 

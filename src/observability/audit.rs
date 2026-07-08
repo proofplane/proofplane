@@ -283,7 +283,10 @@ mod tests {
         assert_eq!(fields["outcome"], "success");
         assert_eq!(fields["actor_type"], "agent_connection");
         assert_eq!(fields["user_id"], user_id.to_string());
-        assert_eq!(fields["agent_connection_id"], agent_connection_id.to_string());
+        assert_eq!(
+            fields["agent_connection_id"],
+            agent_connection_id.to_string()
+        );
         assert_eq!(fields["client_type"], "mcp");
         assert_eq!(fields["operation"], "create_evidence_submission");
         assert_eq!(fields["workspace_id"], workspace_id.to_string());

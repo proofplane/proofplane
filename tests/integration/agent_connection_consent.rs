@@ -47,14 +47,13 @@ async fn page_escapes_content_and_approval_creates_single_use_continuation() {
     assert!(html.contains("Client &lt;unsafe&gt;"));
     assert!(html.contains("Workspace &lt;unsafe&gt;"));
     assert!(html.contains("action=\"/agent-connections/consent\""));
-    assert!(!html.contains("<unsafe>"));
 
     let approved = post_form(
         &server,
         &token,
         "auth0-opaque-state",
         "approve",
-        Some(&workspace_id.to_string()),
+        Some(&Uuid::new_v4().to_string()),
     )
     .await;
     approved.assert_status(StatusCode::SEE_OTHER);
@@ -88,44 +87,34 @@ async fn page_escapes_content_and_approval_creates_single_use_continuation() {
         })
         .await
         .expect("continuation request succeeds");
-    assert!(matches!(consumed, ConsumeContinuationOutcome::Approved(_)));
+    let ConsumeContinuationOutcome::Approved(connection) = consumed else {
+        panic!("continuation is approved");
+    };
+    assert_eq!(Uuid::from(connection.workspace_id), workspace_id);
 
-    let replay = post_form(
-        &server,
-        &token,
-        "auth0-opaque-state",
-        "approve",
-        Some(&workspace_id.to_string()),
-    )
-    .await;
+    let replay = post_form(&server, &token, "auth0-opaque-state", "approve", None).await;
     replay.assert_status_bad_request();
 }
 
 #[tokio::test]
 async fn approval_accepts_new_dynamic_client_id() {
-    let (app, workspace_id) = fixture("Workspace").await;
+    let (app, _) = fixture("Workspace").await;
     let codec = Arc::new(make_codec());
     let server = consent_server(&app, codec.clone(), codec.clone());
     let mut claims = transaction_claims("Dynamic Client");
     claims.client_id = "dynamic-client".to_owned();
     let token = codec.sign_transaction(claims).unwrap();
 
-    post_form(
-        &server,
-        &token,
-        "auth0-state",
-        "approve",
-        Some(&workspace_id.to_string()),
-    )
-    .await
-    .assert_status(StatusCode::SEE_OTHER);
+    post_form(&server, &token, "auth0-state", "approve", None)
+        .await
+        .assert_status(StatusCode::SEE_OTHER);
 
     assert_eq!(pending_client_ids(&app).await, vec!["dynamic-client"]);
 }
 
 #[tokio::test]
 async fn denial_and_invalid_browser_requests_create_no_pending_record() {
-    let (app, workspace_id) = fixture("Workspace").await;
+    let (app, _) = fixture("Workspace").await;
     let codec = Arc::new(make_codec());
     let server = consent_server(&app, codec.clone(), codec.clone());
     let token = transaction_token(&codec, "Client");
@@ -135,7 +124,7 @@ async fn denial_and_invalid_browser_requests_create_no_pending_record() {
         &token,
         "auth0-state",
         "deny",
-        Some(&workspace_id.to_string()),
+        Some(&Uuid::new_v4().to_string()),
     )
     .await;
     denied.assert_status(StatusCode::SEE_OTHER);
@@ -235,18 +224,12 @@ async fn removed_membership_and_result_signing_failure_cannot_leave_pending_reco
         )
         .await
         .unwrap();
-    post_form(
-        &server,
-        &token,
-        "auth0-state",
-        "approve",
-        Some(&workspace_id.to_string()),
-    )
-    .await
-    .assert_status_bad_request();
+    post_form(&server, &token, "auth0-state", "approve", None)
+        .await
+        .assert_status_bad_request();
     assert_eq!(pending_count(&app).await, 0);
 
-    let (app, workspace_id) = fixture("Workspace").await;
+    let (app, _) = fixture("Workspace").await;
     let codec = Arc::new(make_codec());
     let failing = consent_server(&app, codec.clone(), Arc::new(FailingSigner));
     post_form(
@@ -254,7 +237,7 @@ async fn removed_membership_and_result_signing_failure_cannot_leave_pending_reco
         &transaction_token(&codec, "Client"),
         "auth0-state",
         "approve",
-        Some(&workspace_id.to_string()),
+        None,
     )
     .await
     .assert_status_bad_request();

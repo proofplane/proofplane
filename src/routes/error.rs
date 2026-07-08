@@ -149,6 +149,9 @@ impl From<CreateWorkspaceError> for ApiError {
     fn from(error: CreateWorkspaceError) -> Self {
         match error {
             CreateWorkspaceError::SlugTaken => conflict(ConflictKind::WorkspaceSlugTaken),
+            CreateWorkspaceError::UserAlreadyHasWorkspace => {
+                conflict(ConflictKind::WorkspaceMembershipExists)
+            }
             CreateWorkspaceError::Repository(error) => repository_error(error),
         }
     }

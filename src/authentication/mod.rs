@@ -96,5 +96,4 @@ pub enum Error {
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}

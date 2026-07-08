@@ -5,14 +5,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{
-            RegisteredClaims, UploadSessionDecryptor, UploadSessionEncryptor, VerifiedPasetoToken,
-        },
+    authentication::paseto::{
+        RegisteredClaims, UploadSessionDecryptor, UploadSessionEncryptor, VerifiedPasetoToken,
     },
-    domain::{
-        AgentConnectionId, EvidenceSubmissionId, UserId, WorkspaceId,
-    },
+    domain::{AgentConnectionId, EvidenceSubmissionId, UserId, WorkspaceId},
 };
 
 const UPLOAD_SESSION_TOKEN_VERSION: u8 = 1;

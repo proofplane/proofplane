@@ -6,10 +6,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{
-            RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
-        },
+    authentication::paseto::{
+        RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
     },
     domain::{
         AgentConnectionId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId,
@@ -149,7 +147,7 @@ impl AttachmentUploadGrantService {
                 },
             )
             .await?
-        .ok_or(UploadGrantError::Unavailable)?;
+            .ok_or(UploadGrantError::Unavailable)?;
 
         let issued = self
             .grant_encryptor
@@ -210,9 +208,7 @@ impl AttachmentUploadGrantService {
             workspace_id: redeemed.workspace_id,
             submission_id: redeemed.evidence_submission_id,
             issued_by_user_id: redeemed.issued_by_user_id,
-            issued_via: upload_grant_issuer_from_record(
-                redeemed.issued_via_agent_connection_id,
-            )?,
+            issued_via: upload_grant_issuer_from_record(redeemed.issued_via_agent_connection_id)?,
             expires_at: redeemed.expires_at,
             redeemed_at,
         })

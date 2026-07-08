@@ -49,7 +49,7 @@ impl ProofplaneMcp {
             )
             .await
             .map_err(service_error)?
-        .ok_or_else(not_found)?;
+            .ok_or_else(not_found)?;
 
         AuditEvent::new(
             "evidence_submission.created",

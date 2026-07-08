@@ -96,9 +96,7 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let demo_attachment = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
     debug!("done seeding local data");
 
-    Ok(SeedSummary {
-        demo_attachment,
-    })
+    Ok(SeedSummary { demo_attachment })
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
@@ -255,20 +253,20 @@ async fn seed_evidence_requests(
             connection.connection_id,
             async move |context| {
                 for seed in seeds {
-                if let Some(existing_request) =
-                    existing.iter().find(|request| request.title == seed.title)
-                {
-                    let update = seed.into_update();
-                    context
-                        .replace_evidence_request(existing_request.id, &update)
-                        .await?;
-                } else {
-                    let request = seed.into_new();
-                    context.create_evidence_request(&request).await?;
+                    if let Some(existing_request) =
+                        existing.iter().find(|request| request.title == seed.title)
+                    {
+                        let update = seed.into_update();
+                        context
+                            .replace_evidence_request(existing_request.id, &update)
+                            .await?;
+                    } else {
+                        let request = seed.into_new();
+                        context.create_evidence_request(&request).await?;
+                    }
                 }
-            }
 
-            Ok(())
+                Ok(())
             },
         )
         .await?;

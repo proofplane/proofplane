@@ -855,6 +855,49 @@ h3 {
   background: var(--color-surface);
 }
 
+.workspace-connect-panel,
+.workspace-connect-grid article {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  background: var(--color-surface);
+}
+
+.workspace-connect-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  align-items: center;
+  max-width: 900px;
+  margin-bottom: var(--space-lg);
+}
+
+.workspace-connect-panel h2,
+.workspace-connect-grid h2 {
+  margin-bottom: var(--space-xs);
+  font-size: var(--font-size-title);
+  line-height: 1.25;
+}
+
+.workspace-connect-panel p,
+.workspace-connect-grid p {
+  margin-bottom: 0;
+  color: var(--color-ink-muted);
+}
+
+.workspace-connect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+  max-width: 900px;
+  margin-bottom: var(--space-xxl);
+}
+
+.workspace-connect-grid article {
+  display: grid;
+  gap: var(--space-sm);
+}
+
 .token-list-header,
 .token-row {
   display: flex;

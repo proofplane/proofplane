@@ -17,7 +17,7 @@ impl ConflictKind {
             Self::AgentConnectionExists => "agent_connection_exists",
             Self::WorkspaceSlugTaken => "slug_taken",
             Self::ControlCodeTaken => "control_code_taken",
-            Self::WorkspaceMembershipExists => "membership_exists",
+            Self::WorkspaceMembershipExists => "user_already_has_workspace",
             Self::EvidenceRequestControlMappingExists => "evidence_request_control_mapping_exists",
         }
     }
@@ -29,7 +29,7 @@ impl ConflictKind {
             }
             Self::WorkspaceSlugTaken => "a workspace with this slug already exists",
             Self::ControlCodeTaken => "a control with this code already exists in the workspace",
-            Self::WorkspaceMembershipExists => "the user is already a member of this workspace",
+            Self::WorkspaceMembershipExists => "the user already belongs to a workspace",
             Self::EvidenceRequestControlMappingExists => {
                 "this control is already mapped to the evidence request"
             }

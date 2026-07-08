@@ -28,14 +28,14 @@ async fn create_workspace_requires_authentication() {
 
     let missing = app
         .server()
-        .post("/workspaces")
+        .post("/workspace")
         .json(&json!({ "name": "x" }))
         .await;
     assert_eq!(missing.status_code(), StatusCode::UNAUTHORIZED);
 
     let invalid = app
         .server()
-        .post("/workspaces")
+        .post("/workspace")
         .add_header(AUTHORIZATION_HEADER, "Bearer invalid")
         .json(&json!({ "name": "x" }))
         .await;
@@ -48,7 +48,7 @@ async fn workspace_preflight_does_not_require_authentication() {
 
     let response = app
         .server()
-        .method(Method::OPTIONS, "/workspaces")
+        .method(Method::OPTIONS, "/workspace")
         .add_header(header::ORIGIN.as_str(), "http://127.0.0.1:5173")
         .add_header(header::ACCESS_CONTROL_REQUEST_METHOD.as_str(), "GET")
         .add_header(
@@ -62,7 +62,7 @@ async fn workspace_preflight_does_not_require_authentication() {
 }
 
 #[tokio::test]
-async fn list_workspaces_returns_only_the_callers_workspaces_with_roles() {
+async fn get_workspace_returns_the_callers_workspace_with_role() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-list";
     let bob = "auth0|bob-list";
@@ -75,15 +75,53 @@ async fn list_workspaces_returns_only_the_callers_workspaces_with_roles() {
         .to_owned();
     app.create_workspace_as(bob, "Bob Workspace").await;
 
-    let alice_list = list_workspaces(&app, alice).await;
-    assert_eq!(alice_list.len(), 1);
-    assert_eq!(alice_list[0]["id"], alice_workspace);
-    assert_eq!(alice_list[0]["role"], "owner");
+    let alice_workspace_response = get_workspace(&app, alice).await;
+    assert_eq!(alice_workspace_response["id"], alice_workspace);
+    assert_eq!(alice_workspace_response["role"], "owner");
 
-    let bob_list = list_workspaces(&app, bob).await;
-    assert_eq!(bob_list.len(), 1);
-    assert_eq!(bob_list[0]["role"], "owner");
-    assert_ne!(bob_list[0]["id"], alice_workspace);
+    let bob_workspace = get_workspace(&app, bob).await;
+    assert_eq!(bob_workspace["role"], "owner");
+    assert_ne!(bob_workspace["id"], alice_workspace);
+}
+
+#[tokio::test]
+async fn get_workspace_without_membership_returns_404() {
+    let app = TestApp::start_without_default_auth().await;
+    let alice = "auth0|alice-no-workspace";
+    app.login(alice).await;
+
+    app.server()
+        .get("/workspace")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {alice}"))
+        .await
+        .assert_status_not_found();
+}
+
+#[tokio::test]
+async fn inserting_second_membership_for_user_fails() {
+    let app = TestApp::start_without_default_auth().await;
+    let alice = "auth0|alice-single-membership";
+    let alice_id = app.login(alice).await;
+    app.create_workspace_as(alice, "Alice Workspace").await;
+
+    let client = app.postgres().get().await.expect("pool client opens");
+    let other_workspace_id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO workspaces (id, name) VALUES ($1, $2)",
+            &[&other_workspace_id, &"Other Workspace"],
+        )
+        .await
+        .expect("workspace insert runs");
+
+    let duplicate = client
+        .execute(
+            "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')",
+            &[&other_workspace_id, &alice_id],
+        )
+        .await;
+
+    assert!(duplicate.is_err());
 }
 
 #[tokio::test]
@@ -128,7 +166,7 @@ async fn cannot_remove_the_last_owner() {
 }
 
 #[tokio::test]
-async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
+async fn creating_a_second_workspace_returns_single_workspace_conflict() {
     let app = TestApp::start_without_default_auth().await;
     let alice = "auth0|alice-slug";
     app.login(alice).await;
@@ -137,14 +175,14 @@ async fn creating_a_workspace_with_a_taken_slug_returns_conflict() {
         .await
         .assert_status_ok();
 
-    let conflict = create_workspace_with_slug(&app, alice, "Second Workspace", "acme").await;
+    let conflict = create_workspace_with_slug(&app, alice, "Second Workspace", "other").await;
     assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
 
     let body = conflict.json::<Value>();
-    assert_eq!(body["error"]["code"], "slug_taken");
+    assert_eq!(body["error"]["code"], "user_already_has_workspace");
     assert_eq!(
         body["error"]["message"],
-        "a workspace with this slug already exists"
+        "the user already belongs to a workspace"
     );
 }
 
@@ -247,7 +285,7 @@ async fn create_workspace_with_slug_request(
 ) -> axum_test::TestResponse {
     let mut request = app
         .server()
-        .post("/workspaces")
+        .post("/workspace")
         .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
     if let Some(request_id) = request_id {
         request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());
@@ -256,14 +294,14 @@ async fn create_workspace_with_slug_request(
     request.json(&json!({ "name": name, "slug": slug })).await
 }
 
-async fn list_workspaces(app: &TestApp, sub: &str) -> Vec<Value> {
+async fn get_workspace(app: &TestApp, sub: &str) -> Value {
     let response = app
         .server()
-        .get("/workspaces")
+        .get("/workspace")
         .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
         .await;
     response.assert_status_ok();
-    response.json::<Vec<Value>>()
+    response.json::<Value>()
 }
 
 async fn insert_membership(app: &TestApp, workspace_id: Uuid, user_id: Uuid, role: &str) {
@@ -299,13 +337,13 @@ async fn remove_member_with_request_id(
 async fn remove_member_request(
     app: &TestApp,
     sub: &str,
-    workspace_id: Uuid,
+    _workspace_id: Uuid,
     user_id: Uuid,
     request_id: Option<Uuid>,
 ) -> axum_test::TestResponse {
     let mut request = app
         .server()
-        .delete(&format!("/workspaces/{workspace_id}/members/{user_id}"))
+        .delete(&format!("/workspace/members/{user_id}"))
         .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"));
     if let Some(request_id) = request_id {
         request = request.add_header(REQUEST_ID_HEADER, request_id.to_string());

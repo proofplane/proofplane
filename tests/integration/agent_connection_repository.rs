@@ -373,16 +373,6 @@ VALUES ($1, 'delete_everything')
     assert!(client
         .execute(
             r#"
-INSERT INTO api_token_permissions (api_token_id, permission)
-VALUES ($1, 'delete_everything')
-"#,
-            &[&app.api_token_id()],
-        )
-        .await
-        .is_err());
-    assert!(client
-        .execute(
-            r#"
 UPDATE agent_connections
 SET status = 'authorized', activated_at = now()
 WHERE id = $1

@@ -1,16 +1,10 @@
 mod agent_connection_consent;
 mod agent_connection_repository;
 mod agent_connections;
-mod attachment_downloads;
-mod attachment_upload_grants;
-mod controls;
 mod dequeuer_pubsub;
-mod evidence_requests;
-mod evidence_submissions;
 mod mcp;
 mod me;
 mod repository;
-mod request_auth;
 mod support;
 mod worker_handlers;
 mod workspaces;

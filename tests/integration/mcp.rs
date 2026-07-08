@@ -245,7 +245,7 @@ VALUES ($1, $2, 'Agent request', 'Description', 'Instructions', 'quarterly', now
         .expect("database opens")
         .query_one(
             r#"
-SELECT submitted_by_api_token_id, submitted_by_agent_connection_id
+SELECT submitted_by_agent_connection_id
 FROM evidence_submissions
 WHERE id = $1
 "#,
@@ -253,9 +253,6 @@ WHERE id = $1
         )
         .await
         .expect("submission loads");
-    assert!(submission
-        .get::<_, Option<Uuid>>("submitted_by_api_token_id")
-        .is_none());
     assert_eq!(
         submission.get::<_, Option<Uuid>>("submitted_by_agent_connection_id"),
         Some(Uuid::from(connection_id))
@@ -276,7 +273,7 @@ WHERE id = $1
         .expect("database opens")
         .query_one(
             r#"
-SELECT issued_via_api_token_id, issued_via_agent_connection_id
+SELECT issued_via_agent_connection_id
 FROM attachment_upload_grants
 WHERE evidence_submission_id = $1
 "#,
@@ -284,9 +281,6 @@ WHERE evidence_submission_id = $1
         )
         .await
         .expect("upload grant loads");
-    assert!(grant_row
-        .get::<_, Option<Uuid>>("issued_via_api_token_id")
-        .is_none());
     assert_eq!(
         grant_row.get::<_, Option<Uuid>>("issued_via_agent_connection_id"),
         Some(Uuid::from(connection_id))
@@ -294,20 +288,13 @@ WHERE evidence_submission_id = $1
 }
 
 #[tokio::test]
-async fn auth0_principals_initialize_and_list_tools_but_cannot_call_protected_tools() {
+async fn auth0_principals_without_agent_connection_are_unauthorized() {
     let app = TestApp::start_without_default_auth().await;
     let server = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
         outcome: StubAuth0Outcome::Verified,
     }));
 
-    initialize(&server, "auth0-access-token")
-        .await
-        .assert_status_ok();
-    let client = McpClient::connect(&server, "auth0-access-token").await;
-    assert!(!client.list_tools().await.is_empty());
-
-    let error = client.call_tool_error("list_controls", json!({})).await;
-    assert_eq!(error.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+    assert_unauthorized(&initialize(&server, "auth0-access-token").await);
 }
 
 #[tokio::test]
@@ -475,10 +462,6 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "attachments",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_submission")["outputSchema"],
-        "attachment_upload",
-    );
-    assert_schema_has_property(
         &find_tool(&tool_list, "list_controls")["outputSchema"],
         "controls",
     );
@@ -526,11 +509,11 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
 
     client
         .execute(
-            "UPDATE api_tokens SET revoked_at = now() WHERE id = $1",
+            "UPDATE agent_connections SET status = 'revoked', revoked_at = now() WHERE id = $1",
             &[&app.api_token_id()],
         )
         .await
-        .expect("token revokes");
+        .expect("agent connection revokes");
     let revoked = server
         .delete(MCP)
         .add_header(header::AUTHORIZATION, app.bearer_token())
@@ -543,11 +526,11 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .await;
     client
         .execute(
-            "UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = $1",
+            "UPDATE agent_connections SET status = 'revoked', revoked_at = now() WHERE id = $1",
             &[&Uuid::from(expired.token_id)],
         )
         .await
-        .expect("token expires");
+        .expect("agent connection revokes");
     assert_unauthorized(&initialize(&server, &expired.raw_token).await);
 
     let removed_member = app
@@ -811,19 +794,19 @@ async fn mcp_submission_tools_preserve_selective_context() {
         .await;
     let evidence_request_id = uuid_from(&request["id"]);
     let created = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions"
-        ))
-        .json(&json!({
+        .create_evidence_submission(
+            workspace_id,
+            evidence_request_id,
+            &json!({
             "coverage_start_at": "2026-01-01T00:00:00Z",
             "coverage_end_at": "2026-03-31T23:59:59Z",
             "source_system": "okta",
             "collection_method": "api_export",
             "summary": "Quarterly access review",
             "description": "Reviewer decisions and exceptions."
-        }))
-        .await
-        .json::<Value>();
+            }),
+        )
+        .await;
     let submission_id = uuid_from(&created["id"]);
 
     let direct = mcp_client
@@ -896,36 +879,33 @@ async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() 
         created["evidence_request_id"],
         evidence_request_id.to_string()
     );
-    assert_eq!(created["attachment_upload"]["method"], "POST");
-    assert_eq!(
-        created["attachment_upload"]["path"],
-        format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments")
-    );
-    assert_eq!(created["attachment_upload"]["multipart_file_field"], "file");
-    assert_eq!(
-        created["attachment_upload"]["required_file_part_header"],
-        "Content-Digest"
-    );
-    assert_eq!(created["attachment_upload"]["transfer_mode"], "rest_only");
     assert!(created.get("summary").is_none());
     assert!(created.get("description").is_none());
     assert!(created.get("token").is_none());
 
     let persisted = app
-        .get(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}"
-        ))
+        .postgres()
+        .get()
         .await
-        .json::<Value>();
-    assert_eq!(persisted["submission"]["source_system"], "okta");
-    assert_eq!(persisted["submission"]["collection_method"], "api_export");
+        .expect("database opens")
+        .query_one(
+            "SELECT source_system, collection_method, summary, description FROM evidence_submissions WHERE id = $1",
+            &[&submission_id],
+        )
+        .await
+        .expect("submission loads");
+    assert_eq!(persisted.get::<_, String>("source_system"), "okta");
     assert_eq!(
-        persisted["submission"]["summary"],
-        "Quarterly access review"
+        persisted.get::<_, String>("collection_method"),
+        "api_export"
     );
     assert_eq!(
-        persisted["submission"]["description"],
-        "Reviewer decisions and exceptions."
+        persisted.get::<_, Option<String>>("summary").as_deref(),
+        Some("Quarterly access review")
+    );
+    assert_eq!(
+        persisted.get::<_, Option<String>>("description").as_deref(),
+        Some("Reviewer decisions and exceptions.")
     );
 
     assert_eq!(logs.len(), 1);
@@ -1425,15 +1405,13 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
         )
         .await;
     let evidence_request_id = uuid_from(&request["id"]);
-    app.post(&format!(
-        "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/control-mappings"
-    ))
-    .json(&json!({
-        "control_id": control_id,
-        "rationale": "Maps access evidence to the access review control."
-    }))
-    .await
-    .assert_status_ok();
+    insert_control_mapping_row(
+        &app,
+        evidence_request_id,
+        control_id,
+        "Maps access evidence to the access review control.",
+    )
+    .await;
 
     let controls = mcp_client.call_tool("list_controls", json!({})).await;
     assert_eq!(controls["controls"][0]["code"], "PP-AC-01");
@@ -1555,20 +1533,8 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .await;
     assert_eq!(missing.data["problem"]["code"], "not_found");
 
-    let second_control_id = app
-        .post(&format!("/workspaces/{workspace_id}/controls"))
-        .json(&json!({
-            "code": "PP-AC-05",
-            "title": "Second access review",
-            "description": "Control description for second access review.",
-            "framework_requirement_ids": []
-        }))
-        .await
-        .json::<Value>()["id"]
-        .as_str()
-        .expect("control id")
-        .parse::<Uuid>()
-        .expect("control id parses");
+    let second_control_id =
+        insert_control_row(&app, workspace_id, "PP-AC-05", "Second access review").await;
     let token = app.api_token().to_owned();
     let (audited, logs) = capture_audit_logs(|request_id| {
         let server = &server;
@@ -1818,18 +1784,18 @@ async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
         .await;
     let evidence_request_id = uuid_from(&request["id"]);
     let response = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions"
-        ))
-        .json(&json!({
+        .create_evidence_submission(
+            workspace_id,
+            evidence_request_id,
+            &json!({
             "coverage_start_at": "2026-01-01T00:00:00Z",
             "coverage_end_at": "2026-01-31T23:59:59Z",
             "source_system": "integration",
             "collection_method": "manual_upload",
-        }))
+            }),
+        )
         .await;
-    response.assert_status_ok();
-    uuid_from(&response.json::<Value>()["id"])
+    uuid_from(&response["id"])
 }
 
 async fn insert_submission_row(app: &TestApp, workspace_id: Uuid, title: &str) -> Uuid {
@@ -1857,7 +1823,7 @@ VALUES ($1, $2, $3, 'Seeded description', 'Seeded instructions', 'quarterly', no
         .execute(
             r#"
 INSERT INTO evidence_submissions (
-    id, evidence_request_id, submitted_by_api_token_id,
+    id, evidence_request_id, submitted_by_agent_connection_id,
     coverage_start_at, coverage_end_at, source_system, collection_method
 )
 VALUES ($1, $2, $3, now(), now(), 'integration', 'manual_upload')
@@ -1868,6 +1834,52 @@ VALUES ($1, $2, $3, now(), now(), 'integration', 'manual_upload')
         .expect("evidence submission fixture inserts");
 
     submission_id
+}
+
+async fn insert_control_row(app: &TestApp, workspace_id: Uuid, code: &str, title: &str) -> Uuid {
+    let control_id = Uuid::new_v4();
+    app.postgres()
+        .get()
+        .await
+        .expect("control fixture connection opens")
+        .execute(
+            r#"
+INSERT INTO controls (id, workspace_id, code, title, description)
+VALUES ($1, $2, $3, $4, $5)
+"#,
+            &[
+                &control_id,
+                &workspace_id,
+                &code,
+                &title,
+                &format!("Control description for {title}."),
+            ],
+        )
+        .await
+        .expect("control fixture inserts");
+
+    control_id
+}
+
+async fn insert_control_mapping_row(
+    app: &TestApp,
+    evidence_request_id: Uuid,
+    control_id: Uuid,
+    rationale: &str,
+) {
+    app.postgres()
+        .get()
+        .await
+        .expect("control mapping fixture connection opens")
+        .execute(
+            r#"
+INSERT INTO evidence_request_control_mappings (evidence_request_id, control_id, rationale)
+VALUES ($1, $2, $3)
+"#,
+            &[&evidence_request_id, &control_id, &rationale],
+        )
+        .await
+        .expect("control mapping fixture inserts");
 }
 
 fn field_issue_names(data: &Value) -> Vec<&str> {
@@ -1896,9 +1908,12 @@ fn assert_audit_event(record: &Value, expected: ExpectedAuditEvent) {
     assert_eq!(fields["type"], "audit_log");
     assert_eq!(fields["event_name"], expected.event_name);
     assert_eq!(fields["outcome"], "success");
-    assert_eq!(fields["actor_type"], "api_token");
+    assert_eq!(fields["actor_type"], "agent_connection");
     assert_eq!(fields["user_id"], expected.user_id.to_string());
-    assert_eq!(fields["api_token_id"], expected.api_token_id.to_string());
+    assert_eq!(
+        fields["agent_connection_id"],
+        expected.api_token_id.to_string()
+    );
     assert_eq!(fields["client_type"], expected.client_type);
     assert_eq!(fields["operation"], expected.operation);
     assert_eq!(fields["workspace_id"], expected.workspace_id.to_string());

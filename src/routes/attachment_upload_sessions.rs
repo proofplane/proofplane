@@ -117,8 +117,12 @@ async fn open_upload_session(
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
     let body = render_upload_page(
-            &inventory(&state.submissions, session.submission_id, session_context(&session))
-                .await?,
+        &inventory(
+            &state.submissions,
+            session.submission_id,
+            session_context(&session),
+        )
+        .await?,
         None,
     );
     Ok(Html(body).into_response())

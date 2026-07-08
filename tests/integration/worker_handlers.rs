@@ -17,7 +17,7 @@ use proofplane::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::{attachment_form, upload_attachment as upload_attachment_request, TestApp};
+use super::support::{upload_attachment as upload_attachment_request, TestApp};
 
 const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
@@ -31,19 +31,14 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
         .await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let upload = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments"
-        ))
-        .multipart(attachment_form(
-            b"clean attachment",
-            "artifact.txt",
-            "text/plain",
-            None,
-        ))
-        .await;
-    upload.assert_status(StatusCode::ACCEPTED);
-    let attachment = upload.json::<Value>()["attachment"].clone();
+    let attachment = upload_attachment_request(
+        &app,
+        workspace_id,
+        submission_id,
+        "artifact.txt",
+        b"clean attachment",
+    )
+    .await;
     let attachment_id = attachment["id"]
         .as_str()
         .expect("attachment ID is a string");
@@ -65,14 +60,7 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
 
     deliver_twice(&worker, &finalization_messages[0]).await;
 
-    let detail = app
-        .get(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}"
-        ))
-        .await
-        .json::<Value>();
-    let finalized = &detail["attachments"][0];
-    assert_eq!(finalized["upload_status"], "uploaded");
+    assert_eq!(attachment_status(&app, attachment_uuid).await, "uploaded");
 
     let final_key = attachment_object_key(&app, attachment_uuid).await;
     assert_eq!(
@@ -571,18 +559,18 @@ async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
         .await;
     let evidence_request_id = uuid_field(&request, "id");
     let submission = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions"
-        ))
-        .json(&json!({
+        .create_evidence_submission(
+            workspace_id,
+            evidence_request_id,
+            &json!({
             "coverage_start_at": "2026-01-01T00:00:00Z",
             "coverage_end_at": "2026-01-31T23:59:59Z",
             "source_system": "integration",
             "collection_method": "worker test",
-        }))
+            }),
+        )
         .await;
-    submission.assert_status_ok();
-    uuid_field(&submission.json(), "id")
+    uuid_field(&submission, "id")
 }
 
 fn uuid_field(value: &Value, field: &str) -> Uuid {

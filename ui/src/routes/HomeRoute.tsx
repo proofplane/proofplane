@@ -1,4 +1,4 @@
-import { Bot, FileCheck2, KeyRound, Layers3 } from "lucide-react";
+import { Bot, FileCheck2, Layers3, PlugZap } from "lucide-react";
 import { Link } from "react-router-dom";
 import { StartWorkspaceButton } from "../auth/StartWorkspaceButton";
 import { Shell } from "../components/Shell";
@@ -16,28 +16,28 @@ const sections = [
   },
   {
     eyebrow: "Step 02",
-    title: "Issue a scoped API token.",
-    body: "Create a workspace-bound token with explicit permission strings. The backend can list and revoke those tokens later.",
-    icon: KeyRound,
-    artifact: "Scoped token",
-    result: "Token endpoint ready",
-    summary: "Token API",
-    visual: <PermissionStepVisual />,
+    title: "Connect an MCP client.",
+    body: "Authorize an MCP client through OAuth and approve the exact workspace permissions it requests.",
+    icon: PlugZap,
+    artifact: "OAuth consent",
+    result: "Client connected",
+    summary: "MCP OAuth",
+    visual: <McpStepVisual />,
   },
   {
     eyebrow: "Step 03",
-    title: "Use the data APIs.",
-    body: "Controls, evidence requests, submissions, attachments, and mappings are backend routes today.",
+    title: "Collect compliance evidence.",
+    body: "Use connected clients to work with controls, evidence requests, submissions, attachments, and mappings.",
     icon: Bot,
     artifact: "Compliance records",
-    result: "REST APIs available",
-    summary: "Data APIs",
+    result: "Evidence organized",
+    summary: "Evidence flow",
     visual: <DataApiStepVisual />,
   },
   {
     eyebrow: "Step 04",
     title: "Packet and MCP views are placeholders.",
-    body: "The backend does not yet provide production MCP tools or auditor packet previews. The UI marks both as not built yet.",
+    body: "Auditor packet previews and richer workspace views are still later screens.",
     icon: FileCheck2,
     artifact: "Later screens",
     result: "Not implemented yet",
@@ -55,8 +55,8 @@ export function HomeRoute() {
             <p className="eyebrow">SOC 2 compliance infrastructure</p>
             <h1 id="home-title">Compliance tasks, reduced to the next action.</h1>
             <p className="lede">
-              Proofplane currently supports workspace setup, scoped tokens, and
-              backend APIs for controls, evidence requests, submissions, and attachments.
+              Proofplane currently supports workspace setup and OAuth-based MCP
+              connections for controls, evidence requests, submissions, and attachments.
             </p>
             <div className="actions">
               <StartWorkspaceButton />
@@ -130,9 +130,9 @@ function HeroVisual() {
           <small>Owner: workspace admin</small>
         </div>
         <div className="stage-panel">
-          <span>Token</span>
-          <strong>Scoped API access</strong>
-          <small>Explicit permission strings</small>
+          <span>MCP</span>
+          <strong>OAuth client access</strong>
+          <small>Consent-bound permissions</small>
         </div>
         <div className="stage-panel">
           <span>Placeholder</span>
@@ -142,11 +142,11 @@ function HeroVisual() {
       </div>
       <div className="stage-command">
         <span>API surface</span>
-        <code>Create token for Acme Security</code>
+        <code>Authorize MCP client for Acme Security</code>
       </div>
       <div className="stage-footer">
         <span>Workspace</span>
-        <span>Token</span>
+        <span>MCP</span>
         <span>Evidence</span>
         <span>Controls</span>
       </div>
@@ -171,12 +171,12 @@ function WorkspaceStepVisual() {
   );
 }
 
-function PermissionStepVisual() {
+function McpStepVisual() {
   return (
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-strategy-panel">
-        <h4>Token permissions</h4>
+        <h4>Requested permissions</h4>
         {["read_controls", "write_evidence_submissions", "read_evidence_requests"].map((label) => (
           <div className="mock-strategy-row" key={label}>
             <span>{label}</span>

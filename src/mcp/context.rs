@@ -1,4 +1,6 @@
 use super::auth::McpPrincipal;
+#[cfg(test)]
+use crate::domain::{UserId, WorkspacePermissions};
 use crate::{
     domain::{WorkspaceId, WorkspacePermission},
     observability::audit::AuditActor,
@@ -6,8 +8,6 @@ use crate::{
     services::agent_connections::AgentConnectionContext,
 };
 use serde_json::json;
-#[cfg(test)]
-use crate::domain::{UserId, WorkspacePermissions};
 
 pub const SESSION_ID_HEADER: &str = "mcp-session-id";
 
@@ -56,7 +56,9 @@ impl McpRequestContext {
             .copied()
             .ok_or_else(internal_context_error)?;
 
-        if connection.workspace_id != workspace_id || !connection.permissions.has(required_permission) {
+        if connection.workspace_id != workspace_id
+            || !connection.permissions.has(required_permission)
+        {
             return Err(not_found());
         }
 
@@ -82,7 +84,9 @@ impl McpRequestContext {
     }
 }
 
-fn workspace_principal(extensions: &http::Extensions) -> Result<AgentConnectionContext, rmcp::ErrorData> {
+fn workspace_principal(
+    extensions: &http::Extensions,
+) -> Result<AgentConnectionContext, rmcp::ErrorData> {
     match extensions.get::<McpPrincipal>() {
         Some(McpPrincipal::AgentConnection(connection)) => Ok(*connection),
         None => Err(internal_context_error()),
@@ -124,7 +128,9 @@ mod tests {
     fn authorization_conceals_workspace_and_permission_failures() {
         let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(McpPrincipal::AgentConnection(agent_connection_context(workspace_id)));
+        extensions.insert(McpPrincipal::AgentConnection(agent_connection_context(
+            workspace_id,
+        )));
         extensions.insert(RequestId(uuid::Uuid::new_v4()));
         let headers = http::HeaderMap::new();
 

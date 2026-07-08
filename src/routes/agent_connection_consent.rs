@@ -82,7 +82,6 @@ struct ConsentForm {
     session_token: String,
     state: String,
     decision: String,
-    workspace_id: Option<String>,
 }
 
 async fn show_consent<S>(
@@ -109,7 +108,7 @@ where
 
     secure_response(
         StatusCode::OK,
-        render_consent(&query, &claims, &context.workspaces),
+        render_consent(&query, &claims, &context.workspace),
     )
 }
 
@@ -138,9 +137,6 @@ where
             redirect_with_result(&state, &form.state, result)
         }
         "approve" => {
-            let Some(workspace_id) = form.workspace_id else {
-                return unavailable();
-            };
             let context = match state.service.consent_context(&claims.sub).await {
                 Ok(ConsentContextOutcome::Available(context)) => context,
                 Ok(ConsentContextOutcome::Unavailable) => return unavailable(),
@@ -155,7 +151,7 @@ where
             };
             let pending = PendingCreationRequest::from_claims(
                 &claims,
-                workspace_id,
+                context.workspace.workspace.id,
                 continuation_token.clone(),
                 nonce.clone(),
             )
@@ -225,13 +221,13 @@ struct PendingCreationRequest {
 impl PendingCreationRequest {
     fn from_claims(
         claims: &ConsentTransactionClaims,
-        workspace_id: String,
+        workspace_id: WorkspaceId,
         continuation_token: String,
         nonce: String,
     ) -> Self {
         Self {
             user_id: String::new(),
-            workspace_id,
+            workspace_id: workspace_id.to_string(),
             auth0_subject: claims.sub.clone(),
             auth0_client_id: claims.client_id.clone(),
             client_display_name: claims.client_name.clone(),
@@ -363,24 +359,17 @@ fn redirect_to_auth0<S>(
 fn render_consent(
     query: &ConsentQuery,
     claims: &ConsentTransactionClaims,
-    workspaces: &[crate::domain::WorkspaceWithRole],
+    workspace: &crate::domain::WorkspaceWithRole,
 ) -> String {
-    let mut options = String::new();
-    for workspace in workspaces {
-        options.push_str(&format!(
-            "<option value=\"{}\">{}</option>",
-            workspace.workspace.id,
-            escape_html(&workspace.workspace.name)
-        ));
-    }
     let scopes = claims
         .scopes
         .iter()
         .map(|scope| format!("<li>{}</li>", escape_html(scope)))
         .collect::<String>();
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize agent connection</title></head><body><main><h1>Authorize {client}</h1><p>Select one workspace for this connection.</p><ul>{scopes}</ul><form method=\"post\" action=\"/agent-connections/consent\"><input type=\"hidden\" name=\"session_token\" value=\"{token}\"><input type=\"hidden\" name=\"state\" value=\"{state}\"><label>Workspace<select name=\"workspace_id\" required>{options}</select></label><button type=\"submit\" name=\"decision\" value=\"approve\">Approve</button><button type=\"submit\" name=\"decision\" value=\"deny\">Deny</button></form></main></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize agent connection</title></head><body><main><h1>Authorize {client}</h1><p>This connection will use the workspace <strong>{workspace}</strong>.</p><ul>{scopes}</ul><form method=\"post\" action=\"/agent-connections/consent\"><input type=\"hidden\" name=\"session_token\" value=\"{token}\"><input type=\"hidden\" name=\"state\" value=\"{state}\"><button type=\"submit\" name=\"decision\" value=\"approve\">Approve</button><button type=\"submit\" name=\"decision\" value=\"deny\">Deny</button></form></main></body></html>",
         client = escape_html(&claims.client_name),
+        workspace = escape_html(&workspace.workspace.name),
         token = escape_html(&query.session_token),
         state = escape_html(&query.state),
     )
@@ -500,6 +489,7 @@ fn log_service_error(error: AgentConnectionError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{Workspace, WorkspaceRole, WorkspaceWithRole};
 
     #[test]
     fn html_escapes_client_workspace_state_and_token_content() {
@@ -522,10 +512,21 @@ mod tests {
             iat: 1,
             exp: 2,
         };
-        let html = render_consent(&query, &claims, &[]);
+        let html = render_consent(
+            &query,
+            &claims,
+            &WorkspaceWithRole {
+                workspace: Workspace {
+                    id: WorkspaceId::from(Uuid::new_v4()),
+                    slug: None,
+                    name: "Workspace <unsafe>".to_owned(),
+                    created_at: Utc::now(),
+                },
+                role: WorkspaceRole::Owner,
+            },
+        );
         assert!(html.contains("&lt;Client &amp; Co&gt;"));
-        assert!(!html.contains("<script>"));
-        assert!(!html.contains("onfocus=\"alert"));
+        assert!(html.contains("Workspace &lt;unsafe&gt;"));
     }
 
     #[test]

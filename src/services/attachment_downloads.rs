@@ -6,14 +6,12 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, RegisteredClaims, VerifiedPasetoToken,
-        },
+    authentication::paseto::{
+        DownloadGrantDecryptor, DownloadGrantEncryptor, RegisteredClaims, VerifiedPasetoToken,
     },
     domain::{
-        AgentConnectionId, AttachmentUploadStatus, EvidenceAttachment,
-        EvidenceAttachmentId, EvidenceSubmissionId, UserId, WorkspaceId,
+        AgentConnectionId, AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId,
+        EvidenceSubmissionId, UserId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
     repository::{AttachmentDownloadCandidate, Postgres},
@@ -370,9 +368,7 @@ mod tests {
             attachment_id: "00000000-0000-4000-8000-000000000003".to_owned(),
             issued_by_user_id: "00000000-0000-4000-8000-000000000004".to_owned(),
             issued_via_api_token_id: None,
-            issued_via_agent_connection_id: Some(
-                "00000000-0000-4000-8000-000000000005".to_owned(),
-            ),
+            issued_via_agent_connection_id: Some("00000000-0000-4000-8000-000000000005".to_owned()),
         }
     }
 

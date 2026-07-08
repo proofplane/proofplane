@@ -17,7 +17,7 @@ use crate::{
         UserAuthenticator,
     },
     config::Auth0Config,
-    domain::{OAuthAuthorizationRequestId, WorkspaceId, WorkspacePermission},
+    domain::{OAuthAuthorizationRequestId, WorkspacePermission},
     services::oauth::{
         ApproveConsentPayload, AuthorizePayload, CallbackOutcome, OAuthConsentContext, OAuthError,
         OAuthService, RegisterClientPayload, TokenPayload,
@@ -301,7 +301,7 @@ where
         .await
     {
         Ok(CallbackOutcome::Reusable { redirect_uri }) => redirect(redirect_uri),
-        Ok(CallbackOutcome::ConsentRequired { context }) => consent_page(context, None),
+        Ok(CallbackOutcome::ConsentRequired { context }) => consent_page(*context, None),
         Err(error) => {
             tracing::error!(%error, "OAuth callback failed");
             oauth_html_error()
@@ -312,7 +312,6 @@ where
 #[derive(Deserialize)]
 struct ConsentForm {
     request_id: String,
-    workspace_id: String,
     decision: String,
 }
 
@@ -330,15 +329,9 @@ where
     else {
         return oauth_html_error();
     };
-    let Ok(workspace_id) = Uuid::parse_str(&form.workspace_id).map(WorkspaceId::from) else {
-        return oauth_html_error();
-    };
     match state
         .service
-        .approve_consent(ApproveConsentPayload {
-            request_id,
-            workspace_id,
-        })
+        .approve_consent(ApproveConsentPayload { request_id })
         .await
     {
         Ok(redirect_uri) => redirect(redirect_uri),
@@ -420,18 +413,8 @@ fn render_consent_page(context: OAuthConsentContext, message: Option<&str>) -> S
         .iter()
         .map(|scope| format!("<li>{}</li>", escape_html(scope.as_str())))
         .collect::<String>();
-    let options = context
-        .workspaces
-        .iter()
-        .map(|workspace| {
-            format!(
-                "<option value=\"{}\">{} - {}</option>",
-                Uuid::from(workspace.workspace.id),
-                escape_html(&workspace.workspace.name),
-                escape_html(workspace.role.as_str())
-            )
-        })
-        .collect::<String>();
+    let workspace_name = escape_html(&context.workspace.workspace.name);
+    let workspace_role = escape_html(context.workspace.role.as_str());
     let notice = message
         .map(|message| {
             format!(
@@ -494,7 +477,7 @@ p {{ color: var(--muted); line-height: 1.55; max-width: 68ch; }}
 ul {{ margin: 12px 0 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }}
 form {{ display: grid; gap: 14px; margin-top: 18px; max-width: 560px; }}
 label {{ font-size: 0.8125rem; font-weight: 620; color: var(--muted); }}
-select {{
+.workspace-fixed {{
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -504,7 +487,7 @@ select {{
   padding: 10px 12px;
   margin-top: 8px;
 }}
-select:focus-visible, button:focus-visible {{
+button:focus-visible {{
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }}
@@ -527,19 +510,17 @@ button:hover {{ background: oklch(72% 0.09 174); }}
 <body>
 <main>
 <h1>Authorize {client_name}</h1>
-<p>Choose the Proofplane workspace this MCP client can use. The client receives only the approved workspace permissions below.</p>
+<p>This MCP client will use your Proofplane workspace. The client receives only the approved workspace permissions below.</p>
 {notice}
 <section class="panel" aria-labelledby="requested-access">
 <h2 id="requested-access">Requested access</h2>
 <ul>{scopes}</ul>
 </section>
-<section class="panel" aria-labelledby="workspace-selection">
-<h2 id="workspace-selection">Workspace</h2>
+<section class="panel" aria-labelledby="workspace-context">
+<h2 id="workspace-context">Workspace</h2>
 <form method="post" action="/oauth/consent">
 <input type="hidden" name="request_id" value="{request_id}">
-<label for="workspace_id">Workspace
-<select id="workspace_id" name="workspace_id" required>{options}</select>
-</label>
+<div class="workspace-fixed">{workspace_name} - {workspace_role}</div>
 <div class="actions">
 <button type="submit" name="decision" value="approve">Approve</button>
 <button class="danger-button" type="submit" name="decision" value="deny">Deny</button>
@@ -551,7 +532,8 @@ button:hover {{ background: oklch(72% 0.09 174); }}
 </html>"#,
         client_name = escape_html(&context.client_name),
         request_id = Uuid::from(request.id),
-        options = options,
+        workspace_name = workspace_name,
+        workspace_role = workspace_role,
     )
 }
 
@@ -616,7 +598,7 @@ mod tests {
     };
 
     #[test]
-    fn consent_page_renders_workspace_picker_with_escaped_content() {
+    fn consent_page_renders_fixed_workspace_with_escaped_content() {
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
         let html = render_consent_page(
             OAuthConsentContext {
@@ -633,7 +615,7 @@ mod tests {
                     expires_at: Utc::now(),
                 },
                 client_name: "<Inspector & Codex>".to_owned(),
-                workspaces: vec![WorkspaceWithRole {
+                workspace: WorkspaceWithRole {
                     workspace: Workspace {
                         id: workspace_id,
                         slug: None,
@@ -641,16 +623,12 @@ mod tests {
                         created_at: Utc::now(),
                     },
                     role: WorkspaceRole::Owner,
-                }],
+                },
             },
             None,
         );
 
-        assert!(html.contains("<select"));
-        assert!(html.contains(&format!("value=\"{}\"", Uuid::from(workspace_id))));
         assert!(html.contains("&lt;Inspector &amp; Codex&gt;"));
         assert!(html.contains("SOC 2 &lt;Prod&gt; - owner"));
-        assert!(!html.contains("<Inspector"));
-        assert!(!html.contains("SOC 2 <Prod>"));
     }
 }
