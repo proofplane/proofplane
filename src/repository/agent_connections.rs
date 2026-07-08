@@ -3,7 +3,7 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentConnection, AgentConnectionId, NewPendingAgentConnection, Sha256Digest,
+    AgentConnection, AgentConnectionId, NewPendingAgentConnection, Sha256Digest, WorkspaceId,
     WorkspacePermission,
 };
 
@@ -12,6 +12,19 @@ use super::{constraints::classify_db_error, Error, Postgres};
 const CONNECTION_COLUMNS: &str = "c.id, c.user_id, c.workspace_id, c.auth0_subject, \
     c.auth0_client_id, c.client_display_name, c.resource, c.status, \
     c.pending_expires_at, c.activated_at, c.last_used_at, c.revoked_at, c.created_at";
+const PERMISSIONS_MATCH: &str = r#"
+(
+    SELECT count(*)
+    FROM agent_connection_permissions p
+    WHERE p.agent_connection_id = c.id
+) = cardinality($6::text[])
+AND NOT EXISTS (
+    SELECT 1
+    FROM agent_connection_permissions p
+    WHERE p.agent_connection_id = c.id
+      AND NOT p.permission = ANY($6::text[])
+)
+"#;
 
 impl Postgres {
     pub async fn create_pending_agent_connection(
@@ -28,7 +41,7 @@ DELETE FROM agent_connections
 WHERE user_id = $1
   AND auth0_client_id = $2
   AND resource = $3
-  AND status = 'pending'
+  AND status IN ('pending', 'authorized')
   AND pending_expires_at <= now()
 "#,
                 &[
@@ -161,9 +174,11 @@ WITH consumed AS (
       )
     RETURNING t.agent_connection_id
 )
-SELECT {CONNECTION_COLUMNS}
-FROM agent_connections c
-JOIN consumed ON consumed.agent_connection_id = c.id
+UPDATE agent_connections c
+SET status = 'authorized'
+FROM consumed
+WHERE consumed.agent_connection_id = c.id
+RETURNING {CONNECTION_COLUMNS}
 "#
                 ),
                 &[&continuation, &nonce],
@@ -200,7 +215,7 @@ WHERE c.auth0_subject = $1
   AND u.auth0_sub = $1
   AND c.auth0_client_id = $2
   AND c.resource = $3
-  AND c.status = 'active'
+  AND c.status IN ('authorized', 'active')
 "#
                 ),
                 &[&auth0_subject, &auth0_client_id, &resource],
@@ -226,7 +241,7 @@ WHERE c.auth0_subject = $1
 UPDATE agent_connections c
 SET status = 'active', activated_at = now()
 WHERE c.id = $1
-  AND c.status = 'pending'
+  AND c.status = 'authorized'
   AND c.pending_expires_at > now()
   AND EXISTS (
       SELECT 1 FROM agent_authorization_transactions t
@@ -241,6 +256,91 @@ RETURNING c.id, c.user_id, c.workspace_id, c.auth0_subject, c.auth0_client_id,
     c.activated_at, c.last_used_at, c.revoked_at, c.created_at
 "#,
                 &[&Uuid::from(id)],
+            )
+            .await?;
+        let Some(row) = row else {
+            transaction.commit().await?;
+            return Ok(None);
+        };
+        let mut connection = connection_from_row(&row)?;
+        connection.permissions = permissions_for_connection(&transaction, id).await?;
+        transaction.commit().await?;
+        Ok(Some(connection))
+    }
+
+    pub async fn authorize_agent_connection(
+        &self,
+        id: AgentConnectionId,
+        workspace_id: WorkspaceId,
+        auth0_subject: &str,
+        auth0_client_id: &str,
+        resource: &str,
+        permissions: &[String],
+    ) -> Result<Option<AgentConnection>, Error> {
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let row = transaction
+            .query_opt(
+                &format!(
+                    r#"
+WITH activated AS (
+    UPDATE agent_connections c
+    SET status = 'active',
+        activated_at = now(),
+        last_used_at = now()
+    WHERE c.id = $1
+      AND c.workspace_id = $2
+      AND c.auth0_subject = $3
+      AND c.auth0_client_id = $4
+      AND c.resource = $5
+      AND c.status = 'authorized'
+      AND c.pending_expires_at > now()
+      AND {PERMISSIONS_MATCH}
+      AND EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = c.user_id AND u.auth0_sub = c.auth0_subject
+      )
+      AND EXISTS (
+          SELECT 1 FROM workspace_memberships m
+          WHERE m.user_id = c.user_id AND m.workspace_id = c.workspace_id
+      )
+    RETURNING {CONNECTION_COLUMNS}
+),
+touched AS (
+    UPDATE agent_connections c
+    SET last_used_at = now()
+    WHERE c.id = $1
+      AND c.workspace_id = $2
+      AND c.auth0_subject = $3
+      AND c.auth0_client_id = $4
+      AND c.resource = $5
+      AND c.status = 'active'
+      AND {PERMISSIONS_MATCH}
+      AND NOT EXISTS (SELECT 1 FROM activated)
+      AND EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = c.user_id AND u.auth0_sub = c.auth0_subject
+      )
+      AND EXISTS (
+          SELECT 1 FROM workspace_memberships m
+          WHERE m.user_id = c.user_id AND m.workspace_id = c.workspace_id
+      )
+    RETURNING {CONNECTION_COLUMNS}
+)
+SELECT * FROM activated
+UNION ALL
+SELECT * FROM touched
+LIMIT 1
+"#
+                ),
+                &[
+                    &Uuid::from(id),
+                    &Uuid::from(workspace_id),
+                    &auth0_subject,
+                    &auth0_client_id,
+                    &resource,
+                    &permissions,
+                ],
             )
             .await?;
         let Some(row) = row else {
@@ -278,7 +378,7 @@ WHERE id = $1 AND status = 'active'
                 r#"
 UPDATE agent_connections
 SET status = 'revoked', revoked_at = now()
-WHERE id = $1 AND status IN ('pending', 'active')
+WHERE id = $1 AND status IN ('pending', 'authorized', 'active')
 "#,
                 &[&Uuid::from(id)],
             )
@@ -313,7 +413,7 @@ WHERE agent_connection_id = $1
         WorkspacePermission::ALL
             .iter()
             .position(|candidate| candidate == permission)
-            .expect("parsed permission is canonical")
+            .unwrap_or(WorkspacePermission::ALL.len())
     });
     Ok(permissions)
 }

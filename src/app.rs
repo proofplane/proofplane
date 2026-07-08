@@ -4,13 +4,16 @@ use axum::{extract::MatchedPath, http::Request, middleware, response::Response, 
 use metrics_exporter_prometheus::PrometheusHandle;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::Span;
+use url::ParseError;
 
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
+        auth0_redirect_token::RedirectTokenCodec,
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
+            UploadSessionEncryptor,
         },
         ApiTokenAuthenticator, UserAuthenticator,
     },
@@ -18,6 +21,7 @@ use crate::{
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
+        agent_connection_consent::{self, AgentConnectionConsentState},
         api_tokens::{self, ApiTokensState},
         attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
@@ -29,6 +33,7 @@ use crate::{
         internal_agent_connections::{self, InternalAgentConnectionsState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
+        oauth::{self, OAuthState},
         request_context::attach_request_id,
         version,
         workspaces::{self, WorkspacesState},
@@ -41,6 +46,7 @@ use crate::{
         controls::ControlService,
         evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService,
+        oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
         workspaces::WorkspaceService,
@@ -56,9 +62,21 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub user_authenticator: UserAuthenticator<V>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateAppError {
+    #[error("authentication initialization error")]
+    Authentication(#[from] crate::authentication::Error),
+
+    #[error("invalid consent URL configuration")]
+    ConsentUrl(#[source] ParseError),
+
+    #[error("invalid Auth0 continuation URL configuration")]
+    Auth0ContinuationUrl(#[source] ParseError),
+}
+
 pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     dependencies: AppDependencies<V>,
-) -> Result<Router, crate::authentication::Error> {
+) -> Result<Router, CreateAppError> {
     let api_token_authenticator = dependencies.api_token_authenticator.clone();
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
@@ -115,7 +133,44 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let mcp_oauth_decryptor = McpOAuthDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let oauth_service = OAuthService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.clone(),
+        mcp_oauth_encryptor,
+        mcp_oauth_decryptor,
+    );
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
+    let consent_url = dependencies
+        .config
+        .server
+        .public_api_base_url
+        .join("agent-connections/consent")
+        .map_err(CreateAppError::ConsentUrl)?;
+    let auth0_continue_url = dependencies
+        .config
+        .auth0
+        .issuer
+        .join("continue")
+        .map_err(CreateAppError::Auth0ContinuationUrl)?;
+    let consent_token_codec = Arc::new(RedirectTokenCodec::new(
+        dependencies.config.auth0.action.shared_secret.clone(),
+        dependencies.config.auth0.issuer.to_string(),
+        consent_url.to_string(),
+    ));
+    let agent_connection_service = AgentConnectionService::new(dependencies.postgres.clone());
 
     Ok(Router::new()
         .nest(
@@ -188,9 +243,25 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
+        .merge(agent_connection_consent::router(
+            AgentConnectionConsentState {
+                service: agent_connection_service.clone(),
+                token_codec: consent_token_codec.clone(),
+                result_signer: consent_token_codec,
+                resource: dependencies.config.mcp.resource.to_string(),
+                auth0_continue_url,
+            },
+        ))
+        .merge(oauth::router(OAuthState {
+            service: oauth_service,
+            user_authenticator: dependencies.user_authenticator.clone(),
+            auth0: dependencies.config.auth0.clone(),
+            issuer: dependencies.config.server.public_api_base_url.clone(),
+            http: reqwest::Client::new(),
+        }))
         .merge(internal_agent_connections::router(
             InternalAgentConnectionsState {
-                service: AgentConnectionService::new(dependencies.postgres.clone()),
+                service: agent_connection_service,
                 action_shared_secret: dependencies.config.auth0.action.shared_secret.clone(),
             },
         ))

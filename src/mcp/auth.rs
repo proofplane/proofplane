@@ -12,16 +12,22 @@ use crate::authentication::{
     auth0::{TokenVerifier, VerifiedMcpClaims},
     ApiTokenAuthenticator, ApiTokenContext,
 };
+use crate::services::agent_connections::{
+    AgentConnectionContext, AgentConnectionService, AuthorizeMcpConnectionPayload,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpPrincipal {
     ApiToken(ApiTokenContext),
+    AgentConnection(AgentConnectionContext),
     Auth0(VerifiedMcpClaims),
 }
 
 pub(crate) struct AuthenticationState<V> {
     pub api_tokens: Arc<ApiTokenAuthenticator>,
     pub auth0: Arc<V>,
+    pub agent_connections: AgentConnectionService,
+    pub resource: String,
     pub challenge: HeaderValue,
 }
 
@@ -30,6 +36,8 @@ impl<V> Clone for AuthenticationState<V> {
         Self {
             api_tokens: self.api_tokens.clone(),
             auth0: self.auth0.clone(),
+            agent_connections: self.agent_connections.clone(),
+            resource: self.resource.clone(),
             challenge: self.challenge.clone(),
         }
     }
@@ -56,7 +64,15 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
         }
     } else {
         match state.auth0.verify(raw_token).await {
-            Ok(claims) => McpPrincipal::Auth0(claims),
+            Ok(claims) => match agent_connection_principal(&state, claims).await {
+                Ok(principal) => principal,
+                Err(AgentConnectionAuthError::Rejected) => return unauthorized(&state.challenge),
+                Err(AgentConnectionAuthError::Unavailable(error)) => {
+                    tracing::error!(%error, "MCP agent connection authorization failed");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                        .into_response();
+                }
+            },
             Err(error) if error.is_token_rejection() => {
                 return unauthorized(&state.challenge);
             }
@@ -68,12 +84,49 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
         }
     };
 
-    if let McpPrincipal::ApiToken(context) = principal {
-        Span::current().record("user_id", context.user_id.to_string());
-        Span::current().record("api_token_id", context.api_token_id.to_string());
+    match &principal {
+        McpPrincipal::ApiToken(context) => {
+            Span::current().record("user_id", context.user_id.to_string());
+            Span::current().record("api_token_id", context.api_token_id.to_string());
+        }
+        McpPrincipal::AgentConnection(context) => {
+            Span::current().record("user_id", context.user_id.to_string());
+        }
+        McpPrincipal::Auth0(_) => {}
     }
     request.extensions_mut().insert(principal);
     next.run(request).await
+}
+
+enum AgentConnectionAuthError {
+    Rejected,
+    Unavailable(crate::services::agent_connections::AgentConnectionError),
+}
+
+async fn agent_connection_principal<V: TokenVerifier<Claims = VerifiedMcpClaims>>(
+    state: &AuthenticationState<V>,
+    claims: VerifiedMcpClaims,
+) -> Result<McpPrincipal, AgentConnectionAuthError> {
+    match (claims.connection_id, claims.workspace_id) {
+        (None, None) => Ok(McpPrincipal::Auth0(claims)),
+        (Some(connection_id), Some(workspace_id)) => {
+            let context = state
+                .agent_connections
+                .authorize_mcp_connection(AuthorizeMcpConnectionPayload {
+                    connection_id,
+                    workspace_id,
+                    auth0_subject: claims.subject.clone(),
+                    auth0_client_id: claims.client_id.clone(),
+                    resource: state.resource.clone(),
+                    permissions: claims.scopes.clone(),
+                })
+                .await
+                .map_err(AgentConnectionAuthError::Unavailable)?
+                .ok_or(AgentConnectionAuthError::Rejected)?;
+            Ok(McpPrincipal::AgentConnection(context))
+        }
+        _ => Err(AgentConnectionAuthError::Rejected),
+    }
 }
 
 fn bearer_token(request: &Request) -> Option<&str> {

@@ -15,6 +15,8 @@ use crate::{
     services::Error,
     worker::ATTACHMENT_SCAN_REQUESTED,
 };
+
+use super::agent_connections::AgentConnectionContext;
 use bytes::Bytes;
 use futures_core::Stream;
 use uuid::Uuid;
@@ -66,6 +68,25 @@ impl EvidenceSubmissionService {
                 token.workspace_id,
                 token.user_id,
                 token.api_token_id,
+                async move |context| context.create_evidence_submission(&payload).await,
+            )
+            .await?)
+    }
+
+    pub async fn create_for_agent(
+        &self,
+        connection: AgentConnectionContext,
+        evidence_request_id: EvidenceRequestId,
+        mut payload: CreateEvidenceSubmissionPayload,
+    ) -> Result<Option<EvidenceSubmission>, Error> {
+        payload.evidence_request_id = evidence_request_id;
+
+        Ok(self
+            .repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
                 async move |context| context.create_evidence_submission(&payload).await,
             )
             .await?)

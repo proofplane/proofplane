@@ -32,7 +32,8 @@ use crate::{
     domain::{
         optional_text, required_text, validate_attachment_filename,
         CreateEvidenceSubmissionPayload, DomainError, EvidenceAttachment, EvidenceRequestId,
-        EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspacePermission,
+        EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
+        WorkspacePermission,
     },
     object_storage::StorageError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -195,7 +196,10 @@ struct EvidenceSubmissionResponseDTO {
 
 #[derive(Debug, Serialize)]
 struct EvidenceSubmitterResponseDTO {
-    api_token_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_token_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_connection_id: Option<Uuid>,
     user_id: Uuid,
 }
 
@@ -204,10 +208,7 @@ impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmitterResponseDTO {
-                api_token_id: Uuid::from(submission.submitted_by.api_token_id),
-                user_id: Uuid::from(submission.submitted_by.user_id),
-            },
+            submitted_by: EvidenceSubmitterResponseDTO::from(submission.submitted_by),
             received_at: submission.received_at,
             coverage_start_at: submission.coverage_start_at,
             coverage_end_at: submission.coverage_end_at,
@@ -237,13 +238,20 @@ impl From<EvidenceSubmission> for EvidenceSubmissionSummaryResponseDTO {
         Self {
             id: Uuid::from(submission.id),
             evidence_request_id: Uuid::from(submission.evidence_request_id),
-            submitted_by: EvidenceSubmitterResponseDTO {
-                api_token_id: Uuid::from(submission.submitted_by.api_token_id),
-                user_id: Uuid::from(submission.submitted_by.user_id),
-            },
+            submitted_by: EvidenceSubmitterResponseDTO::from(submission.submitted_by),
             coverage_start_at: submission.coverage_start_at,
             coverage_end_at: submission.coverage_end_at,
             summary: submission.summary,
+        }
+    }
+}
+
+impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
+    fn from(submitter: EvidenceSubmitter) -> Self {
+        Self {
+            api_token_id: submitter.api_token_id().map(Uuid::from),
+            agent_connection_id: submitter.agent_connection_id().map(Uuid::from),
+            user_id: Uuid::from(submitter.user_id()),
         }
     }
 }

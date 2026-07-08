@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate seed api worker dequeuer mcp
+.PHONY: help fmt fmt-check lint test test-action check build up down health reset-local migrate seed api worker dequeuer mcp
 
 PROOFPLANE_CONFIG ?= config/local.yaml
 
@@ -9,6 +9,7 @@ help:
 		'  make fmt-check         Check Rust formatting' \
 		'  make lint              Run clippy with warnings denied' \
 		'  make test              Run all tests' \
+		'  make test-action       Run Auth0 Action tests' \
 		'  make check             Run fmt-check, lint, and test' \
 		'  make build             Build package' \
 		'  make up                Start local Docker dependencies' \
@@ -34,7 +35,10 @@ lint:
 test:
 	cargo test
 
-check: fmt-check lint test
+test-action:
+	node --test auth0/actions/agent-connection-redirect.test.js
+
+check: fmt-check lint test test-action
 
 build:
 	cargo build

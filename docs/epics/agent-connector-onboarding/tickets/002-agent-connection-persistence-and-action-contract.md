@@ -12,10 +12,14 @@ truth without changing current MCP authorization.
 - [x] Given a user, client, resource, workspace, canonical permission set, and
   approved continuation, when a pending connection is created, then only
   digests are stored and at most one non-revoked tuple exists.
+- [x] Given Auth0 consumes an approved continuation, when the continuation
+  validates, then the connection moves from pending to authorized without
+  being marked active.
 - [x] Given an expired pending connection, when the same tuple is created
   again, then expiry cleanup and replacement happen transactionally.
-- [x] Given an active connection, when reusable lookup runs, then it succeeds
-  only for exact subject, client, resource, scopes, and current membership.
+- [x] Given an authorized or active connection, when reusable lookup runs, then
+  it succeeds only for exact subject, client, resource, scopes, and current
+  membership.
 - [x] Given a denied, replayed, revoked, expired, or membership-less
   connection, when its lifecycle operation runs, then it cannot authorize or
   be reused.
@@ -69,6 +73,12 @@ truth without changing current MCP authorization.
 - 2026-07-06: The spec now records explicit service policy outcomes for
   continuation consumption and activation, distinct from repository failures;
   repository `Option` results retain conditional row-match semantics.
+- 2026-07-07: Continuation consumption now moves a valid row from `pending` to
+  `authorized`; ticket 004 remains responsible for `authorized` to `active` on
+  first valid MCP use.
+- 2026-07-07: Reusable lookup includes both `authorized` and `active`
+  connections so retrying Codex login after a completed OAuth flow does not
+  create a duplicate pending request.
 - 2026-07-06: The spec now records the shared redacted `Sha256Digest` used by
   API-token, continuation, and nonce digests without changing persisted bytes.
 - 2026-07-06: The spec now names the generated repository insertion payload

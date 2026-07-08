@@ -206,7 +206,7 @@ async fn activate_seeded_connection(app: &TestApp, id: AgentConnectionId) {
         .activate_agent_connection(id)
         .await
         .expect("repository activation succeeds")
-        .expect("consumed pending connection activates");
+        .expect("authorized connection activates");
 }
 
 async fn remove_membership(app: &TestApp, user_id: Uuid, workspace_id: Uuid) {

@@ -147,8 +147,8 @@ async fn upload_grant_redeems_once_and_marks_redeemed_at() {
         app.user_id().to_string()
     );
     assert_eq!(
-        redeemed.issued_via_api_token_id.to_string(),
-        app.api_token_id().to_string()
+        redeemed.issued_via.api_token_id().map(|id| id.to_string()),
+        Some(app.api_token_id().to_string())
     );
 
     let second = service.redeem(&token).await;

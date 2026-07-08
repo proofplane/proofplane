@@ -1,8 +1,12 @@
 use async_trait::async_trait;
-use axum::http::{header, HeaderName, HeaderValue, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
+use chrono::{Duration, Utc};
 use proofplane::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
-    domain::WorkspacePermission,
+    domain::{
+        AgentAuthorizationTransactionId, AgentConnectionId, NewPendingAgentConnection, UserId,
+        WorkspaceId, WorkspacePermission,
+    },
     mcp::SESSION_ID_HEADER,
     routes::{
         protected_resource_metadata::PROTECTED_RESOURCE_METADATA_ENDPOINT,
@@ -23,6 +27,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::support::{capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, TestApp};
+use proofplane::services::agent_connections::digest_secret;
 
 const MCP: &str = "/mcp";
 
@@ -32,6 +37,13 @@ struct StubAuth0Verifier {
 
 enum StubAuth0Outcome {
     Verified,
+    VerifiedConnection {
+        subject: String,
+        client_id: String,
+        connection_id: AgentConnectionId,
+        workspace_id: WorkspaceId,
+        scopes: Vec<WorkspacePermission>,
+    },
     RejectCredentials,
     Unavailable,
 }
@@ -41,11 +53,26 @@ impl TokenVerifier for StubAuth0Verifier {
     type Claims = VerifiedMcpClaims;
 
     async fn verify(&self, token: &str) -> Result<VerifiedMcpClaims, VerifyError> {
-        match self.outcome {
+        match &self.outcome {
             StubAuth0Outcome::Verified => Ok(VerifiedMcpClaims {
                 subject: "auth0|integration-user".to_owned(),
                 client_id: "integration-mcp-client".to_owned(),
-                scopes: vec!["read_controls".to_owned()],
+                scopes: vec![WorkspacePermission::ReadControls],
+                connection_id: None,
+                workspace_id: None,
+            }),
+            StubAuth0Outcome::VerifiedConnection {
+                subject,
+                client_id,
+                connection_id,
+                workspace_id,
+                scopes,
+            } => Ok(VerifiedMcpClaims {
+                subject: subject.clone(),
+                client_id: client_id.clone(),
+                scopes: scopes.clone(),
+                connection_id: Some(*connection_id),
+                workspace_id: Some(*workspace_id),
             }),
             StubAuth0Outcome::RejectCredentials if token == "client-credentials-jwt" => {
                 Err(VerifyError::MachineIdentity)
@@ -54,6 +81,216 @@ impl TokenVerifier for StubAuth0Verifier {
             StubAuth0Outcome::Unavailable => Err(VerifyError::JwksUnavailable),
         }
     }
+}
+
+#[tokio::test]
+async fn auth0_connection_claims_activate_connection_and_authorize_protected_tools() {
+    let app = TestApp::start_without_default_auth().await;
+    let subject = "auth0|agent-mcp-user";
+    let client_id = "agent-mcp-client";
+    let resource = "https://mcp.proofplane.test/mcp";
+    let user_id = app.login(subject).await;
+    let workspace_id = Uuid::parse_str(
+        app.create_workspace_as(subject, "Agent MCP Runtime Workspace")
+            .await["id"]
+            .as_str()
+            .expect("workspace id is a string"),
+    )
+    .expect("workspace id is a UUID");
+    let connection_id = AgentConnectionId::from(Uuid::new_v4());
+    app.postgres()
+        .create_pending_agent_connection(&NewPendingAgentConnection {
+            id: connection_id,
+            transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
+            user_id: UserId::from(user_id),
+            workspace_id: WorkspaceId::from(workspace_id),
+            auth0_subject: subject.to_owned(),
+            auth0_client_id: client_id.to_owned(),
+            client_display_name: "Agent MCP Client".to_owned(),
+            resource: resource.to_owned(),
+            permissions: vec![WorkspacePermission::ReadControls],
+            pending_expires_at: Utc::now() + Duration::minutes(5),
+            continuation_digest: digest_secret("agent-continue"),
+            nonce_digest: digest_secret("agent-nonce"),
+        })
+        .await
+        .expect("pending connection creates");
+    app.postgres()
+        .consume_agent_connection_continuation(
+            digest_secret("agent-continue"),
+            digest_secret("agent-nonce"),
+        )
+        .await
+        .expect("continuation consumes")
+        .expect("connection is authorized");
+
+    let server = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
+        outcome: StubAuth0Outcome::VerifiedConnection {
+            subject: subject.to_owned(),
+            client_id: client_id.to_owned(),
+            connection_id,
+            workspace_id: WorkspaceId::from(workspace_id),
+            scopes: vec![WorkspacePermission::ReadControls],
+        },
+    }));
+    let client = McpClient::connect(&server, "auth0-access-token").await;
+
+    let response = client.call_tool("list_controls", json!({})).await;
+    assert!(response["controls"].as_array().is_some());
+
+    let row = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            "SELECT status, activated_at IS NOT NULL, last_used_at IS NOT NULL FROM agent_connections WHERE id = $1",
+            &[&Uuid::from(connection_id)],
+        )
+        .await
+        .expect("connection loads");
+    assert_eq!(row.get::<_, String>("status"), "active");
+    assert!(row.get::<_, bool>(1));
+    assert!(row.get::<_, bool>(2));
+}
+
+#[tokio::test]
+async fn auth0_connection_claims_authorize_write_tools_with_agent_provenance() {
+    let app = TestApp::start_without_default_auth().await;
+    let subject = "auth0|agent-mcp-writer";
+    let client_id = "agent-mcp-writer-client";
+    let resource = "https://mcp.proofplane.test/mcp";
+    let user_id = app.login(subject).await;
+    let workspace_id = Uuid::parse_str(
+        app.create_workspace_as(subject, "Agent MCP Write Workspace")
+            .await["id"]
+            .as_str()
+            .expect("workspace id is a string"),
+    )
+    .expect("workspace id is a UUID");
+    let evidence_request_id = Uuid::new_v4();
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .execute(
+            r#"
+INSERT INTO evidence_requests (
+    id, workspace_id, title, description, collection_instructions,
+    cadence, due_at, schedule_anchor_at, freshness_window_days, status
+)
+VALUES ($1, $2, 'Agent request', 'Description', 'Instructions', 'quarterly', now(), now(), 90, 'active')
+"#,
+            &[&evidence_request_id, &workspace_id],
+        )
+        .await
+        .expect("evidence request inserts");
+    let connection_id = AgentConnectionId::from(Uuid::new_v4());
+    app.postgres()
+        .create_pending_agent_connection(&NewPendingAgentConnection {
+            id: connection_id,
+            transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
+            user_id: UserId::from(user_id),
+            workspace_id: WorkspaceId::from(workspace_id),
+            auth0_subject: subject.to_owned(),
+            auth0_client_id: client_id.to_owned(),
+            client_display_name: "Agent MCP Writer".to_owned(),
+            resource: resource.to_owned(),
+            permissions: vec![WorkspacePermission::WriteEvidenceSubmissions],
+            pending_expires_at: Utc::now() + Duration::minutes(5),
+            continuation_digest: digest_secret("agent-write-continue"),
+            nonce_digest: digest_secret("agent-write-nonce"),
+        })
+        .await
+        .expect("pending connection creates");
+    app.postgres()
+        .consume_agent_connection_continuation(
+            digest_secret("agent-write-continue"),
+            digest_secret("agent-write-nonce"),
+        )
+        .await
+        .expect("continuation consumes")
+        .expect("connection is authorized");
+
+    let server = app.mcp_http_server_with_auth0_verifier(Arc::new(StubAuth0Verifier {
+        outcome: StubAuth0Outcome::VerifiedConnection {
+            subject: subject.to_owned(),
+            client_id: client_id.to_owned(),
+            connection_id,
+            workspace_id: WorkspaceId::from(workspace_id),
+            scopes: vec![WorkspacePermission::WriteEvidenceSubmissions],
+        },
+    }));
+    let client = McpClient::connect(&server, "auth0-agent-write-token").await;
+
+    let created = client
+        .call_tool(
+            "create_evidence_submission",
+            json!({
+                "evidence_request_id": evidence_request_id,
+                "coverage_start_at": "2026-01-01T00:00:00Z",
+                "coverage_end_at": "2026-03-31T23:59:59Z",
+                "source_system": "agent",
+                "collection_method": "api_export",
+                "summary": "Agent-created submission"
+            }),
+        )
+        .await;
+    let submission_id = uuid_from(&created["submission_id"]);
+
+    let submission = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+SELECT submitted_by_api_token_id, submitted_by_agent_connection_id
+FROM evidence_submissions
+WHERE id = $1
+"#,
+            &[&submission_id],
+        )
+        .await
+        .expect("submission loads");
+    assert!(submission
+        .get::<_, Option<Uuid>>("submitted_by_api_token_id")
+        .is_none());
+    assert_eq!(
+        submission.get::<_, Option<Uuid>>("submitted_by_agent_connection_id"),
+        Some(Uuid::from(connection_id))
+    );
+
+    let grant = client
+        .call_tool(
+            "manage_evidence_submission_attachment",
+            json!({ "submission_id": submission_id }),
+        )
+        .await;
+    assert_eq!(grant["submission_id"], submission_id.to_string());
+
+    let grant_row = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+SELECT issued_via_api_token_id, issued_via_agent_connection_id
+FROM attachment_upload_grants
+WHERE evidence_submission_id = $1
+"#,
+            &[&submission_id],
+        )
+        .await
+        .expect("upload grant loads");
+    assert!(grant_row
+        .get::<_, Option<Uuid>>("issued_via_api_token_id")
+        .is_none());
+    assert_eq!(
+        grant_row.get::<_, Option<Uuid>>("issued_via_agent_connection_id"),
+        Some(Uuid::from(connection_id))
+    );
 }
 
 #[tokio::test]
@@ -109,7 +346,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     metadata.assert_status_ok();
     metadata.assert_json(&json!({
         "resource": "https://mcp.proofplane.test/mcp",
-        "authorization_servers": ["https://proofplane-integration.us.auth0.com/"],
+        "authorization_servers": ["https://api.proofplane.test/"],
         "bearer_methods_supported": ["header"],
         "scopes_supported": [
             "read_evidence_requests",
@@ -334,6 +571,27 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .to_str()
         .expect("content type is text")
         .starts_with("text/plain"));
+}
+
+#[tokio::test]
+async fn mcp_cors_is_available_for_browser_based_clients() {
+    let app = TestApp::builder().without_default_auth().build().await;
+    let server = app.mcp_http_server();
+
+    let metadata = server
+        .get(PROTECTED_RESOURCE_METADATA_ENDPOINT)
+        .add_header(header::ORIGIN.as_str(), "http://localhost:6274")
+        .await;
+    metadata.assert_status_ok();
+    metadata.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+
+    let preflight = server
+        .method(Method::OPTIONS, PROTECTED_RESOURCE_METADATA_ENDPOINT)
+        .add_header(header::ORIGIN.as_str(), "http://localhost:6274")
+        .add_header(header::ACCESS_CONTROL_REQUEST_METHOD.as_str(), "GET")
+        .await;
+    preflight.assert_status_ok();
+    preflight.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
 }
 
 #[tokio::test]

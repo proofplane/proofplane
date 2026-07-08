@@ -1,11 +1,10 @@
 # 001 - Auth0 MCP Authorization Foundation
 
-**Status:** Done · **Depends on:** MCP Server 001 (Done) · **Spec:** [spec.md](../spec.md#architecture-decision)
+**Status:** Superseded · **Depends on:** MCP Server 001 (Done) · **Spec:** [spec.md](../spec.md#architecture-decision)
 
-**Summary** - Make Auth0 the OAuth authorization server for the hosted MCP
-resource. Prove the required tenant capabilities, publish MCP discovery
-metadata, and validate Auth0-issued MCP access tokens without adding OAuth
-protocol or token-issuance endpoints to Proofplane.
+**Summary** - Superseded foundation work that made Auth0 the MCP OAuth
+authorization server. The current design makes Proofplane the MCP OAuth
+authorization server facade and keeps Auth0 only for upstream human login.
 
 **Acceptance criteria**
 
@@ -36,8 +35,8 @@ protocol or token-issuance endpoints to Proofplane.
   third-party test client, scopes, and a 24-hour access-token lifetime.
 - [x] Exercise initial browser authorization with MCP Inspector through the
   return from Auth0.
-- [x] Add validated MCP resource, Auth0 issuer, JWKS, and allowed-client
-  configuration.
+- [x] Add validated MCP resource, Auth0 issuer, JWKS, and required
+  client-identity validation.
 - [x] Implement `WWW-Authenticate` and Protected Resource Metadata.
 - [x] Generalize Auth0 JWT verification for MCP claims and a unified actor
   context while preserving `ppat_` behavior.
@@ -50,8 +49,12 @@ protocol or token-issuance endpoints to Proofplane.
 - 2026-07-02: The spec replaces the Proofplane OAuth/PASETO service with
   direct Auth0 authorization using 24-hour access tokens without
   `offline_access`.
-- Open DCR remains deferred; first-class clients use reviewed Auth0 CIMD or
-  manual third-party registration.
+- 2026-07-07: Superseded. Proofplane now owns MCP OAuth discovery, DCR,
+  Authorization Code with PKCE, one-use code exchange, and 24-hour PASETO MCP
+  access tokens. Auth0 remains the upstream human login provider.
+- Development DCR is now the default Codex path; production DCR remains
+  deferred until tenant ACL, abuse controls, monitoring, cleanup, and default
+  third-party API permissions are specified.
 - 2026-07-02: The spec records the 001/002 fail-closed boundary and development
   tenant contract.
 - 2026-07-02: Repository implementation and `make check` are complete.
@@ -66,6 +69,9 @@ protocol or token-issuance endpoints to Proofplane.
 - 2026-07-03: The development tenant uses a static third-party Inspector
   client, user-delegated client grant, domain connection, and confidential
   `client_secret_post` contract; Inspector supplies mandatory PKCE.
+- 2026-07-07: Codex `0.142.5` successfully probed Protected Resource
+  Metadata, Auth0 authorization-server metadata, and the DCR registration
+  endpoint. Proofplane no longer requires local MCP client allowlisting.
 - 2026-07-04: The spec now records startup validation for the preconstructed
   MCP authentication challenge.
 - 2026-07-05: MCP Inspector reached Auth0 through Proofplane discovery,

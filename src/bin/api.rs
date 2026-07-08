@@ -3,7 +3,7 @@ use tokio::net::TcpListener;
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    app::{create_app, AppDependencies},
+    app::{create_app, AppDependencies, CreateAppError},
     authentication::{auth0::Auth0TokenVerifier, ApiTokenAuthenticator, UserAuthenticator},
     config, object_storage, observability, repository, store,
 };
@@ -30,11 +30,14 @@ enum Error {
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
 
-    #[error("authentication initialization error")]
-    Authentication(#[from] proofplane::authentication::Error),
+    #[error("application initialization error")]
+    App(#[from] CreateAppError),
 
     #[error("object storage initialization error")]
     ObjectStorage(#[from] object_storage::StorageError),
+
+    #[error("I/O error")]
+    Io(#[from] std::io::Error),
 }
 
 async fn run() -> Result<(), Error> {
@@ -64,7 +67,7 @@ async fn run() -> Result<(), Error> {
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
-    let listener = TcpListener::bind(config.server.api_bind).await.unwrap();
+    let listener = TcpListener::bind(config.server.api_bind).await?;
     info!("listening on {}", config.server.api_bind);
 
     let api_token_authenticator = ApiTokenAuthenticator::new(postgres.clone());
@@ -86,14 +89,12 @@ async fn run() -> Result<(), Error> {
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to listen for ctrl-c");
-
-            info!("received shutdown signal")
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => info!("received shutdown signal"),
+                Err(error) => error!(%error, "failed to listen for ctrl-c"),
+            }
         })
-        .await
-        .unwrap();
+        .await?;
 
     info!("server shutdown complete");
 

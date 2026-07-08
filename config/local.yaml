@@ -19,10 +19,10 @@ auth0:
   issuer: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/"
   audience: "https://api.proofplane.com"
   jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
-  mcp:
-    resource: http://127.0.0.1:3002/mcp
-    allowed_client_ids:
-      - "tpc_2fF3uw2EaHnos66XPFPjHP"
+  upstream_oauth:
+    client_id: "local-proofplane-oauth-client"
+    client_secret: "local-proofplane-oauth-client-secret-change-me"
+    callback_path: "/oauth/auth0/callback"
   action:
     shared_secret: "local-action-shared-secret-change-me-001"
 
@@ -37,6 +37,11 @@ paseto:
     keys:
       - id: "local-upload-grant-001"
         secret: "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"
+  mcp_oauth:
+    active_key_id: "local-mcp-oauth-001"
+    keys:
+      - id: "local-mcp-oauth-001"
+        secret: "k4.local.BMyQa9GmLofWmmvtYCedLfePwmuJsMgNn96nW1PtMp0"
 
 object_storage:
   backend: "filesystem"
@@ -61,6 +66,7 @@ worker:
 
 mcp:
   shutdown_grace_seconds: 30
+  resource: http://127.0.0.1:3002/mcp
 
 health:
   live_path: "/livez"

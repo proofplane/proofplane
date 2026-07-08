@@ -201,9 +201,10 @@ fn parse_scopes(values: Vec<String>) -> Validation<Vec<WorkspacePermission>, Str
         return Validation::invalid_many(errors);
     }
 
-    Validation::valid(
-        canonical_permissions(parsed).expect("validated scopes contain no duplicate permissions"),
-    )
+    match canonical_permissions(parsed) {
+        Ok(permissions) => Validation::valid(permissions),
+        Err(error) => Validation::invalid(error.to_string()),
+    }
 }
 
 fn canonical_resource(value: String) -> Validation<String, String> {

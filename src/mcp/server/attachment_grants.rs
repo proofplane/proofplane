@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     domain::{EvidenceSubmissionId, WorkspacePermission},
-    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::attachment_upload_grants::{IssuedUploadGrant, UploadGrantError},
     validate,
 };
@@ -35,19 +35,21 @@ impl ProofplaneMcp {
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
         let workspace_id = context.token.workspace_id;
-        let grant = self
-            .attachment_upload_grants
-            .issue(&context.token, submission_id)
-            .await
-            .map_err(upload_grant_error)?;
+        let grant = if let Some(connection) = context.agent_connection_context() {
+            self.attachment_upload_grants
+                .issue_for_agent(&connection, submission_id)
+                .await
+        } else {
+            self.attachment_upload_grants
+                .issue(&context.token, submission_id)
+                .await
+        }
+        .map_err(upload_grant_error)?;
 
         AuditEvent::new(
             "evidence_attachment_upload_grant.issued",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "manage_evidence_submission_attachment",
         )

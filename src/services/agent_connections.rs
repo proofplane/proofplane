@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        NewPendingAgentConnection, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
+        NewPendingAgentConnection, Sha256Digest, User, UserId, WorkspaceId, WorkspacePermission,
+        WorkspacePermissions, WorkspaceWithRole,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -62,6 +63,16 @@ pub struct FindReusableConnectionPayload {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuthorizeMcpConnectionPayload {
+    pub connection_id: AgentConnectionId,
+    pub workspace_id: WorkspaceId,
+    pub auth0_subject: String,
+    pub auth0_client_id: String,
+    pub resource: String,
+    pub permissions: Vec<WorkspacePermission>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConsumeContinuationPayload {
     pub continuation_token: String,
     pub nonce: String,
@@ -87,9 +98,49 @@ pub enum ActivationOutcome {
     Rejected,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsentContext {
+    pub user: User,
+    pub workspaces: Vec<WorkspaceWithRole>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentConnectionContext {
+    pub user_id: UserId,
+    pub connection_id: AgentConnectionId,
+    pub workspace_id: WorkspaceId,
+    pub permissions: WorkspacePermissions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsentContextOutcome {
+    Available(ConsentContext),
+    Unavailable,
+}
+
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
+    }
+
+    pub async fn consent_context(
+        &self,
+        auth0_subject: &str,
+    ) -> Result<ConsentContextOutcome, AgentConnectionError> {
+        let Some(user) = self.repository.get_user_by_auth0_sub(auth0_subject).await? else {
+            return Ok(ConsentContextOutcome::Unavailable);
+        };
+        let workspaces = self
+            .repository
+            .list_workspaces_with_role_for_user(user.id)
+            .await?;
+        if workspaces.is_empty() {
+            return Ok(ConsentContextOutcome::Unavailable);
+        }
+        Ok(ConsentContextOutcome::Available(ConsentContext {
+            user,
+            workspaces,
+        }))
     }
 
     pub async fn create_pending(
@@ -172,6 +223,38 @@ impl AgentConnectionService {
             )
             .await?;
         Ok(connection.filter(|connection| connection.permissions == payload.permissions))
+    }
+
+    pub async fn authorize_mcp_connection(
+        &self,
+        payload: AuthorizeMcpConnectionPayload,
+    ) -> Result<Option<AgentConnectionContext>, AgentConnectionError> {
+        let permission_strings = payload
+            .permissions
+            .iter()
+            .map(|permission| permission.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let Some(connection) = self
+            .repository
+            .authorize_agent_connection(
+                payload.connection_id,
+                payload.workspace_id,
+                &payload.auth0_subject,
+                &payload.auth0_client_id,
+                &payload.resource,
+                &permission_strings,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(AgentConnectionContext {
+            user_id: connection.user_id,
+            connection_id: connection.id,
+            workspace_id: connection.workspace_id,
+            permissions: WorkspacePermissions::from_iter(connection.permissions),
+        }))
     }
 
     pub async fn activate(
