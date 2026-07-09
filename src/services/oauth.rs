@@ -62,20 +62,16 @@ pub enum OAuthError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterClientPayload {
-    pub client_name: Option<String>,
+    pub client_name: String,
     pub redirect_uris: Vec<String>,
-    pub token_endpoint_auth_method: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizePayload {
-    pub response_type: String,
     pub client_id: String,
     pub redirect_uri: String,
     pub code_challenge: String,
-    pub code_challenge_method: String,
-    pub resource: String,
-    pub scope: String,
+    pub scopes: Vec<WorkspacePermission>,
     pub state: Option<String>,
 }
 
@@ -143,29 +139,10 @@ impl OAuthService {
         &self,
         payload: RegisterClientPayload,
     ) -> Result<OAuthClient, OAuthError> {
-        if payload
-            .token_endpoint_auth_method
-            .as_deref()
-            .is_some_and(|method| method != "none")
-        {
-            return Err(OAuthError::InvalidRequest);
-        }
-        if payload.redirect_uris.is_empty()
-            || payload
-                .redirect_uris
-                .iter()
-                .any(|uri| !valid_redirect_uri(uri))
-        {
-            return Err(OAuthError::InvalidRequest);
-        }
-        let client_name = payload
-            .client_name
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| "MCP client".to_owned());
         self.repository
             .create_oauth_client(&NewOAuthClient {
                 id: format!("ppoc_{}", random_secret(24)?),
-                client_name,
+                client_name: payload.client_name,
                 redirect_uris: payload.redirect_uris,
             })
             .await
@@ -176,12 +153,6 @@ impl OAuthService {
         &self,
         payload: AuthorizePayload,
     ) -> Result<PreparedAuthorization, OAuthError> {
-        if payload.response_type != "code"
-            || payload.code_challenge_method != "S256"
-            || payload.resource != self.resource.as_str()
-        {
-            return Err(OAuthError::InvalidRequest);
-        }
         let client = self
             .repository
             .get_oauth_client(&payload.client_id)
@@ -194,10 +165,6 @@ impl OAuthService {
         {
             return Err(OAuthError::InvalidRequest);
         }
-        if payload.code_challenge.trim().is_empty() {
-            return Err(OAuthError::InvalidRequest);
-        }
-        let scopes = parse_scope(&payload.scope)?;
         let csrf_token = random_secret(32)?;
         Ok(PreparedAuthorization {
             request: self
@@ -209,7 +176,7 @@ impl OAuthService {
                     code_challenge: payload.code_challenge,
                     state: payload.state.unwrap_or_default(),
                     resource: self.resource.to_string(),
-                    scopes,
+                    scopes: payload.scopes,
                     csrf_token: csrf_token.clone(),
                     expires_at: Utc::now() + AUTHORIZATION_REQUEST_TTL,
                 })
@@ -473,7 +440,7 @@ fn redirect_with_code(redirect_uri: &str, code: &str, state: &str) -> Result<Url
     Ok(url)
 }
 
-fn valid_redirect_uri(uri: &str) -> bool {
+pub fn valid_redirect_uri(uri: &str) -> bool {
     let Ok(url) = Url::parse(uri) else {
         return false;
     };

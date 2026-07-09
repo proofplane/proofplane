@@ -180,6 +180,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             user_authenticator: dependencies.user_authenticator.clone(),
             auth0: dependencies.config.auth0.clone(),
             issuer: dependencies.config.server.public_api_base_url.clone(),
+            resource: dependencies.config.mcp.resource.clone(),
             http: reqwest::Client::new(),
         }))
         .nest("/version", version::router())

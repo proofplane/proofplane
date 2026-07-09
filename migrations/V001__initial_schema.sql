@@ -275,9 +275,6 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL,
     redirect_uris TEXT[] NOT NULL CHECK (cardinality(redirect_uris) > 0),
-    token_endpoint_auth_method TEXT NOT NULL
-        DEFAULT 'none'
-        CHECK (token_endpoint_auth_method = 'none'),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -19,8 +19,8 @@ use crate::{
     config::Auth0Config,
     domain::{OAuthAuthorizationRequestId, WorkspacePermission},
     services::oauth::{
-        ApproveConsentPayload, AuthorizePayload, CallbackOutcome, OAuthConsentContext, OAuthError,
-        OAuthService, RegisterClientPayload, TokenPayload,
+        parse_scope, valid_redirect_uri, ApproveConsentPayload, AuthorizePayload, CallbackOutcome,
+        OAuthConsentContext, OAuthError, OAuthService, RegisterClientPayload, TokenPayload,
     },
 };
 
@@ -29,6 +29,7 @@ pub struct OAuthState<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub user_authenticator: UserAuthenticator<V>,
     pub auth0: Auth0Config,
     pub issuer: Url,
+    pub resource: Url,
     pub http: Client,
 }
 
@@ -39,6 +40,7 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for OAuthState<V> {
             user_authenticator: self.user_authenticator.clone(),
             auth0: self.auth0.clone(),
             issuer: self.issuer.clone(),
+            resource: self.resource.clone(),
             http: self.http.clone(),
         }
     }
@@ -133,12 +135,27 @@ where
     {
         return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
     }
+    if body
+        .token_endpoint_auth_method
+        .as_deref()
+        .is_some_and(|method| method != "none")
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    }
+    if body.redirect_uris.is_empty()
+        || body.redirect_uris.iter().any(|uri| !valid_redirect_uri(uri))
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    }
+    let client_name = body
+        .client_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "MCP client".to_owned());
     match state
         .service
         .register_client(RegisterClientPayload {
-            client_name: body.client_name,
+            client_name,
             redirect_uris: body.redirect_uris,
-            token_endpoint_auth_method: body.token_endpoint_auth_method,
         })
         .await
     {
@@ -178,16 +195,25 @@ async fn authorize<V>(
 where
     V: TokenVerifier<Claims = VerifiedClaims>,
 {
+    if query.response_type != "code"
+        || query.code_challenge_method != "S256"
+        || query.resource != state.resource.as_str()
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if query.code_challenge.trim().is_empty() {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let Ok(scopes) = parse_scope(&query.scope) else {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
     let prepared = match state
         .service
         .prepare_authorization(AuthorizePayload {
-            response_type: query.response_type,
             client_id: query.client_id,
             redirect_uri: query.redirect_uri,
             code_challenge: query.code_challenge,
-            code_challenge_method: query.code_challenge_method,
-            resource: query.resource,
-            scope: query.scope,
+            scopes,
             state: query.state,
         })
         .await
