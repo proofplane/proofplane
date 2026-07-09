@@ -7,7 +7,6 @@ use crate::{
 };
 
 pub mod auth0;
-pub mod auth0_redirect_token;
 mod jwks;
 pub mod paseto;
 

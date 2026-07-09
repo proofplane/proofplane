@@ -1,6 +1,4 @@
-mod agent_connection_consent;
 mod agent_connection_repository;
-mod agent_connections;
 mod dequeuer_pubsub;
 mod mcp;
 mod me;

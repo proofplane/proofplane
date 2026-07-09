@@ -58,7 +58,6 @@ pub struct Auth0Config {
     pub audience: String,
     pub jwks_url: Url,
     pub upstream_oauth: Auth0UpstreamOAuthConfig,
-    pub action: Auth0ActionConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -66,11 +65,6 @@ pub struct Auth0UpstreamOAuthConfig {
     pub client_id: String,
     pub client_secret: SecretString,
     pub callback_path: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct Auth0ActionConfig {
-    pub shared_secret: SecretString,
 }
 
 #[derive(Debug, Clone)]
@@ -415,8 +409,6 @@ auth0:
     client_id: ""
     client_secret: ""
     callback_path: "callback"
-  action:
-    shared_secret: "short"
 paseto:
   download:
     active_key_id: ""
@@ -482,7 +474,6 @@ health:
                 assert!(paths.contains(&"auth0.upstream_oauth.client_id"));
                 assert!(paths.contains(&"auth0.upstream_oauth.client_secret"));
                 assert!(paths.contains(&"auth0.upstream_oauth.callback_path"));
-                assert!(paths.contains(&"auth0.action.shared_secret"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));

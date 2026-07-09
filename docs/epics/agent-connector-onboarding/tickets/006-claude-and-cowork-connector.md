@@ -3,8 +3,8 @@
 **Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#claude-and-cowork)
 
 **Summary** - Validate that Claude and Cowork can use the hosted Proofplane MCP
-endpoint through the same Auth0 discovery, DCR or manual-registration, and
-workspace-consent path. This ticket no longer creates Proofplane OAuth client
+endpoint through Proofplane OAuth discovery, DCR or manual registration, and
+workspace consent. This ticket no longer creates Proofplane OAuth client
 plumbing; it verifies host behavior, reconnect behavior, and any distribution
 material needed for a first-class customer path.
 
@@ -40,8 +40,8 @@ material needed for a first-class customer path.
 
 **Notes**
 
-- 2026-07-02: The spec now requires Claude/Cowork validation against Auth0
-  discovery, client registration, and the workspace Redirect Action.
+- 2026-07-08: The spec now requires Claude/Cowork validation against
+  Proofplane discovery, client registration, and workspace consent.
 - 2026-07-02: The support matrix must record behavior after an access token
   expires because the initial release does not request `offline_access`.
 - 2026-07-07: Codex DCR validation removed the need for Proofplane-side static

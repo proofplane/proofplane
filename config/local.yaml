@@ -23,8 +23,6 @@ auth0:
     client_id: "local-proofplane-oauth-client"
     client_secret: "local-proofplane-oauth-client-secret-change-me"
     callback_path: "/oauth/auth0/callback"
-  action:
-    shared_secret: "local-action-shared-secret-change-me-001"
 
 paseto:
   download:

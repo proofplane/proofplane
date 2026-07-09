@@ -18,8 +18,8 @@ handoff units that link into it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Superseded | Auth0-owned MCP OAuth discovery and token issuance are superseded by the Proofplane OAuth facade; Auth0 remains upstream human login. |
-| 002. [Agent Connection Persistence And Action Contract](./tickets/002-agent-connection-persistence-and-action-contract.md) | Doing | Add the transactional connection lifecycle and authenticated internal Action contract. |
-| 003. [Workspace Consent And Auth0 Redirect Action](./tickets/003-workspace-consent-and-auth0-redirect-action.md) | Doing | Reworked as Proofplane-hosted OAuth consent after upstream Auth0 login; Redirect Action material is superseded. |
+| 002. [Agent Connection Persistence](./tickets/002-agent-connection-persistence.md) | Doing | Add the transactional connection lifecycle for OAuth-backed agent grants. |
+| 003. [Proofplane OAuth Workspace Consent](./tickets/003-proofplane-oauth-workspace-consent.md) | Doing | Add Proofplane-hosted OAuth consent after upstream Auth0 login. |
 | 004. [MCP Agent Connection Runtime Authorization](./tickets/004-mcp-agent-connection-runtime-authorization.md) | Done | Proofplane PASETO MCP tokens activate authorized rows, enforce live membership/scopes, and audit/persist agent provenance for MCP tool use. |
 | 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Todo | Add connection lifecycle UI, revocation, and client-specific setup. |
 | 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Todo | DCR removes Proofplane-side static client setup where supported; still validate Claude/Cowork host behavior, expiry, and directory requirements. |
@@ -30,8 +30,7 @@ handoff units that link into it.
 
 - **001** is superseded where it made Auth0 the MCP authorization server.
   Auth0 tenant work remains only for the upstream human login application.
-- **002** depends on 001 and establishes connection persistence and the
-  internal Action contract.
+- **002** depends on 001 and establishes connection persistence.
 - **003** depends on 002 and adds Proofplane-hosted OAuth consent after
   upstream Auth0 login.
 - **004** depends on 002 and 003 and adds live MCP authorization.

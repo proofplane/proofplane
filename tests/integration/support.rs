@@ -31,11 +31,11 @@ use proofplane::{
         UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0ActionConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-        LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-        PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
-        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat, McpConfig,
+        ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+        PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
+        PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig,
+        UploadsConfig, WorkerConfig,
     },
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, CreateEvidenceRequestPayload,
@@ -1118,9 +1118,6 @@ fn config(
                 client_id: "integration-auth0-client".to_owned(),
                 client_secret: SecretString::from("integration-auth0-secret"),
                 callback_path: "/oauth/auth0/callback".to_owned(),
-            },
-            action: Auth0ActionConfig {
-                shared_secret: SecretString::from("integration-action-shared-secret-001"),
             },
         },
         paseto: PasetoConfig {

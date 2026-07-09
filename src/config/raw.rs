@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::{validate, validation::Validation};
@@ -13,8 +13,8 @@ use super::{
         public_api_base_url as validate_public_api_base_url, secret_value, string_url,
         string_value, ConfigValidationExt,
     },
-    Auth0ActionConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig, HealthConfig,
-    McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+    Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig, HealthConfig, McpConfig,
+    ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
     PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
     PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig,
     WorkerConfig,
@@ -74,7 +74,6 @@ pub(super) struct RawAuth0Config {
     audience: String,
     jwks_url: String,
     upstream_oauth: RawAuth0UpstreamOAuthConfig,
-    action: RawAuth0ActionConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,11 +83,6 @@ pub(super) struct RawAuth0UpstreamOAuthConfig {
     callback_path: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct RawAuth0ActionConfig {
-    shared_secret: SecretString,
-}
-
 impl RawAuth0Config {
     pub(super) fn validate(self) -> Validation<Auth0Config, ConfigFieldError> {
         validate! {
@@ -96,34 +90,14 @@ impl RawAuth0Config {
             audience <- string_value(self.audience).at("auth0.audience"),
             jwks_url <- string_url(self.jwks_url).at("auth0.jwks_url"),
             upstream_oauth <- self.upstream_oauth.validate(),
-            action <- self.action.validate(),
             => Auth0Config {
                 issuer,
                 audience,
                 jwks_url,
                 upstream_oauth,
-                action,
             },
         }
     }
-}
-
-impl RawAuth0ActionConfig {
-    pub(super) fn validate(self) -> Validation<Auth0ActionConfig, ConfigFieldError> {
-        validate! {
-            shared_secret <- validate_action_shared_secret(self.shared_secret)
-                .at("auth0.action.shared_secret"),
-            => Auth0ActionConfig { shared_secret },
-        }
-    }
-}
-
-fn validate_action_shared_secret(value: SecretString) -> Result<SecretString, String> {
-    let value = secret_value(value)?;
-    if value.expose_secret().len() < 32 {
-        return Err("must contain at least 32 bytes".to_owned());
-    }
-    Ok(value)
 }
 
 impl RawAuth0UpstreamOAuthConfig {
