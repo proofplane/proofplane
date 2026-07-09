@@ -1,14 +1,17 @@
 use deadpool_postgres::{Object, Pool};
 
-use crate::domain::{ApiTokenId, UserId, WorkspaceId};
+use uuid::Uuid;
 
-mod api_tokens;
+use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
+
+mod agent_connections;
 mod attachment_upload_grants;
 pub mod constraints;
 mod controls;
 pub mod error;
 mod evidence_requests;
 mod evidence_submissions;
+mod oauth;
 mod outbox;
 mod users;
 mod workspace_memberships;
@@ -35,21 +38,34 @@ pub struct TransactionContext<'transaction> {
 pub struct WorkspaceTransactionContext<'transaction> {
     pub workspace_id: WorkspaceId,
     pub user_id: UserId,
-    pub api_token_id: ApiTokenId,
+    pub credential: WorkspaceCredential,
     transaction: deadpool_postgres::Transaction<'transaction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceCredential {
+    AgentConnection(AgentConnectionId),
+}
+
+impl WorkspaceCredential {
+    pub fn agent_connection_uuid(self) -> Option<Uuid> {
+        match self {
+            Self::AgentConnection(id) => Some(id.into()),
+        }
+    }
 }
 
 impl<'transaction> WorkspaceTransactionContext<'transaction> {
     fn new(
         workspace_id: WorkspaceId,
         user_id: UserId,
-        api_token_id: ApiTokenId,
+        credential: WorkspaceCredential,
         transaction: deadpool_postgres::Transaction<'transaction>,
     ) -> Self {
         Self {
             workspace_id,
             user_id,
-            api_token_id,
+            credential,
             transaction,
         }
     }
@@ -100,11 +116,11 @@ impl Postgres {
         Ok(result)
     }
 
-    pub async fn in_workspace_context<T, F>(
+    pub async fn in_agent_connection_workspace_context<T, F>(
         &self,
         workspace_id: WorkspaceId,
         user_id: UserId,
-        api_token_id: ApiTokenId,
+        agent_connection_id: AgentConnectionId,
         operation: F,
     ) -> Result<T, Error>
     where
@@ -116,8 +132,12 @@ impl Postgres {
     {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
-        let mut context =
-            WorkspaceTransactionContext::new(workspace_id, user_id, api_token_id, transaction);
+        let mut context = WorkspaceTransactionContext::new(
+            workspace_id,
+            user_id,
+            WorkspaceCredential::AgentConnection(agent_connection_id),
+            transaction,
+        );
         let result = operation(&mut context).await?;
 
         context.commit().await?;

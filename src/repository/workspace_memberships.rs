@@ -138,10 +138,10 @@ impl Postgres {
         rows.into_iter().next().map(role_from_row).transpose()
     }
 
-    pub async fn list_workspaces_with_role_for_user(
+    pub async fn get_workspace_with_role_for_user(
         &self,
         user_id: UserId,
-    ) -> Result<Vec<WorkspaceWithRole>, Error> {
+    ) -> Result<Option<WorkspaceWithRole>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
@@ -155,13 +155,15 @@ SELECT
 FROM workspace_memberships m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1
-ORDER BY w.created_at, w.id
 "#,
                 &[&Uuid::from(user_id)],
             )
             .await?;
 
-        rows.into_iter().map(workspace_with_role_from_row).collect()
+        rows.into_iter()
+            .next()
+            .map(workspace_with_role_from_row)
+            .transpose()
     }
 }
 

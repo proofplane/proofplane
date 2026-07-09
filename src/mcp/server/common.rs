@@ -155,14 +155,6 @@ impl From<DomainError> for FieldIssue {
                 field: "freshness_window_days",
                 message: "freshness_window_days must be positive".to_owned(),
             },
-            DomainError::MissingApiTokenExpiration => Self {
-                field: "expires_at",
-                message: "expires_at is required".to_owned(),
-            },
-            DomainError::ApiTokenExpirationNotFuture => Self {
-                field: "expires_at",
-                message: "expires_at must be in the future".to_owned(),
-            },
             DomainError::DuplicatePermission { permission } => Self {
                 field: "permissions",
                 message: format!("permissions contains duplicate value {permission}"),

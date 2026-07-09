@@ -6,15 +6,16 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    authentication::{
-        paseto::{
-            RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
-        },
-        ApiTokenContext,
+    authentication::paseto::{
+        RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
     },
-    domain::{ApiTokenId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId},
+    domain::{
+        AgentConnectionId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId,
+    },
     repository::{NewAttachmentUploadGrant, Postgres},
 };
+
+use super::agent_connections::AgentConnectionContext;
 
 const UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
 const UPLOAD_GRANT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -26,7 +27,9 @@ struct UploadGrantClaims {
     workspace_id: String,
     submission_id: String,
     issued_by_user_id: String,
-    issued_via_api_token_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issued_via_api_token_id: Option<String>,
+    issued_via_agent_connection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +38,7 @@ struct VerifiedUploadGrant {
     workspace_id: WorkspaceId,
     submission_id: EvidenceSubmissionId,
     issued_by_user_id: UserId,
-    issued_via_api_token_id: ApiTokenId,
+    issued_via: UploadGrantIssuer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +55,7 @@ pub struct RedeemedUploadGrant {
     pub workspace_id: WorkspaceId,
     pub submission_id: EvidenceSubmissionId,
     pub issued_by_user_id: UserId,
-    pub issued_via_api_token_id: ApiTokenId,
+    pub issued_via: UploadGrantIssuer,
     pub expires_at: DateTime<Utc>,
     pub redeemed_at: DateTime<Utc>,
 }
@@ -62,7 +65,20 @@ pub struct UploadGrantAuditContext {
     pub workspace_id: WorkspaceId,
     pub submission_id: EvidenceSubmissionId,
     pub issued_by_user_id: UserId,
-    pub issued_via_api_token_id: ApiTokenId,
+    pub issued_via: UploadGrantIssuer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadGrantIssuer {
+    AgentConnection(AgentConnectionId),
+}
+
+impl UploadGrantIssuer {
+    pub fn agent_connection_id(self) -> AgentConnectionId {
+        match self {
+            Self::AgentConnection(id) => id,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -90,19 +106,36 @@ impl AttachmentUploadGrantService {
 
     pub async fn issue(
         &self,
-        token: &ApiTokenContext,
+        connection: &AgentConnectionContext,
+        submission_id: EvidenceSubmissionId,
+    ) -> Result<IssuedUploadGrant, UploadGrantError> {
+        self.issue_with_context(
+            connection.workspace_id,
+            connection.user_id,
+            UploadGrantIssuer::AgentConnection(connection.connection_id),
+            submission_id,
+        )
+        .await
+    }
+
+    async fn issue_with_context(
+        &self,
+        workspace_id: WorkspaceId,
+        user_id: UserId,
+        issued_via: UploadGrantIssuer,
         submission_id: EvidenceSubmissionId,
     ) -> Result<IssuedUploadGrant, UploadGrantError> {
         let expires_at = Utc::now()
             + chrono::Duration::from_std(UPLOAD_GRANT_TTL)
                 .map_err(|_| UploadGrantError::Internal)?;
         let grant_id = AttachmentUploadGrantId::from(Uuid::new_v4());
+        let agent_connection_id = issued_via.agent_connection_id();
         let grant = self
             .repository
-            .in_workspace_context(
-                token.workspace_id,
-                token.user_id,
-                token.api_token_id,
+            .in_agent_connection_workspace_context(
+                workspace_id,
+                user_id,
+                agent_connection_id,
                 async move |context| {
                     context
                         .create_attachment_upload_grant(NewAttachmentUploadGrant {
@@ -120,7 +153,7 @@ impl AttachmentUploadGrantService {
             .grant_encryptor
             .encrypt(
                 RegisteredClaims {
-                    subject: Uuid::from(token.user_id),
+                    subject: Uuid::from(user_id),
                     token_id: Uuid::from(grant.id),
                     expires_at: grant.expires_at,
                 },
@@ -130,7 +163,10 @@ impl AttachmentUploadGrantService {
                     workspace_id: grant.workspace_id.to_string(),
                     submission_id: grant.evidence_submission_id.to_string(),
                     issued_by_user_id: grant.issued_by_user_id.to_string(),
-                    issued_via_api_token_id: grant.issued_via_api_token_id.to_string(),
+                    issued_via_api_token_id: None,
+                    issued_via_agent_connection_id: grant
+                        .issued_via_agent_connection_id
+                        .map(|id| id.to_string()),
                 },
             )
             .map_err(|_| UploadGrantError::Internal)?;
@@ -145,10 +181,10 @@ impl AttachmentUploadGrantService {
             expires_at: issued.expires_at,
             submission_id,
             audit: UploadGrantAuditContext {
-                workspace_id: token.workspace_id,
+                workspace_id,
                 submission_id,
-                issued_by_user_id: token.user_id,
-                issued_via_api_token_id: token.api_token_id,
+                issued_by_user_id: user_id,
+                issued_via,
             },
         })
     }
@@ -172,7 +208,7 @@ impl AttachmentUploadGrantService {
             workspace_id: redeemed.workspace_id,
             submission_id: redeemed.evidence_submission_id,
             issued_by_user_id: redeemed.issued_by_user_id,
-            issued_via_api_token_id: redeemed.issued_via_api_token_id,
+            issued_via: upload_grant_issuer_from_record(redeemed.issued_via_agent_connection_id)?,
             expires_at: redeemed.expires_at,
             redeemed_at,
         })
@@ -207,8 +243,31 @@ impl TryFrom<VerifiedPasetoToken<UploadGrantClaims>> for VerifiedUploadGrant {
             workspace_id: WorkspaceId::from(parse_uuid(&claims.workspace_id)?),
             submission_id: EvidenceSubmissionId::from(parse_uuid(&claims.submission_id)?),
             issued_by_user_id,
-            issued_via_api_token_id: ApiTokenId::from(parse_uuid(&claims.issued_via_api_token_id)?),
+            issued_via: upload_grant_issuer_from_claims(
+                claims.issued_via_api_token_id.as_deref(),
+                claims.issued_via_agent_connection_id.as_deref(),
+            )?,
         })
+    }
+}
+
+fn upload_grant_issuer_from_record(
+    agent_connection_id: Option<AgentConnectionId>,
+) -> Result<UploadGrantIssuer, UploadGrantError> {
+    agent_connection_id
+        .map(UploadGrantIssuer::AgentConnection)
+        .ok_or(UploadGrantError::Internal)
+}
+
+fn upload_grant_issuer_from_claims(
+    api_token_id: Option<&str>,
+    agent_connection_id: Option<&str>,
+) -> Result<UploadGrantIssuer, InvalidUploadGrantClaims> {
+    match (api_token_id, agent_connection_id) {
+        (None, Some(id)) => Ok(UploadGrantIssuer::AgentConnection(AgentConnectionId::from(
+            parse_uuid(id)?,
+        ))),
+        _ => Err(InvalidUploadGrantClaims),
     }
 }
 
@@ -255,7 +314,8 @@ mod tests {
             workspace_id: Uuid::new_v4().to_string(),
             submission_id: Uuid::new_v4().to_string(),
             issued_by_user_id: Uuid::new_v4().to_string(),
-            issued_via_api_token_id: Uuid::new_v4().to_string(),
+            issued_via_api_token_id: None,
+            issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
         }
     }
 
@@ -268,8 +328,8 @@ mod tests {
         assert_eq!(grant.workspace_id.to_string(), claims.workspace_id);
         assert_eq!(grant.submission_id.to_string(), claims.submission_id);
         assert_eq!(
-            grant.issued_via_api_token_id.to_string(),
-            claims.issued_via_api_token_id
+            grant.issued_via.agent_connection_id().to_string(),
+            claims.issued_via_agent_connection_id.unwrap()
         );
     }
 
@@ -283,7 +343,9 @@ mod tests {
             |claims: &mut UploadGrantClaims| claims.grant_id = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| claims.workspace_id = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| claims.submission_id = "bad".to_owned(),
-            |claims: &mut UploadGrantClaims| claims.issued_via_api_token_id = "bad".to_owned(),
+            |claims: &mut UploadGrantClaims| {
+                claims.issued_via_agent_connection_id = Some("bad".to_owned())
+            },
         ] {
             let mut claims = claims();
             mutate(&mut claims);

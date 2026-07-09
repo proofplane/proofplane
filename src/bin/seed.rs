@@ -13,7 +13,7 @@ async fn main() {
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded fresh local workspaces, owner membership, API token permissions, demo evidence requests, SOC 2 controls, and demo evidence submission"
+        "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence requests, SOC 2 controls, and demo evidence submission"
     );
     match summary.demo_attachment {
         seed::DemoAttachmentSeedStatus::Seeded => {
@@ -30,10 +30,6 @@ async fn main() {
     println!(
         "unauthorized workspace: {}",
         Uuid::from(local_unauthorized_workspace_id())
-    );
-    println!(
-        "local owner bearer API token (reissued by this seed run): {}",
-        summary.api_token
     );
 }
 

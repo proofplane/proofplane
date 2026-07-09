@@ -1,13 +1,18 @@
-use std::{
-    collections::HashSet,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use jwtk::Claims;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{authentication::jwks::JwksVerifier, config::Auth0Config, domain::WorkspacePermission};
+use uuid::Uuid;
+
+use crate::{
+    authentication::jwks::JwksVerifier,
+    config::Auth0Config,
+    domain::{
+        canonical_permissions, AgentConnectionId, DomainError, WorkspaceId, WorkspacePermission,
+    },
+};
 
 const ISSUED_AT_LEEWAY: Duration = Duration::from_secs(30);
 
@@ -22,7 +27,9 @@ pub struct VerifiedClaims {
 pub struct VerifiedMcpClaims {
     pub subject: String,
     pub client_id: String,
-    pub scopes: Vec<String>,
+    pub scopes: Vec<WorkspacePermission>,
+    pub connection_id: Option<AgentConnectionId>,
+    pub workspace_id: Option<WorkspaceId>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,12 +50,14 @@ pub enum VerifyError {
     MissingSubject,
     #[error("client-credentials identities are not accepted")]
     MachineIdentity,
-    #[error("token authorized client is missing or not allowed")]
+    #[error("token authorized client is missing")]
     InvalidClient,
     #[error("token lifetime claims are missing or invalid")]
     InvalidLifetime,
     #[error("token scopes are missing or unsupported")]
     InvalidScopes,
+    #[error("token connection claims are malformed")]
+    InvalidConnectionClaims,
     #[error("the JWKS endpoint is unavailable")]
     JwksUnavailable,
 }
@@ -159,11 +168,21 @@ struct McpExtraClaims {
     scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gty: Option<String>,
+    #[serde(
+        default,
+        rename = "https://proofplane.com/connection_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    connection_id: Option<String>,
+    #[serde(
+        default,
+        rename = "https://proofplane.com/workspace_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    workspace_id: Option<String>,
 }
 
-struct McpPolicy {
-    allowed_client_ids: HashSet<String>,
-}
+struct McpPolicy;
 
 impl ClaimsPolicy for McpPolicy {
     type ExtraClaims = McpExtraClaims;
@@ -193,11 +212,8 @@ impl ClaimsPolicy for McpPolicy {
             .extra
             .azp
             .as_deref()
-            .filter(|client_id| !client_id.is_empty())
+            .filter(|client_id| !client_id.trim().is_empty())
             .ok_or(VerifyError::InvalidClient)?;
-        if !self.allowed_client_ids.contains(client_id) {
-            return Err(VerifyError::InvalidClient);
-        }
 
         let raw_scope = claims
             .extra
@@ -207,24 +223,36 @@ impl ClaimsPolicy for McpPolicy {
             .ok_or(VerifyError::InvalidScopes)?;
         let scopes = raw_scope
             .split_ascii_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if scopes.is_empty()
-            || scopes.iter().any(|scope| {
-                !WorkspacePermission::ALL
-                    .iter()
-                    .any(|permission| permission.as_str() == scope)
-            })
-        {
+            .map(str::parse::<WorkspacePermission>)
+            .collect::<Result<Vec<_>, DomainError>>()
+            .map_err(|_| VerifyError::InvalidScopes)
+            .and_then(|scopes| {
+                canonical_permissions(scopes).map_err(|_| VerifyError::InvalidScopes)
+            })?;
+        if scopes.is_empty() {
             return Err(VerifyError::InvalidScopes);
         }
+
+        let connection_id =
+            optional_uuid_claim(&claims.extra.connection_id)?.map(AgentConnectionId::from);
+        let workspace_id = optional_uuid_claim(&claims.extra.workspace_id)?.map(WorkspaceId::from);
 
         Ok(VerifiedMcpClaims {
             subject,
             client_id: client_id.to_owned(),
             scopes,
+            connection_id,
+            workspace_id,
         })
     }
+}
+
+fn optional_uuid_claim(value: &Option<String>) -> Result<Option<Uuid>, VerifyError> {
+    value
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| VerifyError::InvalidConnectionClaims)
 }
 
 pub struct Auth0TokenVerifier {
@@ -258,15 +286,13 @@ pub struct Auth0McpTokenVerifier {
 }
 
 impl Auth0McpTokenVerifier {
-    pub fn new(config: &Auth0Config) -> Self {
+    pub fn new(config: &Auth0Config, audience: impl Into<String>) -> Self {
         Self {
             verifier: Auth0Verifier {
                 verifier: JwksVerifier::remote(config.jwks_url.to_string()),
                 issuer: config.issuer.to_string(),
-                audience: config.mcp.resource.to_string(),
-                policy: McpPolicy {
-                    allowed_client_ids: config.mcp.allowed_client_ids.iter().cloned().collect(),
-                },
+                audience: audience.into(),
+                policy: McpPolicy,
             },
         }
     }
@@ -330,9 +356,7 @@ mod tests {
                     verifier: jwks,
                     issuer: ISSUER.to_owned(),
                     audience: MCP_AUDIENCE.to_owned(),
-                    policy: McpPolicy {
-                        allowed_client_ids: HashSet::from([CLIENT.to_owned()]),
-                    },
+                    policy: McpPolicy,
                 },
             },
             signing_key,
@@ -358,6 +382,8 @@ mod tests {
             azp: Some(CLIENT.to_owned()),
             scope: Some("read_controls write_controls".to_owned()),
             gty: None,
+            connection_id: None,
+            workspace_id: None,
         });
         claims
             .set_iss(ISSUER)
@@ -511,22 +537,37 @@ mod tests {
     #[test]
     fn mcp_policy_projects_valid_claims() {
         let claims = mcp_claims();
-        let policy = McpPolicy {
-            allowed_client_ids: HashSet::from([CLIENT.to_owned()]),
-        };
+        let policy = McpPolicy;
         let verified = policy
             .validate(claims.claims(), "auth0|user".to_owned())
             .expect("claims validate");
         assert_eq!(verified.subject, "auth0|user");
         assert_eq!(verified.client_id, CLIENT);
-        assert_eq!(verified.scopes, ["read_controls", "write_controls"]);
+        assert_eq!(
+            verified.scopes,
+            [
+                WorkspacePermission::ReadControls,
+                WorkspacePermission::WriteControls
+            ]
+        );
+    }
+
+    #[test]
+    fn mcp_policy_accepts_any_non_blank_dynamic_client_id() {
+        let mut claims = mcp_claims();
+        claims.claims_mut().extra.azp = Some("dynamic-client-456".to_owned());
+        let policy = McpPolicy;
+
+        let verified = policy
+            .validate(claims.claims(), "auth0|user".to_owned())
+            .expect("claims validate");
+
+        assert_eq!(verified.client_id, "dynamic-client-456");
     }
 
     #[test]
     fn mcp_policy_rejects_missing_invalid_or_future_lifetime() {
-        let policy = McpPolicy {
-            allowed_client_ids: HashSet::from([CLIENT.to_owned()]),
-        };
+        let policy = McpPolicy;
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 
         let mut cases = Vec::new();
@@ -553,9 +594,7 @@ mod tests {
 
     #[test]
     fn mcp_policy_rejects_machine_clients_and_invalid_scopes() {
-        let policy = McpPolicy {
-            allowed_client_ids: HashSet::from([CLIENT.to_owned()]),
-        };
+        let policy = McpPolicy;
 
         assert!(matches!(
             policy.validate(mcp_claims().claims(), "client-123@clients".to_owned()),
@@ -568,7 +607,7 @@ mod tests {
             Err(VerifyError::MachineIdentity)
         ));
 
-        for client in [None, Some(""), Some("unregistered")] {
+        for client in [None, Some(""), Some(" \t ")] {
             let mut claims = mcp_claims();
             claims.claims_mut().extra.azp = client.map(str::to_owned);
             assert!(matches!(
@@ -671,9 +710,7 @@ mod tests {
                 verifier: JwksVerifier::remote(remote_url),
                 issuer: ISSUER.to_owned(),
                 audience: MCP_AUDIENCE.to_owned(),
-                policy: McpPolicy {
-                    allowed_client_ids: HashSet::from([CLIENT.to_owned()]),
-                },
+                policy: McpPolicy,
             },
         };
         let token = sign_with(&mcp_key, mcp_claims());

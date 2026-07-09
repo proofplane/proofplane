@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     extract::{Request, State},
     http::{header, HeaderValue, StatusCode},
@@ -8,28 +6,29 @@ use axum::{
 };
 use tracing::Span;
 
-use crate::authentication::{
-    auth0::{TokenVerifier, VerifiedMcpClaims},
-    ApiTokenAuthenticator, ApiTokenContext,
+use crate::authentication::auth0::{TokenVerifier, VerifiedMcpClaims};
+use crate::services::agent_connections::{
+    AgentConnectionContext, AgentConnectionService, AuthorizeMcpConnectionPayload,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpPrincipal {
-    ApiToken(ApiTokenContext),
-    Auth0(VerifiedMcpClaims),
+    AgentConnection(AgentConnectionContext),
 }
 
 pub(crate) struct AuthenticationState<V> {
-    pub api_tokens: Arc<ApiTokenAuthenticator>,
-    pub auth0: Arc<V>,
+    pub auth0: std::sync::Arc<V>,
+    pub agent_connections: AgentConnectionService,
+    pub resource: String,
     pub challenge: HeaderValue,
 }
 
 impl<V> Clone for AuthenticationState<V> {
     fn clone(&self) -> Self {
         Self {
-            api_tokens: self.api_tokens.clone(),
             auth0: self.auth0.clone(),
+            agent_connections: self.agent_connections.clone(),
+            resource: self.resource.clone(),
             challenge: self.challenge.clone(),
         }
     }
@@ -44,36 +43,62 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
         return unauthorized(&state.challenge);
     };
 
-    let principal = if raw_token.starts_with("ppat_") {
-        match state.api_tokens.authenticate(raw_token).await {
-            Ok(Some(context)) => McpPrincipal::ApiToken(context),
-            Ok(None) => return unauthorized(&state.challenge),
-            Err(error) => {
-                tracing::error!(%error, "MCP API token authentication failed");
+    let principal = match state.auth0.verify(raw_token).await {
+        Ok(claims) => match agent_connection_principal(&state, claims).await {
+            Ok(principal) => principal,
+            Err(AgentConnectionAuthError::Rejected) => return unauthorized(&state.challenge),
+            Err(AgentConnectionAuthError::Unavailable(error)) => {
+                tracing::error!(%error, "MCP agent connection authorization failed");
                 return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
                     .into_response();
             }
+        },
+        Err(error) if error.is_token_rejection() => {
+            return unauthorized(&state.challenge);
         }
-    } else {
-        match state.auth0.verify(raw_token).await {
-            Ok(claims) => McpPrincipal::Auth0(claims),
-            Err(error) if error.is_token_rejection() => {
-                return unauthorized(&state.challenge);
-            }
-            Err(error) => {
-                tracing::error!(%error, "MCP Auth0 token verification failed");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                    .into_response();
-            }
+        Err(error) => {
+            tracing::error!(%error, "MCP OAuth token verification failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response();
         }
     };
 
-    if let McpPrincipal::ApiToken(context) = principal {
-        Span::current().record("user_id", context.user_id.to_string());
-        Span::current().record("api_token_id", context.api_token_id.to_string());
+    match &principal {
+        McpPrincipal::AgentConnection(context) => {
+            Span::current().record("user_id", context.user_id.to_string());
+        }
     }
     request.extensions_mut().insert(principal);
     next.run(request).await
+}
+
+enum AgentConnectionAuthError {
+    Rejected,
+    Unavailable(crate::services::agent_connections::AgentConnectionError),
+}
+
+async fn agent_connection_principal<V: TokenVerifier<Claims = VerifiedMcpClaims>>(
+    state: &AuthenticationState<V>,
+    claims: VerifiedMcpClaims,
+) -> Result<McpPrincipal, AgentConnectionAuthError> {
+    match (claims.connection_id, claims.workspace_id) {
+        (Some(connection_id), Some(workspace_id)) => {
+            let context = state
+                .agent_connections
+                .authorize_mcp_connection(AuthorizeMcpConnectionPayload {
+                    connection_id,
+                    workspace_id,
+                    auth0_subject: claims.subject.clone(),
+                    auth0_client_id: claims.client_id.clone(),
+                    resource: state.resource.clone(),
+                    permissions: claims.scopes.clone(),
+                })
+                .await
+                .map_err(AgentConnectionAuthError::Unavailable)?
+                .ok_or(AgentConnectionAuthError::Rejected)?;
+            Ok(McpPrincipal::AgentConnection(context))
+        }
+        _ => Err(AgentConnectionAuthError::Rejected),
+    }
 }
 
 fn bearer_token(request: &Request) -> Option<&str> {
@@ -102,15 +127,14 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     #[test]
-    fn bearer_token_accepts_api_tokens_and_jwts() {
-        for raw_token in ["ppat_example", "eyJhbGciOiJSUzI1NiJ9.payload.signature"] {
-            let request = Request::builder()
-                .header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
-                .body(Body::empty())
-                .expect("request builds");
+    fn bearer_token_accepts_jwts() {
+        let raw_token = "eyJhbGciOiJSUzI1NiJ9.payload.signature";
+        let request = Request::builder()
+            .header(header::AUTHORIZATION, format!("Bearer {raw_token}"))
+            .body(Body::empty())
+            .expect("request builds");
 
-            assert_eq!(bearer_token(&request), Some(raw_token));
-        }
+        assert_eq!(bearer_token(&request), Some(raw_token));
     }
 
     #[test]

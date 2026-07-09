@@ -10,13 +10,14 @@ use super::{
     helpers::{
         gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
         parse_log_format, paseto_download_key, path_string, postgres_connection_string,
-        public_api_base_url as validate_public_api_base_url, string_url, string_value,
-        ConfigValidationExt,
+        public_api_base_url as validate_public_api_base_url, secret_value, string_url,
+        string_value, ConfigValidationExt,
     },
-    Auth0Config, Auth0McpConfig, GcsObjectStorageConfig, HealthConfig, McpConfig,
+    Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig, HealthConfig, McpConfig,
     ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
-    PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
-    PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
+    PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig,
+    WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -72,13 +73,14 @@ pub(super) struct RawAuth0Config {
     issuer: String,
     audience: String,
     jwks_url: String,
-    mcp: RawAuth0McpConfig,
+    upstream_oauth: RawAuth0UpstreamOAuthConfig,
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct RawAuth0McpConfig {
-    resource: String,
-    allowed_client_ids: Vec<String>,
+pub(super) struct RawAuth0UpstreamOAuthConfig {
+    client_id: String,
+    client_secret: SecretString,
+    callback_path: String,
 }
 
 impl RawAuth0Config {
@@ -87,26 +89,29 @@ impl RawAuth0Config {
             issuer <- string_url(self.issuer).at("auth0.issuer"),
             audience <- string_value(self.audience).at("auth0.audience"),
             jwks_url <- string_url(self.jwks_url).at("auth0.jwks_url"),
-            mcp <- self.mcp.validate(),
+            upstream_oauth <- self.upstream_oauth.validate(),
             => Auth0Config {
                 issuer,
                 audience,
                 jwks_url,
-                mcp,
+                upstream_oauth,
             },
         }
     }
 }
 
-impl RawAuth0McpConfig {
-    pub(super) fn validate(self) -> Validation<Auth0McpConfig, ConfigFieldError> {
+impl RawAuth0UpstreamOAuthConfig {
+    pub(super) fn validate(self) -> Validation<Auth0UpstreamOAuthConfig, ConfigFieldError> {
         validate! {
-            resource <- canonical_url(self.resource).at("auth0.mcp.resource"),
-            allowed_client_ids <- validate_allowed_client_ids(self.allowed_client_ids)
-                .at("auth0.mcp.allowed_client_ids"),
-            => Auth0McpConfig {
-                resource,
-                allowed_client_ids,
+            client_id <- string_value(self.client_id).at("auth0.upstream_oauth.client_id"),
+            client_secret <- secret_value(self.client_secret)
+                .at("auth0.upstream_oauth.client_secret"),
+            callback_path <- path_string(self.callback_path)
+                .at("auth0.upstream_oauth.callback_path"),
+            => Auth0UpstreamOAuthConfig {
+                client_id,
+                client_secret,
+                callback_path,
             },
         }
     }
@@ -120,21 +125,11 @@ fn canonical_url(value: String) -> Result<url::Url, String> {
     Ok(url)
 }
 
-fn validate_allowed_client_ids(values: Vec<String>) -> Result<Vec<String>, String> {
-    if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
-        return Err("must contain at least one non-empty client ID".to_owned());
-    }
-    let unique = values.iter().collect::<HashSet<_>>();
-    if unique.len() != values.len() {
-        return Err("client IDs must be unique".to_owned());
-    }
-    Ok(values)
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct RawPasetoConfig {
     download: RawPasetoDownloadConfig,
     upload_grant: RawPasetoUploadGrantConfig,
+    mcp_oauth: RawPasetoMcpOAuthConfig,
 }
 
 impl RawPasetoConfig {
@@ -142,9 +137,11 @@ impl RawPasetoConfig {
         validate! {
             download <- self.download.validate(),
             upload_grant <- self.upload_grant.validate(),
+            mcp_oauth <- self.mcp_oauth.validate(),
             => PasetoConfig {
                 download,
                 upload_grant,
+                mcp_oauth,
             },
         }
     }
@@ -318,6 +315,92 @@ fn validate_upload_grant_keyring(
     Validation::invalid(ConfigFieldError::new(
         "paseto.upload_grant.active_key_id",
         "must exist in paseto.upload_grant.keys",
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoMcpOAuthConfig {
+    active_key_id: String,
+    keys: Vec<RawPasetoMcpOAuthKey>,
+}
+
+impl RawPasetoMcpOAuthConfig {
+    pub(super) fn validate(self) -> Validation<PasetoMcpOAuthConfig, ConfigFieldError> {
+        validate! {
+            active_key_id <- string_value(self.active_key_id)
+                .at("paseto.mcp_oauth.active_key_id"),
+            keys <- validate_mcp_oauth_keys(self.keys),
+            => PasetoMcpOAuthConfig {
+                active_key_id,
+                keys,
+            },
+        }
+        .and_then(validate_mcp_oauth_keyring)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawPasetoMcpOAuthKey {
+    id: String,
+    secret: SecretString,
+}
+
+impl RawPasetoMcpOAuthKey {
+    fn validate(self, index: usize) -> Validation<PasetoMcpOAuthKey, ConfigFieldError> {
+        let id_path = format!("paseto.mcp_oauth.keys[{index}].id");
+        let secret_path = format!("paseto.mcp_oauth.keys[{index}].secret");
+
+        validate! {
+            id <- string_value(self.id).at(id_path),
+            secret <- paseto_download_key(self.secret).at(secret_path),
+            => PasetoMcpOAuthKey { id, secret },
+        }
+    }
+}
+
+fn validate_mcp_oauth_keys(
+    keys: Vec<RawPasetoMcpOAuthKey>,
+) -> Validation<Vec<PasetoMcpOAuthKey>, ConfigFieldError> {
+    let mut errors = Vec::new();
+    let mut validated = Vec::with_capacity(keys.len());
+
+    for (index, key) in keys.into_iter().enumerate() {
+        match key.validate(index) {
+            Validation::Valid(key) => validated.push(key),
+            Validation::Invalid(mut key_errors) => errors.append(&mut key_errors),
+        }
+    }
+
+    if validated.is_empty() {
+        errors.push(ConfigFieldError::new(
+            "paseto.mcp_oauth.keys",
+            "must contain at least one key",
+        ));
+    }
+
+    add_duplicate_id_errors(
+        "paseto.mcp_oauth.keys",
+        validated.iter().map(|key| key.id.as_str()),
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        return Validation::valid(validated);
+    }
+
+    Validation::invalid_many(errors)
+}
+
+fn validate_mcp_oauth_keyring(
+    config: PasetoMcpOAuthConfig,
+) -> Validation<PasetoMcpOAuthConfig, ConfigFieldError> {
+    if config.keys.iter().any(|key| key.id == config.active_key_id) {
+        return Validation::valid(config);
+    }
+
+    Validation::invalid(ConfigFieldError::new(
+        "paseto.mcp_oauth.active_key_id",
+        "must exist in paseto.mcp_oauth.keys",
     ))
 }
 
@@ -524,15 +607,20 @@ impl RawWorkerConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct RawMcpConfig {
     shutdown_grace_seconds: u64,
+    resource: String,
 }
 
 impl RawMcpConfig {
     pub(super) fn validate(self) -> Validation<McpConfig, ConfigFieldError> {
-        nonzero_u64(self.shutdown_grace_seconds)
-            .at("mcp.shutdown_grace_seconds")
-            .map(|shutdown_grace_seconds| McpConfig {
+        validate! {
+            shutdown_grace_seconds <- nonzero_u64(self.shutdown_grace_seconds)
+                .at("mcp.shutdown_grace_seconds"),
+            resource <- canonical_url(self.resource).at("mcp.resource"),
+            => McpConfig {
                 shutdown_grace_seconds,
-            })
+                resource,
+            },
+        }
     }
 }
 

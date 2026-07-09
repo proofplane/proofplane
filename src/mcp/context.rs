@@ -1,19 +1,19 @@
 use super::auth::McpPrincipal;
+#[cfg(test)]
+use crate::domain::{UserId, WorkspacePermissions};
 use crate::{
-    authentication::ApiTokenContext,
     domain::{WorkspaceId, WorkspacePermission},
+    observability::audit::AuditActor,
     routes::request_context::RequestId,
+    services::agent_connections::AgentConnectionContext,
 };
 use serde_json::json;
-
-#[cfg(test)]
-use crate::domain::{ApiTokenId, UserId, WorkspacePermissions};
 
 pub const SESSION_ID_HEADER: &str = "mcp-session-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpRequestContext {
-    pub token: ApiTokenContext,
+    pub connection: AgentConnectionContext,
     pub request_id: RequestId,
     pub session_id: Option<String>,
 }
@@ -24,18 +24,18 @@ impl McpRequestContext {
         headers: &http::HeaderMap,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = api_token_principal(extensions)?;
+        let connection = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
             .ok_or_else(internal_context_error)?;
 
-        if !token.permissions.has(required_permission) {
+        if !connection.permissions.has(required_permission) {
             return Err(not_found());
         }
 
         Ok(Self {
-            token,
+            connection,
             request_id,
             session_id: headers
                 .get(SESSION_ID_HEADER)
@@ -50,18 +50,20 @@ impl McpRequestContext {
         workspace_id: WorkspaceId,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let token = api_token_principal(extensions)?;
+        let connection = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
             .ok_or_else(internal_context_error)?;
 
-        if !token.allows(workspace_id, required_permission) {
+        if connection.workspace_id != workspace_id
+            || !connection.permissions.has(required_permission)
+        {
             return Err(not_found());
         }
 
         Ok(Self {
-            token,
+            connection,
             request_id,
             session_id: headers
                 .get(SESSION_ID_HEADER)
@@ -69,12 +71,24 @@ impl McpRequestContext {
                 .map(str::to_owned),
         })
     }
+
+    pub fn audit_actor(&self) -> AuditActor {
+        AuditActor::AgentConnection {
+            user_id: self.connection.user_id.into(),
+            agent_connection_id: self.connection.connection_id.into(),
+        }
+    }
+
+    pub fn agent_connection_context(&self) -> AgentConnectionContext {
+        self.connection
+    }
 }
 
-fn api_token_principal(extensions: &http::Extensions) -> Result<ApiTokenContext, rmcp::ErrorData> {
+fn workspace_principal(
+    extensions: &http::Extensions,
+) -> Result<AgentConnectionContext, rmcp::ErrorData> {
     match extensions.get::<McpPrincipal>() {
-        Some(McpPrincipal::ApiToken(token)) => Ok(*token),
-        Some(McpPrincipal::Auth0(_)) => Err(not_found()),
+        Some(McpPrincipal::AgentConnection(connection)) => Ok(*connection),
         None => Err(internal_context_error()),
     }
 }
@@ -96,10 +110,10 @@ fn not_found() -> rmcp::ErrorData {
 }
 
 #[cfg(test)]
-pub(crate) fn api_token_context(workspace_id: WorkspaceId) -> ApiTokenContext {
-    ApiTokenContext {
+pub(crate) fn agent_connection_context(workspace_id: WorkspaceId) -> AgentConnectionContext {
+    AgentConnectionContext {
         user_id: UserId::from(uuid::Uuid::new_v4()),
-        api_token_id: ApiTokenId::from(uuid::Uuid::new_v4()),
+        connection_id: crate::domain::AgentConnectionId::from(uuid::Uuid::new_v4()),
         workspace_id,
         permissions: WorkspacePermissions::from_iter([WorkspacePermission::ReadControls]),
     }
@@ -114,7 +128,9 @@ mod tests {
     fn authorization_conceals_workspace_and_permission_failures() {
         let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(McpPrincipal::ApiToken(api_token_context(workspace_id)));
+        extensions.insert(McpPrincipal::AgentConnection(agent_connection_context(
+            workspace_id,
+        )));
         extensions.insert(RequestId(uuid::Uuid::new_v4()));
         let headers = http::HeaderMap::new();
 
@@ -141,10 +157,10 @@ mod tests {
     #[test]
     fn authorization_extracts_request_and_session_context() {
         let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
-        let token = api_token_context(workspace_id);
+        let connection = agent_connection_context(workspace_id);
         let request_id = RequestId(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(McpPrincipal::ApiToken(token));
+        extensions.insert(McpPrincipal::AgentConnection(connection));
         extensions.insert(request_id);
         let mut headers = http::HeaderMap::new();
         headers.insert(SESSION_ID_HEADER, HeaderValue::from_static("session-1"));
@@ -157,7 +173,7 @@ mod tests {
         )
         .expect("authorization succeeds");
 
-        assert_eq!(context.token, token);
+        assert_eq!(context.connection, connection);
         assert_eq!(context.request_id, request_id);
         assert_eq!(context.session_id.as_deref(), Some("session-1"));
     }
@@ -165,10 +181,10 @@ mod tests {
     #[test]
     fn token_workspace_authorization_checks_permission_without_argument_workspace() {
         let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
-        let token = api_token_context(workspace_id);
+        let connection = agent_connection_context(workspace_id);
         let request_id = RequestId(uuid::Uuid::new_v4());
         let mut extensions = http::Extensions::new();
-        extensions.insert(McpPrincipal::ApiToken(token));
+        extensions.insert(McpPrincipal::AgentConnection(connection));
         extensions.insert(request_id);
         let headers = http::HeaderMap::new();
 
@@ -178,7 +194,7 @@ mod tests {
             WorkspacePermission::ReadControls,
         )
         .expect("token workspace authorization succeeds");
-        assert_eq!(context.token.workspace_id, workspace_id);
+        assert_eq!(context.connection.workspace_id, workspace_id);
 
         let denied = McpRequestContext::authorize_token_workspace(
             &extensions,

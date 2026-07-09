@@ -12,7 +12,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use tokio_util::sync::CancellationToken;
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::Span;
 
 use super::{
@@ -23,11 +23,8 @@ use crate::authentication::paseto::{
     DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
-    authentication::{
-        auth0::{TokenVerifier, VerifiedMcpClaims},
-        ApiTokenAuthenticator,
-    },
-    config::{Auth0McpConfig, HealthConfig},
+    authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
+    config::HealthConfig,
     domain::WorkspacePermission,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
@@ -40,6 +37,7 @@ use crate::{
         request_context::attach_request_id,
     },
     services::{
+        agent_connections::AgentConnectionService,
         attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
@@ -60,10 +58,9 @@ pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub authenticator: Arc<ApiTokenAuthenticator>,
-    pub auth0_verifier: Arc<V>,
-    pub auth0_issuer: Url,
-    pub auth0_mcp: Auth0McpConfig,
+    pub oauth_verifier: Arc<V>,
+    pub authorization_server: Url,
+    pub resource: Url,
     pub public_api_base_url: Url,
     pub download_grant_encryptor: DownloadGrantEncryptor,
     pub download_grant_decryptor: DownloadGrantDecryptor,
@@ -79,10 +76,9 @@ impl<V> Clone for McpAppDependencies<V> {
             postgres: self.postgres.clone(),
             object_store: self.object_store.clone(),
             metrics: self.metrics.clone(),
-            authenticator: self.authenticator.clone(),
-            auth0_verifier: self.auth0_verifier.clone(),
-            auth0_issuer: self.auth0_issuer.clone(),
-            auth0_mcp: self.auth0_mcp.clone(),
+            oauth_verifier: self.oauth_verifier.clone(),
+            authorization_server: self.authorization_server.clone(),
+            resource: self.resource.clone(),
             public_api_base_url: self.public_api_base_url.clone(),
             download_grant_encryptor: self.download_grant_encryptor.clone(),
             download_grant_decryptor: self.download_grant_decryptor.clone(),
@@ -110,10 +106,11 @@ where
         dependencies.upload_grant_decryptor,
     );
     let controls = ControlService::new(dependencies.postgres.clone());
+    let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
-        dependencies.authenticator,
-        dependencies.auth0_verifier,
-        dependencies.auth0_mcp.clone(),
+        dependencies.oauth_verifier,
+        dependencies.resource.clone(),
+        agent_connections,
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
@@ -124,8 +121,8 @@ where
     )?;
     let protected_resource_metadata =
         protected_resource_metadata::router(ProtectedResourceMetadataState {
-            resource: dependencies.auth0_mcp.resource.clone(),
-            authorization_server: dependencies.auth0_issuer.clone(),
+            resource: dependencies.resource.clone(),
+            authorization_server: dependencies.authorization_server.clone(),
         });
 
     Ok(Router::new()
@@ -146,6 +143,7 @@ where
             }),
         )
         .layer(middleware::from_fn(attach_request_id))
+        .layer(CorsLayer::permissive())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
@@ -157,7 +155,6 @@ where
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })
@@ -173,16 +170,16 @@ where
 }
 
 pub fn protocol_router<V>(
-    authenticator: Arc<ApiTokenAuthenticator>,
-    auth0_verifier: Arc<V>,
-    auth0_config: Auth0McpConfig,
+    oauth_verifier: Arc<V>,
+    resource: Url,
+    agent_connections: AgentConnectionService,
     server: ProofplaneMcp,
     cancellation_token: CancellationToken,
 ) -> Result<Router, McpAppError>
 where
     V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
 {
-    let challenge = authentication_challenge(&auth0_config)?;
+    let challenge = authentication_challenge(&resource)?;
     let server_factory = move || Ok(server.clone());
     let transport = StreamableHttpService::<ProofplaneMcp, LocalSessionManager>::new(
         server_factory,
@@ -195,22 +192,22 @@ where
         .nest_service(ENDPOINT, transport)
         .layer(middleware::from_fn_with_state(
             AuthenticationState {
-                api_tokens: authenticator,
-                auth0: auth0_verifier,
+                auth0: oauth_verifier,
+                agent_connections,
+                resource: resource.to_string(),
                 challenge,
             },
             authenticate_request,
         )))
 }
 
-fn authentication_challenge(config: &Auth0McpConfig) -> Result<HeaderValue, McpAppError> {
+fn authentication_challenge(resource: &Url) -> Result<HeaderValue, McpAppError> {
     let scopes = WorkspacePermission::ALL
         .iter()
         .map(|permission| permission.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    let metadata = config
-        .resource
+    let metadata = resource
         .join(PROTECTED_RESOURCE_METADATA_ENDPOINT)
         .map_err(McpAppError::ResourceMetadataUrl)?;
     let challenge = format!(
@@ -232,7 +229,7 @@ mod tests {
     use axum::{body::Body, http::Request};
     use url::Url;
 
-    use super::{authentication_challenge, trace_path, Auth0McpConfig, McpAppError};
+    use super::{authentication_challenge, trace_path, McpAppError};
 
     #[test]
     fn http_trace_path_never_contains_query_parameters() {
@@ -246,13 +243,10 @@ mod tests {
 
     #[test]
     fn authentication_challenge_rejects_non_hierarchical_resource_url() {
-        let config = Auth0McpConfig {
-            resource: Url::parse("mailto:mcp@proofplane.com").unwrap(),
-            allowed_client_ids: vec!["client-123".to_owned()],
-        };
+        let resource = Url::parse("mailto:mcp@proofplane.com").unwrap();
 
         assert!(matches!(
-            authentication_challenge(&config),
+            authentication_challenge(&resource),
             Err(McpAppError::ResourceMetadataUrl(_))
         ));
     }

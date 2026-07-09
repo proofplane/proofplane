@@ -67,7 +67,7 @@ impl FromStr for WorkspacePermission {
 }
 
 /// A `Copy` set of granted workspace permissions, small enough to live inside
-/// `ApiTokenContext` and be checked in-memory on every data-plane request.
+/// request context and be checked in-memory on every data-plane request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WorkspacePermissions {
     bits: u8,
@@ -111,11 +111,42 @@ impl FromIterator<WorkspacePermission> for WorkspacePermissions {
     }
 }
 
+pub fn canonical_permissions(
+    values: Vec<WorkspacePermission>,
+) -> Result<Vec<WorkspacePermission>, DomainError> {
+    let mut seen = [false; 6];
+    for permission in values {
+        let index = permission_index(permission);
+        if seen[index] {
+            return Err(DomainError::DuplicatePermission {
+                permission: permission.as_str().to_owned(),
+            });
+        }
+        seen[index] = true;
+    }
+
+    Ok(WorkspacePermission::ALL
+        .into_iter()
+        .filter(|permission| seen[permission_index(*permission)])
+        .collect())
+}
+
+fn permission_index(permission: WorkspacePermission) -> usize {
+    match permission {
+        WorkspacePermission::ReadEvidenceRequests => 0,
+        WorkspacePermission::WriteEvidenceRequests => 1,
+        WorkspacePermission::ReadEvidenceSubmissions => 2,
+        WorkspacePermission::WriteEvidenceSubmissions => 3,
+        WorkspacePermission::ReadControls => 4,
+        WorkspacePermission::WriteControls => 5,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use super::{WorkspacePermission, WorkspacePermissions};
+    use super::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
 
     #[test]
     fn permission_round_trips_through_string() {
@@ -152,5 +183,35 @@ mod tests {
             assert!(all.has(permission));
         }
         assert!(WorkspacePermissions::none().is_empty());
+    }
+
+    #[test]
+    fn canonical_permissions_reject_duplicates() {
+        assert_eq!(
+            canonical_permissions(vec![
+                WorkspacePermission::ReadControls,
+                WorkspacePermission::ReadControls,
+            ]),
+            Err(crate::domain::DomainError::DuplicatePermission {
+                permission: "read_controls".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_permissions_preserve_workspace_permission_order() {
+        assert_eq!(
+            canonical_permissions(vec![
+                WorkspacePermission::WriteControls,
+                WorkspacePermission::ReadEvidenceRequests,
+                WorkspacePermission::ReadControls,
+            ])
+            .unwrap(),
+            vec![
+                WorkspacePermission::ReadEvidenceRequests,
+                WorkspacePermission::ReadControls,
+                WorkspacePermission::WriteControls,
+            ]
+        );
     }
 }

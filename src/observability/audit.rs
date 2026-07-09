@@ -11,30 +11,40 @@ use uuid::Uuid;
 /// The identity responsible for an audited operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuditActor {
-    User { user_id: Uuid },
-    ApiToken { user_id: Uuid, api_token_id: Uuid },
-    System { name: &'static str },
+    User {
+        user_id: Uuid,
+    },
+    AgentConnection {
+        user_id: Uuid,
+        agent_connection_id: Uuid,
+    },
+    System {
+        name: &'static str,
+    },
 }
 
 impl AuditActor {
     fn actor_type(self) -> &'static str {
         match self {
             Self::User { .. } => "user",
-            Self::ApiToken { .. } => "api_token",
+            Self::AgentConnection { .. } => "agent_connection",
             Self::System { .. } => "system",
         }
     }
 
     fn user_id(&self) -> Option<&Uuid> {
         match self {
-            Self::User { user_id } | Self::ApiToken { user_id, .. } => Some(user_id),
+            Self::User { user_id } | Self::AgentConnection { user_id, .. } => Some(user_id),
             Self::System { .. } => None,
         }
     }
 
-    fn api_token_id(&self) -> Option<&Uuid> {
+    fn agent_connection_id(&self) -> Option<&Uuid> {
         match self {
-            Self::ApiToken { api_token_id, .. } => Some(api_token_id),
+            Self::AgentConnection {
+                agent_connection_id,
+                ..
+            } => Some(agent_connection_id),
             Self::User { .. } | Self::System { .. } => None,
         }
     }
@@ -42,7 +52,7 @@ impl AuditActor {
     fn system_name(self) -> Option<&'static str> {
         match self {
             Self::System { name } => Some(name),
-            Self::User { .. } | Self::ApiToken { .. } => None,
+            Self::User { .. } | Self::AgentConnection { .. } => None,
         }
     }
 }
@@ -119,8 +129,7 @@ impl fmt::Display for AuditMetadata {
             return f.write_str("{}");
         }
 
-        let metadata = serde_json::to_string(&self.0)
-            .expect("audit metadata contains only string keys and values");
+        let metadata = serde_json::to_string(&self.0).map_err(|_| fmt::Error)?;
         f.write_str(&metadata)
     }
 }
@@ -202,7 +211,7 @@ impl AuditEvent {
             outcome = self.outcome.as_str(),
             actor_type = self.actor.actor_type(),
             user_id = self.actor.user_id().map(|id| id.to_string()),
-            api_token_id = self.actor.api_token_id().map(|id| id.to_string()),
+            agent_connection_id = self.actor.agent_connection_id().map(|id| id.to_string()),
             system_name = self.actor.system_name(),
             client_type = self.client_type.as_str(),
             operation = self.operation,
@@ -234,7 +243,7 @@ mod tests {
     #[test]
     fn emits_required_and_optional_fields_as_json() {
         let user_id = Uuid::new_v4();
-        let api_token_id = Uuid::new_v4();
+        let agent_connection_id = Uuid::new_v4();
         let workspace_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
@@ -247,11 +256,11 @@ mod tests {
             AuditEvent::new(
                 "evidence_submission.created",
                 AuditOutcome::Success,
-                AuditActor::ApiToken {
+                AuditActor::AgentConnection {
                     user_id,
-                    api_token_id,
+                    agent_connection_id,
                 },
-                AuditClientType::Rest,
+                AuditClientType::Mcp,
                 "create_evidence_submission",
             )
             .workspace_id(workspace_id)
@@ -272,10 +281,13 @@ mod tests {
         assert!(Uuid::parse_str(fields["event_id"].as_str().unwrap()).is_ok());
         assert_eq!(fields["event_name"], "evidence_submission.created");
         assert_eq!(fields["outcome"], "success");
-        assert_eq!(fields["actor_type"], "api_token");
+        assert_eq!(fields["actor_type"], "agent_connection");
         assert_eq!(fields["user_id"], user_id.to_string());
-        assert_eq!(fields["api_token_id"], api_token_id.to_string());
-        assert_eq!(fields["client_type"], "rest");
+        assert_eq!(
+            fields["agent_connection_id"],
+            agent_connection_id.to_string()
+        );
+        assert_eq!(fields["client_type"], "mcp");
         assert_eq!(fields["operation"], "create_evidence_submission");
         assert_eq!(fields["workspace_id"], workspace_id.to_string());
         assert_eq!(fields["request_id"], request_id.to_string());
@@ -331,7 +343,7 @@ mod tests {
         assert_eq!(fields["client_type"], "worker");
         for field in [
             "user_id",
-            "api_token_id",
+            "agent_connection_id",
             "workspace_id",
             "request_id",
             "session_id",

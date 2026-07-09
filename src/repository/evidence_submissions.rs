@@ -235,31 +235,32 @@ impl WorkspaceTransactionContext<'_> {
         &self,
         payload: &CreateEvidenceSubmissionPayload,
     ) -> Result<Option<EvidenceSubmission>, Error> {
+        let agent_connection_id = self.credential.agent_connection_uuid();
         let rows = self
             .transaction
             .query(
                 r#"
 WITH inserted AS (
-    INSERT INTO evidence_submissions (
-        evidence_request_id,
-        submitted_by_api_token_id,
-        coverage_start_at,
-        coverage_end_at,
-        source_system,
+	    INSERT INTO evidence_submissions (
+	        evidence_request_id,
+	        submitted_by_agent_connection_id,
+	        coverage_start_at,
+	        coverage_end_at,
+	        source_system,
         collection_method,
-        summary,
-        description
-    )
-    SELECT er.id, $2, $3, $4, $5, $6, $7, $8
-    FROM evidence_requests er
-    WHERE er.id = $1
-      AND er.workspace_id = $9
-    RETURNING
-        id,
-        evidence_request_id,
-        submitted_by_api_token_id,
-        received_at,
-        coverage_start_at,
+	        summary,
+	        description
+	    )
+	    SELECT er.id, $2, $3, $4, $5, $6, $7, $8
+	    FROM evidence_requests er
+	    WHERE er.id = $1
+	      AND er.workspace_id = $9
+	    RETURNING
+	        id,
+	        evidence_request_id,
+	        submitted_by_agent_connection_id,
+	        received_at,
+	        coverage_start_at,
         coverage_end_at,
         source_system,
         collection_method,
@@ -267,23 +268,23 @@ WITH inserted AS (
         description
 )
 SELECT
-    inserted.id,
-    inserted.evidence_request_id,
-    inserted.submitted_by_api_token_id,
-    t.user_id AS submitted_by_user_id,
-    inserted.received_at,
+	    inserted.id,
+	    inserted.evidence_request_id,
+	    inserted.submitted_by_agent_connection_id,
+	    c.user_id AS submitted_by_user_id,
+	    inserted.received_at,
     inserted.coverage_start_at,
     inserted.coverage_end_at,
     inserted.source_system,
     inserted.collection_method,
-    inserted.summary,
-    inserted.description
-FROM inserted
-JOIN api_tokens t ON t.id = inserted.submitted_by_api_token_id
-"#,
+	    inserted.summary,
+	    inserted.description
+	FROM inserted
+	LEFT JOIN agent_connections c ON c.id = inserted.submitted_by_agent_connection_id
+	"#,
                 &[
                     &Uuid::from(payload.evidence_request_id),
-                    &Uuid::from(self.api_token_id),
+                    &agent_connection_id,
                     &payload.coverage_start_at,
                     &payload.coverage_end_at,
                     &payload.source_system,
@@ -376,10 +377,10 @@ LIMIT 1
             .query(
                 r#"
 SELECT
-    s.id,
-    s.evidence_request_id,
-    s.submitted_by_api_token_id,
-    t.user_id AS submitted_by_user_id,
+	    s.id,
+	    s.evidence_request_id,
+	    s.submitted_by_agent_connection_id,
+	    c.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -396,9 +397,9 @@ SELECT
     a.checksum_sha256,
     a.checksum_crc32c,
     a.upload_status
-FROM evidence_submissions s
-JOIN evidence_requests er ON er.id = s.evidence_request_id
-JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
+	FROM evidence_submissions s
+	JOIN evidence_requests er ON er.id = s.evidence_request_id
+	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
     AND a.archived = false
 WHERE s.id = $1
@@ -430,10 +431,10 @@ WITH latest_submission AS (
     LIMIT 1
 )
 SELECT
-    s.id,
-    s.evidence_request_id,
-    s.submitted_by_api_token_id,
-    t.user_id AS submitted_by_user_id,
+	    s.id,
+	    s.evidence_request_id,
+	    s.submitted_by_agent_connection_id,
+	    c.user_id AS submitted_by_user_id,
     s.received_at,
     s.coverage_start_at,
     s.coverage_end_at,
@@ -450,9 +451,9 @@ SELECT
     a.checksum_sha256,
     a.checksum_crc32c,
     a.upload_status
-FROM latest_submission latest
-JOIN evidence_submissions s ON s.id = latest.id
-JOIN api_tokens t ON t.id = s.submitted_by_api_token_id
+	FROM latest_submission latest
+	JOIN evidence_submissions s ON s.id = latest.id
+	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
 LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
     AND a.archived = false
 ORDER BY a.filename, a.id
@@ -684,10 +685,7 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         evidence_request_id: EvidenceRequestId::from(
             row.try_get::<_, Uuid>("evidence_request_id")?,
         ),
-        submitted_by: EvidenceSubmitter {
-            api_token_id: row.try_get::<_, Uuid>("submitted_by_api_token_id")?.into(),
-            user_id: row.try_get::<_, Uuid>("submitted_by_user_id")?.into(),
-        },
+        submitted_by: evidence_submitter_from_row(row)?,
         received_at: row.try_get("received_at")?,
         coverage_start_at: row.try_get("coverage_start_at")?,
         coverage_end_at: row.try_get("coverage_end_at")?,
@@ -696,6 +694,21 @@ fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> 
         summary: row.try_get("summary")?,
         description: row.try_get("description")?,
     })
+}
+
+fn evidence_submitter_from_row(row: &Row) -> Result<EvidenceSubmitter, Error> {
+    let user_id = row.try_get::<_, Uuid>("submitted_by_user_id")?.into();
+    let agent_connection_id = row.try_get::<_, Option<Uuid>>("submitted_by_agent_connection_id")?;
+
+    match agent_connection_id {
+        Some(agent_connection_id) => Ok(EvidenceSubmitter::AgentConnection {
+            agent_connection_id: agent_connection_id.into(),
+            user_id,
+        }),
+        None => Err(Error::InvariantViolation(
+            "evidence submission must have an agent connection submitter",
+        )),
+    }
 }
 
 fn evidence_attachment_from_row(row: &Row) -> Result<EvidenceAttachment, Error> {

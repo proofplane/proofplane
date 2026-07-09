@@ -1,63 +1,62 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
-use metrics_exporter_prometheus::PrometheusHandle;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::Span;
-
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor, UploadSessionDecryptor, UploadSessionEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
+            UploadSessionEncryptor,
         },
-        ApiTokenAuthenticator, UserAuthenticator,
+        UserAuthenticator,
     },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
-        api_tokens::{self, ApiTokensState},
-        attachment_downloads::{self, AttachmentDownloadRouteAuthState, AttachmentDownloadState},
+        attachment_downloads::{self, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
-        controls::{self, ControlRouteAuthState, ControlState},
         error::not_found,
-        evidence_requests::{self, EvidenceRequestRouteAuthState, EvidenceRequestState},
-        evidence_submissions::{self, EvidenceSubmissionRouteAuthState, EvidenceSubmissionState},
         health::{self, ReadyState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
+        oauth::{self, OAuthState},
         request_context::attach_request_id,
         version,
         workspaces::{self, WorkspacesState},
     },
     services::{
-        api_tokens::ApiTokenService,
         attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService,
-        controls::ControlService,
-        evidence_requests::EvidenceRequestService,
         evidence_submissions::EvidenceSubmissionService,
+        oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
         workspaces::WorkspaceService,
     },
 };
+use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
+use metrics_exporter_prometheus::PrometheusHandle;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::Span;
 
 pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
-    pub api_token_authenticator: ApiTokenAuthenticator,
     pub user_authenticator: UserAuthenticator<V>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateAppError {
+    #[error("authentication initialization error")]
+    Authentication(#[from] crate::authentication::Error),
 }
 
 pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     dependencies: AppDependencies<V>,
-) -> Result<Router, crate::authentication::Error> {
-    let api_token_authenticator = dependencies.api_token_authenticator.clone();
+) -> Result<Router, CreateAppError> {
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -113,8 +112,26 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let mcp_oauth_decryptor = McpOAuthDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.to_string(),
+        &dependencies.config.paseto.mcp_oauth,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let oauth_service = OAuthService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        dependencies.config.mcp.resource.clone(),
+        mcp_oauth_encryptor,
+        mcp_oauth_decryptor,
+    );
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
-
     Ok(Router::new()
         .nest(
             &dependencies.config.health.live_path,
@@ -133,24 +150,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 handle: dependencies.metrics,
             }),
         )
-        .merge(evidence_requests::router(EvidenceRequestState {
-            service: EvidenceRequestService::new(dependencies.postgres.clone()),
-            route_auth: EvidenceRequestRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
-        }))
-        .merge(evidence_submissions::router(EvidenceSubmissionState {
-            service: evidence_submission_service.clone(),
-            max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
-            route_auth: EvidenceSubmissionRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
-        }))
         .merge(attachment_downloads::router(AttachmentDownloadState {
             service: attachment_download_service.clone(),
-            route_auth: AttachmentDownloadRouteAuthState {
-                authenticator: api_token_authenticator.clone(),
-            },
         }))
         .merge(attachment_upload_sessions::router(
             AttachmentUploadSessionState {
@@ -162,12 +163,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             },
         ))
-        .merge(controls::router(ControlState {
-            service: ControlService::new(dependencies.postgres.clone()),
-            route_auth: ControlRouteAuthState {
-                authenticator: api_token_authenticator,
-            },
-        }))
         .merge(me::router(MeState {
             service: UserService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
@@ -180,11 +175,13 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
-        .merge(api_tokens::router(ApiTokensState {
-            service: ApiTokenService::new(dependencies.postgres.clone()),
-            route_auth: UserRouteAuthState {
-                authenticator: dependencies.user_authenticator.clone(),
-            },
+        .merge(oauth::router(OAuthState {
+            service: oauth_service,
+            user_authenticator: dependencies.user_authenticator.clone(),
+            auth0: dependencies.config.auth0.clone(),
+            issuer: dependencies.config.server.public_api_base_url.clone(),
+            resource: dependencies.config.mcp.resource.clone(),
+            http: reqwest::Client::new(),
         }))
         .nest("/version", version::router())
         .fallback(not_found)
@@ -201,7 +198,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                         %method,
                         path,
                         request_id = tracing::field::Empty,
-                        api_token_id = tracing::field::Empty,
                         user_id = tracing::field::Empty
                     )
                 })

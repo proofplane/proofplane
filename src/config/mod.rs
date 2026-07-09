@@ -57,19 +57,21 @@ pub struct Auth0Config {
     pub issuer: Url,
     pub audience: String,
     pub jwks_url: Url,
-    pub mcp: Auth0McpConfig,
+    pub upstream_oauth: Auth0UpstreamOAuthConfig,
 }
 
 #[derive(Debug, Clone)]
-pub struct Auth0McpConfig {
-    pub resource: Url,
-    pub allowed_client_ids: Vec<String>,
+pub struct Auth0UpstreamOAuthConfig {
+    pub client_id: String,
+    pub client_secret: SecretString,
+    pub callback_path: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct PasetoConfig {
     pub download: PasetoDownloadConfig,
     pub upload_grant: PasetoUploadGrantConfig,
+    pub mcp_oauth: PasetoMcpOAuthConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,18 @@ pub struct PasetoUploadGrantConfig {
 
 #[derive(Debug, Clone)]
 pub struct PasetoUploadGrantKey {
+    pub id: String,
+    pub secret: SecretString,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoMcpOAuthConfig {
+    pub active_key_id: String,
+    pub keys: Vec<PasetoMcpOAuthKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasetoMcpOAuthKey {
     pub id: String,
     pub secret: SecretString,
 }
@@ -150,6 +164,7 @@ pub struct WorkerConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpConfig {
     pub shutdown_grace_seconds: u64,
+    pub resource: Url,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,9 +405,10 @@ auth0:
   issuer: ""
   audience: ""
   jwks_url: "not-a-url"
-  mcp:
-    resource: "not-a-url"
-    allowed_client_ids: []
+  upstream_oauth:
+    client_id: ""
+    client_secret: ""
+    callback_path: "callback"
 paseto:
   download:
     active_key_id: ""
@@ -400,6 +416,11 @@ paseto:
       - id: ""
         secret: "not-a-paserk"
   upload_grant:
+    active_key_id: ""
+    keys:
+      - id: ""
+        secret: "not-a-paserk"
+  mcp_oauth:
     active_key_id: ""
     keys:
       - id: ""
@@ -425,6 +446,7 @@ worker:
   shutdown_grace_seconds: 0
 mcp:
   shutdown_grace_seconds: 0
+  resource: "not-a-url"
 health:
   live_path: "livez"
   ready_path: "/readyz"
@@ -449,14 +471,18 @@ health:
                 assert!(paths.contains(&"auth0.issuer"));
                 assert!(paths.contains(&"auth0.audience"));
                 assert!(paths.contains(&"auth0.jwks_url"));
-                assert!(paths.contains(&"auth0.mcp.resource"));
-                assert!(paths.contains(&"auth0.mcp.allowed_client_ids"));
+                assert!(paths.contains(&"auth0.upstream_oauth.client_id"));
+                assert!(paths.contains(&"auth0.upstream_oauth.client_secret"));
+                assert!(paths.contains(&"auth0.upstream_oauth.callback_path"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));
                 assert!(paths.contains(&"paseto.upload_grant.active_key_id"));
                 assert!(paths.contains(&"paseto.upload_grant.keys[0].id"));
                 assert!(paths.contains(&"paseto.upload_grant.keys[0].secret"));
+                assert!(paths.contains(&"paseto.mcp_oauth.active_key_id"));
+                assert!(paths.contains(&"paseto.mcp_oauth.keys[0].id"));
+                assert!(paths.contains(&"paseto.mcp_oauth.keys[0].secret"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"scanner.clamd_address"));
@@ -467,6 +493,7 @@ health:
                 assert!(paths.contains(&"worker.concurrency"));
                 assert!(paths.contains(&"worker.shutdown_grace_seconds"));
                 assert!(paths.contains(&"mcp.shutdown_grace_seconds"));
+                assert!(paths.contains(&"mcp.resource"));
                 assert!(paths.contains(&"health.live_path"));
                 assert!(paths.contains(&"health.dependency_timeout_ms"));
             }
@@ -638,6 +665,14 @@ paseto:
             .split_once("\nobject_storage:\n")
             .expect("local config has object_storage")
             .1;
+
+        let paseto = if paseto.contains("mcp_oauth:") {
+            paseto.to_owned()
+        } else {
+            format!(
+                "{paseto}  mcp_oauth:\n    active_key_id: \"local-mcp-oauth-001\"\n    keys:\n      - id: \"local-mcp-oauth-001\"\n        secret: \"k4.local.BMyQa9GmLofWmmvtYCedLfePwmuJsMgNn96nW1PtMp0\"\n"
+            )
+        };
 
         format!("{before_paseto}\n{paseto}\nobject_storage:\n{after_paseto}")
     }

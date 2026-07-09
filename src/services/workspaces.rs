@@ -36,6 +36,9 @@ pub enum CreateWorkspaceError {
     #[error("a workspace with this slug already exists")]
     SlugTaken,
 
+    #[error("the user already belongs to a workspace")]
+    UserAlreadyHasWorkspace,
+
     #[error("repository error")]
     Repository(RepositoryError),
 }
@@ -44,6 +47,9 @@ impl From<RepositoryError> for CreateWorkspaceError {
     fn from(error: RepositoryError) -> Self {
         match error {
             RepositoryError::Conflict(ConflictKind::WorkspaceSlugTaken) => Self::SlugTaken,
+            RepositoryError::Conflict(ConflictKind::WorkspaceMembershipExists) => {
+                Self::UserAlreadyHasWorkspace
+            }
             other => Self::Repository(other),
         }
     }
@@ -87,13 +93,13 @@ impl WorkspaceService {
         })
     }
 
-    pub async fn list_for_user(
+    pub async fn get_for_user(
         &self,
         user_id: UserId,
-    ) -> Result<Vec<WorkspaceWithRole>, ServiceError> {
+    ) -> Result<Option<WorkspaceWithRole>, ServiceError> {
         Ok(self
             .repository
-            .list_workspaces_with_role_for_user(user_id)
+            .get_workspace_with_role_for_user(user_id)
             .await?)
     }
 
@@ -120,10 +126,16 @@ impl WorkspaceService {
 
     pub async fn remove_member(
         &self,
-        workspace_id: WorkspaceId,
         actor_user_id: UserId,
         target_user_id: UserId,
-    ) -> Result<(), MemberError> {
+    ) -> Result<WorkspaceId, MemberError> {
+        let workspace_id = self
+            .repository
+            .get_workspace_with_role_for_user(actor_user_id)
+            .await?
+            .ok_or(MemberError::Forbidden)?
+            .workspace
+            .id;
         self.authorize_member_management(workspace_id, actor_user_id)
             .await?;
 
@@ -152,7 +164,7 @@ impl WorkspaceService {
         match outcome {
             RemoveOutcome::NotFound => Err(MemberError::NotFound),
             RemoveOutcome::LastOwner => Err(MemberError::LastOwner),
-            RemoveOutcome::Removed => Ok(()),
+            RemoveOutcome::Removed => Ok(workspace_id),
         }
     }
 }

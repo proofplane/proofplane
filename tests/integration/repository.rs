@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    ApiTokenId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
+    AgentConnectionId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
     CreateEvidenceRequestPayload, CreateEvidenceSubmissionPayload, CreateWorkspacePayload,
     EvidenceRequestCadence, EvidenceRequestStatus, EvidenceSubmissionId, UpdateWorkspacePayload,
     UserId,
@@ -16,7 +16,7 @@ use super::support::TestApp;
 struct RepositoryContext {
     workspace_id: proofplane::domain::WorkspaceId,
     user_id: UserId,
-    api_token_id: ApiTokenId,
+    agent_connection_id: AgentConnectionId,
 }
 
 #[tokio::test]
@@ -284,10 +284,10 @@ async fn attachment_scan_malicious_and_failed_updates_leave_object_key_quarantin
     let submission = create_repository_submission(postgres, context, request.id).await;
     let malicious = create_repository_attachment(postgres, context, submission.id).await;
     let failed = postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .create_evidence_attachment(&attachment_payload(submission.id, "failed-scan"))
@@ -351,10 +351,10 @@ async fn outbox_append_commits_atomically_with_domain_write() {
     let context = repository_workspace_context(&app).await;
 
     let request = postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 let request = context
                     .create_evidence_request(&CreateEvidenceRequestPayload {
@@ -398,10 +398,10 @@ async fn outbox_append_rolls_back_with_domain_write() {
     let context = repository_workspace_context(&app).await;
 
     let result = postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .create_evidence_request(&CreateEvidenceRequestPayload {
@@ -530,7 +530,7 @@ async fn repository_workspace_context(app: &TestApp) -> RepositoryContext {
     RepositoryContext {
         workspace_id: workspace.id,
         user_id: token.user_id,
-        api_token_id: token.token_id,
+        agent_connection_id: token.token_id,
     }
 }
 
@@ -539,10 +539,10 @@ async fn create_repository_evidence_request(
     context: RepositoryContext,
 ) -> proofplane::domain::EvidenceRequest {
     postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .create_evidence_request(&CreateEvidenceRequestPayload {
@@ -568,10 +568,10 @@ async fn create_repository_submission(
     evidence_request_id: proofplane::domain::EvidenceRequestId,
 ) -> proofplane::domain::EvidenceSubmission {
     postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .create_evidence_submission(&submission_payload(evidence_request_id))
@@ -599,10 +599,10 @@ async fn create_repository_attachment_with_suffix(
 ) -> proofplane::domain::EvidenceAttachment {
     let suffix = suffix.to_owned();
     postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .create_evidence_attachment(&attachment_payload(submission_id, &suffix))
@@ -620,10 +620,10 @@ async fn append_outbox(
 ) -> proofplane::repository::OutboxMessage {
     let aggregate_id = aggregate_id.to_owned();
     postgres
-        .in_workspace_context(
+        .in_agent_connection_workspace_context(
             context.workspace_id,
             context.user_id,
-            context.api_token_id,
+            context.agent_connection_id,
             async move |context| {
                 context
                     .append_outbox_message(&outbox_payload(

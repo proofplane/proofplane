@@ -57,6 +57,28 @@ WHERE id = $1
         rows.into_iter().next().map(user_from_row).transpose()
     }
 
+    pub async fn get_user_by_auth0_sub(&self, auth0_sub: &str) -> Result<Option<User>, Error> {
+        let client = self.get().await?;
+        let row = client
+            .query_opt(
+                r#"
+SELECT
+    id,
+    auth0_sub,
+    email,
+    name,
+    last_login_at,
+    created_at
+FROM users
+WHERE auth0_sub = $1
+"#,
+                &[&auth0_sub],
+            )
+            .await?;
+
+        row.map(user_from_row).transpose()
+    }
+
     pub async fn record_user_login(&self, id: UserId) -> Result<Option<User>, Error> {
         let client = self.get().await?;
         let rows = client

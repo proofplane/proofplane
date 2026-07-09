@@ -1,18 +1,18 @@
-# 003 - Connection Management And Guided UI
+# 005 - Connection Management And Guided UI
 
-**Status:** Todo · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#website-experience)
+**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#website-experience)
 
 **Summary** - Replace the token-centric MCP preview with a guided setup that
-launches each client's verified Auth0 connection path, securely hosts the
-Redirect Action workspace step, and lets users recognize and revoke authorized
-agent connections.
+launches each client's verified Proofplane OAuth connection path, hosts the
+workspace consent step, and lets users recognize and revoke authorized agent
+connections.
 
 **Acceptance criteria**
 
-- [ ] Given a valid Auth0 Redirect Action transaction, when the user opens the
+- [ ] Given a valid Proofplane OAuth transaction, when the user opens the
   workspace step, then the UI displays the verified client, requested scopes,
   and only workspaces the user can currently access.
-- [ ] Given a missing, expired, replayed, or invalid Action transaction, when
+- [ ] Given a missing, expired, replayed, or invalid OAuth transaction, when
   the consent route opens, then it reveals no connection or workspace data.
 - [ ] Given a supported client, when a user selects it, then the UI launches or
   explains the native connection path without requiring a terminal or config
@@ -47,8 +47,8 @@ agent connections.
 
 **Notes**
 
-- 2026-07-02: Auth0 owns OAuth consent and tokens; Proofplane UI owns only the
-  workspace-specific grant step and connection management.
+- 2026-07-08: Proofplane owns MCP OAuth consent and tokens; Auth0 remains the
+  upstream human login provider.
 - 2026-07-02: OAuth connections use 24-hour access tokens and may require a
   visible reconnect when the client does not restart authorization.
 - The harness remains authoritative for transport health and mounted tools.

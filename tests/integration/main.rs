@@ -1,15 +1,8 @@
-mod api_token_authentication;
-mod api_tokens;
-mod attachment_downloads;
-mod attachment_upload_grants;
-mod controls;
+mod agent_connection_repository;
 mod dequeuer_pubsub;
-mod evidence_requests;
-mod evidence_submissions;
 mod mcp;
 mod me;
 mod repository;
-mod request_auth;
 mod support;
 mod worker_handlers;
 mod workspaces;

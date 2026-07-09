@@ -16,9 +16,9 @@ use crate::{
     domain::{
         optional_text, required_text, CreateEvidenceSubmissionPayload, DomainError,
         EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, WorkspaceId, WorkspacePermission,
+        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId, WorkspacePermission,
     },
-    observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     validate,
     validation::Validation,
 };
@@ -39,10 +39,14 @@ impl ProofplaneMcp {
         let (evidence_request_id, payload) = parse_create_submission_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
-        let workspace_id = context.token.workspace_id;
+        let workspace_id = context.connection.workspace_id;
         let submission = self
             .evidence_submissions
-            .create(context.token, evidence_request_id, payload)
+            .create(
+                context.agent_connection_context(),
+                evidence_request_id,
+                payload,
+            )
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -50,10 +54,7 @@ impl ProofplaneMcp {
         AuditEvent::new(
             "evidence_submission.created",
             AuditOutcome::Success,
-            AuditActor::ApiToken {
-                user_id: context.token.user_id.into(),
-                api_token_id: context.token.api_token_id.into(),
-            },
+            context.audit_actor(),
             AuditClientType::Mcp,
             "create_evidence_submission",
         )
@@ -87,7 +88,7 @@ impl ProofplaneMcp {
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
         let detail = self
             .evidence_submissions
-            .get(context.token, submission_id)
+            .get(context.agent_connection_context(), submission_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -112,7 +113,7 @@ impl ProofplaneMcp {
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
         let detail = self
             .evidence_submissions
-            .latest_for_request(context.token, evidence_request_id)
+            .latest_for_request(context.agent_connection_context(), evidence_request_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
@@ -144,38 +145,13 @@ pub(super) struct GetEvidenceSubmissionRequest {
 struct CreateEvidenceSubmissionResponse {
     submission_id: String,
     evidence_request_id: String,
-    attachment_upload: AttachmentUploadInstructionsResponseDTO,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-struct AttachmentUploadInstructionsResponseDTO {
-    method: &'static str,
-    path: String,
-    multipart_file_field: &'static str,
-    required_file_part_header: &'static str,
-    content_digest_crc32c: &'static str,
-    transfer_mode: &'static str,
 }
 
 impl CreateEvidenceSubmissionResponse {
-    fn new(workspace_id: WorkspaceId, submission: EvidenceSubmission) -> Self {
-        let submission_id = Uuid::from(submission.id);
-
+    fn new(_workspace_id: WorkspaceId, submission: EvidenceSubmission) -> Self {
         Self {
-            submission_id: submission_id.to_string(),
+            submission_id: submission.id.to_string(),
             evidence_request_id: submission.evidence_request_id.to_string(),
-            attachment_upload: AttachmentUploadInstructionsResponseDTO {
-                method: "POST",
-                path: format!(
-                    "/workspaces/{}/evidence-submissions/{}/attachments",
-                    Uuid::from(workspace_id),
-                    submission_id
-                ),
-                multipart_file_field: "file",
-                required_file_part_header: "Content-Digest",
-                content_digest_crc32c: "include crc32c as a structured field byte sequence, for example crc32c=:base64:",
-                transfer_mode: "rest_only",
-            },
         }
     }
 }
@@ -225,10 +201,7 @@ impl EvidenceSubmissionResponseDTO {
         Self {
             id: submission.id.to_string(),
             evidence_request_id: submission.evidence_request_id.to_string(),
-            submitted_by: EvidenceSubmitterResponseDTO {
-                api_token_id: submission.submitted_by.api_token_id.to_string(),
-                user_id: submission.submitted_by.user_id.to_string(),
-            },
+            submitted_by: EvidenceSubmitterResponseDTO::from(submission.submitted_by),
             received_at: direct.then_some(format_datetime(submission.received_at)),
             coverage_start_at: format_datetime(submission.coverage_start_at),
             coverage_end_at: format_datetime(submission.coverage_end_at),
@@ -242,8 +215,17 @@ impl EvidenceSubmissionResponseDTO {
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct EvidenceSubmitterResponseDTO {
-    api_token_id: String,
+    agent_connection_id: Option<String>,
     user_id: String,
+}
+
+impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
+    fn from(submitter: EvidenceSubmitter) -> Self {
+        Self {
+            agent_connection_id: submitter.agent_connection_id().map(|id| id.to_string()),
+            user_id: submitter.user_id().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
