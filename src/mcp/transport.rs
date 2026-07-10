@@ -185,9 +185,6 @@ where
 {
     let challenge = authentication_challenge(&resource)?;
     let server_factory = move || Ok(server.clone());
-    // An empty `allowed_hosts` keeps rmcp's secure loopback-only default;
-    // rmcp treats a *set-but-empty* list as "allow all", so only override when
-    // the operator configured explicit hosts (e.g. a hosted/tunnelled deploy).
     let mut transport_config = StreamableHttpServerConfig::default()
         .with_cancellation_token(cancellation_token.child_token());
     if !allowed_hosts.is_empty() {

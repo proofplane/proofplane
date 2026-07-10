@@ -165,10 +165,6 @@ pub struct WorkerConfig {
 pub struct McpConfig {
     pub shutdown_grace_seconds: u64,
     pub resource: Url,
-    /// Hosts allowed in the inbound `Host` header for the Streamable HTTP MCP
-    /// transport (rmcp DNS-rebinding protection). Empty keeps rmcp's secure
-    /// loopback-only default; set the public host(s) for a hosted/tunnelled
-    /// deployment. See the agent-connector-onboarding spec.
     pub allowed_hosts: Vec<String>,
 }
 
@@ -339,8 +335,6 @@ mod tests {
 
     #[test]
     fn mcp_allowed_hosts_parse_when_present() {
-        // Reuse the real local config as a valid base and populate its
-        // (default-empty) allowed_hosts so we don't hand-maintain a full fixture.
         let base = fs::read_to_string("config/local.yaml").expect("local config readable");
         let with_hosts = base.replace(
             "allowed_hosts: []",

@@ -622,8 +622,7 @@ MCP access tokens. End-to-end Auth0 testing uses a dedicated development
 tenant and an externally reachable preview environment for the upstream
 callback. Because the OAuth authorization server and the MCP data plane run on
 two origins (`public_api_base_url` and `mcp.resource`), a client like Claude
-must reach both; local preview uses two ngrok tunnels — see
-[CONTRIBUTING.md](../../../CONTRIBUTING.md) § Connecting Codex or Cowork.
+must reach both; local preview uses two ngrok tunnels.
 
 The MCP OAuth PASETO keyring is rotated independently of Auth0 upstream login
 keys.
@@ -676,11 +675,7 @@ discourages DCR in favor of CIMD or Anthropic-held client credentials
 
 The release smoke test must prove that Claude follows Protected Resource
 Metadata to the Proofplane issuer, completes Proofplane workspace consent, and
-sends a Proofplane PASETO access token with the required claims. Because v1
-issues no refresh token, the test must also record the user-visible reconnect
-behavior after the 24-hour access token expires. See
-[CONTRIBUTING.md](../../../CONTRIBUTING.md) § Connecting Codex or Cowork for the
-local ngrok setup.
+sends a Proofplane PASETO access token with the required claims.
 
 ### Codex
 
