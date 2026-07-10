@@ -790,12 +790,12 @@ resolved most Claude/Cowork questions:
   support (advertise `offline_access`, issue and rotate refresh tokens, return
   `invalid_grant`) is a deferred follow-up.
 
-Open items still validated live in ticket 006: the exact user-visible reconnect
-behavior on expiry, and whether Claude sends `resource` and a non-empty `scope`
-on `/oauth/authorize` (both currently required). At directory scale Claude
-discourages DCR in favor of CIMD or `oauth_anthropic_creds` — a separate
-distribution follow-up. Whether generic OAuth warrants additional DCR abuse
-controls also remains open.
+Cowork completed the live flow with the currently required `resource` and
+non-empty `scope` fields on `/oauth/authorize`, so those checks remain strict.
+Exact user-visible reconnect behavior on expiry is a non-blocking refresh-token
+follow-up. At directory scale Claude discourages DCR in favor of CIMD or
+`oauth_anthropic_creds` — a separate distribution follow-up. Whether generic
+OAuth warrants additional DCR abuse controls also remains open.
 
 If a first-class client cannot recover from access-token expiry with an
 acceptable visible or automatic authorization flow, it must not be marketed
@@ -826,6 +826,10 @@ access is unsupported until a replacement credential mechanism is designed.
 - [RFC 9700: OAuth Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700)
 
 ## Revisions
+
+- 2026-07-10: Closed ticket 006 after Codex and Cowork worked end to end.
+  Retained strict authorization fields, accepted the documented no-refresh-token
+  v1 behavior, and deferred exact post-expiry UX and the generic support matrix.
 
 - 2026-07-09: PR #42 shipped the working Codex OAuth connection and three
   product decisions recorded in the banner at the top of this spec: removed
