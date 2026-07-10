@@ -1,0 +1,8 @@
+version: "3"
+endpoints:
+  - name: api
+    upstream:
+      url: 3000
+  - name: mcp
+    upstream:
+      url: 3002

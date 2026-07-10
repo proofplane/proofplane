@@ -64,7 +64,14 @@ worker:
 
 mcp:
   shutdown_grace_seconds: 30
+  # For loopback dev this is the local MCP URL. For hosted-client (Claude /
+  # Cowork) testing, set it to the MCP ngrok tunnel URL + /mcp — see
+  # docs/claude-cowork-connector-testing.md.
   resource: http://127.0.0.1:3002/mcp
+  # Hosts allowed in the inbound Host header for the MCP transport (rmcp
+  # DNS-rebinding protection). Empty keeps the secure loopback-only default; add
+  # the MCP tunnel host (e.g. "abc123.ngrok.app") when testing hosted clients.
+  allowed_hosts: []
 
 health:
   live_path: "/livez"

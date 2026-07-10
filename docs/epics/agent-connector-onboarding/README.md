@@ -22,7 +22,7 @@ handoff units that link into it.
 | 003. [Proofplane OAuth Workspace Consent](./tickets/003-proofplane-oauth-workspace-consent.md) | Done | Proofplane-hosted consent after Auth0 login shipped in PR #42; consent binds the user's single workspace as a fixed approval. |
 | 004. [MCP Agent Connection Runtime Authorization](./tickets/004-mcp-agent-connection-runtime-authorization.md) | Done | Proofplane PASETO MCP tokens activate authorized rows, enforce live membership/scopes, and audit/persist agent provenance for MCP tool use. |
 | 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Todo | Add connection lifecycle UI, revocation, and client-specific setup. Drop the removed API-token "advanced path" from scope. |
-| 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Todo | DCR removes Proofplane-side static client setup where supported; still validate Claude/Cowork host behavior, expiry, and directory requirements. |
+| 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Doing | `mcp.allowed_hosts` fix + ngrok preview shipped; live Claude/Cowork validation and expiry behavior pending. OAuth facade already client-generic. |
 | 007. [Codex Direct MCP Integration](./tickets/007-codex-direct-mcp-integration.md) | Done | Codex connects through direct remote MCP setup, Proofplane DCR, and Proofplane workspace consent; no plugin is required. |
 | 008. [Generic Client Fallback](./tickets/008-generic-client-fallback.md) | Todo | Reframe: OAuth/DCR-capable clients are supported; there is no `ppat_` fallback for the rest (API tokens removed in PR #42). |
 
@@ -45,3 +45,20 @@ handoff units that link into it.
   bearer-token fallback for the rest.
 - Directory review is an external distribution step, not a blocker for custom
   connector or generic remote-MCP setup.
+
+## Deferred follow-ups
+
+Captured while scoping ticket 006 (2026-07-10), not yet ticketed:
+
+- **Refresh-token support.** v1 issues no refresh token, so Claude re-consents
+  every ~24h. Advertising `offline_access` and issuing + rotating refresh
+  tokens (with `invalid_grant` on invalidation) would give Claude/Cowork — and
+  Codex — a persistent connection. Requires a spec revision (the spec currently
+  commits to no refresh tokens in v1).
+- **Directory submission.** At directory scale Claude discourages DCR in favor
+  of CIMD (`client_id_metadata_document_supported`) or Anthropic-held
+  credentials (`oauth_anthropic_creds`), plus privacy/support/test-account and
+  tool-annotation metadata. Its own future ticket.
+- **Durable preview/staging environment.** Ticket 006 validates via a local
+  stack + ngrok; a hosted staging deployment would make Claude testing and
+  directory review repeatable.

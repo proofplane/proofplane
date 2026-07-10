@@ -165,6 +165,11 @@ pub struct WorkerConfig {
 pub struct McpConfig {
     pub shutdown_grace_seconds: u64,
     pub resource: Url,
+    /// Hosts allowed in the inbound `Host` header for the Streamable HTTP MCP
+    /// transport (rmcp DNS-rebinding protection). Empty keeps rmcp's secure
+    /// loopback-only default; set the public host(s) for a hosted/tunnelled
+    /// deployment. See the agent-connector-onboarding spec.
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,6 +324,10 @@ mod tests {
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
+        assert!(
+            config.mcp.allowed_hosts.is_empty(),
+            "allowed_hosts defaults to empty (rmcp loopback-only) when omitted"
+        );
         assert_eq!(config.paseto.download.active_key_id, "local-download-001");
         assert_eq!(config.paseto.download.keys.len(), 1);
         assert_eq!(
@@ -326,6 +335,31 @@ mod tests {
             "local-upload-grant-001"
         );
         assert_eq!(config.paseto.upload_grant.keys.len(), 1);
+    }
+
+    #[test]
+    fn mcp_allowed_hosts_parse_when_present() {
+        // Reuse the real local config as a valid base and populate its
+        // (default-empty) allowed_hosts so we don't hand-maintain a full fixture.
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let with_hosts = base.replace(
+            "allowed_hosts: []",
+            "allowed_hosts:\n    - \"mcp.example.ngrok.app\"\n    - \"127.0.0.1:3002\"",
+        );
+        assert_ne!(base, with_hosts, "allowed_hosts injection anchor matched");
+
+        let path = write_temp_config(&with_hosts);
+        let config = load_from_path(&path).expect("config with allowed_hosts loads");
+
+        assert_eq!(
+            config.mcp.allowed_hosts,
+            vec![
+                "mcp.example.ngrok.app".to_owned(),
+                "127.0.0.1:3002".to_owned()
+            ]
+        );
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]

@@ -666,6 +666,7 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
                 ready_path: "/readyz".to_owned(),
                 dependency_timeout_ms: 1000,
             },
+            allowed_hosts: self.app_config.mcp.allowed_hosts.clone(),
             cancellation_token: CancellationToken::new(),
         })
         .expect("MCP application initializes")
@@ -1171,6 +1172,7 @@ fn config(
             shutdown_grace_seconds: 1,
             resource: url::Url::parse("https://mcp.proofplane.test/mcp")
                 .expect("MCP resource parses"),
+            allowed_hosts: Vec::new(),
         },
         health: HealthConfig {
             live_path: "/livez".to_owned(),
