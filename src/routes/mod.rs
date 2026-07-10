@@ -1,5 +1,6 @@
 pub mod attachment_downloads;
 pub mod attachment_upload_sessions;
+pub mod auditor_access;
 pub mod authentication;
 pub mod error;
 pub mod health;

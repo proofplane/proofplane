@@ -85,6 +85,17 @@ pub(super) fn required_timestamp(
 pub(super) fn argument_errors(errors: Vec<McpArgumentError>) -> rmcp::ErrorData {
     let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
 
+    field_errors(issues)
+}
+
+pub(super) fn invalid_field(field: &'static str, message: impl Into<String>) -> rmcp::ErrorData {
+    field_errors(vec![FieldIssue {
+        field,
+        message: message.into(),
+    }])
+}
+
+fn field_errors(issues: Vec<FieldIssue>) -> rmcp::ErrorData {
     rmcp::ErrorData::invalid_params(
         "tool argument validation failed",
         Some(json!({

@@ -53,6 +53,11 @@ The mailer is a small adapter. Local and test environments capture outbound
 messages for assertions; production delivery can be wired to a provider without
 changing the portal contract.
 
+Ticket 007 ships the browser invite flow as
+`GET /auditor-access/{workspace_id}?token=...`, with server-rendered form posts
+for OTP request and verification. The existing JSON OTP endpoints remain
+available for API-style callers.
+
 ## Auditor Sessions
 
 Successful OTP verification creates a server-side auditor session and sets an
@@ -71,9 +76,15 @@ historical Evidence Submissions, and attachment metadata in deterministic
 order. This is intentionally broader than the old latest-only packet idea:
 auditors need the submitted record, not a curated snapshot.
 
-Attachment metadata includes download eligibility, filename, content type,
-content length, checksums, and lifecycle status. Internal object keys and
-storage backend details are never serialized.
+Ticket 005 ships the backend read model as
+`GET /auditor-access/portal/data`, authenticated only by the auditor session
+cookie. The endpoint uses the session workspace as its scope rather than a
+workspace path parameter.
+
+Non-archived attachment metadata includes download eligibility, filename,
+content type, content length, checksums, and lifecycle status. Archived
+attachments are filtered out and do not appear in the portal response. Internal
+object keys and storage backend details are never serialized.
 
 ## Attachment Downloads
 
@@ -81,10 +92,19 @@ Verified auditor sessions may download uploaded, unarchived attachments.
 Pending, finalizing, failed, malicious, archived, missing, or cross-workspace
 attachments are not downloadable.
 
+Ticket 006 ships the backend download route as
+`GET /auditor-access/portal/evidence-submissions/{submission_id}/attachments/{attachment_id}/download`,
+authenticated only by the auditor session cookie. It does not issue browser
+API tokens or new attachment download grants for auditors.
+
+Ticket 007 ships the server-rendered portal page as
+`GET /auditor-access/portal`, authenticated by the same auditor session cookie
+and backed by the existing portal read model.
+
 Downloads stream through Proofplane, not directly from object storage. The
-download path rechecks session, grant, workspace, attachment status, and object
-metadata before streaming with safe `Cache-Control`, `Referrer-Policy`, and
-`Content-Disposition` headers.
+download path rechecks the session, underlying auditor access grant, workspace,
+attachment status, and object metadata before streaming with safe
+`Cache-Control`, `Referrer-Policy`, and `Content-Disposition` headers.
 
 ## Audit Logging
 
@@ -99,8 +119,21 @@ Auditor comments, request/response workflows, review status tracking, bulk ZIP
 exports, firm branding, and a separate SPA are deferred. The v1 portal is a
 secure read-only browser surface.
 
+Worker-backed auditor OTP mail delivery is deferred until production mail is
+added. The worker should own OTP generation, digest persistence, and mail send
+so raw OTP codes are never stored in durable queue payloads.
+
 ## Revisions
 
+- 2026-07-06: Added deferred worker-backed OTP mail delivery so production
+  mail wiring does not leave the request path responsible for provider retries.
 - 2026-07-01: Replaced the stale packet/export plan with email-bound
   auditor portal access, OTP verification, seven-day sessions, and direct
   attachment downloads.
+- 2026-07-02: Recorded the shipped portal read model endpoint and clarified
+  that archived attachments are omitted from portal metadata.
+- 2026-07-02: Recorded the shipped direct auditor attachment download route
+  and clarified that it uses the auditor session cookie rather than a new
+  attachment download grant.
+- 2026-07-04: Recorded the shipped server-rendered browser invite and portal
+  routes.

@@ -198,7 +198,8 @@ VALUES
     ('read_evidence_submissions'),
     ('write_evidence_submissions'),
     ('read_controls'),
-    ('write_controls')
+    ('write_controls'),
+    ('manage_auditor_access')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS agent_connections (

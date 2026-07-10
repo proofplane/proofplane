@@ -1,4 +1,5 @@
 mod attachment_grants;
+mod auditor_access_grants;
 mod common;
 mod controls;
 mod evidence_requests;
@@ -12,18 +13,22 @@ use rmcp::{
 
 use crate::{
     services::{
-        attachment_upload_grants::AttachmentUploadGrantService, controls::ControlService,
+        attachment_upload_grants::AttachmentUploadGrantService,
+        auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
     },
     VERSION,
 };
+use url::Url;
 
 #[derive(Clone)]
 pub struct ProofplaneMcp {
     evidence_requests: EvidenceRequestService,
     evidence_submissions: EvidenceSubmissionService,
     attachment_upload_grants: AttachmentUploadGrantService,
+    auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
+    public_api_base_url: Url,
     tool_router: ToolRouter<Self>,
 }
 
@@ -32,13 +37,17 @@ impl ProofplaneMcp {
         evidence_requests: EvidenceRequestService,
         evidence_submissions: EvidenceSubmissionService,
         attachment_upload_grants: AttachmentUploadGrantService,
+        auditor_access_grants: AuditorAccessGrantService,
         controls: ControlService,
+        public_api_base_url: Url,
     ) -> Self {
         Self {
             evidence_requests,
             evidence_submissions,
             attachment_upload_grants,
+            auditor_access_grants,
             controls,
+            public_api_base_url,
             tool_router: Self::tool_router(),
         }
     }
@@ -48,6 +57,7 @@ impl ProofplaneMcp {
             + Self::evidence_requests_tool_router()
             + Self::evidence_submissions_tool_router()
             + Self::attachment_grants_tool_router()
+            + Self::auditor_access_grants_tool_router()
             + Self::controls_tool_router()
     }
 }

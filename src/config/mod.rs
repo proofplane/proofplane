@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
+    pub mail: MailConfig,
     pub observability: ObservabilityConfig,
     pub worker: WorkerConfig,
     pub mcp: McpConfig,
@@ -127,6 +128,17 @@ pub struct GcsObjectStorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadsConfig {
     pub max_attachment_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailConfig {
+    pub adapter: MailAdapterConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailAdapterConfig {
+    Disabled,
+    LocalStdout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +266,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
+        mail <- raw.mail.unwrap_or_default().validate(),
         observability <- raw.observability.validate(),
         worker <- raw.worker.validate(),
         mcp <- raw.mcp.validate(),
@@ -267,6 +280,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             object_storage,
             scanner,
             uploads,
+            mail,
             observability,
             worker,
             mcp,
@@ -318,6 +332,7 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
+        assert_eq!(config.mail.adapter, MailAdapterConfig::LocalStdout);
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert_eq!(config.paseto.download.active_key_id, "local-download-001");
         assert_eq!(config.paseto.download.keys.len(), 1);

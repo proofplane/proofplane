@@ -38,10 +38,18 @@ ORDER BY code
         let rows = client
             .query(
                 r#"
-SELECT id, framework_id, code, title, description
-FROM framework_requirements
-WHERE framework_id = $1
-ORDER BY code
+SELECT
+    fr.id,
+    fr.framework_id,
+    f.code AS framework_code,
+    f.name AS framework_name,
+    fr.code,
+    fr.title,
+    fr.description
+FROM framework_requirements fr
+JOIN frameworks f ON f.id = fr.framework_id
+WHERE fr.framework_id = $1
+ORDER BY fr.code
 "#,
                 &[&Uuid::from(framework_id)],
             )
@@ -239,12 +247,15 @@ SELECT
     c.updated_at,
     fr.id AS framework_requirement_id,
     fr.framework_id AS framework_requirement_framework_id,
+    f.code AS framework_requirement_framework_code,
+    f.name AS framework_requirement_framework_name,
     fr.code AS framework_requirement_code,
     fr.title AS framework_requirement_title,
     fr.description AS framework_requirement_description
 FROM controls c
 LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
 LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+LEFT JOIN frameworks f ON f.id = fr.framework_id
 WHERE c.id = $1
   AND c.workspace_id = $2
 ORDER BY fr.code
@@ -351,12 +362,15 @@ SELECT
     c.updated_at,
     fr.id AS framework_requirement_id,
     fr.framework_id AS framework_requirement_framework_id,
+    f.code AS framework_requirement_framework_code,
+    f.name AS framework_requirement_framework_name,
     fr.code AS framework_requirement_code,
     fr.title AS framework_requirement_title,
     fr.description AS framework_requirement_description
 FROM controls c
 LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
 LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+LEFT JOIN frameworks f ON f.id = fr.framework_id
 WHERE c.workspace_id = $1
 ORDER BY c.code, fr.code
 "#,
@@ -382,12 +396,15 @@ SELECT
     c.updated_at,
     fr.id AS framework_requirement_id,
     fr.framework_id AS framework_requirement_framework_id,
+    f.code AS framework_requirement_framework_code,
+    f.name AS framework_requirement_framework_name,
     fr.code AS framework_requirement_code,
     fr.title AS framework_requirement_title,
     fr.description AS framework_requirement_description
 FROM controls c
 LEFT JOIN control_framework_requirement_mappings m ON m.control_id = c.id
 LEFT JOIN framework_requirements fr ON fr.id = m.framework_requirement_id
+LEFT JOIN frameworks f ON f.id = fr.framework_id
 WHERE c.id = $1
   AND c.workspace_id = $2
 ORDER BY fr.code
@@ -453,6 +470,8 @@ fn framework_requirement_from_row(row: Row) -> Result<FrameworkRequirement, Erro
     Ok(FrameworkRequirement {
         id: FrameworkRequirementId::from(row.try_get::<_, Uuid>("id")?),
         framework_id: FrameworkId::from(row.try_get::<_, Uuid>("framework_id")?),
+        framework_code: row.try_get("framework_code")?,
+        framework_name: row.try_get("framework_name")?,
         code: row.try_get("code")?,
         title: row.try_get("title")?,
         description: row.try_get("description")?,
@@ -503,6 +522,8 @@ fn push_joined_framework_requirement(control: &mut Control, row: &Row) -> Result
         framework_id: FrameworkId::from(
             row.try_get::<_, Uuid>("framework_requirement_framework_id")?,
         ),
+        framework_code: row.try_get("framework_requirement_framework_code")?,
+        framework_name: row.try_get("framework_requirement_framework_name")?,
         code: row.try_get("framework_requirement_code")?,
         title: row.try_get("framework_requirement_title")?,
         description: row.try_get("framework_requirement_description")?,

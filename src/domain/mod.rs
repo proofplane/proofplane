@@ -1,4 +1,7 @@
 mod agent_connection;
+mod auditor_access_grant;
+mod auditor_access_session;
+mod auditor_portal;
 mod controls;
 mod error;
 mod evidence_request;
@@ -14,6 +17,16 @@ mod workspace;
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
     NewPendingAgentConnection,
+};
+pub use auditor_access_grant::{
+    AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
+};
+pub use auditor_access_session::{
+    AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
+};
+pub use auditor_portal::{
+    AuditorPortalAttachment, AuditorPortalControl, AuditorPortalEvidenceRequest,
+    AuditorPortalReadModel, AuditorPortalSubmission,
 };
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload,

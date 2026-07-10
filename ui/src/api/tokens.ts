@@ -7,6 +7,7 @@ export const tokenPermissions = [
   "write_evidence_submissions",
   "read_controls",
   "write_controls",
+  "manage_auditor_access",
 ] as const;
 
 export type TokenPermission = (typeof tokenPermissions)[number];
@@ -56,7 +57,7 @@ export const permissionPresets: PermissionPreset[] = [
   {
     id: "all-permissions",
     name: "All permissions",
-    description: "Grant every current workspace data-plane permission.",
+    description: "Grant every current workspace permission.",
     permissions: [...tokenPermissions],
   },
   {

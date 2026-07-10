@@ -100,7 +100,7 @@ async fn redeem_download_grant(
     Ok(response)
 }
 
-fn content_disposition(filename: &str) -> String {
+pub(crate) fn content_disposition(filename: &str) -> String {
     format!("attachment; filename=\"{filename}\"")
 }
 

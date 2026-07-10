@@ -31,11 +31,11 @@ use proofplane::{
         UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat, McpConfig,
-        ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
-        PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
-        PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig,
-        UploadsConfig, WorkerConfig,
+        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat,
+        MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+        PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig,
+        PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
+        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, CreateEvidenceRequestPayload,
@@ -43,6 +43,7 @@ use proofplane::{
         EvidenceRequestId, EvidenceRequestStatus, NewPendingAgentConnection, ProvisionUserPayload,
         UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions, WorkspaceRole,
     },
+    mailer::CapturingMailAdapter,
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     repository::{NewWorkspaceMembership, Postgres},
     routes::authentication::AUTHORIZATION_HEADER,
@@ -263,6 +264,7 @@ pub struct TestApp {
     home_workspace_id: Uuid,
     workspace_ids: HashMap<String, Uuid>,
     control_ids: HashMap<String, HashMap<String, Uuid>>,
+    mailer: Arc<CapturingMailAdapter>,
 }
 
 impl TestApp {
@@ -329,6 +331,7 @@ impl TestApp {
         let recorder = PrometheusBuilder::new().build_recorder();
         let user_authenticator =
             UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone());
+        let mailer = Arc::new(CapturingMailAdapter::default());
 
         let dependencies = AppDependencies {
             config: app_config.clone(),
@@ -336,6 +339,7 @@ impl TestApp {
             object_store: object_store.clone(),
             metrics: recorder.handle(),
             user_authenticator,
+            mail_adapter: Some(mailer.clone()),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
@@ -382,6 +386,7 @@ impl TestApp {
             home_workspace_id,
             workspace_ids,
             control_ids,
+            mailer,
         }
     }
 
@@ -614,6 +619,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
 
     pub fn bearer_token(&self) -> String {
         format!("Bearer {}", self.api_token)
+    }
+
+    pub fn sent_mail(&self) -> Vec<proofplane::mailer::CapturedOtp> {
+        self.mailer.sent()
     }
 
     fn mcp_app(&self) -> Router {
@@ -1157,6 +1166,9 @@ fn config(
         },
         uploads: UploadsConfig {
             max_attachment_bytes,
+        },
+        mail: MailConfig {
+            adapter: MailAdapterConfig::Disabled,
         },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,

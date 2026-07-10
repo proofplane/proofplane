@@ -11,11 +11,13 @@ use crate::{
         UserAuthenticator,
     },
     config::AppConfig,
+    mailer::SharedMailAdapter,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
         attachment_downloads::{self, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
+        auditor_access::{self, AuditorAccessState},
         error::not_found,
         health::{self, ReadyState},
         me::{self, MeState, UserRouteAuthState},
@@ -28,6 +30,9 @@ use crate::{
     services::{
         attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService,
+        auditor_access_grants::AuditorAccessGrantService,
+        auditor_access_sessions::AuditorAccessSessionService,
+        auditor_portal::AuditorPortalReadModelService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
@@ -46,6 +51,7 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub user_authenticator: UserAuthenticator<V>,
+    pub mail_adapter: Option<SharedMailAdapter>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -132,6 +138,15 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         mcp_oauth_decryptor,
     );
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
+    let secure_auditor_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
+    let auditor_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
+    let auditor_sessions = AuditorAccessSessionService::new(
+        dependencies.postgres.clone(),
+        dependencies
+            .mail_adapter
+            .unwrap_or_else(|| crate::mailer::from_config(&dependencies.config.mail.adapter)),
+    );
+
     Ok(Router::new()
         .nest(
             &dependencies.config.health.live_path,
@@ -156,13 +171,20 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .merge(attachment_upload_sessions::router(
             AttachmentUploadSessionState {
                 grants: attachment_upload_grant_service,
-                downloads: attachment_download_service,
+                downloads: attachment_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
                 secure_cookie: secure_upload_cookie,
                 max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             },
         ))
+        .merge(auditor_access::router(AuditorAccessState {
+            grants: auditor_grants,
+            sessions: auditor_sessions,
+            portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
+            downloads: attachment_download_service,
+            secure_cookie: secure_auditor_cookie,
+        }))
         .merge(me::router(MeState {
             service: UserService::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {

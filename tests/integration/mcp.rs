@@ -341,7 +341,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "read_evidence_submissions",
             "write_evidence_submissions",
             "read_controls",
-            "write_controls"
+            "write_controls",
+            "manage_auditor_access"
         ]
     }));
 
@@ -364,6 +365,9 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_latest_evidence_submission",
         "create_evidence_submission",
         "manage_evidence_submission_attachment",
+        "create_auditor_access_link",
+        "list_auditor_access_links",
+        "revoke_auditor_access_link",
         "list_frameworks",
         "list_framework_requirements",
         "list_controls",
@@ -412,6 +416,18 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submission_attachment")["inputSchema"],
         "submission_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
+        "email",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
+        "expires_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "revoke_auditor_access_link")["inputSchema"],
+        "grant_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "map_evidence_request_to_control")["inputSchema"],
@@ -505,6 +521,50 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submission_attachment")["outputSchema"],
         "intended_use",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
+        "url",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
+        "grant",
+    );
+    for property in [
+        "id",
+        "auditor_email",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    ] {
+        assert_schema_has_property(
+            &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
+            property,
+        );
+        assert_schema_has_property(
+            &find_tool(&tool_list, "list_auditor_access_links")["outputSchema"],
+            property,
+        );
+        assert_schema_has_property(
+            &find_tool(&tool_list, "revoke_auditor_access_link")["outputSchema"],
+            property,
+        );
+    }
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
+        "url_secret_type",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
+        "intended_use",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "list_auditor_access_links")["outputSchema"],
+        "grants",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "revoke_auditor_access_link")["outputSchema"],
+        "grant",
     );
 
     client
@@ -1106,6 +1166,225 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
                 .call_tool_error(
                     "manage_evidence_submission_attachment",
                     json!({ "submission_id": submission_id }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied["problem"]["code"], "not_found");
+    assert!(denied_logs.is_empty());
+}
+
+#[tokio::test]
+async fn mcp_auditor_link_tools_create_list_revoke_and_audit_without_secrets() {
+    let app = TestApp::start().await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.home_workspace_id();
+    let token = app.api_token().to_owned();
+
+    let (created, create_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "create_auditor_access_link",
+                    json!({
+                        "email": " Auditor@Example.COM ",
+                        "expires_at": "2099-01-01T00:00:00Z"
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+
+    let url = created["url"].as_str().expect("auditor link URL");
+    assert!(url.starts_with(&format!(
+        "https://api.proofplane.test/auditor-access/{workspace_id}?token="
+    )));
+    let invite_token = url
+        .split("token=")
+        .nth(1)
+        .expect("auditor URL contains token");
+    let grant = &created["grant"];
+    let grant_id = uuid_from(&grant["id"]);
+    assert_eq!(grant["auditor_email"], "auditor@example.com");
+    assert!(grant["created_at"].as_str().is_some());
+    assert_eq!(grant["expires_at"], "2099-01-01T00:00:00.000Z");
+    assert!(grant["revoked_at"].is_null());
+    assert_eq!(created["url_secret_type"], "bearer_secret");
+    assert_eq!(created["intended_use"], "auditor_browser_access");
+    assert_secret_fields_absent(&created);
+
+    assert_eq!(create_logs.len(), 1);
+    assert_audit_event(
+        &create_logs[0],
+        ExpectedAuditEvent {
+            event_name: "auditor_access_grant.created",
+            operation: "create_auditor_access_link",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "auditor_access_grant",
+            object_id: grant_id,
+        },
+    );
+    let create_metadata = audit_metadata(&create_logs[0]);
+    assert_eq!(create_metadata["auditor_email"], "auditor@example.com");
+    assert_eq!(create_metadata["expires_at"], "2099-01-01T00:00:00.000Z");
+    assert!(!create_logs[0].to_string().contains(url));
+    assert!(!create_logs[0].to_string().contains(invite_token));
+
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let listed = mcp_client
+        .call_tool("list_auditor_access_links", json!({}))
+        .await;
+    assert_eq!(listed["grants"][0]["id"], grant_id.to_string());
+    assert_eq!(listed["grants"][0]["auditor_email"], "auditor@example.com");
+    assert_secret_fields_absent(&listed);
+
+    let (revoked, revoke_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "revoke_auditor_access_link",
+                    json!({ "grant_id": grant_id }),
+                )
+                .await
+        }
+    })
+    .await;
+    assert_eq!(revoked["grant"]["id"], grant_id.to_string());
+    assert!(revoked["grant"]["revoked_at"].as_str().is_some());
+    assert_secret_fields_absent(&revoked);
+
+    assert_eq!(revoke_logs.len(), 1);
+    assert_audit_event(
+        &revoke_logs[0],
+        ExpectedAuditEvent {
+            event_name: "auditor_access_grant.revoked",
+            operation: "revoke_auditor_access_link",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "auditor_access_grant",
+            object_id: grant_id,
+        },
+    );
+    assert!(!revoke_logs[0].to_string().contains(url));
+    assert!(!revoke_logs[0].to_string().contains(invite_token));
+}
+
+#[tokio::test]
+async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP auditor link workspace")
+        .with_default_membership()
+        .workspace("other", "MCP auditor link hidden workspace")
+        .without_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+
+    let invalid_email = mcp_client
+        .call_tool_error(
+            "create_auditor_access_link",
+            json!({ "email": "not-an-email" }),
+        )
+        .await;
+    assert_eq!(invalid_email.data["problem"]["code"], "validation_failed");
+    assert_eq!(field_issue_names(&invalid_email.data), ["email"]);
+
+    let invalid_expiry_timestamp = mcp_client
+        .call_tool_error(
+            "create_auditor_access_link",
+            json!({ "email": "auditor@example.com", "expires_at": "tomorrow" }),
+        )
+        .await;
+    assert_eq!(
+        invalid_expiry_timestamp.data["problem"]["code"],
+        "validation_failed"
+    );
+    assert_eq!(
+        field_issue_names(&invalid_expiry_timestamp.data),
+        ["expires_at"]
+    );
+
+    let past_expiry = mcp_client
+        .call_tool_error(
+            "create_auditor_access_link",
+            json!({ "email": "auditor@example.com", "expires_at": "2000-01-01T00:00:00Z" }),
+        )
+        .await;
+    assert_eq!(past_expiry.data["problem"]["code"], "validation_failed");
+    assert_eq!(field_issue_names(&past_expiry.data), ["expires_at"]);
+
+    let invalid_grant_id = mcp_client
+        .call_tool_error(
+            "revoke_auditor_access_link",
+            json!({ "grant_id": "not-a-uuid" }),
+        )
+        .await;
+    assert_eq!(
+        invalid_grant_id.data["problem"]["code"],
+        "validation_failed"
+    );
+    assert_eq!(field_issue_names(&invalid_grant_id.data), ["grant_id"]);
+
+    let created = mcp_client
+        .call_tool(
+            "create_auditor_access_link",
+            json!({ "email": "auditor@example.com" }),
+        )
+        .await;
+    let grant_id = uuid_from(&created["grant"]["id"]);
+    let other_workspace = app
+        .issue_api_token(
+            app.workspace_id("other"),
+            vec![WorkspacePermission::ManageAuditorAccess],
+        )
+        .await;
+    let (cross_workspace, cross_workspace_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = other_workspace.raw_token.clone();
+        async move {
+            let other_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            other_client
+                .call_tool_error(
+                    "revoke_auditor_access_link",
+                    json!({ "grant_id": grant_id }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(cross_workspace["problem"]["code"], "not_found");
+    assert!(cross_workspace_logs.is_empty());
+
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let (denied, denied_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = read_only.raw_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "create_auditor_access_link",
+                    json!({ "email": "auditor@example.com" }),
                 )
                 .await
                 .data
@@ -1756,7 +2035,7 @@ fn assert_unauthorized(response: &axum_test::TestResponse) {
     response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.header(header::WWW_AUTHENTICATE),
-        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls\""
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls manage_auditor_access\""
     );
 }
 
@@ -1899,6 +2178,26 @@ fn field_issue_names(data: &Value) -> Vec<&str> {
         .iter()
         .map(|issue| issue["field"].as_str().expect("field"))
         .collect()
+}
+
+fn assert_secret_fields_absent(value: &Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, nested) in object {
+                assert!(
+                    !["token", "secret", "raw_secret", "secret_digest"].contains(&key.as_str()),
+                    "secret-bearing field {key} is absent from {value}"
+                );
+                assert_secret_fields_absent(nested);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                assert_secret_fields_absent(nested);
+            }
+        }
+        _ => {}
+    }
 }
 
 struct ExpectedAuditEvent {

@@ -12,16 +12,18 @@ pub enum WorkspacePermission {
     WriteEvidenceSubmissions,
     ReadControls,
     WriteControls,
+    ManageAuditorAccess,
 }
 
 impl WorkspacePermission {
-    pub const ALL: [WorkspacePermission; 6] = [
+    pub const ALL: [WorkspacePermission; 7] = [
         Self::ReadEvidenceRequests,
         Self::WriteEvidenceRequests,
         Self::ReadEvidenceSubmissions,
         Self::WriteEvidenceSubmissions,
         Self::ReadControls,
         Self::WriteControls,
+        Self::ManageAuditorAccess,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -32,6 +34,7 @@ impl WorkspacePermission {
             Self::WriteEvidenceSubmissions => "write_evidence_submissions",
             Self::ReadControls => "read_controls",
             Self::WriteControls => "write_controls",
+            Self::ManageAuditorAccess => "manage_auditor_access",
         }
     }
 
@@ -43,6 +46,7 @@ impl WorkspacePermission {
             Self::WriteEvidenceSubmissions => 1 << 3,
             Self::ReadControls => 1 << 4,
             Self::WriteControls => 1 << 5,
+            Self::ManageAuditorAccess => 1 << 6,
         }
     }
 }
@@ -58,6 +62,7 @@ impl FromStr for WorkspacePermission {
             "write_evidence_submissions" => Ok(Self::WriteEvidenceSubmissions),
             "read_controls" => Ok(Self::ReadControls),
             "write_controls" => Ok(Self::WriteControls),
+            "manage_auditor_access" => Ok(Self::ManageAuditorAccess),
             _ => Err(DomainError::InvalidEnumValue {
                 field: "permission",
                 value: value.to_owned(),
@@ -114,7 +119,7 @@ impl FromIterator<WorkspacePermission> for WorkspacePermissions {
 pub fn canonical_permissions(
     values: Vec<WorkspacePermission>,
 ) -> Result<Vec<WorkspacePermission>, DomainError> {
-    let mut seen = [false; 6];
+    let mut seen = [false; 7];
     for permission in values {
         let index = permission_index(permission);
         if seen[index] {
@@ -139,6 +144,7 @@ fn permission_index(permission: WorkspacePermission) -> usize {
         WorkspacePermission::WriteEvidenceSubmissions => 3,
         WorkspacePermission::ReadControls => 4,
         WorkspacePermission::WriteControls => 5,
+        WorkspacePermission::ManageAuditorAccess => 6,
     }
 }
 
