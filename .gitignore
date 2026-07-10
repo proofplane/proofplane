@@ -5,3 +5,4 @@ ui/dist/
 ui/.env.local
 ui/playwright-report/
 ui/test-results/
+*.log
