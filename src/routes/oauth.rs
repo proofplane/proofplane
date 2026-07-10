@@ -143,7 +143,10 @@ where
         return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
     }
     if body.redirect_uris.is_empty()
-        || body.redirect_uris.iter().any(|uri| !valid_redirect_uri(uri))
+        || body
+            .redirect_uris
+            .iter()
+            .any(|uri| !valid_redirect_uri(uri))
     {
         return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
     }

@@ -140,7 +140,6 @@ struct CreateEvidenceRequest {
     due_at: Option<String>,
     schedule_anchor_at: Option<String>,
     freshness_window_days: Option<i32>,
-    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -230,7 +229,6 @@ fn parse_create_evidence_request(
         ),
         cadence <- parse_cadence(args.cadence.unwrap_or_default()),
         freshness_window_days <- validate_freshness_window_days(args.freshness_window_days),
-        status <- parse_status(args.status.unwrap_or_default()),
         => CreateEvidenceRequestPayload {
             title,
             description,
@@ -239,7 +237,7 @@ fn parse_create_evidence_request(
             due_at,
             schedule_anchor_at,
             freshness_window_days,
-            status,
+            status: EvidenceRequestStatus::Active,
         },
     }
     .into_result()
@@ -260,13 +258,6 @@ fn parse_due_evidence_requests_request(
 fn parse_cadence(value: String) -> Validation<EvidenceRequestCadence, DomainError> {
     value
         .parse::<EvidenceRequestCadence>()
-        .map(Validation::valid)
-        .unwrap_or_else(Validation::invalid)
-}
-
-fn parse_status(value: String) -> Validation<EvidenceRequestStatus, DomainError> {
-    value
-        .parse::<EvidenceRequestStatus>()
         .map(Validation::valid)
         .unwrap_or_else(Validation::invalid)
 }
@@ -297,7 +288,6 @@ mod tests {
             due_at: Some("2026-04-01T00:00:00Z".to_owned()),
             schedule_anchor_at: Some("2026-01-01T00:00:00Z".to_owned()),
             freshness_window_days: Some(90),
-            status: Some("active".to_owned()),
         })
         .expect("valid request parses");
 
