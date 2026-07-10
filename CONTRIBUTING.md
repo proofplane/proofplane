@@ -11,6 +11,10 @@ Install these tools before starting:
 - Rust and Cargo for the current stable toolchain
 - `make`
 - Docker with Docker Compose
+- [`ngrok`](https://ngrok.com/download) — only needed to connect a hosted agent
+  (Claude/Cowork) to your local server
+- An agent to connect: the [Codex CLI](https://developers.openai.com/codex/) or
+  Claude/Cowork
 
 ## First Setup
 
@@ -25,7 +29,9 @@ make seed
 
 `make up` starts local Postgres, the Pub/Sub emulator, and ClamAV. `make health`
 checks that those services are reachable and creates the local filesystem
-storage directory when needed.
+storage directory when needed. `make seed` runs the database migrations and
+writes demo data (an owner user, a workspace, frameworks, controls, and an
+evidence request).
 
 The local Docker services listen on:
 
@@ -33,126 +39,182 @@ The local Docker services listen on:
 - Pub/Sub emulator: `127.0.0.1:8085`
 - ClamAV clamd: `127.0.0.1:3310`
 
-`make seed` runs the application database migrations before writing local data.
-The current schema is a consolidated initial schema. If you have an old local
-database from before the API-token cutover, use:
+If you have an old local database from a previous schema, reset it:
 
 ```bash
 make reset-local
 make seed
 ```
 
-The seed output prints a local owner bearer API token. Use that token for
-data-plane API calls:
+## How authentication works
 
-```bash
-export PROOFPLANE_API_TOKEN=ppat_replace_with_latest_seed_output
-curl --fail-with-body \
-  --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
-  http://127.0.0.1:3000/workspaces/00000000-0000-4000-8000-000000000001/evidence-requests
-```
+ MCP authenticates with an OAuth flow:
 
-Management routes still use Auth0 bearer JWTs. Local fixture examples for the
-data plane live in [`fixtures/api/README.md`](fixtures/api/README.md).
+- Agents (Codex, Claude/Cowork) obtain a short-lived Proofplane PASETO access
+  token via Authorization Code + PKCE, brokered by the Proofplane OAuth facade,
+  with Auth0 as the upstream human login.
+- The control-plane REST routes (`/me`, `/workspaces`, the OAuth endpoints, and
+  browser attachment flows) authenticate with Auth0 user JWTs.
+
+Because there is no static token, exercising MCP locally means completing the
+OAuth flow with a real agent (or the MCP Inspector's OAuth mode). The setup
+below gets you there. See the
+[Agent Connector Onboarding spec](docs/epics/agent-connector-onboarding/spec.md)
+for the full design.
 
 ## Configuration
 
-Local Make targets default to:
+Make targets default to the loopback config:
 
 ```text
 PROOFPLANE_CONFIG=config/local.yaml
 ```
 
-Pass another config path when needed:
-
-```bash
-make api PROOFPLANE_CONFIG=path/to/config.yaml
-```
-
-The local config covers process bind addresses, Postgres, Pub/Sub, PASETO API
-and download keys, filesystem object storage, ClamAV, observability, Auth0
+`config/local.yaml` is committed and covers process bind addresses, Postgres,
+Pub/Sub, PASETO keys, filesystem object storage, ClamAV, observability, Auth0
 settings, worker settings, upload limits, and health paths.
 
-Object storage is not run in Docker Compose for the MVP. Local config reserves
-`.local/storage` for the filesystem-backed object storage adapter. Production
-GCS work is tracked in the
+To connect a real agent you need public URLs and real Auth0 credentials, so use
+a private override at `.local/config.yaml` (the whole `.local/` directory is
+gitignored, so it is safe for secrets and per-session values):
+
+```bash
+cp config/local.yaml .local/config.yaml
+```
+
+Then run any process against it by exporting the path once:
+
+```bash
+export PROOFPLANE_CONFIG=.local/config.yaml
+```
+
+Object storage is not run in Docker Compose for the MVP; local config reserves
+`.local/storage` for the filesystem-backed adapter. Production GCS work is
+tracked in the
 [Production Runtime Adapters epic](docs/epics/production-runtime-adapters/README.md).
 
 ## Running Processes
 
-Start a process with the Make target for that binary:
+Start a process with the Make target for that binary (they read
+`$PROOFPLANE_CONFIG`, defaulting to `config/local.yaml`):
 
 ```bash
-make api
+make api        # control-plane REST + OAuth authorization server, :3000
 make worker
 make dequeuer
-make mcp
+make mcp        # Streamable HTTP MCP data plane, :3002
 ```
 
-The local API listens on `127.0.0.1:3000` with the default config.
+## Connecting Codex or Cowork (single flow)
 
-### Testing MCP With The Inspector
+The OAuth authorization server (`:3000`) and the MCP data plane (`:3002`) are two
+origins. Both must be reachable by the agent. Claude/Cowork is hosted, so it
+needs public URLs; using ngrok for **both** agents gives one consistent setup.
+(Codex is local — see the note at the end for a no-ngrok shortcut.)
 
-The local MCP server uses Streamable HTTP. Start the local
-dependencies and seed data, then run the MCP server:
+### 1. Copy the config
 
 ```bash
-make up
-make health
-make seed
-make mcp
+cp config/local.yaml .local/config.yaml
 ```
 
-Copy the fresh `ppat_...` token printed by `make seed` from the line:
+Fill in the Auth0 upstream application credentials once (from the Proofplane dev
+Auth0 tenant — ask a teammate if you don't have them):
+
+```yaml
+auth0:
+  upstream_oauth:
+    client_id: "<dev-auth0-app-client-id>"
+    client_secret: "<dev-auth0-app-client-secret>"
+```
+
+### 2. Start ngrok
+
+The committed `ngrok.yaml` at the repo root defines two endpoints (`api` → 3000,
+`mcp` → 3002) with no authtoken. Provide the authtoken via the environment so
+nothing secret is committed:
+
+```bash
+export NGROK_AUTHTOKEN=<your-ngrok-authtoken>
+ngrok start --all --config ngrok.yaml
+```
+
+Read the two public URLs it assigned (they change on every restart):
+
+```bash
+curl -s 127.0.0.1:4040/api/tunnels | python3 -c '
+import sys, json
+t = {x["name"]: x["public_url"] for x in json.load(sys.stdin)["tunnels"]}
+print("server.public_api_base_url :", t["api"])
+print("mcp.resource        :", t["mcp"] + "/mcp")
+print("allowed_hosts entry :", t["mcp"].split("://")[1])
+print("agent connector URL :", t["mcp"] + "/mcp")'
+```
+
+### 3. Fill the ngrok values into `.local/config.yaml`
+
+```yaml
+server:
+  public_api_base_url: "https://<api>.ngrok-free.app"   # the api URL
+mcp:
+  resource: "https://<mcp>.ngrok-free.app/mcp"           # the mcp URL + /mcp
+  allowed_hosts:
+    - "<mcp>.ngrok-free.app"                             # the mcp host, no scheme
+```
+
+`mcp.resource` must be **identical** to the URL you give the agent — the
+`/oauth/authorize` resource check is exact. `allowed_hosts` is required because
+the MCP transport rejects any `Host` it doesn't recognize (an empty list keeps
+the localhost-only default).
+
+### 4. Register the Auth0 callback
+
+Add this **once** to the Auth0 upstream app's Allowed Callback URLs. If it's already
+there you can skip this step. Use a wildcard so the rotating `api` URL always matches
+and you never edit Auth0 again:
 
 ```text
-local owner bearer API token (reissued by this seed run): ppat_...
+https://*.ngrok-free.app/oauth/auth0/callback
 ```
 
-The seed command reissues this token each time it runs. If you rerun
-`make seed`, update any MCP client or Inspector configuration with the new
-token.
+### 5. Run the servers against `.local/config.yaml`
 
-In another terminal, start the MCP Inspector:
+Both processes must use the same config, or the OAuth `issuer` won't match:
 
 ```bash
-npx @modelcontextprotocol/inspector
+PROOFPLANE_CONFIG=.local/config.yaml make api
+PROOFPLANE_CONFIG=.local/config.yaml make mcp
 ```
 
-Open the Inspector URL printed by that command, including its proxy token query
-parameter. Configure the connection as:
+### 6. Connect the agent
 
-- Transport Type: `Streamable HTTP`
-- URL: `http://127.0.0.1:3002/mcp`
-- Connection Type: `Proxy`
-- Custom header enabled:
-  - Name: `Authorization`
-  - Value: `Bearer ppat_...`
-
-**Make sure you use the "Proxy" connection type.** It won't work with "Direct"
-because of CORS.
-
-Optionally, to verify the server and token outside the Inspector:
+**Codex** ([docs](https://developers.openai.com/codex/mcp)):
 
 ```bash
-curl --fail-with-body -i http://127.0.0.1:3002/mcp \
-  --header "Authorization: Bearer $PROOFPLANE_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --header "Accept: application/json, text/event-stream" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+codex mcp add proofplane --url https://<mcp>.ngrok-free.app/mcp
+codex mcp login proofplane
 ```
 
-Stop or reset local Docker state with:
+**Claude / Cowork:** add a custom connector by URL, using
+`https://<mcp>.ngrok-free.app/mcp`. Claude registers itself via Dynamic Client
+Registration; no client setup is needed.
 
-```bash
-make down
-make reset-local
-```
+Either agent then runs discovery → registration → Auth0 login → workspace
+consent, and calls tools with a 24-hour token.
 
-`make reset-local` destroys Docker volumes for the local dependency stack and
-recreates the filesystem storage directory. Use it when local dependency state
-needs to be rebuilt or when a schema-squashing change requires a fresh local
-database.
+### Notes and gotchas
+
+- **URLs rotate** every `ngrok` restart, so repeat steps 2–3 (and re-point the
+  agent) each session. The Auth0 wildcard and `public_api_base_url`/`mcp.resource`
+  are the only moving parts.
+- **24-hour re-consent:** tokens last 24h and there is no refresh token yet, so
+  the agent re-runs the browser flow daily. This is a known v1 limitation.
+
+### MCP Inspector
+
+The Inspector can connect through the same OAuth flow (Streamable HTTP, no static
+token). Point it at your MCP URL and complete the browser authorization; use the
+"Proxy" connection type to avoid CORS issues.
 
 ## Validation
 
@@ -175,9 +237,9 @@ Useful focused commands:
 
 ```bash
 cargo test --test integration request_auth
+cargo test --test integration mcp
+cargo test --test integration agent_connection_repository
 cargo test --test integration evidence_submissions
-cargo test --test integration api_token
-cargo test --test integration repository
 ```
 
 ## Repository Notes
@@ -186,8 +248,12 @@ cargo test --test integration repository
 - Application code lives under `src/`, grouped by route, service, repository,
   domain, and external adapter responsibility.
 - MVP planning and tickets live in [`docs/epics/`](docs/epics/).
-- Data-plane HTTP routes authenticate with user-owned PASETO API tokens.
-- Management-plane routes authenticate with Auth0 bearer JWTs.
+- The compliance data plane is exposed only through MCP; there is no REST data
+  plane and no API tokens.
+- MCP authenticates with the Proofplane OAuth facade (PASETO access tokens);
+  control-plane REST routes authenticate with Auth0 user JWTs.
+- Each user has exactly one workspace.
 
-Do not commit credentials or production configuration. Use
-`PROOFPLANE_CONFIG=path/to/config.yaml` for local overrides.
+Do not commit credentials or production configuration. Keep private overrides and
+secrets in the gitignored `.local/` directory; `ngrok.yaml` stays committed
+because it holds no secret (the authtoken comes from `NGROK_AUTHTOKEN`).

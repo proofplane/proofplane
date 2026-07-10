@@ -640,6 +640,8 @@ impl RawWorkerConfig {
 pub(super) struct RawMcpConfig {
     shutdown_grace_seconds: u64,
     resource: String,
+    #[serde(default)]
+    allowed_hosts: Vec<String>,
 }
 
 impl RawMcpConfig {
@@ -648,9 +650,11 @@ impl RawMcpConfig {
             shutdown_grace_seconds <- nonzero_u64(self.shutdown_grace_seconds)
                 .at("mcp.shutdown_grace_seconds"),
             resource <- canonical_url(self.resource).at("mcp.resource"),
+            allowed_hosts <- Validation::valid(self.allowed_hosts),
             => McpConfig {
                 shutdown_grace_seconds,
                 resource,
+                allowed_hosts,
             },
         }
     }

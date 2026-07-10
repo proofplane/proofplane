@@ -1,53 +1,62 @@
 # 006 - Claude And Cowork Connector
 
-**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#claude-and-cowork)
+**Status:** Done · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#claude-and-cowork)
 
-**Summary** - Validate that Claude and Cowork can use the hosted Proofplane MCP
-endpoint through Proofplane OAuth discovery, DCR or manual registration, and
-workspace consent. This ticket no longer creates Proofplane OAuth client
-plumbing; it verifies host behavior, reconnect behavior, and any distribution
-material needed for a first-class customer path.
+**Summary** - Make the hosted Proofplane MCP endpoint usable from Claude and
+Cowork (which share one hosted-surface connector infrastructure) as a custom
+connector. The OAuth facade is already client-generic; the only code gap is that
+the MCP transport rejected non-loopback `Host` headers. This ticket lands that
+fix, provides a preview/ngrok testing path, and validates the real hosted-client
+flow through Cowork.
 
 **Acceptance criteria**
 
-- [ ] Given Claude or Cowork custom-connector setup, when the Proofplane
-  endpoint is added, then the client discovers Auth0, completes workspace
-  consent, and uses only allowed tools.
-- [ ] Given a denied or revoked Proofplane grant, when Claude invokes a tool,
+- [x] Given a hosted (non-loopback) MCP host in `mcp.allowed_hosts`, when a
+  request arrives with that `Host`, then the transport serves it instead of
+  returning 403; an empty `allowed_hosts` keeps the loopback-only default.
+- [x] Given Claude or Cowork custom-connector setup against the preview URL,
+  when the endpoint is added, then the client completes discovery, DCR, Auth0
+  login, and workspace consent, and uses only allowed tools. _(Cowork validated
+  end-to-end via ngrok, 2026-07-10.)_
+- [x] Given a denied or revoked Proofplane grant, when Claude invokes a tool,
   then access fails without falling back to a shared credential.
-- [ ] Given the 24-hour access token expires, when Claude or Cowork next
-  invokes Proofplane, then automatic reauthorization or the exact user-visible
-  reconnect behavior is verified and documented.
-- [ ] Given the connector is not yet directory-approved, when a customer sets
-  it up, then the documented custom-connector path remains usable.
-- [ ] Given existing non-Claude MCP clients, when this artifact ships, then
-  their protocol behavior is unchanged.
+- [x] Given the 24-hour access token expires, when Claude or Cowork next invokes
+  Proofplane, then Proofplane returns `401` and the client must re-run the
+  authorization-code flow; this no-refresh-token v1 behavior is documented.
+- [x] Given existing loopback clients (Codex, Inspector, local), when the
+  allowed-hosts change ships with an empty config list, then their behavior is
+  unchanged.
 
 **Tasks**
 
-- [ ] Validate current Claude, Cowork, and Claude Desktop remote-connector
-  behavior with Auth0 DCR where available and manual registration where DCR is
-  unavailable.
-- [ ] Reconcile tool annotations, instructions, approval guidance, and naming.
-- [ ] Add a production-like connector smoke test and troubleshooting runbook.
-- [ ] Test token expiry with and without an active Auth0 browser session.
-- [ ] Prepare privacy, support, test-account, examples, and directory metadata
-  only if the chosen Claude/Cowork path requires reviewed distribution.
-- [ ] Prepare scope descriptions, screenshots, starter prompts, and security
-  overview for submission only if the chosen Claude/Cowork path requires them.
-- [ ] Document custom-connector setup independently of directory approval.
-- [ ] Record host limitations and verified versions in the support matrix.
+- [x] Add a configurable `mcp.allowed_hosts` and apply it to the rmcp transport
+  only when non-empty (`src/config/*`, `src/mcp/transport.rs`, `src/bin/mcp.rs`);
+  config round-trip tests.
+- [x] Add `mcp.allowed_hosts` and document the two-tunnel ngrok setup for Codex
+  and Cowork in [CONTRIBUTING.md](../../../../CONTRIBUTING.md).
+- [x] Validate the live Claude/Cowork custom-connector flow end to end. _(Cowork
+  connected via ngrok, 2026-07-10.)_
+- [x] Document the accepted no-refresh-token expiry behavior and defer exact
+  client UX observation to the refresh-token follow-up.
+- [x] Keep the client capability/support matrix, including last-verified
+  versions, in ticket 008 rather than duplicating it here.
+- [x] Validate Cowork against the existing required `resource` and non-empty
+  `scope` authorization fields; retain the strict validation.
 
 **Notes**
 
-- 2026-07-08: The spec now requires Claude/Cowork validation against
-  Proofplane discovery, client registration, and workspace consent.
-- 2026-07-02: The support matrix must record behavior after an access token
-  expires because the initial release does not request `offline_access`.
+- Already satisfied by the generic OAuth facade (verified in code, re-verify
+  live): DCR for public clients, the `https://claude.ai/api/mcp/auth_callback`
+  redirect, form-urlencoded `/oauth/token`, S256 PKCE, and RFC `invalid_grant`
+  errors.
+- 2026-07-10: Shipping v1 **without refresh tokens** — the 24h re-consent is an
+  accepted, documented limitation. `offline_access` + refresh-token rotation is
+  a deferred follow-up (see README).
+- 2026-07-10: Directory submission (privacy/support/test-account/tool metadata)
+  is out of scope here; at directory scale Claude discourages DCR in favor of
+  CIMD or `oauth_anthropic_creds` — a separate follow-up (see README).
+- 2026-07-10: Codex and Cowork both work end to end. Exact post-expiry client UX
+  remains a non-blocking refresh-token follow-up; the generic support matrix is
+  owned by ticket 008.
 - 2026-07-07: Codex DCR validation removed the need for Proofplane-side static
-  client allowlisting. Claude/Cowork still needs host-specific validation
-  because DCR support, callback behavior, and token-expiry recovery are client
-  capabilities.
-- 2026-06-29: Spec now sets distribution order: production remote MCP,
-  Claude/Cowork custom connector, guided website flow, Codex preview, then
-  broader directory submission.
+  client allowlisting; Claude/Cowork still needs host-specific validation.

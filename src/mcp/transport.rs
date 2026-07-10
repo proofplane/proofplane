@@ -68,6 +68,7 @@ pub struct McpAppDependencies<V> {
     pub upload_grant_encryptor: UploadGrantEncryptor,
     pub upload_grant_decryptor: UploadGrantDecryptor,
     pub health: HealthConfig,
+    pub allowed_hosts: Vec<String>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -86,6 +87,7 @@ impl<V> Clone for McpAppDependencies<V> {
             upload_grant_encryptor: self.upload_grant_encryptor.clone(),
             upload_grant_decryptor: self.upload_grant_decryptor.clone(),
             health: self.health.clone(),
+            allowed_hosts: self.allowed_hosts.clone(),
             cancellation_token: self.cancellation_token.clone(),
         }
     }
@@ -121,6 +123,7 @@ where
             controls,
             dependencies.public_api_base_url,
         ),
+        dependencies.allowed_hosts,
         dependencies.cancellation_token.clone(),
     )?;
     let protected_resource_metadata =
@@ -178,6 +181,7 @@ pub fn protocol_router<V>(
     resource: Url,
     agent_connections: AgentConnectionService,
     server: ProofplaneMcp,
+    allowed_hosts: Vec<String>,
     cancellation_token: CancellationToken,
 ) -> Result<Router, McpAppError>
 where
@@ -185,11 +189,15 @@ where
 {
     let challenge = authentication_challenge(&resource)?;
     let server_factory = move || Ok(server.clone());
+    let mut transport_config = StreamableHttpServerConfig::default()
+        .with_cancellation_token(cancellation_token.child_token());
+    if !allowed_hosts.is_empty() {
+        transport_config = transport_config.with_allowed_hosts(allowed_hosts);
+    }
     let transport = StreamableHttpService::<ProofplaneMcp, LocalSessionManager>::new(
         server_factory,
         Default::default(),
-        StreamableHttpServerConfig::default()
-            .with_cancellation_token(cancellation_token.child_token()),
+        transport_config,
     );
 
     Ok(Router::new()

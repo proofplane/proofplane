@@ -119,6 +119,7 @@ async fn run() -> Result<(), Error> {
         upload_grant_encryptor,
         upload_grant_decryptor,
         health: config.health.clone(),
+        allowed_hosts: config.mcp.allowed_hosts.clone(),
         cancellation_token: sessions.clone(),
     })?;
 

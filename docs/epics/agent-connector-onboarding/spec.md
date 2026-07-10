@@ -603,8 +603,14 @@ Required public roles are:
 - Proofplane API issuer URL, such as `https://api.proofplane.com/`;
 - Auth0 issuer URL;
 - Auth0 JWKS URL;
-- Auth0 upstream OAuth application client ID, secret, and callback path; and
-- Proofplane MCP OAuth PASETO keyring.
+- Auth0 upstream OAuth application client ID, secret, and callback path;
+- Proofplane MCP OAuth PASETO keyring; and
+- `mcp.allowed_hosts`: the `Host` values the Streamable HTTP MCP transport
+  accepts (rmcp DNS-rebinding protection). Empty keeps rmcp's secure
+  loopback-only default (`localhost`, `127.0.0.1`, `::1`); a hosted/tunnelled
+  deployment must list its public MCP host or every MCP request 403s. A
+  *set-but-empty* list would disable the check entirely, so Proofplane only
+  overrides the default when the configured list is non-empty.
 
 The MCP resource URL is both the protected resource identifier and Proofplane
 PASETO audience. It must be identical in client requests, protected-resource
@@ -614,7 +620,9 @@ Production endpoints use HTTPS. Local unit and integration tests use local
 JWK fixtures for upstream Auth0 token verification and PASETO key fixtures for
 MCP access tokens. End-to-end Auth0 testing uses a dedicated development
 tenant and an externally reachable preview environment for the upstream
-callback.
+callback. Because the OAuth authorization server and the MCP data plane run on
+two origins (`public_api_base_url` and `mcp.resource`), a client like Claude
+must reach both; local preview uses two ngrok tunnels.
 
 The MCP OAuth PASETO keyring is rotated independently of Auth0 upstream login
 keys.
@@ -654,9 +662,16 @@ still owns whether its transport remains connected and tools are mounted.
 
 ### Claude And Cowork
 
-Proofplane ships as a hosted remote connector. The initial release may use a
-custom connector URL. Directory submission follows production Auth0 OAuth,
-support, privacy, tool-annotation, and test-account validation.
+Proofplane ships as a hosted remote connector. The initial release uses a
+custom connector URL; Claude and Cowork share one hosted-surface connector
+infrastructure and the single redirect URI
+`https://claude.ai/api/mcp/auth_callback`. Claude registers itself via `oauth_dcr`
+(public client, S256 PKCE), so no manual client setup is required for the
+custom-connector path. The only server change required was making the MCP
+transport's `Host` allowlist configurable (`mcp.allowed_hosts`); without it a
+hosted host 403s. Directory submission is a later step and, at scale, Claude
+discourages DCR in favor of CIMD or Anthropic-held client credentials
+(`oauth_anthropic_creds`).
 
 The release smoke test must prove that Claude follows Protected Resource
 Metadata to the Proofplane issuer, completes Proofplane workspace consent, and
@@ -755,12 +770,32 @@ authorized/active connection reuse. Ticket 004 remains responsible for
 activating authorized connections on the first valid MCP request and enforcing
 the claims on protected tools.
 
-The remaining client questions are:
+Ticket 006 research against the
+[Claude connector auth docs](https://claude.com/docs/connectors/building/authentication)
+resolved most Claude/Cowork questions:
 
-- whether Claude/Cowork supports Proofplane DCR or needs manual registration;
-- whether Claude/Cowork and Codex automatically restart OAuth after `401` or
-  provide a usable reconnect control; and
-- whether generic OAuth warrants additional DCR abuse controls.
+- **DCR:** Claude supports `oauth_dcr` out of the box (public client, S256
+  PKCE), and its hosted redirect `https://claude.ai/api/mcp/auth_callback` is
+  accepted by the existing validator — no manual registration needed for the
+  custom-connector path.
+- **Host allowlist (the one code gap):** the rmcp transport rejected
+  non-loopback `Host` headers; ticket 006 adds `mcp.allowed_hosts` so a hosted
+  MCP host is accepted. This was the reason Codex (localhost) worked but a
+  hosted Claude would not.
+- **Token expiry (accepted v1 behavior):** Claude refreshes reactively on `401`
+  and proactively before expiry, and expects a refresh token. v1 issues none, so
+  Claude re-runs the full authorization-code flow every ~24h; the
+  reusable-connection short-circuit can make that near-silent when the Auth0
+  session is live. This is the accepted, documented v1 limitation. Refresh-token
+  support (advertise `offline_access`, issue and rotate refresh tokens, return
+  `invalid_grant`) is a deferred follow-up.
+
+Cowork completed the live flow with the currently required `resource` and
+non-empty `scope` fields on `/oauth/authorize`, so those checks remain strict.
+Exact user-visible reconnect behavior on expiry is a non-blocking refresh-token
+follow-up. At directory scale Claude discourages DCR in favor of CIMD or
+`oauth_anthropic_creds` — a separate distribution follow-up. Whether generic
+OAuth warrants additional DCR abuse controls also remains open.
 
 If a first-class client cannot recover from access-token expiry with an
 acceptable visible or automatic authorization flow, it must not be marketed
@@ -791,6 +826,10 @@ access is unsupported until a replacement credential mechanism is designed.
 - [RFC 9700: OAuth Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700)
 
 ## Revisions
+
+- 2026-07-10: Closed ticket 006 after Codex and Cowork worked end to end.
+  Retained strict authorization fields, accepted the documented no-refresh-token
+  v1 behavior, and deferred exact post-expiry UX and the generic support matrix.
 
 - 2026-07-09: PR #42 shipped the working Codex OAuth connection and three
   product decisions recorded in the banner at the top of this spec: removed
