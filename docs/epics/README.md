@@ -44,6 +44,7 @@ provenance, and freshness is derived from submitted evidence.
 | [MCP Server](./mcp-server/README.md) | Doing | MCP is now the sole compliance data-plane. Runtime, read tools, and write tools (001–003) are Done; only logging/equivalence (005) remains, and its REST-parity framing needs reworking since REST was removed. |
 | [MCP Attachment Management](./mcp-attachment-upload/README.md) | Todo | Agents hand humans scoped attachment-management links without moving attachment bytes through MCP. |
 | [Agent Connector Onboarding](./agent-connector-onboarding/README.md) | Doing | OAuth facade + working Codex connection shipped (tickets 001–004, 007 Done in PR #42). Remaining: guided UI (005), Claude/Cowork (006), generic clients (008). |
+| [MCP Agent Guidance](./mcp-agent-guidance/README.md) | Todo | Teach connecting agents how to use Proofplane via server instructions, richer tool descriptions, and on-demand depth docs (guide tool + resources). |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
 | [Self-Onboarding UI](./self-onboarding-ui/README.md) | Done - Will Do Later | Remaining UI tickets are postponed until MCP is more complete; specs may need revalidation before reopening. |
 
