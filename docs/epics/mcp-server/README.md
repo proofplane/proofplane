@@ -1,7 +1,10 @@
 # MCP Server Epic
 
-Make Proofplane a first-class agent backend while preserving the same services,
-authorization, validation, and audit semantics used by REST.
+Make Proofplane a first-class agent backend. MCP is now the sole compliance
+data-plane: the REST data-plane and `ppat_` API tokens were removed in PR #42
+(see the [Agent Connector Onboarding](../agent-connector-onboarding/spec.md)
+2026-07-09 decision banner), and MCP authenticates with the Proofplane OAuth
+facade rather than the original `ppat_` contract.
 
 Full runtime, tool, identity, and error decisions live in [spec.md](./spec.md).
 
@@ -12,12 +15,14 @@ Full runtime, tool, identity, and error decisions live in [spec.md](./spec.md).
 | 001. [MCP Runtime And Authentication](./tickets/001-mcp-runtime-and-authentication.md) | Done | Authenticated Streamable HTTP runtime, public operations routes, and graceful shutdown shipped. |
 | 002. [Compliance Read Tools](./tickets/002-compliance-read-tools.md) | Done | Core read tools expose selectively detailed evidence, human attachment grants, controls, and mappings. |
 | 003. [Compliance Write Tools](./tickets/003-compliance-write-tools.md) | Done | Submission and mapping writes are exposed with REST-equivalent persistence and audit semantics. |
-| 005. [MCP Logging And Equivalence](./tickets/005-mcp-logging-and-equivalence.md) | Todo | Prove parity and attributable tool activity. |
+| 005. [MCP Logging And Equivalence](./tickets/005-mcp-logging-and-equivalence.md) | Needs rework | Attributable MCP tool logging still applies, but the REST/MCP equivalence half is obsolete now that REST was removed (PR #42). Reframe to MCP-only audit coverage. |
 
 ## Sequencing
 
-The API-token prerequisite in API Token And PASETO Migration ticket 006 and all
-Evidence Lifecycle Completion tickets are already done.
+Evidence Lifecycle Completion is done. The former `ppat_` API-token
+prerequisite no longer applies: `ppat_` authentication was removed in PR #42
+and MCP now authenticates through the Proofplane OAuth facade (owned by the
+Agent Connector Onboarding epic).
 
 Deliver the remaining work in these waves:
 

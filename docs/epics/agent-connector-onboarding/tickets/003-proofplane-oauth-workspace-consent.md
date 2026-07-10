@@ -1,6 +1,6 @@
 # 003 - Proofplane OAuth Workspace Consent
 
-**Status:** Doing · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#workspace-grant-flow)
+**Status:** Done · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#workspace-grant-flow)
 
 **Summary** - Add the Proofplane-hosted OAuth consent step that follows
 upstream Auth0 login, selects one workspace, creates an authorized connection,
@@ -11,7 +11,7 @@ and returns a one-use authorization code to the MCP client.
 - [x] Given a visible Proofplane MCP authorization, when upstream Auth0 login
   completes, then the user can approve one currently accessible workspace and
   Proofplane issues an authorization code for that approved connection.
-- [ ] Given an exact reusable connection, when authorization repeats, then the
+- [x] Given an exact reusable connection, when authorization repeats, then the
   authorization completes without another workspace consent page.
 - [x] Given tampered, expired, replayed, wrong-state, wrong-client, denied, or
   inaccessible-workspace consent, when handled, then no usable pending
@@ -47,3 +47,8 @@ and returns a one-use authorization code to the MCP client.
   lifecycle issue rather than a Proofplane or Auth0 transaction failure.
 - 2026-07-06: The spec was reconciled with denial-without-persistence
   behavior.
+- 2026-07-09: Done. Shipped in PR #42. Each user has exactly one workspace, so
+  the consent page displays that single workspace as a fixed approval rather
+  than a picker (`consent_page_renders_fixed_workspace_with_escaped_content`);
+  reusable-connection reuse skips the consent page. See the spec's 2026-07-09
+  decision banner.

@@ -1,6 +1,6 @@
 # 007 - Evidence Lifecycle Audit Logs
 
-**Status:** Done · **Depends on:** 005, evidence-lifecycle-completion/001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/003, evidence-lifecycle-completion/004 · **Spec:**
+**Status:** Done · **Depends on:** 005, Evidence Lifecycle Completion (done, archived) · **Spec:**
 [spec.md](../spec.md#evidence-lifecycle-audit-events)
 
 **Summary** - Emit structured audit logs for evidence submission creation,
@@ -16,9 +16,10 @@ attributable without exposing secrets.
 - [ ] Given rejected requests, rolled-back mutations, retryable worker failures,
   duplicate delivery, or stale delivery, when logs are captured, then no false
   success audit record is emitted.
-- [ ] Given audit fields are inspected, then workspace, user, API token, system
-  client, request correlation, event name, outcome, grant ID, submission ID,
-  and attachment ID may appear where applicable.
+- [ ] Given audit fields are inspected, then workspace, user, agent connection,
+  system client, request correlation, event name, outcome, grant ID, submission
+  ID, and attachment ID may appear where applicable. (Actor is the agent
+  connection ID, not an API token ID — `ppat_` removed in PR #42.)
 - [ ] Given sensitive values exist during the flow, then raw grant tokens, API
   tokens, authorization headers, attachment bytes, object keys treated as
   storage internals, submission summaries and descriptions, scanner raw error

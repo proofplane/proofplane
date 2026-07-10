@@ -21,9 +21,9 @@ or cross-workspace state.
 
 ## Auditor Access Grants
 
-Persist each grant with workspace, auditor email, creator user/API token,
-created time, default 30-day expiry, optional revocation time, and a digest of
-the raw invite secret. The raw invite secret is returned only when the grant is
+Persist each grant with workspace, auditor email, creator (user or agent
+connection — `ppat_` API tokens were removed in PR #42), created time, default
+30-day expiry, optional revocation time, and a digest of the raw invite secret. The raw invite secret is returned only when the grant is
 created and is never stored.
 
 Grant creation, listing, and revocation require a new

@@ -3,6 +3,14 @@
 Let MCP clients delegate evidence attachment upload and download to a human
 browser session without moving file bytes through chat, model context, or MCP.
 
+> **Reconciliation — 2026-07-09 (PR #42):** This epic shipped when upload grants
+> could be issued via either a `ppat_` API token or an agent connection. `ppat_`
+> authentication was removed in PR #42 (see the [Agent Connector
+> Onboarding](../agent-connector-onboarding/spec.md) 2026-07-09 decision
+> banner), so grants are now always issued via an **agent connection**. The
+> `issued_via_api_token_id` column and any "issued via API token" wording in the
+> spec/tickets are vestigial; only the agent-connection issuer is populated.
+
 Technical decisions live in [spec.md](./spec.md). Page behavior lives in
 [ux.md](./ux.md).
 

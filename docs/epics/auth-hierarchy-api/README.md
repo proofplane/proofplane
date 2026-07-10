@@ -33,6 +33,6 @@ This epic is **API-only**; its frontend is the parallel `self-onboarding-ui` epi
   the actor must belong to the path workspace and hold the specific permission
   grant for the route (the six read/write × evidence-requests / submissions /
   controls permissions ported into an `actor_permissions` table).
-- **004** depends on 001-002 and `paseto-token-migration/002` for the operations
-  it instruments, and on `reliability-observability/005` for the shared
-  audit-log field contract.
+- **004** depends on 001-002 and the archived API Token And PASETO Migration
+  epic for the operations it instruments, and on `reliability-observability/005`
+  for the shared audit-log field contract.

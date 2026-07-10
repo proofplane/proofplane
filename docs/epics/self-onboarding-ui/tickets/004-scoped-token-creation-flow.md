@@ -1,6 +1,6 @@
 # 004 - Scoped Token Creation Flow
 
-**Status:** Done · **Depends on:** 003, paseto-token-migration/002, paseto-token-migration/006 · **Spec:** [spec.md](../spec.md#token-permission-model)
+**Status:** Obsolete · **Depends on:** 003, API Token And PASETO Migration (done, archived) · **Spec:** [spec.md](../spec.md#token-permission-model)
 
 **Summary** - Build the token creation flow with job-based permission presets,
 granular permission visibility, and a one-time raw-token success state.

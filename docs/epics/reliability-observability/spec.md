@@ -8,9 +8,12 @@ for the API, dequeuer, worker, storage, and MCP runtimes.
 ## Existing Baseline
 
 - `/readyz` checks Postgres with a timeout.
-- Authentication resolves persisted users, memberships, API tokens, and
-  permissions from Postgres. Authorization is local policy over that context;
-  there is no separate authorization service or synchronization path.
+- Authentication resolves persisted users, memberships, MCP OAuth agent
+  connections, and permissions from Postgres. (`ppat_` API tokens were removed
+  in PR #42 — see the [Agent Connector
+  Onboarding](../agent-connector-onboarding/spec.md) 2026-07-09 decision
+  banner.) Authorization is local policy over that context; there is no separate
+  authorization service or synchronization path.
 - Outbox publish retry and worker delivery behavior have integration coverage.
 - Attachment scan/finalization tests already cover concrete Postgres rollback,
   scanner failure, and object-store failure.
@@ -141,12 +144,14 @@ Stable event names are:
 - `evidence_attachment_scan.completed`;
 - `evidence_attachment_finalization.completed`.
 
-Allowed fields include workspace ID, user ID, API token ID, system client,
-request correlation ID, event name, outcome, evidence request ID, submission
-ID, attachment ID, grant ID, and coarse lifecycle status where applicable.
-Audit records must not include raw grant tokens, API tokens, authorization
-headers, attachment bytes, storage object keys treated as internals, scanner raw
-error strings, credentials, or unbounded dependency error strings.
+Allowed fields include workspace ID, user ID, agent connection ID, system
+client, request correlation ID, event name, outcome, evidence request ID,
+submission ID, attachment ID, grant ID, and coarse lifecycle status where
+applicable. (The actor identifier is the agent connection ID, not an API token
+ID — `ppat_` was removed in PR #42.) Audit records must not include raw grant
+tokens, access tokens, authorization headers, attachment bytes, storage object
+keys treated as internals, scanner raw error strings, credentials, or unbounded
+dependency error strings.
 
 Submission creation, attachment acceptance, and download-grant issuance success
 records are emitted only after the database transaction commits. Download-grant

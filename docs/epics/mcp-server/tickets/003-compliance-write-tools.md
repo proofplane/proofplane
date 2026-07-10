@@ -1,6 +1,6 @@
 # 003 - Compliance Write Tools
 
-**Status:** Done · **Depends on:** 001, evidence-lifecycle-completion/004, reliability-observability/007 · **Spec:** [spec.md](../spec.md#core-demo-tools)
+**Status:** Done · **Depends on:** 001, Evidence Lifecycle Completion (done, archived), reliability-observability/007 · **Spec:** [spec.md](../spec.md#core-demo-tools)
 
 **Summary** - Add service-backed tools for submission records with bounded
 context and for control mappings while leaving binary file transfer to REST.
