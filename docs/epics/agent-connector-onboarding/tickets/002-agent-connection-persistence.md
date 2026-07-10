@@ -1,6 +1,6 @@
 # 002 - Agent Connection Persistence
 
-**Status:** Doing · **Depends on:** 001 · **Spec:** [spec.md](../spec.md#agent-connection-foundation)
+**Status:** Done · **Depends on:** 001 · **Spec:** [spec.md](../spec.md#agent-connection-foundation)
 
 **Summary** - Establish the durable agent-connection lifecycle used by
 Proofplane OAuth consent and MCP runtime authorization.
@@ -69,3 +69,8 @@ Proofplane OAuth consent and MCP runtime authorization.
   API-token, continuation, and nonce digests without changing persisted bytes.
 - 2026-07-06: The spec now names the generated repository insertion payload
   `NewPendingAgentConnection`, distinct from the persisted connection entity.
+- 2026-07-09: Done. Shipped in PR #42 with the working Codex OAuth connection.
+  Note: PR #42 also removed `ppat_` API-token authentication and the REST
+  data-plane, so the `*_api_token_id` provenance columns this ticket set up are
+  now vestigial and only the agent-connection side is populated. See the
+  spec's 2026-07-09 decision banner.

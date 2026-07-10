@@ -1,6 +1,6 @@
 # 001 - MCP Runtime And Authentication
 
-**Status:** Done · **Depends on:** paseto-token-migration/006 · **Spec:** [spec.md](../spec.md#runtime-and-transport)
+**Status:** Done · **Depends on:** API Token And PASETO Migration (done, archived) · **Spec:** [spec.md](../spec.md#runtime-and-transport)
 
 **Summary** - Replace the existing scaffold with a streamable-HTTP MCP runtime
 that authenticates user-owned workspace API tokens and shuts down cleanly.

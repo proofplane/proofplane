@@ -1,6 +1,6 @@
 # 004 — Auth & Identity Audit Logs
 
-**Status:** Done · **Depends on:** 001, 002, paseto-token-migration/006, reliability-observability/005 · **Spec:** [API-token spec](../../paseto-token-migration/spec.md#audit-and-secret-handling)
+**Status:** Done · **Depends on:** 001, 002, API Token And PASETO Migration (done, archived), reliability-observability/005 · **Spec:** API Token And PASETO Migration spec (archived — folder removed in commit a36b836)
 
 **Summary** — Emit structured identity and access audit logs for login, workspace
 creation, membership change, and user API-token issue/revoke.
@@ -25,9 +25,9 @@ creation, membership change, and user API-token issue/revoke.
 
 - [x] Integrate the structured fields from `reliability-observability/005`.
 - [x] Emit workspace/member logs after successful 002 operations.
-- [x] Emit API-token lifecycle logs after successful
-  `paseto-token-migration/002` operations plus explicit `user.logged_in` from
-  `POST /login`.
+- [x] Emit API-token lifecycle logs after successful API-token operations (from
+  the archived API Token And PASETO Migration epic) plus explicit
+  `user.logged_in` from `POST /login`.
 - [x] Tests (attribution, no success log on rollback, no-secrets, explicit login).
 
 **Notes**
@@ -43,3 +43,9 @@ creation, membership change, and user API-token issue/revoke.
   names and identifier-only audit fields remain unchanged.
 - Revised on 2026-06-22 to make `POST /login` the explicit login event, update
   `users.last_login_at` on every successful login, and keep `GET /me` read-only.
+- 2026-07-09: Historical. PR #42 removed `ppat_` API tokens, so the
+  `api_token.issued`/`_revoked` events and the `api_token_id` audit field no
+  longer apply; MCP OAuth agent connections are the current non-human actor.
+  The API Token And PASETO Migration epic this ticket instrumented was archived
+  (folder removed in commit a36b836), so its links here are plain references
+  rather than navigable paths.

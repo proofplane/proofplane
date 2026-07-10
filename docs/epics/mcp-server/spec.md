@@ -1,9 +1,26 @@
 # MCP Server Spec
 
+> **Reconciliation — 2026-07-09 (PR #42):** Two premises in this spec are
+> superseded and now owned by the
+> [Agent Connector Onboarding](../agent-connector-onboarding/spec.md) epic (see
+> its 2026-07-09 decision banner):
+>
+> - **Identity is no longer `ppat_`.** MCP authenticates with Proofplane-issued
+>   PASETO access tokens from the OAuth facade and an agent-connection actor
+>   context, not opaque `ppat_` bearer tokens / `ApiTokenContext`. `ppat_`
+>   authentication was removed entirely.
+> - **There is no REST data-plane to be equivalent to.** The REST routes for
+>   controls, evidence requests, and evidence submissions were removed; **MCP is
+>   the sole compliance data-plane.** Any "REST/MCP equivalence" or "same as
+>   REST" framing below is historical — MCP is now the definition, not a mirror.
+>
+> The runtime, transport, tool catalog, and audit design below remain accurate.
+
 ## Goal
 
 Expose the stable compliance service layer through MCP so customer-owned agents
-can inspect and update Proofplane without calling REST indirectly.
+can inspect and update Proofplane. MCP is the sole data-plane for compliance
+reads and writes.
 
 ## Runtime And Transport
 
@@ -25,10 +42,15 @@ are configured. On shutdown, the listener stops accepting requests, drains for
 
 ## Identity
 
-MCP is a data-plane interface. Requests authenticate with the same user-owned
-opaque `ppat_` bearer-token contract as REST and produce the same
-`ApiTokenContext`. Tool authorization uses the same workspace permissions as
-equivalent REST operations.
+MCP is the compliance data-plane interface. _(Historical, superseded by the
+2026-07-09 reconciliation banner: requests originally authenticated with the
+same user-owned opaque `ppat_` bearer-token contract as REST and produced an
+`ApiTokenContext`, with tool authorization mirroring equivalent REST
+operations.)_ Requests now authenticate with Proofplane-issued PASETO access
+tokens from the OAuth facade and carry an agent-connection actor context; tool
+authorization uses the connection's approved workspace permissions. See the
+[Agent Connector Onboarding spec](../agent-connector-onboarding/spec.md) for
+the token contract and runtime authorization.
 
 HTTP MCP authorization is transport-level: the MCP client or agent harness
 supplies credentials as HTTP request metadata, outside MCP tool schemas and

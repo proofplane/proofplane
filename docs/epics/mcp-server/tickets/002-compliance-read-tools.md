@@ -1,6 +1,6 @@
 # 002 - Compliance Read Tools
 
-**Status:** Done · **Depends on:** 001, evidence-lifecycle-completion/002, evidence-lifecycle-completion/004 · **Spec:** [spec.md](../spec.md#core-demo-tools)
+**Status:** Done · **Depends on:** 001, Evidence Lifecycle Completion (done, archived) · **Spec:** [spec.md](../spec.md#core-demo-tools)
 
 **Summary** - Add the core read tools for requests, selectively detailed
 submissions, human attachment download grants, controls, and mappings.

@@ -1,5 +1,36 @@
 # Agent Connector Onboarding Spec
 
+> **Decision revision — 2026-07-09 (shipped in PR #42):** Three product
+> decisions landed with the working Codex OAuth connection and now supersede
+> earlier text throughout this spec:
+>
+> 1. **API-token (`ppat_`) authentication was removed entirely.** The
+>    `domain/api_token`, `repository/api_tokens`, `routes/api_tokens`, and
+>    opaque-token authenticator modules are deleted. Proofplane-issued PASETO
+>    access tokens from the OAuth facade are the **only** MCP credential. Any
+>    passage below promising `ppat_` coexistence, an "advanced API-token path,"
+>    or "existing `ppat_` callers remain unchanged" is obsolete. *Rationale:* a
+>    non-technical, browser-authorized connection is the product; maintaining a
+>    parallel long-lived-credential plane contradicted that and doubled the
+>    authorization surface.
+> 2. **The REST data-plane was removed.** The REST routes for controls,
+>    evidence requests, and evidence submissions are deleted. **MCP is now the
+>    only interface for compliance reads and writes.** REST remains only for
+>    control-plane concerns (auth, `me`, workspaces, OAuth, and browser
+>    attachment flows). Any "REST and MCP" or "same model as REST clients"
+>    framing is obsolete. *Rationale:* the agent/MCP surface is the product
+>    data-plane; a second REST data-plane was unused and doubled maintenance.
+> 3. **Each user has exactly one workspace.** Consent no longer shows a
+>    workspace **picker**; it displays the user's single workspace as a fixed,
+>    non-editable approval (`get_workspace_with_role_for_user`). Read any
+>    "select one accessible workspace" / "workspace picker" language below as
+>    "approve the user's single workspace." *Rationale:* one-workspace-per-user
+>    removes an entire class of cross-workspace consent-tampering surface and
+>    matches how self-onboarding provisions accounts today.
+>
+> The sections below retain their original wording except where directly
+> corrected; treat this banner as authoritative where they disagree.
+
 ## Goal
 
 Let a non-technical operations or compliance user connect Proofplane to an AI
@@ -63,19 +94,18 @@ This supersedes the earlier Auth0-owned MCP OAuth design.
 
 ## Current Reality
 
-The MCP runtime and core tools already use Streamable HTTP at `/mcp`. They
-authenticate requests with a pre-provisioned, workspace-bound `ppat_` bearer
-token. The website can issue that token, but this is the wrong default for
-non-technical users:
+The MCP runtime and core tools use Streamable HTTP at `/mcp`. They now
+authenticate requests exclusively with Proofplane-issued PASETO access tokens
+from the OAuth facade described below.
 
-- the user must create, copy, and preserve a long-lived credential;
-- credentials can leak through plaintext configuration or shell state;
-- clients require different manual setup;
-- browser-led consent and reconnection are unavailable; and
-- connection lifecycle and audit attribution are token-centric.
-
-Existing `ppat_` authentication remains supported for CI, unattended agents,
-direct REST consumers, and MCP clients without interactive OAuth.
+_(Historical context, superseded by the 2026-07-09 banner: MCP originally also
+accepted pre-provisioned, workspace-bound `ppat_` bearer tokens issued by the
+website. That path was the wrong default for non-technical users — it required
+creating, copying, and preserving a long-lived credential that could leak
+through plaintext config or shell state, offered no browser-led consent or
+reconnection, and made connection lifecycle and audit attribution
+token-centric. `ppat_` authentication and the REST data-plane have since been
+removed; the OAuth facade is the only path.)_
 
 ## Product Boundary
 
@@ -95,8 +125,12 @@ This epic does not:
 - synchronize every Proofplane workspace into Auth0 Organizations;
 - pass MCP credentials through prompts, tools, logs, or browser storage;
 - enable uncontrolled Dynamic Client Registration in production; or
-- support unattended OAuth connections that must outlive the access token; or
-- remove existing API-token authentication.
+- support unattended OAuth connections that must outlive the access token.
+
+_(The initial proposal also promised to preserve existing API-token
+authentication. Per the 2026-07-09 banner, `ppat_` authentication and the REST
+data-plane were instead removed; the OAuth facade is the sole MCP credential
+path.)_
 
 Auth0 Organizations are not used for workspace binding. Auth0 currently
 documents Organization user flows as
@@ -153,8 +187,9 @@ flowchart LR
 4. The client discovers Proofplane OAuth metadata, dynamically registers when
    needed, and opens Proofplane authorization.
 5. Proofplane sends the browser to Auth0 Universal Login for human identity.
-6. Proofplane shows the requested permissions and lets the user choose one
-   accessible workspace.
+6. Proofplane shows the requested permissions and the user's single workspace
+   as a fixed approval (each user has exactly one workspace; there is no
+   picker).
 7. Proofplane completes the authorization code flow and returns a 24-hour
    PASETO access token to the MCP client.
 8. The client calls `/mcp`; Proofplane verifies the PASETO token and the live
@@ -199,9 +234,9 @@ sequenceDiagram
     P->>P: Verify upstream identity and provision user
     P->>D: Find exact reusable connection for user, client, resource, and scopes
     D-->>P: No reusable connection
-    P->>D: Load accessible workspace for consent context
-    W-->>U: Show client, requested permissions, and workspace picker
-    U->>W: Approve one workspace
+    P->>D: Load the user's single workspace for consent context
+    W-->>U: Show client, requested permissions, and the fixed workspace
+    U->>W: Approve the workspace
     W->>P: POST /oauth/consent
     P->>D: Recheck membership, authorize connection, and store one-use code
     P-->>C: Authorization code at registered redirect URI
@@ -308,14 +343,13 @@ and client, client display-name snapshot, exact resource, lifecycle
 timestamps, and no credential. Authorization transactions contain only
 SHA-256 continuation and nonce digests plus a consumption timestamp. The
 connection's pending expiration is the single authorization deadline used for
-continuation consumption, first-use activation, and expired-row replacement. A shared
+continuation consumption, first-use activation, and expired-row replacement. A
 `workspace_permissions` lookup table defines the canonical permission
-vocabulary referenced by both API-token and agent-connection permission
-mappings; the mappings remain separate so each retains direct foreign-key
-ownership and cascade behavior.
-API-token, continuation, and nonce digests use one redacted `Sha256Digest`
-domain value type; their database columns continue to store the same 32-byte
-SHA-256 output.
+vocabulary; `agent_connection_permissions` references it. (The lookup was
+originally shared with an API-token permission mapping too; with `ppat_`
+removed in PR #42 the agent-connection mapping is now its only consumer.)
+Continuation and nonce digests use one redacted `Sha256Digest`
+domain value type; their database columns store 32-byte SHA-256 output.
 
 Repository and service operations support pending creation, denial,
 single-use continuation consumption, exact reusable lookup, activation, last
@@ -353,7 +387,7 @@ For every authorization transaction targeting the MCP resource, Proofplane:
 4. reuses an exact authorized or active connection when the same user, client,
    resource, scopes, and workspace membership still match;
 5. otherwise renders `/oauth/consent` with the verified client, requested
-   scopes, and accessible workspace context;
+   scopes, and the user's single workspace shown as a fixed approval;
 6. on approval, rechecks membership, creates or updates the authorized
    connection, and stores a one-use authorization-code digest; and
 7. exchanges the code plus PKCE verifier for a 24-hour Proofplane PASETO MCP
@@ -386,7 +420,9 @@ Reconnect control.
 Automatic reauthorization is client behavior, not guaranteed by MCP. The
 Claude/Cowork and Codex release gates must verify their behavior on access-token
 expiry. This release does not support background or unattended OAuth work
-beyond the token lifetime; those callers use `ppat_` credentials.
+beyond the token lifetime. (Unattended callers previously used `ppat_`
+credentials; per the 2026-07-09 banner that path no longer exists, so
+unattended agent access is out of scope until a replacement is designed.)
 
 ## Access Token Contract
 
@@ -419,9 +455,7 @@ signature, issuer, audience, and lifetime checks.
 flowchart TD
     R[Request to /mcp] --> B{Bearer credential present?}
     B -- no --> U[401 with resource metadata]
-    B -- yes --> T{ppat_ token format?}
-    T -- yes --> P[Existing API-token authenticator]
-    T -- no --> J[Verify Proofplane PASETO signature and registered claims]
+    B -- yes --> J[Verify Proofplane PASETO signature and registered claims]
     J --> C{Required MCP claims valid?}
     C -- no --> U
     C -- yes --> G[Load connection, user, workspace, and membership]
@@ -447,11 +481,13 @@ The database check makes revocation and membership removal immediate even
 while a PASETO remains cryptographically valid.
 
 Agent-backed MCP write tools persist agent provenance directly. Evidence
-submissions store either `submitted_by_api_token_id` or
-`submitted_by_agent_connection_id`; attachment upload grants store either
-`issued_via_api_token_id` or `issued_via_agent_connection_id`. Database
-constraints require exactly one source, so OAuth agent operations do not create
-or rely on synthetic API-token identifiers. Browser upload sessions created
+submissions and attachment upload grants record their agent-connection issuer
+(`submitted_by_agent_connection_id` / `issued_via_agent_connection_id`), so
+OAuth agent operations do not create or rely on synthetic API-token
+identifiers. The parallel `*_api_token_id` columns remain in the schema but are
+vestigial now that `ppat_` authentication is removed (see the 2026-07-09
+banner); every agent-backed write populates the agent-connection side. Browser
+upload sessions created
 from agent-issued attachment grants preserve the agent-connection issuer in
 their signed session token, downstream attachment download grants, and audit
 records.
@@ -553,8 +589,9 @@ An agent connection contains:
 Proofplane stores only digests for one-use authorization codes and consumes
 them atomically during `/oauth/token` exchange.
 
-Audit events use identifier-only fields and distinguish human, API-token, and
-agent-connection actors. Auth0 tenant logs remain the source for OAuth
+Audit events use identifier-only fields and distinguish human and
+agent-connection actors (the API-token actor type was removed with `ppat_` in
+PR #42). Auth0 tenant logs remain the source for OAuth
 issuance events; Proofplane audit records domain approval, runtime use, and
 local revocation.
 
@@ -597,9 +634,11 @@ The website:
 - explains that OAuth connections may require reconnection after 24 hours;
 - provides an explicit Authenticate or Reconnect action when the client cannot
   restart OAuth automatically;
-- distinguishes "authorized" from external client connection health;
-- offers a first useful SOC 2 prompt; and
-- keeps API-token setup as an advanced path.
+- distinguishes "authorized" from external client connection health; and
+- offers a first useful SOC 2 prompt.
+
+(An earlier draft kept API-token setup as an advanced path; per the 2026-07-09
+banner that path was removed and OAuth is the only supported setup.)
 
 The consent route is part of the Proofplane OAuth transaction. It acts only on
 a valid stored authorization request and verified upstream identity, and it
@@ -644,11 +683,13 @@ release validation.
 
 Generic clients receive the hosted MCP URL and a capability matrix. OAuth is
 offered to clients with supported discovery, redirect, and Proofplane DCR
-behavior. Clients without that path use advanced `ppat_` setup.
+behavior. Clients without a supported OAuth/DCR path are unsupported for now:
+with `ppat_` removed (see the 2026-07-09 banner) there is no advanced
+bearer-token fallback, so such clients cannot connect until they gain
+OAuth/DCR support or a replacement unattended-credential mechanism is designed.
 
 ## Compatibility And Failure Behavior
 
-- Existing REST and MCP `ppat_` callers remain unchanged.
 - Unknown issuers, audiences, connections, workspaces, scopes, and malformed
   client identities fail closed.
 - Missing or malformed OAuth authorization state cannot create a connection.
@@ -661,9 +702,9 @@ behavior. Clients without that path use advanced `ppat_` setup.
 - Revocation and membership removal invalidate MCP access immediately.
 - Auth0 or Proofplane dependency failure does not fall back to shared or
   long-lived credentials.
-- An unsupported client receives honest fallback guidance.
-- Client-directory rejection does not block custom connector or API-token
-  setup.
+- An unsupported client receives honest guidance that it cannot connect yet
+  (there is no `ppat_` fallback).
+- Client-directory rejection does not block custom-connector OAuth setup.
 
 ## Testing
 
@@ -674,8 +715,9 @@ behavior. Clients without that path use advanced `ppat_` setup.
   expiry, live grant checks, and membership enforcement.
 - MCP protocol tests validate `401` challenges and Protected Resource Metadata.
 - Integration tests cover workspace isolation, live membership removal,
-  connection revocation, token expiry, reauthorization, and `ppat_`
-  coexistence.
+  connection revocation, token expiry, and reauthorization. (The former
+  `ppat_` coexistence tests were dropped when API tokens were removed in
+  PR #42.)
 - Browser tests cover workspace approval, denial, expiry, replay, and malformed
   OAuth transactions.
 - Preview smoke tests exercise initial and repeated Proofplane Authorization
@@ -722,8 +764,9 @@ The remaining client questions are:
 
 If a first-class client cannot recover from access-token expiry with an
 acceptable visible or automatic authorization flow, it must not be marketed
-as a persistent no-token connection. Unattended callers remain on `ppat_`
-authentication.
+as a persistent no-token connection. Unattended callers previously fell back to
+`ppat_` authentication; with that path removed in PR #42, unattended agent
+access is unsupported until a replacement credential mechanism is designed.
 
 ## Distribution Order
 
@@ -749,6 +792,12 @@ authentication.
 
 ## Revisions
 
+- 2026-07-09: PR #42 shipped the working Codex OAuth connection and three
+  product decisions recorded in the banner at the top of this spec: removed
+  `ppat_` API-token authentication, removed the REST data-plane (MCP is now the
+  only compliance data interface), and restricted each user to a single
+  workspace (consent shows a fixed workspace, not a picker). Tickets 002 and
+  003 moved to Done alongside the already-Done 004 and 007.
 - 2026-07-07: Switched MCP OAuth to a Proofplane-owned facade. Proofplane now
   publishes authorization-server metadata, accepts local DCR, runs
   Authorization Code with PKCE, issues 24-hour MCP PASETO access tokens, and
