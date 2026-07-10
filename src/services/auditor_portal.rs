@@ -20,6 +20,14 @@ impl AuditorPortalReadModelService {
         &self,
         session: &AuditorSession,
     ) -> Result<AuditorPortalReadModel, Error> {
+        let mut framework_requirements = Vec::new();
+        for framework in self.repository.list_frameworks().await? {
+            framework_requirements.extend(
+                self.repository
+                    .list_framework_requirements(framework.id)
+                    .await?,
+            );
+        }
         let controls = self
             .repository
             .in_workspace_context_read(session.workspace_id, async |context| {
@@ -40,6 +48,7 @@ impl AuditorPortalReadModelService {
             workspace_id: session.workspace_id,
             workspace_name: workspace.name,
             auditor_email: session.auditor_email.clone(),
+            framework_requirements,
             controls,
         })
     }

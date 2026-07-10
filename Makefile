@@ -1,6 +1,6 @@
 .PHONY: help fmt fmt-check lint test check build up down health reset-local migrate seed api worker dequeuer mcp
 
-PROOFPLANE_CONFIG ?= config/local.yaml
+PROOFPLANE_CONFIG ?= .local/config.yaml
 
 help:
 	@printf '%s\n' \

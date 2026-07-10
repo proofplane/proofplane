@@ -10,6 +10,7 @@ pub struct AuditorPortalReadModel {
     pub workspace_id: WorkspaceId,
     pub workspace_name: String,
     pub auditor_email: String,
+    pub framework_requirements: Vec<FrameworkRequirement>,
     pub controls: Vec<AuditorPortalControl>,
 }
 
