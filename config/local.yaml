@@ -20,8 +20,8 @@ auth0:
   audience: "https://api.proofplane.com"
   jwks_url: "https://dev-ctgrkbdrbodz4azi.us.auth0.com/.well-known/jwks.json"
   upstream_oauth:
-    client_id: "local-proofplane-oauth-client"
-    client_secret: "local-proofplane-oauth-client-secret-change-me"
+    client_id: "e3heU32s14zjpgCzELb2RZoGg8YXVf4E"
+    client_secret: "_Y3Oyi0nu2CRXcFAAgdjnE2QSszu3UJZ8olzgbp7sZ3rEs_xUc-3RKmGz2Jm6KGb"
     callback_path: "/oauth/auth0/callback"
 
 paseto:
