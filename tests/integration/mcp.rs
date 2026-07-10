@@ -614,7 +614,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
             mcp_client
                 .call_tool(
                     "create_evidence_request",
-                    evidence_request("Created by MCP", "2026-02-15T00:00:00Z"),
+                    mcp_evidence_request("Created by MCP", "2026-02-15T00:00:00Z"),
                 )
                 .await
         }
@@ -627,6 +627,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
     );
     assert_eq!(created["evidence_request"]["title"], "Created by MCP");
     assert_eq!(created["evidence_request"]["cadence"], "quarterly");
+    assert_eq!(created["evidence_request"]["status"], "active");
     assert_eq!(create_logs.len(), 1);
     assert_audit_event(
         &create_logs[0],
@@ -710,8 +711,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
                 "cadence": "weekly",
                 "due_at": "not-a-date",
                 "schedule_anchor_at": "also-not-a-date",
-                "freshness_window_days": 0,
-                "status": "draft"
+                "freshness_window_days": 0
             }),
         )
         .await;
@@ -731,8 +731,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
                 "cadence": "weekly",
                 "due_at": "2026-02-15T00:00:00Z",
                 "schedule_anchor_at": "2026-01-01T00:00:00Z",
-                "freshness_window_days": 0,
-                "status": "draft"
+                "freshness_window_days": 0
             }),
         )
         .await;
@@ -744,8 +743,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
             "description",
             "collection_instructions",
             "cadence",
-            "freshness_window_days",
-            "status"
+            "freshness_window_days"
         ]
     );
 
@@ -765,7 +763,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
             read_only_client
                 .call_tool_error(
                     "create_evidence_request",
-                    evidence_request("Denied request", "2026-02-15T00:00:00Z"),
+                    mcp_evidence_request("Denied request", "2026-02-15T00:00:00Z"),
                 )
                 .await
                 .data
@@ -1772,6 +1770,18 @@ fn evidence_request(title: &str, due_at: &str) -> Value {
         "schedule_anchor_at": "2026-01-01T00:00:00Z",
         "freshness_window_days": 90,
         "status": "active"
+    })
+}
+
+fn mcp_evidence_request(title: &str, due_at: &str) -> Value {
+    json!({
+        "title": title,
+        "description": format!("Collect evidence for {title}."),
+        "collection_instructions": format!("Upload the artifact for {title}."),
+        "cadence": "quarterly",
+        "due_at": due_at,
+        "schedule_anchor_at": "2026-01-01T00:00:00Z",
+        "freshness_window_days": 90
     })
 }
 
