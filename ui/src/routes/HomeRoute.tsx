@@ -17,7 +17,7 @@ const sections = [
   {
     eyebrow: "Step 02",
     title: "Connect an MCP client.",
-    body: "Authorize an MCP client through OAuth and approve the exact workspace permissions it requests.",
+    body: "Add Proofplane from your client’s settings and grant the named client access in the browser.",
     icon: PlugZap,
     artifact: "OAuth consent",
     result: "Client connected",
@@ -132,7 +132,7 @@ function HeroVisual() {
         <div className="stage-panel">
           <span>MCP</span>
           <strong>OAuth client access</strong>
-          <small>Consent-bound permissions</small>
+          <small>Browser-granted access</small>
         </div>
         <div className="stage-panel">
           <span>Placeholder</span>
@@ -142,7 +142,7 @@ function HeroVisual() {
       </div>
       <div className="stage-command">
         <span>API surface</span>
-        <code>Authorize MCP client for Acme Security</code>
+        <code>Grant Claude access to Proofplane</code>
       </div>
       <div className="stage-footer">
         <span>Workspace</span>
@@ -176,13 +176,15 @@ function McpStepVisual() {
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-strategy-panel">
-        <h4>Requested permissions</h4>
-        {["read_controls", "write_evidence_submissions", "read_evidence_requests"].map((label) => (
-          <div className="mock-strategy-row" key={label}>
-            <span>{label}</span>
-            <strong>Scoped</strong>
-          </div>
-        ))}
+        <h4>Grant Claude access to Proofplane?</h4>
+        <div className="mock-strategy-row">
+          <span>Proofplane connection</span>
+          <strong>Access granted</strong>
+        </div>
+        <div className="mock-strategy-row">
+          <span>Revoke any time</span>
+          <strong>Account settings</strong>
+        </div>
       </div>
     </div>
   );
@@ -193,7 +195,7 @@ function DataApiStepVisual() {
     <div className="step-mock-shell">
       <div className="mock-window-bar" />
       <div className="mock-terminal-panel">
-        <span>Backend routes</span>
+        <span>First prompts</span>
         <code>{`List Acme Security controls
 List access review evidence requests
 Submit evidence for quarterly access review`}</code>

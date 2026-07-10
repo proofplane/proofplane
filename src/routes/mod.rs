@@ -1,3 +1,4 @@
+pub mod agent_connections;
 pub mod attachment_downloads;
 pub mod attachment_upload_sessions;
 pub mod auditor_access;

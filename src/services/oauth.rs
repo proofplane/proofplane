@@ -18,7 +18,6 @@ use crate::{
         canonical_permissions, AgentConnection, NewOAuthAuthorizationCode,
         NewOAuthAuthorizationRequest, NewOAuthClient, OAuthAuthorizationCode,
         OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient, WorkspacePermission,
-        WorkspaceWithRole,
     },
     repository::{Error as RepositoryError, Postgres},
 };
@@ -89,9 +88,8 @@ pub enum CallbackOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthConsentContext {
-    pub request: OAuthAuthorizationRequest,
+    pub request_id: OAuthAuthorizationRequestId,
     pub client_name: String,
-    pub workspace: WorkspaceWithRole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +282,18 @@ impl OAuthService {
         self.issue_code_redirect(&request, connection).await
     }
 
+    pub async fn cancel_consent(
+        &self,
+        request_id: OAuthAuthorizationRequestId,
+    ) -> Result<Url, OAuthError> {
+        let request = self
+            .repository
+            .consume_oauth_authorization_request(request_id)
+            .await?
+            .ok_or(OAuthError::InvalidGrant)?;
+        redirect_with_error(&request.redirect_uri, "access_denied", &request.state)
+    }
+
     pub async fn issue_access_token(
         &self,
         payload: TokenPayload,
@@ -352,15 +362,13 @@ impl OAuthService {
             .get_oauth_client(&request.client_id)
             .await?
             .ok_or(OAuthError::InvalidClient)?;
-        let workspace = self
-            .repository
+        self.repository
             .get_workspace_with_role_for_user(user_id)
             .await?
             .ok_or(OAuthError::InvalidGrant)?;
         Ok(OAuthConsentContext {
-            request,
+            request_id: request.id,
             client_name: client.client_name,
-            workspace,
         })
     }
 
@@ -434,6 +442,15 @@ pub fn pkce_challenge(verifier: &str) -> String {
 fn redirect_with_code(redirect_uri: &str, code: &str, state: &str) -> Result<Url, OAuthError> {
     let mut url = Url::parse(redirect_uri).map_err(|_| OAuthError::InvalidRequest)?;
     url.query_pairs_mut().append_pair("code", code);
+    if !state.is_empty() {
+        url.query_pairs_mut().append_pair("state", state);
+    }
+    Ok(url)
+}
+
+fn redirect_with_error(redirect_uri: &str, error: &str, state: &str) -> Result<Url, OAuthError> {
+    let mut url = Url::parse(redirect_uri).map_err(|_| OAuthError::InvalidRequest)?;
+    url.query_pairs_mut().append_pair("error", error);
     if !state.is_empty() {
         url.query_pairs_mut().append_pair("state", state);
     }

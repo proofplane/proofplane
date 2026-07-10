@@ -61,7 +61,7 @@ it("renders the public explainer with MCP onboarding", () => {
   expect(screen.getByRole("heading", { name: /Create the workspace/i })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: /Connect an MCP client/i })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: /Collect compliance evidence/i })).toBeInTheDocument();
-  expect(screen.getByText("Requested permissions")).toBeInTheDocument();
+  expect(screen.getByText("Grant Claude access to Proofplane")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: /Log in or sign up/i })).toHaveLength(2);
   expect(screen.getAllByRole("link", { name: "Pricing" })).toHaveLength(1);
   expect(screen.getAllByRole("link", { name: "Docs" })).toHaveLength(1);
@@ -221,8 +221,8 @@ it("creates a workspace and routes to MCP connection setup", async () => {
     body: JSON.stringify({ name: "Acme" }),
     method: "POST",
   });
-  expect(await screen.findByRole("heading", { name: /Connect an MCP client/i })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Acme" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /Connect Proofplane/i })).toBeInTheDocument();
+  expect(screen.queryByText("Acme")).not.toBeInTheDocument();
 });
 
 it("preserves workspace input when creation fails", async () => {
@@ -255,8 +255,8 @@ it("routes authenticated users with a workspace to MCP connection setup", async 
 
   renderAt("/app");
 
-  expect(await screen.findByRole("heading", { name: /Connect an MCP client/i })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Existing Workspace" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /Connect Proofplane/i })).toBeInTheDocument();
+  expect(screen.queryByText("Existing Workspace")).not.toBeInTheDocument();
 });
 
 it("keeps authenticated users with a workspace out of onboarding", async () => {
@@ -265,8 +265,107 @@ it("keeps authenticated users with a workspace out of onboarding", async () => {
 
   renderAt("/app/onboarding");
 
-  expect(await screen.findByRole("heading", { name: /Connect an MCP client/i })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Existing Workspace" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /Connect Proofplane/i })).toBeInTheDocument();
+  expect(screen.queryByText("Existing Workspace")).not.toBeInTheDocument();
+});
+
+it("shows both verified desktop setup paths and copies the MCP URL and first prompt", async () => {
+  auth0State.isAuthenticated = true;
+  const clipboard = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: clipboard },
+  });
+  mockWorkspaceFetch(workspaceResponse("Hidden Workspace"));
+
+  renderAt("/app/connect");
+
+  expect(await screen.findByRole("heading", { name: "Claude Desktop" })).toBeInTheDocument();
+  expect(screen.getByText("Open Customize → Connectors.")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "ChatGPT Desktop" })).toBeInTheDocument();
+  expect(screen.getByText("Open Settings → Plugins and select MCPs")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "Refresh icon" })).toBeInTheDocument();
+  expect(screen.getAllByText("Verified setup")).toHaveLength(2);
+  expect(screen.getByRole("heading", { name: /Reconnect after 24 hours/i })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Copy Proofplane MCP URL" }));
+  await waitFor(() => expect(clipboard).toHaveBeenCalledWith("https://mcp.proofplane.test/mcp"));
+  fireEvent.click(screen.getByRole("button", { name: "Copy First SOC 2 prompt" }));
+  await waitFor(() => expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("SOC 2 readiness")));
+});
+
+it("renders access-granted and used connection timestamps without workspace or scope details", async () => {
+  auth0State.isAuthenticated = true;
+  mockConnectionsFetch(connectionResponse([
+    connection("claude-id", "Claude", "authorized", null),
+    connection("codex-id", "Codex", "active", "2026-07-10T13:00:00Z"),
+  ]));
+
+  renderAt("/app/connect");
+
+  expect(await screen.findByRole("heading", { name: "Claude" })).toBeInTheDocument();
+  expect(screen.getByText("Access granted")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
+  expect(screen.getByText("Used")).toBeInTheDocument();
+  expect(screen.getByText("Not yet")).toBeInTheDocument();
+  expect(screen.queryByText(/Hidden Workspace|read_controls|scope/i)).not.toBeInTheDocument();
+});
+
+it("shows connection loading, empty, and recoverable error states", async () => {
+  auth0State.isAuthenticated = true;
+  const pending = vi.fn<typeof fetch>(async (input) => {
+    if (new URL(input.toString()).pathname === "/workspace") {
+      return jsonResponse(workspaceResponse("Hidden Workspace"));
+    }
+    return new Promise<Response>(() => {});
+  });
+  vi.stubGlobal("fetch", pending);
+  const loading = renderAt("/app/connect");
+  expect(await screen.findByLabelText("Loading connections")).toBeInTheDocument();
+  loading.unmount();
+
+  mockConnectionsFetch(connectionResponse([]));
+  const empty = renderAt("/app/connect");
+  expect(await screen.findByText(/No active connections yet/i)).toBeInTheDocument();
+  empty.unmount();
+
+  mockConnectionsFetch(connectionResponse([]), { listStatus: 500 });
+  renderAt("/app/connect");
+  expect(await screen.findByRole("heading", { name: /Connections did not load/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Try again/i })).toBeInTheDocument();
+});
+
+it("uses inline revoke confirmation and removes a connection after success", async () => {
+  auth0State.isAuthenticated = true;
+  const fetchMock = mockConnectionsFetch(connectionResponse([
+    connection("claude-id", "Claude", "active", "2026-07-10T13:00:00Z"),
+  ]));
+  renderAt("/app/connect");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+  expect(screen.getByText(/Revoke Claude access to Proofplane/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Confirm revoke/i }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent(/also remove Proofplane from that client’s settings/i);
+  expect(screen.queryByRole("heading", { name: "Claude" })).not.toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    new URL("http://127.0.0.1:3000/agent-connections/claude-id"),
+    expect.objectContaining({ method: "DELETE" }),
+  );
+});
+
+it("retains the connection and shows an inline error when revocation fails", async () => {
+  auth0State.isAuthenticated = true;
+  mockConnectionsFetch(connectionResponse([
+    connection("claude-id", "Claude", "active", "2026-07-10T13:00:00Z"),
+  ]), { revokeStatus: 500 });
+  renderAt("/app/connect");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+  fireEvent.click(screen.getByRole("button", { name: /Confirm revoke/i }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/still active/i);
+  expect(screen.getByRole("heading", { name: "Claude" })).toBeInTheDocument();
 });
 
 function workspaceResponse(name: string) {
@@ -280,7 +379,10 @@ function workspaceResponse(name: string) {
 }
 
 function mockWorkspaceFetch(workspace: ReturnType<typeof workspaceResponse> | null) {
-  const fetchMock = vi.fn<typeof fetch>(async () => {
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    if (new URL(input.toString()).pathname === "/agent-connections") {
+      return jsonResponse(connectionResponse([]));
+    }
     if (!workspace) {
       return jsonResponse({
         error: { code: "not_found", message: "route not found", details: [] },
@@ -299,6 +401,9 @@ function mockWorkspaceCreationFetch() {
   let created = false;
   const workspace = workspaceResponse("Acme");
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+    if (new URL(_input.toString()).pathname === "/agent-connections") {
+      return jsonResponse(connectionResponse([]));
+    }
     const method = init?.method ?? "GET";
 
     if (method === "POST") {
@@ -317,6 +422,52 @@ function mockWorkspaceCreationFetch() {
 
   vi.stubGlobal("fetch", fetchMock);
 
+  return fetchMock;
+}
+
+function connectionResponse(connections: ReturnType<typeof connection>[]) {
+  return { mcp_url: "https://mcp.proofplane.test/mcp", connections };
+}
+
+function connection(
+  id: string,
+  clientName: string,
+  status: "authorized" | "active",
+  lastUsedAt: string | null,
+) {
+  return {
+    id,
+    client_name: clientName,
+    status,
+    authorized_at: "2026-07-10T12:00:00Z",
+    last_used_at: lastUsedAt,
+  };
+}
+
+function mockConnectionsFetch(
+  body: ReturnType<typeof connectionResponse>,
+  options: { listStatus?: number; revokeStatus?: number } = {},
+) {
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(input.toString());
+    if (url.pathname === "/workspace") {
+      return jsonResponse(workspaceResponse("Hidden Workspace"));
+    }
+    if (url.pathname === "/agent-connections") {
+      if (options.listStatus && options.listStatus >= 400) {
+        return jsonResponse({ error: { message: "Connection service unavailable" } }, options.listStatus);
+      }
+      return jsonResponse(body);
+    }
+    if (url.pathname.startsWith("/agent-connections/") && init?.method === "DELETE") {
+      if (options.revokeStatus && options.revokeStatus >= 400) {
+        return jsonResponse({ error: { message: "Revocation failed" } }, options.revokeStatus);
+      }
+      return new Response(null, { status: 204 });
+    }
+    return jsonResponse({ error: { message: "Not found" } }, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 

@@ -71,3 +71,12 @@ pub struct NewPendingAgentConnection {
     pub continuation_digest: Sha256Digest,
     pub nonce_digest: Sha256Digest,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAgentConnection {
+    pub id: AgentConnectionId,
+    pub client_name: String,
+    pub status: AgentConnectionStatus,
+    pub authorized_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}

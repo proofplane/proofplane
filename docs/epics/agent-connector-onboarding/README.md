@@ -11,7 +11,8 @@ human login provider only.
 
 Full protocol, lifecycle, client, and product decisions live in
 [spec.md](./spec.md), the source of technical depth. Tickets below are lean
-handoff units that link into it.
+handoff units that link into it. Customer-visible consent, guided setup, and
+connection states are captured in [ux.md](./ux.md).
 
 ## Tickets
 
@@ -21,7 +22,7 @@ handoff units that link into it.
 | 002. [Agent Connection Persistence](./tickets/002-agent-connection-persistence.md) | Done | Transactional connection lifecycle for OAuth-backed agent grants shipped in PR #42. |
 | 003. [Proofplane OAuth Workspace Consent](./tickets/003-proofplane-oauth-workspace-consent.md) | Done | Proofplane-hosted consent after Auth0 login shipped in PR #42; consent binds the user's single workspace as a fixed approval. |
 | 004. [MCP Agent Connection Runtime Authorization](./tickets/004-mcp-agent-connection-runtime-authorization.md) | Done | Proofplane PASETO MCP tokens activate authorized rows, enforce live membership/scopes, and audit/persist agent provenance for MCP tool use. |
-| 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Todo | Add connection lifecycle UI, revocation, and client-specific setup. Drop the removed API-token "advanced path" from scope. |
+| 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Done | Account-level consent, user-scoped lifecycle APIs, authoritative revocation, and verified desktop setup shipped. |
 | 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Done | `mcp.allowed_hosts` fix + ngrok preview shipped; Codex and Cowork work end to end. Exact post-expiry UX is a deferred refresh-token follow-up. |
 | 007. [Codex Direct MCP Integration](./tickets/007-codex-direct-mcp-integration.md) | Done | Codex connects through direct remote MCP setup, Proofplane DCR, and Proofplane workspace consent; no plugin is required. |
 | 008. [Generic Client Fallback](./tickets/008-generic-client-fallback.md) | Todo | Reframe: OAuth/DCR-capable clients are supported; there is no `ppat_` fallback for the rest (API tokens removed in PR #42). |

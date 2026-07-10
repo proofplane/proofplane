@@ -16,7 +16,7 @@ mod workspace;
 
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
-    NewPendingAgentConnection,
+    NewPendingAgentConnection, UserAgentConnection,
 };
 pub use auditor_access_grant::{
     AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,

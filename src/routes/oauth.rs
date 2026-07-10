@@ -351,13 +351,22 @@ async fn submit_consent<V>(
 where
     V: TokenVerifier<Claims = VerifiedClaims>,
 {
-    if form.decision != "approve" {
-        return oauth_html_error();
-    }
     let Ok(request_id) = Uuid::parse_str(&form.request_id).map(OAuthAuthorizationRequestId::from)
     else {
         return oauth_html_error();
     };
+    if form.decision == "cancel" {
+        return match state.service.cancel_consent(request_id).await {
+            Ok(redirect_uri) => redirect(redirect_uri),
+            Err(error) => {
+                tracing::error!(%error, "OAuth consent cancellation failed");
+                oauth_html_error()
+            }
+        };
+    }
+    if form.decision != "approve" {
+        return oauth_html_error();
+    }
     match state
         .service
         .approve_consent(ApproveConsentPayload { request_id })
@@ -436,14 +445,6 @@ fn consent_page(context: OAuthConsentContext, message: Option<&str>) -> Response
 }
 
 fn render_consent_page(context: OAuthConsentContext, message: Option<&str>) -> String {
-    let request = &context.request;
-    let scopes = request
-        .scopes
-        .iter()
-        .map(|scope| format!("<li>{}</li>", escape_html(scope.as_str())))
-        .collect::<String>();
-    let workspace_name = escape_html(&context.workspace.workspace.name);
-    let workspace_role = escape_html(context.workspace.role.as_str());
     let notice = message
         .map(|message| {
             format!(
@@ -458,7 +459,7 @@ fn render_consent_page(context: OAuthConsentContext, message: Option<&str>) -> S
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize MCP client</title>
+<title>Grant access to Proofplane</title>
 <style>
 :root {{
   color-scheme: dark;
@@ -487,7 +488,6 @@ main {{
   padding: 56px 0;
 }}
 h1 {{ margin: 0 0 10px; font-size: 1.75rem; line-height: 1.15; letter-spacing: 0; }}
-h2 {{ margin: 0 0 14px; font-size: 1.05rem; letter-spacing: 0; }}
 p {{ color: var(--muted); line-height: 1.55; max-width: 68ch; }}
 .panel {{
   border: 1px solid var(--line);
@@ -503,19 +503,7 @@ p {{ color: var(--muted); line-height: 1.55; max-width: 68ch; }}
   padding: 16px;
   margin-top: 24px;
 }}
-ul {{ margin: 12px 0 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }}
 form {{ display: grid; gap: 14px; margin-top: 18px; max-width: 560px; }}
-label {{ font-size: 0.8125rem; font-weight: 620; color: var(--muted); }}
-.workspace-fixed {{
-  width: 100%;
-  min-height: 42px;
-  border: 1px solid var(--line);
-  background: var(--surface-raised);
-  color: var(--ink);
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-top: 8px;
-}}
 button:focus-visible {{
   outline: 2px solid var(--signal);
   outline-offset: 2px;
@@ -532,27 +520,21 @@ button {{
   cursor: pointer;
 }}
 button:hover {{ background: oklch(72% 0.09 174); }}
-.danger-button {{ background: var(--danger); color: var(--ink); }}
-.danger-button:hover {{ background: var(--danger-hover); }}
+.secondary-button {{ background: transparent; color: var(--ink); border: 1px solid var(--line); }}
+.secondary-button:hover {{ background: var(--surface-raised); }}
 </style>
 </head>
 <body>
 <main>
-<h1>Authorize {client_name}</h1>
-<p>This MCP client will use your Proofplane workspace. The client receives only the approved workspace permissions below.</p>
+<h1>Grant {client_name} access to Proofplane?</h1>
+<p>You can revoke access at any time from your Proofplane connection settings.</p>
 {notice}
-<section class="panel" aria-labelledby="requested-access">
-<h2 id="requested-access">Requested access</h2>
-<ul>{scopes}</ul>
-</section>
-<section class="panel" aria-labelledby="workspace-context">
-<h2 id="workspace-context">Workspace</h2>
+<section class="panel">
 <form method="post" action="/oauth/consent">
 <input type="hidden" name="request_id" value="{request_id}">
-<div class="workspace-fixed">{workspace_name} - {workspace_role}</div>
 <div class="actions">
-<button type="submit" name="decision" value="approve">Approve</button>
-<button class="danger-button" type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="approve">Grant access</button>
+<button class="secondary-button" type="submit" name="decision" value="cancel">Cancel</button>
 </div>
 </form>
 </section>
@@ -560,9 +542,7 @@ button:hover {{ background: oklch(72% 0.09 174); }}
 </body>
 </html>"#,
         client_name = escape_html(&context.client_name),
-        request_id = Uuid::from(request.id),
-        workspace_name = workspace_name,
-        workspace_role = workspace_role,
+        request_id = Uuid::from(context.request_id),
     )
 }
 
@@ -571,7 +551,26 @@ fn oauth_json_error(status: StatusCode, error: &'static str) -> Response {
 }
 
 fn oauth_html_error() -> Response {
-    secure_html("<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization failed</title></head><body><main><h1>Authorization failed</h1></main></body></html>".to_owned())
+    secure_html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connection could not be completed</title>
+<style>
+:root { color-scheme: dark; --canvas: oklch(17% 0.012 170); --surface: oklch(24% 0.014 170); --line: oklch(39% 0.018 170); --ink: oklch(94% 0.01 150); --muted: oklch(76% 0.015 155); }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+main { width: min(680px, calc(100% - 32px)); margin: 56px auto; border: 1px solid var(--line); border-radius: 8px; padding: 24px; background: var(--surface); }
+h1 { margin: 0 0 10px; font-size: 1.75rem; line-height: 1.15; }
+p { margin-bottom: 0; color: var(--muted); line-height: 1.55; }
+</style>
+</head>
+<body><main><h1>Connection could not be completed</h1><p>Return to your client and start the Proofplane connection again.</p></main></body>
+</html>"#
+            .to_owned(),
+    )
 }
 
 fn escape_html(value: &str) -> String {
@@ -614,50 +613,32 @@ fn endpoint(issuer: &Url, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::render_consent_page;
-    use crate::{
-        domain::{
-            OAuthAuthorizationRequest, OAuthAuthorizationRequestId, Workspace, WorkspaceId,
-            WorkspacePermission, WorkspaceRole, WorkspaceWithRole,
-        },
-        services::oauth::OAuthConsentContext,
-    };
+    use crate::{domain::OAuthAuthorizationRequestId, services::oauth::OAuthConsentContext};
 
     #[test]
-    fn consent_page_renders_fixed_workspace_with_escaped_content() {
-        let workspace_id = WorkspaceId::from(Uuid::new_v4());
+    fn consent_page_escapes_client_and_omits_protocol_and_workspace_details() {
         let html = render_consent_page(
             OAuthConsentContext {
-                request: OAuthAuthorizationRequest {
-                    id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
-                    client_id: "client".to_owned(),
-                    redirect_uri: "http://127.0.0.1/callback".to_owned(),
-                    code_challenge: "challenge".to_owned(),
-                    state: "state".to_owned(),
-                    resource: "http://127.0.0.1:3002/mcp".to_owned(),
-                    scopes: vec![WorkspacePermission::ReadControls],
-                    auth0_subject: Some("auth0|user".to_owned()),
-                    user_id: None,
-                    expires_at: Utc::now(),
-                },
+                request_id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
                 client_name: "<Inspector & Codex>".to_owned(),
-                workspace: WorkspaceWithRole {
-                    workspace: Workspace {
-                        id: workspace_id,
-                        slug: None,
-                        name: "SOC 2 <Prod>".to_owned(),
-                        created_at: Utc::now(),
-                    },
-                    role: WorkspaceRole::Owner,
-                },
             },
             None,
         );
 
         assert!(html.contains("&lt;Inspector &amp; Codex&gt;"));
-        assert!(html.contains("SOC 2 &lt;Prod&gt; - owner"));
+        assert!(html.contains("Grant access"));
+        assert!(html.contains("Cancel"));
+        for hidden_detail in [
+            "workspace",
+            "owner",
+            "read_controls",
+            "scope",
+            "http://127.0.0.1:3002/mcp",
+        ] {
+            assert!(!html.contains(hidden_detail), "revealed {hidden_detail}");
+        }
     }
 }
