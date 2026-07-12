@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        NewPendingAgentConnection, Sha256Digest, User, UserId, WorkspaceId, WorkspacePermission,
-        WorkspacePermissions, WorkspaceWithRole,
+        NewPendingAgentConnection, Sha256Digest, UserAgentConnection, UserId, WorkspaceId,
+        WorkspacePermission, WorkspacePermissions,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -98,12 +98,6 @@ pub enum ActivationOutcome {
     Rejected,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsentContext {
-    pub user: User,
-    pub workspace: WorkspaceWithRole,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentConnectionContext {
     pub user_id: UserId,
@@ -112,35 +106,9 @@ pub struct AgentConnectionContext {
     pub permissions: WorkspacePermissions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConsentContextOutcome {
-    Available(ConsentContext),
-    Unavailable,
-}
-
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
-    }
-
-    pub async fn consent_context(
-        &self,
-        auth0_subject: &str,
-    ) -> Result<ConsentContextOutcome, AgentConnectionError> {
-        let Some(user) = self.repository.get_user_by_auth0_sub(auth0_subject).await? else {
-            return Ok(ConsentContextOutcome::Unavailable);
-        };
-        let Some(workspace) = self
-            .repository
-            .get_workspace_with_role_for_user(user.id)
-            .await?
-        else {
-            return Ok(ConsentContextOutcome::Unavailable);
-        };
-        Ok(ConsentContextOutcome::Available(ConsentContext {
-            user,
-            workspace,
-        }))
     }
 
     pub async fn create_pending(
@@ -280,6 +248,24 @@ impl AgentConnectionService {
 
     pub async fn revoke(&self, id: AgentConnectionId) -> Result<bool, AgentConnectionError> {
         Ok(self.repository.revoke_agent_connection(id).await?)
+    }
+
+    pub async fn list_for_user(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<UserAgentConnection>, AgentConnectionError> {
+        Ok(self.repository.list_user_agent_connections(user_id).await?)
+    }
+
+    pub async fn revoke_for_user(
+        &self,
+        user_id: UserId,
+        id: AgentConnectionId,
+    ) -> Result<bool, AgentConnectionError> {
+        Ok(self
+            .repository
+            .revoke_user_agent_connection(user_id, id)
+            .await?)
     }
 }
 

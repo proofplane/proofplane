@@ -1,5 +1,12 @@
 # Agent Connector Onboarding Spec
 
+> **Decision revision — 2026-07-10 (ticket 005):** Connection management uses
+> a simple account-level grant presentation. Consent names only the registered
+> client and asks whether to grant it access to Proofplane. The website never
+> displays workspace identity, roles, resources, client identifiers, or OAuth
+> scopes in consent or connection rows. Workspace membership and negotiated
+> scopes remain validated, stored, and enforced as protocol-level policy.
+
 > **Decision revision — 2026-07-09 (shipped in PR #42):** Three product
 > decisions landed with the working Codex OAuth connection and now supersede
 > earlier text throughout this spec:
@@ -21,10 +28,11 @@
 >    framing is obsolete. *Rationale:* the agent/MCP surface is the product
 >    data-plane; a second REST data-plane was unused and doubled maintenance.
 > 3. **Each user has exactly one workspace.** Consent no longer shows a
->    workspace **picker**; it displays the user's single workspace as a fixed,
->    non-editable approval (`get_workspace_with_role_for_user`). Read any
->    "select one accessible workspace" / "workspace picker" language below as
->    "approve the user's single workspace." *Rationale:* one-workspace-per-user
+>    workspace **picker**. The server resolves the user's single workspace with
+>    `get_workspace_with_role_for_user`; ticket 005 later removed that resolved
+>    workspace from the UI entirely. Read any "select one accessible
+>    workspace" / "workspace picker" language below as an internal binding to
+>    the user's single workspace. *Rationale:* one-workspace-per-user
 >    removes an entire class of cross-workspace consent-tampering surface and
 >    matches how self-onboarding provisions accounts today.
 >
@@ -187,9 +195,9 @@ flowchart LR
 4. The client discovers Proofplane OAuth metadata, dynamically registers when
    needed, and opens Proofplane authorization.
 5. Proofplane sends the browser to Auth0 Universal Login for human identity.
-6. Proofplane shows the requested permissions and the user's single workspace
-   as a fixed approval (each user has exactly one workspace; there is no
-   picker).
+6. Proofplane asks whether to grant the registered client access to
+   Proofplane. Workspace identity and requested scopes remain hidden from the
+   product UI while still binding the internal grant.
 7. Proofplane completes the authorization code flow and returns a 24-hour
    PASETO access token to the MCP client.
 8. The client calls `/mcp`; Proofplane verifies the PASETO token and the live
@@ -197,7 +205,7 @@ flowchart LR
 9. Proofplane records successful use and offers a useful first prompt.
 10. After token expiry, the client starts authorization again. Proofplane
     reuses an exact authorized or active workspace connection without showing
-    the workspace page when it can do so safely.
+    the consent page when it can do so safely.
 
 The user never sees or copies the access token. If the client cannot restart
 authorization automatically, the user reconnects it manually.
@@ -234,9 +242,9 @@ sequenceDiagram
     P->>P: Verify upstream identity and provision user
     P->>D: Find exact reusable connection for user, client, resource, and scopes
     D-->>P: No reusable connection
-    P->>D: Load the user's single workspace for consent context
-    W-->>U: Show client, requested permissions, and the fixed workspace
-    U->>W: Approve the workspace
+    P->>D: Verify the user's single workspace for consent context
+    W-->>U: Ask whether to grant the named client access to Proofplane
+    U->>W: Grant access or cancel
     W->>P: POST /oauth/consent
     P->>D: Recheck membership, authorize connection, and store one-use code
     P-->>C: Authorization code at registered redirect URI
@@ -409,11 +417,11 @@ The best case is nearly silent:
 1. the client automatically restarts authorization;
 2. the Auth0 browser session is still active;
 3. Proofplane finds exactly one reusable connection; and
-4. Proofplane returns a new code without login or workspace interaction.
+4. Proofplane returns a new code without login or consent interaction.
 
 If the Auth0 session has expired, the user signs in again. If the connection
-was revoked, replaced, or is otherwise unavailable, the user completes the
-workspace step again. If the client does not automatically restart OAuth, its
+was revoked, replaced, or is otherwise unavailable, the user grants account
+access again. If the client does not automatically restart OAuth, its
 tools remain disconnected until the user selects its Authenticate or
 Reconnect control.
 
@@ -528,7 +536,7 @@ sequenceDiagram
         P-->>C: New 24-hour PASETO access token
         C->>M: Retry MCP request
     else No reusable connection
-        P-->>U: Select and approve Proofplane workspace
+        P-->>U: Grant the client access to Proofplane
         U-->>P: POST /oauth/consent
         P-->>C: Authorization code
     end
@@ -537,12 +545,10 @@ sequenceDiagram
 When a user revokes a connection, Proofplane first commits local revocation.
 That immediately blocks all access tokens through the runtime database check.
 Proofplane refuses to reuse a revoked connection. A visible authorization
-attempt may create a new authorized connection after the user approves a
-workspace.
-
-Proofplane may also revoke the Auth0 user grant as credential hygiene. Local
-revocation remains authoritative because an already-issued access token is
-otherwise valid until its 24-hour expiry.
+attempt may create a new authorized connection after the user grants access.
+Proofplane does not revoke the upstream Auth0 login grant or attempt to remove
+the connector from the external client. The website tells the user that client
+settings are a separate cleanup surface.
 
 An expired access token cannot be refreshed. Reauthorization always produces
 a new authorization code and access token.
@@ -561,10 +567,11 @@ Proofplane exposes the existing workspace permission vocabulary:
 `offline_access` is not advertised, requested, or accepted in this release.
 
 The registered OAuth client and authorization request limit which scopes a
-client may request. The user reviews the concrete requested scopes during the
-Proofplane workspace step. Proofplane persists the approved set and intersects
-it with the signed token on every request. A tool never escalates a missing
-scope.
+client may request. Proofplane persists the negotiated set and intersects it
+with the signed token on every request. Scopes are intentionally absent from
+consent and connection-management UI; this is a presentation decision, not a
+change to protocol negotiation or enforcement. A tool never escalates a
+missing scope.
 
 ## Persistence And Audit
 
@@ -635,10 +642,14 @@ The initial MCP deployment may use one replica or ingress stickiness keyed by
 The website:
 
 - asks which agent the user uses;
-- launches the best verified client-specific connection path;
-- hosts the Proofplane OAuth workspace-consent route;
-- clearly displays client identity, requested permissions, and workspace;
-- lists authorized connections and supports local revocation;
+- provides verified, menu-based Claude/Cowork and Codex/ChatGPT desktop setup
+  instructions with a copyable hosted MCP URL;
+- hosts the Proofplane OAuth consent route, which names only the registered
+  client and offers `Grant access` and `Cancel`;
+- lists only the signed-in user's authorized and active connections, with
+  client name, `Access granted`/`Used`, authorization time, and last-use time;
+- supports inline, user-scoped local revocation and removes the row after
+  success;
 - explains that OAuth connections may require reconnection after 24 hours;
 - provides an explicit Authenticate or Reconnect action when the client cannot
   restart OAuth automatically;
@@ -648,12 +659,16 @@ The website:
 (An earlier draft kept API-token setup as an advanced path; per the 2026-07-09
 banner that path was removed and OAuth is the only supported setup.)
 
-The consent route is part of the Proofplane OAuth transaction. It acts only on
-a valid stored authorization request and verified upstream identity, and it
-always rechecks membership on approval. A normal website session alone cannot
-mint an agent connection.
+The consent route is server-rendered on the API origin and is part of the
+Proofplane OAuth transaction. It acts only on a valid stored authorization
+request and verified upstream identity, verifies the user's single workspace
+before rendering, and always rechecks membership on approval. Cancellation
+consumes the request and redirects to the registered client with
+`error=access_denied` plus the original state. Invalid, expired, or replayed
+requests reveal only generic retry guidance. A normal website session alone
+cannot mint an agent connection.
 
-Proofplane records an authorized connection when the workspace is approved and
+Proofplane records an authorized connection when access is granted and
 marks it active on the first valid OAuth-backed MCP request. The agent harness
 still owns whether its transport remains connected and tools are mounted.
 `last_used_at` is audit/debug metadata, not a readiness gate.
@@ -674,7 +689,7 @@ discourages DCR in favor of CIMD or Anthropic-held client credentials
 (`oauth_anthropic_creds`).
 
 The release smoke test must prove that Claude follows Protected Resource
-Metadata to the Proofplane issuer, completes Proofplane workspace consent, and
+Metadata to the Proofplane issuer, completes Proofplane consent, and
 sends a Proofplane PASETO access token with the required claims.
 
 ### Codex
@@ -683,14 +698,18 @@ Codex ships through direct remote MCP configuration, not a Proofplane Codex
 plugin. Codex discovers Proofplane Protected Resource Metadata, follows
 Proofplane authorization-server metadata, dynamically registers a public
 Proofplane OAuth client, completes PKCE browser authorization, passes through
-Proofplane workspace consent, and uses Proofplane PASETO access tokens without
+Proofplane consent, and uses Proofplane PASETO access tokens without
 a copied Proofplane API token.
 
-The validated setup path is `codex mcp add` followed by `codex mcp login`.
+The website setup path uses the shared desktop UI: Settings → Plugins → MCPs →
+Add server, select Streamable HTTP, save, select the circular-arrows refresh
+icon, then Authenticate. The
+previous CLI validation remains useful protocol evidence but is not shown to
+customers.
 No Proofplane-owned `proofplane-soc2` plugin, marketplace package, bundled
 workflow skill, or plugin-specific OAuth path is required for this epic. If a
 Codex surface cannot keep the OAuth callback listener alive across the
-workspace-consent round trip, restarting that surface and retrying is an
+consent round trip, restarting that surface and retrying is an
 observed recovery path, but the final supported reconnect behavior still needs
 release validation.
 
@@ -733,7 +752,7 @@ OAuth/DCR support or a replacement unattended-credential mechanism is designed.
   connection revocation, token expiry, and reauthorization. (The former
   `ppat_` coexistence tests were dropped when API tokens were removed in
   PR #42.)
-- Browser tests cover workspace approval, denial, expiry, replay, and malformed
+- Browser tests cover access grant, cancellation, expiry, replay, and malformed
   OAuth transactions.
 - Preview smoke tests exercise initial and repeated Proofplane Authorization
   Code with PKCE using MCP Inspector and Codex DCR.
@@ -827,6 +846,12 @@ access is unsupported until a replacement credential mechanism is designed.
 
 ## Revisions
 
+- 2026-07-10: Ticket 005 replaced workspace-and-scope presentation with a
+  simple account-level grant, added authenticated user-scoped connection
+  listing and authoritative local revocation, and standardized guided desktop
+  menu instructions. OAuth workspace membership and scopes remain unchanged
+  internal enforcement policy.
+
 - 2026-07-10: Closed ticket 006 after Codex and Cowork worked end to end.
   Retained strict authorization fields, accepted the documented no-refresh-token
   v1 behavior, and deferred exact post-expiry UX and the generic support matrix.
@@ -835,7 +860,8 @@ access is unsupported until a replacement credential mechanism is designed.
   product decisions recorded in the banner at the top of this spec: removed
   `ppat_` API-token authentication, removed the REST data-plane (MCP is now the
   only compliance data interface), and restricted each user to a single
-  workspace (consent shows a fixed workspace, not a picker). Tickets 002 and
+  workspace (consent originally showed it as fixed; ticket 005 later hid it
+  while retaining the internal binding). Tickets 002 and
   003 moved to Done alongside the already-Done 004 and 007.
 - 2026-07-07: Switched MCP OAuth to a Proofplane-owned facade. Proofplane now
   publishes authorization-server metadata, accepts local DCR, runs

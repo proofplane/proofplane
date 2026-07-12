@@ -15,6 +15,7 @@ use crate::{
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
+        agent_connections::{self, AgentConnectionsState},
         attachment_downloads::{self, AttachmentDownloadState},
         attachment_upload_sessions::{self, AttachmentUploadSessionState},
         auditor_access::{self, AuditorAccessState},
@@ -28,6 +29,7 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
+        agent_connections::AgentConnectionService,
         attachment_downloads::AttachmentDownloadService,
         attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService,
@@ -196,6 +198,13 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },
+        }))
+        .merge(agent_connections::router(AgentConnectionsState {
+            service: AgentConnectionService::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator.clone(),
+            },
+            mcp_url: dependencies.config.mcp.resource.clone(),
         }))
         .merge(oauth::router(OAuthState {
             service: oauth_service,

@@ -152,6 +152,30 @@ RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
         .transpose()
     }
 
+    pub async fn consume_oauth_authorization_request(
+        &self,
+        request_id: OAuthAuthorizationRequestId,
+    ) -> Result<Option<OAuthAuthorizationRequest>, Error> {
+        let db = self.get().await?;
+        db.query_opt(
+            r#"
+UPDATE oauth_authorization_requests
+SET consumed_at = now()
+WHERE id = $1
+  AND expires_at > now()
+  AND consumed_at IS NULL
+  AND auth0_subject IS NOT NULL
+  AND user_id IS NOT NULL
+RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
+    auth0_subject, user_id, expires_at
+"#,
+            &[&Uuid::from(request_id)],
+        )
+        .await?
+        .map(|row| oauth_request_from_row(&row))
+        .transpose()
+    }
+
     pub async fn create_oauth_authorization_code(
         &self,
         code: &NewOAuthAuthorizationCode,

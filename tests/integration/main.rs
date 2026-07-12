@@ -1,9 +1,11 @@
 mod agent_connection_repository;
+mod agent_connections;
 mod auditor_access;
 mod auditor_access_grants;
 mod dequeuer_pubsub;
 mod mcp;
 mod me;
+mod oauth;
 mod repository;
 mod support;
 mod worker_handlers;

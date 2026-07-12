@@ -3,8 +3,8 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentConnection, AgentConnectionId, NewPendingAgentConnection, Sha256Digest, WorkspaceId,
-    WorkspacePermission,
+    AgentConnection, AgentConnectionId, AgentConnectionStatus, NewPendingAgentConnection,
+    Sha256Digest, UserAgentConnection, UserId, WorkspaceId, WorkspacePermission,
 };
 
 use super::{constraints::classify_db_error, Error, Postgres};
@@ -385,6 +385,63 @@ WHERE id = $1 AND status IN ('pending', 'authorized', 'active')
             .await?
             == 1)
     }
+
+    pub async fn list_user_agent_connections(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<UserAgentConnection>, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .query(
+                r#"
+SELECT c.id, c.client_display_name, c.status, t.consumed_at AS authorized_at,
+    c.last_used_at
+FROM agent_connections c
+JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id
+WHERE c.user_id = $1
+  AND c.status IN ('authorized', 'active')
+  AND t.consumed_at IS NOT NULL
+ORDER BY t.consumed_at DESC, c.id DESC
+"#,
+                &[&Uuid::from(user_id)],
+            )
+            .await?;
+        rows.iter().map(user_connection_from_row).collect()
+    }
+
+    pub async fn revoke_user_agent_connection(
+        &self,
+        user_id: UserId,
+        id: AgentConnectionId,
+    ) -> Result<bool, Error> {
+        let client = self.get().await?;
+        Ok(client
+            .execute(
+                r#"
+UPDATE agent_connections
+SET status = 'revoked', revoked_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND status IN ('authorized', 'active')
+"#,
+                &[&Uuid::from(id), &Uuid::from(user_id)],
+            )
+            .await?
+            == 1)
+    }
+}
+
+fn user_connection_from_row(row: &Row) -> Result<UserAgentConnection, Error> {
+    Ok(UserAgentConnection {
+        id: row.try_get::<_, Uuid>("id")?.into(),
+        client_name: row.try_get("client_display_name")?,
+        status: row
+            .try_get::<_, String>("status")?
+            .parse::<AgentConnectionStatus>()
+            .map_err(|_| Error::InvariantViolation("unknown agent connection status"))?,
+        authorized_at: row.try_get("authorized_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+    })
 }
 
 async fn permissions_for_connection(
