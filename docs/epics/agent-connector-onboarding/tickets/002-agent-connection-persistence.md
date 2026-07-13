@@ -45,8 +45,8 @@ Proofplane OAuth consent and MCP runtime authorization.
   authorization ticket; the spec revision records the new delivery boundary.
 - 2026-07-05: Implementation and `make check` are complete; status remains
   Doing for delivery review as requested by the ticket split.
-- 2026-07-06: PR 40 feedback is tracked in
-  [pr-40-review.md](../pr-40-review.md).
+- 2026-07-06: PR #40 review feedback was incorporated into the implementation
+  and the spec revisions recorded below.
 - 2026-07-06: The spec now records the shared workspace-permission lookup
   introduced while addressing PR 40 review feedback.
 - 2026-07-06: The spec now defers pending-creation DTO validation to ticket

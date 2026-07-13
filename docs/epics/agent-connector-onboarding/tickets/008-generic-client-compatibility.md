@@ -1,13 +1,12 @@
-# 008 - Generic Client Fallback
+# 008 - Generic Client Compatibility
 
-**Status:** Todo · **Depends on:** 001 · **Spec:** [spec.md](../spec.md#other-clients)
+**Status:** Todo · **Depends on:** 003, 004 · **Spec:** [spec.md](../spec.md#other-clients)
 
 **Summary** - Provide accurate remote-MCP guidance for OAuth/DCR-capable clients
 outside the first-class Claude/Cowork and Codex paths, generated from one
 maintained connection definition. With `ppat_` API tokens removed (PR #42,
-see the spec's 2026-07-09 banner), there is no advanced bearer-token fallback:
-clients without a supported OAuth discovery/DCR path are honestly marked
-unsupported until they gain it.
+there is no alternate Proofplane credential: clients without a supported OAuth
+discovery/DCR path are honestly marked unsupported until they gain it.
 
 **Acceptance criteria**
 
@@ -37,7 +36,6 @@ unsupported until they gain it.
   distribution.
 - 2026-07-08: Production Proofplane Dynamic Client Registration requires abuse
   prevention, cleanup ownership, and monitoring.
-- 2026-07-09: `ppat_` API tokens were removed in PR #42, so this ticket no
-  longer has an advanced bearer-token fallback to document. Non-OAuth/DCR
-  clients are unsupported until an unattended-credential replacement is
-  designed.
+- 2026-07-09: `ppat_` API tokens were removed in PR #42. Non-OAuth/DCR clients
+  are unsupported; ticket 008 documents compatibility and does not introduce a
+  credential fallback.

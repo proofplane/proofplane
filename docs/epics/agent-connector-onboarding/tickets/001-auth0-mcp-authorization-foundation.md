@@ -1,10 +1,11 @@
 # 001 - Auth0 MCP Authorization Foundation
 
-**Status:** Superseded · **Depends on:** MCP Server 001 (Done) · **Spec:** [spec.md](../spec.md#architecture-decision)
+**Status:** Done · **Depends on:** MCP Server 001 (Done) · **Spec:** [spec.md](../spec.md#architecture-decision)
 
-**Summary** - Superseded foundation work that made Auth0 the MCP OAuth
-authorization server. The current design makes Proofplane the MCP OAuth
-authorization server facade and keeps Auth0 only for upstream human login.
+**Summary** - Completed foundation work that originally made Auth0 the MCP
+OAuth authorization server. Its delivery evidence remains valid, but the
+architecture was later superseded: Proofplane now owns the MCP OAuth facade,
+and Auth0 provides only upstream human login.
 
 **Acceptance criteria**
 
