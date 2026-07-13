@@ -61,9 +61,12 @@ portable per-tool channel even though clients may load them up front or through
 dynamic tool search. Today they are terse (`"List controls in a workspace."`)
 and one is **wrong**: `create_evidence_submission` advertises *"return REST-only
 attachment upload instructions,"* but the REST data-plane was removed in PR #42
-and attachments now flow through `manage_evidence_submission_attachment`. Each
-description gets one sentence of domain semantics; write tools end with a
-pointer to the relevant guide topic (e.g. `See guide: submitting-evidence`).
+and attachments now flow through `manage_evidence_submission_attachment`.
+Ticket 002 gives each of the 20 current tools one concise sentence of domain
+semantics and does not reference guide or resource surfaces that are not yet
+registered. After registering the guide surface, ticket 003 owns adding
+guide-tool references to relevant evidence, attachment, and control
+descriptions. Auditor access tools receive no unrelated guide pointer.
 
 ### Depth docs: tool + resource (progressive disclosure)
 
@@ -100,8 +103,8 @@ deferred to a future iteration.
 
 ## Topic Inventory
 
-The depth docs are a **small, curated topic set**, not one-per-tool (17 tools
-would mean 17 drifting docs). Initial topics:
+The depth docs are a **small, curated topic set**, not one-per-tool (20 tools
+would mean 20 drifting docs). Initial topics:
 
 | Topic (`get_proofplane_guide` arg / resource path) | Content |
 | --- | --- |
@@ -185,7 +188,7 @@ and 004 implement those surfaces.
   `src/mcp/server/`).
 - Resource handler implementing `list_resources` / `read_resource` for
   `proofplane://docs/{topic}`.
-- Description edits across the 17 existing tools (fix the stale
+- Description edits across the 20 existing tools (fix the stale
   `create_evidence_submission` text first).
 
 ## Testing
@@ -199,8 +202,10 @@ and 004 implement those surfaces.
   content; unknown topics return the topic index, not an error dump.
 - Unit: `list_resources` enumerates exactly the registered topics with stable
   URIs.
-- Contract: no tool description references REST or `ppat_`; write-tool
-  descriptions point at a topic that exists.
+- Contract: ticket 002 descriptions do not reference REST, `ppat_`, internal
+  authorization boundaries, or unavailable guide/resource surfaces. Once
+  ticket 003 registers the guide tool, guide references in relevant evidence,
+  attachment, and control descriptions point at topics that exist.
 - Coexistence: existing tool behavior and MCP runtime authorization are
   unchanged; adding instructions/resources does not alter tool results.
 
@@ -233,3 +238,6 @@ and 004 implement those surfaces.
 - 2026-07-13: Clarified that MCP returns server instructions during
   initialization but does not require clients to place them in model context;
   tool descriptions remain the portable model-facing guidance layer.
+- 2026-07-13: Corrected the current tool inventory from 17 to 20 and assigned
+  guide-tool description references to ticket 003, after that surface exists;
+  auditor access descriptions remain focused on auditor access.

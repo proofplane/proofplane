@@ -91,7 +91,94 @@ impl ServerHandler for ProofplaneMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::{server_info, SERVER_INSTRUCTIONS};
+    use std::collections::BTreeMap;
+
+    use super::{server_info, ProofplaneMcp, SERVER_INSTRUCTIONS};
+
+    fn expected_tool_descriptions() -> BTreeMap<&'static str, &'static str> {
+        BTreeMap::from([
+            (
+                "create_auditor_access_link",
+                "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
+            ),
+            (
+                "create_control",
+                "Create a control that defines what must be proven and link it to the supplied framework requirement IDs.",
+            ),
+            (
+                "create_evidence_request",
+                "Create an evidence request that states what proof to collect, how to collect it, and when it is due.",
+            ),
+            (
+                "create_evidence_submission",
+                "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow.",
+            ),
+            (
+                "get_control",
+                "Get one control and its linked framework requirements by control ID.",
+            ),
+            (
+                "get_evidence_request",
+                "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID.",
+            ),
+            (
+                "get_evidence_submission",
+                "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID.",
+            ),
+            (
+                "get_latest_evidence_submission",
+                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata.",
+            ),
+            (
+                "list_auditor_access_links",
+                "List auditor access grants with email, creation, expiry, and revocation metadata without returning bearer-secret URLs.",
+            ),
+            (
+                "list_controls",
+                "List controls that define what must be proven for compliance.",
+            ),
+            (
+                "list_due_evidence_requests",
+                "List evidence requests due at or before `now`, using the current time when `now` is omitted.",
+            ),
+            (
+                "list_evidence_request_control_mappings",
+                "List the controls mapped to an evidence request, including each mapping rationale.",
+            ),
+            (
+                "list_evidence_requests",
+                "List evidence requests with their collection instructions, due dates, cadence, and status.",
+            ),
+            (
+                "list_framework_requirements",
+                "List a compliance framework’s requirements so their IDs can be assigned to controls.",
+            ),
+            (
+                "list_frameworks",
+                "List the supported compliance frameworks that organize requirements used by controls.",
+            ),
+            (
+                "manage_evidence_submission_attachment",
+                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP.",
+            ),
+            (
+                "map_evidence_request_to_control",
+                "Map an evidence request to a control with a rationale explaining how the requested proof supports it.",
+            ),
+            (
+                "remove_evidence_request_control_mapping",
+                "Remove the mapping between an evidence request and a control by their IDs.",
+            ),
+            (
+                "replace_control",
+                "Replace a control’s code, title, description, and complete framework-requirement links by control ID.",
+            ),
+            (
+                "revoke_auditor_access_link",
+                "Revoke an auditor access grant by grant ID and return its updated metadata.",
+            ),
+        ])
+    }
 
     #[test]
     fn server_info_includes_non_empty_instructions() {
@@ -162,6 +249,57 @@ mod tests {
                 !normalized.contains(forbidden),
                 "instructions omit {forbidden:?}"
             );
+        }
+    }
+
+    #[test]
+    fn tool_router_registers_the_expected_descriptions() {
+        let tools = ProofplaneMcp::tool_router().list_all();
+        let actual = tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name.as_ref(),
+                    tool.description.as_deref().unwrap_or_default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(actual, expected_tool_descriptions());
+    }
+
+    #[test]
+    fn tool_descriptions_are_concise_and_reference_only_available_surfaces() {
+        for tool in ProofplaneMcp::tool_router().list_all() {
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(!description.is_empty(), "{} has a description", tool.name);
+            assert!(
+                description.ends_with('.') && description.matches('.').count() == 1,
+                "{} has one complete sentence: {description:?}",
+                tool.name
+            );
+            assert!(
+                description.len() <= 200,
+                "{} has a concise description: {description:?}",
+                tool.name
+            );
+
+            let normalized = description.to_ascii_lowercase();
+            for forbidden in [
+                "rest",
+                "ppat_",
+                "workspace",
+                "tenant",
+                "see guide:",
+                "get_proofplane_guide",
+                "proofplane://docs",
+            ] {
+                assert!(
+                    !normalized.contains(forbidden),
+                    "{} omits {forbidden:?}: {description:?}",
+                    tool.name
+                );
+            }
         }
     }
 }

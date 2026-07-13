@@ -396,6 +396,100 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     .into_iter()
     .collect::<BTreeSet<_>>();
     assert_eq!(tool_names, expected_tool_names);
+    let expected_descriptions = [
+        (
+            "create_evidence_request",
+            "Create an evidence request that states what proof to collect, how to collect it, and when it is due.",
+        ),
+        (
+            "list_evidence_requests",
+            "List evidence requests with their collection instructions, due dates, cadence, and status.",
+        ),
+        (
+            "get_evidence_request",
+            "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID.",
+        ),
+        (
+            "list_due_evidence_requests",
+            "List evidence requests due at or before `now`, using the current time when `now` is omitted.",
+        ),
+        (
+            "create_evidence_submission",
+            "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow.",
+        ),
+        (
+            "get_evidence_submission",
+            "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID.",
+        ),
+        (
+            "get_latest_evidence_submission",
+            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata.",
+        ),
+        (
+            "manage_evidence_submission_attachment",
+            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP.",
+        ),
+        (
+            "create_auditor_access_link",
+            "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
+        ),
+        (
+            "list_auditor_access_links",
+            "List auditor access grants with email, creation, expiry, and revocation metadata without returning bearer-secret URLs.",
+        ),
+        (
+            "revoke_auditor_access_link",
+            "Revoke an auditor access grant by grant ID and return its updated metadata.",
+        ),
+        (
+            "list_frameworks",
+            "List the supported compliance frameworks that organize requirements used by controls.",
+        ),
+        (
+            "list_framework_requirements",
+            "List a compliance framework’s requirements so their IDs can be assigned to controls.",
+        ),
+        (
+            "list_controls",
+            "List controls that define what must be proven for compliance.",
+        ),
+        (
+            "get_control",
+            "Get one control and its linked framework requirements by control ID.",
+        ),
+        (
+            "create_control",
+            "Create a control that defines what must be proven and link it to the supplied framework requirement IDs.",
+        ),
+        (
+            "replace_control",
+            "Replace a control’s code, title, description, and complete framework-requirement links by control ID.",
+        ),
+        (
+            "list_evidence_request_control_mappings",
+            "List the controls mapped to an evidence request, including each mapping rationale.",
+        ),
+        (
+            "map_evidence_request_to_control",
+            "Map an evidence request to a control with a rationale explaining how the requested proof supports it.",
+        ),
+        (
+            "remove_evidence_request_control_mapping",
+            "Remove the mapping between an evidence request and a control by their IDs.",
+        ),
+    ];
+    for (name, expected_description) in expected_descriptions {
+        assert_eq!(
+            find_tool(&tool_list, name)["description"],
+            expected_description,
+            "{name} exposes its expected description"
+        );
+    }
+    let submission_description = find_tool(&tool_list, "create_evidence_submission")["description"]
+        .as_str()
+        .expect("submission tool has a description");
+    assert!(submission_description.contains("manage_evidence_submission_attachment afterward"));
+    assert!(submission_description.contains("human-browser attachment flow"));
     assert_schema_has_property(
         &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
         "title",

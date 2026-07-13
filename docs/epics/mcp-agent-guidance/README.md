@@ -18,7 +18,7 @@ it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Server Instructions Manual](./tickets/001-server-instructions-manual.md) | Done | Added initialization guidance with explicitly client-dependent model-context handling. |
-| 002. [Tool Description Pass](./tickets/002-tool-description-pass.md) | Todo | Fix the stale `create_evidence_submission` REST text; add one domain sentence + guide pointer per tool. |
+| 002. [Tool Description Pass](./tickets/002-tool-description-pass.md) | Done | Rewrote all 20 descriptions and added exact router and authenticated discovery coverage. |
 | 003. [Guide Tool And Depth Docs](./tickets/003-guide-tool-and-depth-docs.md) | Todo | Embed the curated topic docs and expose them via `get_proofplane_guide(topic)`. |
 | 004. [Doc Resources Surface](./tickets/004-doc-resources-surface.md) | Todo | Expose the same docs as `proofplane://docs/{topic}` resources and enable the resources capability. |
 
@@ -28,8 +28,9 @@ it.
   foundational. Server instructions add orientation where clients use them,
   while tool descriptions provide the portable per-tool layer.
 - **003** defines the canonical curated topic docs and the model-pull channel.
-  After that surface exists, its guide references can be added to the
-  instructions.
+  After that surface exists, it adds guide-tool references to relevant evidence,
+  attachment, and control descriptions; auditor tools receive no unrelated
+  guide pointer. Its guide references can also be added to the instructions.
 - **004** depends on **003** because it reuses the same embedded doc content;
   it adds the resource surface and the resources capability, after which the
   instructions can also reference resources.
