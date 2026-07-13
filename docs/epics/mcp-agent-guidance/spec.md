@@ -9,9 +9,10 @@ system prompt. Observed problem: through the Codex harness, the model can call
 tools but does not reliably understand the domain (evidence request vs.
 submission vs. control vs. attachment grant) or the correct workflow order.
 
-The core principle is **teach on connect, disclose depth on demand**: put the
-minimum orienting context where every client reliably reads it, and let the
-agent pull deeper documentation only when it needs it.
+The core principle is **teach on connect, disclose depth on demand**: return the
+minimum orienting context during initialization for supporting clients, keep
+portable semantics in tool descriptions, and let the agent pull deeper
+documentation only when it needs it.
 
 ## Channels And Why We Use Each
 
@@ -21,9 +22,9 @@ this epic composes them rather than picking one.
 
 | Channel | Reliability on connect | Role in this epic |
 | --- | --- | --- |
-| **Server `instructions`** | Injected into the system prompt on connect; read by Codex and Claude | **Backbone.** The orienting "user manual." |
-| **Tool descriptions** | Sent on every `list_tools`; always in context | **Per-tool semantics.** One domain sentence each. |
-| **`get_proofplane_guide` tool** | Tool-calling is the one channel every client lets the *model* invoke autonomously | **Depth (model pull).** On-demand topic docs. |
+| **Server `instructions`** | Returned during MCP initialization; supporting clients may include it in model context, but treatment varies by client and surface | **Backbone where supported.** The orienting "user manual." |
+| **Tool descriptions** | Available through standard tool discovery; clients may preload or search them dynamically | **Portable per-tool semantics.** One domain sentence each. |
+| **`get_proofplane_guide` tool** | A callable surface lets the model pull depth in the target clients | **Depth (model pull).** On-demand topic docs. |
 | **`proofplane://docs/{topic}` resources** | Pull-based; surfacing varies by client | **Depth (client/human surface).** Same content, idiomatic form. |
 | **Prompts** | User-invoked, not auto-read | **Out of scope this iteration** (see below). |
 
@@ -43,15 +44,22 @@ the instructions when deciding how to use the server
 the instructions must therefore be self-contained: the domain in one line, the
 core loop, and the single most important constraint, before any deeper prose.
 
-The server currently sets **no** instructions (`get_info` returns
-`ServerInfo::new(caps).with_server_info(...)` only). This is the highest-ROI
-change in the epic.
+Before ticket 001, the server set **no** instructions. Ticket 001 adds the
+static manual through `ServerInfo::with_instructions(...)`; this is the
+highest-ROI change in the epic.
+
+The connection's authorization scope remains an internal server concern. The
+manual does not teach agents to select or manage that scope, and it does not
+expose internal boundary terminology. Within the 512-character lead, the most
+important constraint is instead the attachment data path: a human uses the
+browser flow, and file bytes never pass through MCP or the model.
 
 ### Tool descriptions (per-tool)
 
-Descriptions are always in context, so they are the most reliable per-tool
-channel. Today they are terse (`"List controls in a workspace."`) and one is
-**wrong**: `create_evidence_submission` advertises *"return REST-only
+Descriptions travel with standard tool definitions, making them the most
+portable per-tool channel even though clients may load them up front or through
+dynamic tool search. Today they are terse (`"List controls in a workspace."`)
+and one is **wrong**: `create_evidence_submission` advertises *"return REST-only
 attachment upload instructions,"* but the REST data-plane was removed in PR #42
 and attachments now flow through `manage_evidence_submission_attachment`. Each
 description gets one sentence of domain semantics; write tools end with a
@@ -111,9 +119,9 @@ would mean 17 drifting docs). Initial topics:
 ```
 Framework (global)
   └─ Requirement (global)
-        └─ Control (workspace)
+        └─ Control
               └─ Control mapping (Control ↔ Evidence request)
-Evidence request (workspace, has collection_instructions + due date)
+Evidence request (has collection_instructions + due date)
   └─ Evidence submission (records proof, carries agent provenance)
         └─ Attachment (uploaded/downloaded via short-lived human browser grant)
 ```
@@ -131,40 +139,41 @@ Core loop the instructions must teach:
 
 Key constraints to state explicitly:
 
-- exactly **one workspace** per connection (see the
-  [Agent Connector Onboarding](../agent-connector-onboarding/spec.md)
-  2026-07-09 decision banner);
 - **attachments flow through human browser sessions, never MCP**;
-- submissions capture agent-connection provenance; and
-- workspace/permission failures surface as **not-found**, not as explicit
-  authorization errors.
+- attachment browser URLs are bearer secrets shared only with the human
+  managing the attachment before expiry; and
+- submissions capture agent-connection provenance.
+
+The server still binds each connection to one authorization boundary as
+described in the
+[Agent Connector Onboarding spec](../agent-connector-onboarding/spec.md), but
+that is internal authorization architecture rather than agent guidance.
 
 ## Server Draft: Instructions
 
 Front-loaded so the first ~512 characters are self-contained for Codex:
 
-> Proofplane is a SOC 2 / compliance evidence platform. You operate inside one
-> workspace. Core loop: (1) find what's needed — `list_evidence_requests` /
-> `list_due_evidence_requests`; (2) record proof — `create_evidence_submission`
-> against an evidence request; (3) attach files —
-> `manage_evidence_submission_attachment` returns a short-lived browser URL a
-> human uploads through (file bytes never pass through you or the model).
-> Always read an evidence request's `collection_instructions` before
-> submitting. Controls define what must be proven; map them to evidence
-> requests.
+> Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find
+> evidence requests with `list_evidence_requests` or
+> `list_due_evidence_requests` and read `collection_instructions`; second,
+> create an evidence submission for the request with
+> `create_evidence_submission`; third, use
+> `manage_evidence_submission_attachment` to get a short-lived human browser
+> flow for attachments. A human uploads files there; file bytes never pass
+> through MCP or the model.
 >
-> Domain model: Framework → Requirement (global) → Control (workspace) → Control
-> mapping (Control ↔ Evidence request) → Evidence request → Evidence submission
-> → Attachment (via browser grant). Constraints: exactly one workspace per
-> connection; attachments move through human browser sessions, never MCP;
-> submissions capture agent provenance; workspace/permission failures surface
-> as not-found. For deeper detail on any concept or workflow, call
-> `get_proofplane_guide` (topics: glossary, submitting-evidence,
-> controls-and-mappings, attachments, errors-and-not-found) or read the
-> `proofplane://docs/{topic}` resources.
+> Frameworks contain requirements, requirements are satisfied by controls, and
+> control mappings link controls to evidence requests. Each evidence request
+> can have submissions, and each submission can have attachments. Controls
+> define what must be proven, so review their mappings when deciding which proof
+> satisfies a request. Submissions record the connected agent's provenance.
+> Treat the browser URL as a bearer secret and share it only with the human
+> managing the attachment before it expires.
 
 Exact wording is finalized in ticket 001; this draft anchors length and the
-512-character lead.
+512-character lead. The five topics in the inventory remain canonical, but the
+instructions must not reference the guide tool or resources until tickets 003
+and 004 implement those surfaces.
 
 ## Code Touchpoints
 
@@ -181,9 +190,10 @@ Exact wording is finalized in ticket 001; this draft anchors length and the
 
 ## Testing
 
-- Unit: instructions are non-empty, the 512-char lead names the core loop and
-  the one-workspace constraint, and every topic referenced in the instructions
-  resolves to real content.
+- Unit: instructions are non-empty; the 512-char lead names the domain, all
+  three stages of the core loop, and the human-browser/file-byte constraint;
+  and the full manual covers relationships, mappings, provenance, and secure
+  browser-URL handoff.
 - Unit: every registered topic is reachable through **both**
   `get_proofplane_guide` and `read_resource`, and the two return identical
   content; unknown topics return the topic index, not an error dump.
@@ -213,3 +223,13 @@ Exact wording is finalized in ticket 001; this draft anchors length and the
   exposed through both a `get_proofplane_guide` tool and
   `proofplane://docs/{topic}` resources, tuned for Codex and Claude. Prompts
   deferred.
+- 2026-07-13: Replaced agent-facing boundary guidance in the 512-character lead
+  with the browser-only attachment constraint. Kept connection binding as
+  internal authorization architecture and deferred guide/resource references
+  until their surfaces ship in tickets 003 and 004.
+- 2026-07-13: Replaced concealed not-found guidance with an actionable rule to
+  treat attachment browser URLs as bearer secrets and share them only with the
+  intended human before expiry.
+- 2026-07-13: Clarified that MCP returns server instructions during
+  initialization but does not require clients to place them in model context;
+  tool descriptions remain the portable model-facing guidance layer.

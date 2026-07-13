@@ -348,7 +348,22 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
 
     let initialized = initialize(&server, app.api_token()).await;
     initialized.assert_status_ok();
-    assert!(initialized.text().contains("proofplane"));
+    let initialized_body = initialized
+        .text()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find_map(|data| serde_json::from_str::<Value>(data).ok())
+        .expect("initialize event contains a JSON-RPC response");
+    assert_eq!(
+        initialized_body["result"]["serverInfo"]["name"],
+        "proofplane"
+    );
+    assert!(
+        initialized_body["result"]["instructions"]
+            .as_str()
+            .is_some_and(|instructions| !instructions.trim().is_empty()),
+        "authenticated initialization returns server instructions"
+    );
     let session_id = initialized.header(SESSION_ID_HEADER);
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let tool_list = mcp_client.list_tools().await;
