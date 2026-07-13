@@ -1,6 +1,6 @@
 # 003 - Proofplane OAuth Workspace Consent
 
-**Status:** Done · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#workspace-grant-flow)
+**Status:** Done · **Depends on:** 002 · **Spec:** [spec.md](../spec.md#account-consent-and-workspace-binding)
 
 **Summary** - Add the Proofplane-hosted OAuth consent step that follows
 upstream Auth0 login, selects one workspace, creates an authorized connection,

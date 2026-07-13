@@ -5,9 +5,10 @@ by non-technical compliance users. The core principle is to connect a hosted
 account through browser authorization and native client distribution, not ask
 the customer to install a server or copy a long-lived API token.
 Proofplane owns MCP OAuth discovery, local Dynamic Client Registration,
-Authorization Code with PKCE, workspace consent, PASETO access-token issuance,
-durable connection policy, and MCP enforcement. Auth0 remains the upstream
-human login provider only.
+Authorization Code with PKCE, account-level consent with an internal
+single-workspace binding, PASETO access-token issuance, durable connection
+policy, and MCP enforcement. Auth0 remains the upstream human login provider
+only.
 
 Full protocol, lifecycle, client, and product decisions live in
 [spec.md](./spec.md), the source of technical depth. Tickets below are lean
@@ -18,34 +19,32 @@ connection states are captured in [ux.md](./ux.md).
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Superseded | Auth0-owned MCP OAuth discovery and token issuance are superseded by the Proofplane OAuth facade; Auth0 remains upstream human login. |
+| 001. [Auth0 MCP Authorization Foundation](./tickets/001-auth0-mcp-authorization-foundation.md) | Done | Historical delivery evidence retained; its Auth0-owned MCP OAuth architecture was later superseded by the Proofplane OAuth facade. |
 | 002. [Agent Connection Persistence](./tickets/002-agent-connection-persistence.md) | Done | Transactional connection lifecycle for OAuth-backed agent grants shipped in PR #42. |
-| 003. [Proofplane OAuth Workspace Consent](./tickets/003-proofplane-oauth-workspace-consent.md) | Done | Proofplane-hosted consent after Auth0 login shipped in PR #42; consent binds the user's single workspace as a fixed approval. |
+| 003. [Proofplane OAuth Workspace Consent](./tickets/003-proofplane-oauth-workspace-consent.md) | Done | Proofplane-hosted consent after Auth0 login shipped in PR #42; the server binds the user's single workspace internally. |
 | 004. [MCP Agent Connection Runtime Authorization](./tickets/004-mcp-agent-connection-runtime-authorization.md) | Done | Proofplane PASETO MCP tokens activate authorized rows, enforce live membership/scopes, and audit/persist agent provenance for MCP tool use. |
 | 005. [Connection Management And Guided UI](./tickets/005-connection-management-and-guided-ui.md) | Done | Account-level consent, user-scoped lifecycle APIs, authoritative revocation, and verified desktop setup shipped. |
 | 006. [Claude And Cowork Connector](./tickets/006-claude-and-cowork-connector.md) | Done | `mcp.allowed_hosts` fix + ngrok preview shipped; Codex and Cowork work end to end. Exact post-expiry UX is a deferred refresh-token follow-up. |
-| 007. [Codex Direct MCP Integration](./tickets/007-codex-direct-mcp-integration.md) | Done | Codex connects through direct remote MCP setup, Proofplane DCR, and Proofplane workspace consent; no plugin is required. |
-| 008. [Generic Client Fallback](./tickets/008-generic-client-fallback.md) | Todo | Reframe: OAuth/DCR-capable clients are supported; there is no `ppat_` fallback for the rest (API tokens removed in PR #42). |
+| 007. [Codex Direct MCP Integration](./tickets/007-codex-direct-mcp-integration.md) | Done | Codex connects through direct remote MCP setup, Proofplane DCR, and account-level Proofplane consent; no plugin is required. |
+| 008. [Generic Client Compatibility](./tickets/008-generic-client-compatibility.md) | Todo | Define and verify guidance for OAuth/DCR-capable clients; no credential fallback exists for unsupported clients. |
 
 ## Sequencing
 
-- **001–004, 006, and 007 are Done.** The Proofplane OAuth facade, connection
-  persistence, workspace consent, runtime authorization, and the direct Codex
-  path shipped in PR #42; ticket 006 added hosted-host support and validated
-  Cowork. See the 2026-07-09 decision banner in
-  [spec.md](./spec.md) for the `ppat_` removal, REST data-plane removal, and
-  one-workspace decisions that landed with it.
-- **001** is superseded where it made Auth0 the MCP authorization server.
-  Auth0 tenant work remains only for the upstream human login application.
-- **005** depends on 003 and 004 and adds customer-visible connection
-  lifecycle and guided setup. It must drop the removed API-token "advanced
-  path" from its scope.
+- **001–007 are Done.** The Proofplane OAuth facade, connection persistence,
+  account-level consent with an internal single-workspace binding, runtime
+  authorization, guided connection management, hosted-client support, and the
+  direct Codex path have shipped.
+- **001** retains its completed foundation evidence, but its Auth0-owned MCP
+  authorization-server architecture was superseded. Auth0 now provides only
+  upstream human login.
+- **005** delivered customer-visible connection lifecycle and guided setup on
+  top of tickets 003 and 004. OAuth is the only setup path.
 - **006** validated hosted-client tool use through Cowork after adding the MCP
   host allowlist. Exact post-expiry UX and directory distribution remain
   follow-up work.
-- **008** depends on the Proofplane OAuth facade and now only describes which
-  clients are OAuth/DCR-capable. With `ppat_` removed there is no advanced
-  bearer-token fallback for the rest.
+- **008 is the only remaining ticket.** It depends on tickets 003 and 004 and
+  will define and verify compatibility guidance for generic OAuth/DCR-capable
+  clients. There is no bearer-token fallback for unsupported clients.
 - Directory review is an external distribution step, not a blocker for custom
   connector or generic remote-MCP setup.
 

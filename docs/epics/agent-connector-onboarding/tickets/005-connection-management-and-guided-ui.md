@@ -50,6 +50,9 @@ users can recognize and revoke their agent connections.
 
 **Notes**
 
+- 2026-07-13: Removed the unused `ui/src/api/tokens.ts` frontend module and its
+  isolated test. They referenced API-token endpoints removed in PR #42 and had
+  no production consumers; the active CSS design-token module is unchanged.
 - 2026-07-10: Implemented and validated. The product UI now follows a simple
   account-level grant presentation: workspace and scopes remain enforced by
   OAuth and MCP but are intentionally absent from consent and connection

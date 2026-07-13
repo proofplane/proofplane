@@ -8,15 +8,13 @@
 > scopes remain validated, stored, and enforced as protocol-level policy.
 
 > **Decision revision — 2026-07-09 (shipped in PR #42):** Three product
-> decisions landed with the working Codex OAuth connection and now supersede
-> earlier text throughout this spec:
+> decisions landed with the working Codex OAuth connection:
 >
 > 1. **API-token (`ppat_`) authentication was removed entirely.** The
 >    `domain/api_token`, `repository/api_tokens`, `routes/api_tokens`, and
 >    opaque-token authenticator modules are deleted. Proofplane-issued PASETO
->    access tokens from the OAuth facade are the **only** MCP credential. Any
->    passage below promising `ppat_` coexistence, an "advanced API-token path,"
->    or "existing `ppat_` callers remain unchanged" is obsolete. *Rationale:* a
+>    access tokens from the OAuth facade are the **only** MCP credential.
+>    *Rationale:* a
 >    non-technical, browser-authorized connection is the product; maintaining a
 >    parallel long-lived-credential plane contradicted that and doubled the
 >    authorization surface.
@@ -24,20 +22,16 @@
 >    evidence requests, and evidence submissions are deleted. **MCP is now the
 >    only interface for compliance reads and writes.** REST remains only for
 >    control-plane concerns (auth, `me`, workspaces, OAuth, and browser
->    attachment flows). Any "REST and MCP" or "same model as REST clients"
->    framing is obsolete. *Rationale:* the agent/MCP surface is the product
+>    attachment flows). *Rationale:* the agent/MCP surface is the product
 >    data-plane; a second REST data-plane was unused and doubled maintenance.
 > 3. **Each user has exactly one workspace.** Consent no longer shows a
 >    workspace **picker**. The server resolves the user's single workspace with
 >    `get_workspace_with_role_for_user`; ticket 005 later removed that resolved
->    workspace from the UI entirely. Read any "select one accessible
->    workspace" / "workspace picker" language below as an internal binding to
->    the user's single workspace. *Rationale:* one-workspace-per-user
+>    workspace from the UI entirely. Consent is account-level while the server
+>    binds the grant to that workspace internally. *Rationale:*
+>    one-workspace-per-user
 >    removes an entire class of cross-workspace consent-tampering surface and
 >    matches how self-onboarding provisions accounts today.
->
-> The sections below retain their original wording except where directly
-> corrected; treat this banner as authoritative where they disagree.
 
 ## Goal
 
@@ -47,13 +41,15 @@ API token.
 
 The core product principle is **connect an account, not install a server**.
 Proofplane remains a hosted Streamable HTTP MCP service. Compatible clients
-discover Auth0, complete browser authorization, and receive credentials
-without exposing them to the user or model.
+discover Proofplane OAuth, complete browser authorization through upstream
+Auth0 login and Proofplane consent, and receive credentials without exposing
+them to the user or model.
 
 ## Architecture Decision
 
 > **Revision — 2026-07-08:** Proofplane owns MCP OAuth discovery, local DCR,
-> Authorization Code with PKCE, workspace consent, authorization-code
+> Authorization Code with PKCE, account-level consent with an internal
+> single-workspace binding, authorization-code
 > exchange, and PASETO MCP access-token issuance. Auth0 remains only the
 > upstream human identity provider used by `/oauth/auth0/callback`.
 
@@ -67,7 +63,7 @@ Proofplane owns:
 - local Dynamic Client Registration for public MCP clients;
 - exact redirect-URI validation;
 - Authorization Code with PKCE;
-- Proofplane workspace consent;
+- Proofplane account-level consent and internal single-workspace binding;
 - one-use authorization-code storage;
 - Proofplane PASETO access-token issuance; and
 - OAuth protocol errors.
@@ -86,17 +82,17 @@ issue refresh tokens. Proofplane MCP access tokens expire after 24 hours.
 Proofplane remains responsible for:
 
 - MCP Protected Resource Metadata and `401` challenges;
-- selecting and approving one Proofplane workspace during authorization;
+- resolving the user's single workspace as the internal grant binding;
 - durable agent-connection and audit records;
 - Proofplane MCP PASETO access-token validation;
 - live workspace membership, scope, and revocation enforcement; and
 - the hosted MCP tools and application experience.
 
-The workspace grant is integrated into the Proofplane OAuth transaction. After
-upstream Auth0 login, Proofplane loads or provisions the user, reuses an exact
-authorized/active connection when possible, or shows a Proofplane consent page
-that creates an authorized connection and returns a one-use authorization code
-to the MCP client.
+Account consent and the internal single-workspace binding are integrated into
+the Proofplane OAuth transaction. After upstream Auth0 login, Proofplane loads
+or provisions the user, reuses an exact authorized/active connection when
+possible, or shows a Proofplane consent page that creates an authorized
+connection and returns a one-use authorization code to the MCP client.
 
 This supersedes the earlier Auth0-owned MCP OAuth design.
 
@@ -106,25 +102,18 @@ The MCP runtime and core tools use Streamable HTTP at `/mcp`. They now
 authenticate requests exclusively with Proofplane-issued PASETO access tokens
 from the OAuth facade described below.
 
-_(Historical context, superseded by the 2026-07-09 banner: MCP originally also
-accepted pre-provisioned, workspace-bound `ppat_` bearer tokens issued by the
-website. That path was the wrong default for non-technical users — it required
-creating, copying, and preserving a long-lived credential that could leak
-through plaintext config or shell state, offered no browser-led consent or
-reconnection, and made connection lifecycle and audit attribution
-token-centric. `ppat_` authentication and the REST data-plane have since been
-removed; the OAuth facade is the only path.)_
-
 ## Product Boundary
 
-This epic delivers:
+Tickets 001–007 delivered:
 
 - Proofplane-backed OAuth authorization for the hosted MCP endpoint;
 - one-workspace, scoped agent connections;
 - a guided website flow for supported clients;
 - first-class Claude/Cowork validation and direct Codex MCP setup;
-- generic remote-MCP instructions as a fallback; and
 - connection visibility, revocation, and attributable audit events.
+
+This epic has one remaining deliverable: ticket 008 defines and verifies
+generic-client compatibility guidance for OAuth/DCR-capable clients.
 
 This epic does not:
 
@@ -135,22 +124,18 @@ This epic does not:
 - enable uncontrolled Dynamic Client Registration in production; or
 - support unattended OAuth connections that must outlive the access token.
 
-_(The initial proposal also promised to preserve existing API-token
-authentication. Per the 2026-07-09 banner, `ppat_` authentication and the REST
-data-plane were instead removed; the OAuth facade is the sole MCP credential
-path.)_
-
 Auth0 Organizations are not used for workspace binding. Auth0 currently
 documents Organization user flows as
 [unavailable for third-party applications](https://auth0.com/docs/get-started/applications/first-party-and-third-party-applications),
-while MCP clients are third-party applications. Proofplane performs workspace
-selection inside its own OAuth authorization transaction.
+while MCP clients are third-party applications. Proofplane resolves the user's
+single workspace inside its own OAuth authorization transaction and binds it
+to the account-level grant without presenting a workspace choice.
 
 ## Roles And Trust Boundaries
 
 | Role | Component | Responsibility |
 | --- | --- | --- |
-| Resource owner | Proofplane user | Approves client access to one workspace |
+| Resource owner | Proofplane user | Approves account-level client access; the server binds the user's single workspace internally |
 | OAuth client | Claude, Codex, or another MCP harness | Holds credentials and calls MCP |
 | Authorization server | Proofplane API | Runs MCP OAuth discovery, DCR, consent, code exchange, and access-token issuance |
 | Upstream login provider | Auth0 | Authenticates the human user for Proofplane |
@@ -169,7 +154,7 @@ flowchart LR
 
     subgraph PP[Proofplane]
         M[MCP resource server<br/>/mcp]
-        W[Workspace consent UI]
+        W[Account-level consent UI]
         A[Grant and connection API]
         D[(Postgres)]
     end
@@ -178,8 +163,8 @@ flowchart LR
     C -->|discover, register, authorize, and exchange code| P
     P -->|human login| I
     I -->|callback| P
-    U -->|selects workspace and approves| W
-    W -->|create workspace grant| A
+    U -->|grants client access| W
+    W -->|create grant with internal single-workspace binding| A
     A --> D
     P -->|24-hour Proofplane PASETO access token| C
     C -->|Proofplane bearer access token| M
@@ -315,17 +300,18 @@ Auth0 does not issue MCP access tokens, hold MCP client registrations, select
 workspaces, or receive agent-connection claims. The MCP runtime validates only
 Proofplane-issued PASETO access tokens for interactive OAuth connections.
 
-## Workspace Grant Flow
+## Account Consent And Workspace Binding
 
 Auth0 does not know Proofplane workspace membership. Proofplane integrates the
-workspace decision directly into `/oauth/authorize`, `/oauth/auth0/callback`,
-`/oauth/consent`, and `/oauth/token`.
+account-level consent and internal single-workspace binding directly into
+`/oauth/authorize`, `/oauth/auth0/callback`, `/oauth/consent`, and
+`/oauth/token`.
 
 ### Ticket 001/002 delivery boundary
 
-Ticket 001 is superseded where it made Auth0 the MCP authorization server.
-The retained foundation is Protected Resource Metadata plus Auth0 human
-identity verification for the upstream callback.
+Ticket 001 is Done. Its Auth0-owned authorization-server architecture was
+later superseded, while its Protected Resource Metadata and Auth0 human
+identity verification work remain historical delivery evidence.
 
 Ticket 002 adds durable connection persistence and lifecycle operations.
 Ticket 003 adds Proofplane-hosted OAuth consent, authorization-request storage,
@@ -381,9 +367,8 @@ authorization policy.
 ### Initial authorization and connection reuse
 
 Proofplane permits at most one active connection for an Auth0
-user/client/resource tuple. The selected workspace is a property of that
-connection. Connecting the same client to another workspace requires revoking
-or replacing the existing connection through a visible user flow.
+user/client/resource tuple. The user's single workspace is an internal property
+of that connection, resolved by the server rather than selected in consent.
 
 For every authorization transaction targeting the MCP resource, Proofplane:
 
@@ -394,8 +379,9 @@ For every authorization transaction targeting the MCP resource, Proofplane:
 3. exchanges the upstream Auth0 code and verifies the human identity;
 4. reuses an exact authorized or active connection when the same user, client,
    resource, scopes, and workspace membership still match;
-5. otherwise renders `/oauth/consent` with the verified client, requested
-   scopes, and the user's single workspace shown as a fixed approval;
+5. otherwise renders `/oauth/consent` with only the verified client name and an
+   account-level grant decision; workspace, role, resource, client identifier,
+   and scope details are not displayed;
 6. on approval, rechecks membership, creates or updates the authorized
    connection, and stores a one-use authorization-code digest; and
 7. exchanges the code plus PKCE verifier for a 24-hour Proofplane PASETO MCP
@@ -426,11 +412,10 @@ tools remain disconnected until the user selects its Authenticate or
 Reconnect control.
 
 Automatic reauthorization is client behavior, not guaranteed by MCP. The
-Claude/Cowork and Codex release gates must verify their behavior on access-token
-expiry. This release does not support background or unattended OAuth work
-beyond the token lifetime. (Unattended callers previously used `ppat_`
-credentials; per the 2026-07-09 banner that path no longer exists, so
-unattended agent access is out of scope until a replacement is designed.)
+shipped Claude/Cowork and Codex paths accept visible reauthorization as the v1
+behavior when a client cannot restart the flow automatically. This release
+does not support background or unattended OAuth work beyond the token
+lifetime; no replacement credential exists for unattended agent access.
 
 ## Access Token Contract
 
@@ -445,7 +430,7 @@ valid authorization code and PKCE verifier are consumed.
 | `sub` | Auth0 user subject for the approved human |
 | `client_id` | Registered Proofplane OAuth client ID |
 | `connection_id` | Durable Proofplane agent connection |
-| `workspace_id` | Workspace selected during consent |
+| `workspace_id` | User's single workspace, bound internally during consent |
 | `exp`, `iat` | Token lifetime |
 | `scope` | Proofplane-approved MCP scopes |
 
@@ -531,7 +516,7 @@ sequenceDiagram
     P->>P: Find reusable user, client, resource, and scope binding
 
     alt One active connection
-        P-->>C: Authorization code without workspace consent
+        P-->>C: Authorization code without another consent prompt
         C->>P: Exchange code and PKCE verifier
         P-->>C: New 24-hour PASETO access token
         C->>M: Retry MCP request
@@ -710,17 +695,16 @@ No Proofplane-owned `proofplane-soc2` plugin, marketplace package, bundled
 workflow skill, or plugin-specific OAuth path is required for this epic. If a
 Codex surface cannot keep the OAuth callback listener alive across the
 consent round trip, restarting that surface and retrying is an
-observed recovery path, but the final supported reconnect behavior still needs
-release validation.
+observed and accepted recovery path for the shipped direct integration.
 
 ### Other Clients
 
-Generic clients receive the hosted MCP URL and a capability matrix. OAuth is
-offered to clients with supported discovery, redirect, and Proofplane DCR
-behavior. Clients without a supported OAuth/DCR path are unsupported for now:
-with `ppat_` removed (see the 2026-07-09 banner) there is no advanced
-bearer-token fallback, so such clients cannot connect until they gain
-OAuth/DCR support or a replacement unattended-credential mechanism is designed.
+Ticket 008, Generic Client Compatibility, is the only remaining epic scope. It
+will define a maintained connection definition, hosted MCP guidance, and a
+last-verified capability matrix for clients with supported discovery,
+redirect, and Proofplane DCR or manual-registration behavior. Clients without
+a supported OAuth path remain unsupported; no alternate Proofplane credential
+or bearer-token fallback exists.
 
 ## Compatibility And Failure Behavior
 
@@ -763,9 +747,9 @@ OAuth/DCR support or a replacement unattended-credential mechanism is designed.
 Auth0-specific tests remain limited to the upstream human login token
 verification boundary.
 
-## Delivery Gates And Open Decisions
+## Delivery Outcomes And Remaining Work
 
-Tickets 001 and 003 have confirmed these capabilities in development:
+Tickets 001–007 are complete. Together they delivered and confirmed:
 
 1. Protected Resource Metadata discovery.
 2. Proofplane authorization-server metadata.
@@ -778,16 +762,14 @@ Tickets 001 and 003 have confirmed these capabilities in development:
 7. Codex and MCP Inspector browser authorization through Proofplane workspace
    consent and back to the MCP client callback.
 
-The Inspector 0.22.0 callback then bypassed its configured proxy. That external
+The Inspector 0.22.0 callback bypassed its configured proxy. That external
 harness limitation does not block the authorization foundation: Proofplane
 discovery reached the OAuth flow, browser authentication completed, and tests
-cover upstream Auth0 identity verification. Recovery after token expiry is a
-client-specific delivery check in tickets 005 through 008.
-
-Tickets 002 and 003 still need final smoke coverage for denial and
-authorized/active connection reuse. Ticket 004 remains responsible for
-activating authorized connections on the first valid MCP request and enforcing
-the claims on protected tools.
+cover upstream Auth0 identity verification. Tickets 002–004 delivered denial,
+authorized/active connection reuse, first-use activation, live membership and
+scope enforcement, revocation, and agent provenance. Tickets 005–007 delivered
+account-level consent and connection management, guided setup, hosted Cowork
+validation, and the direct Codex integration.
 
 Ticket 006 research against the
 [Claude connector auth docs](https://claude.com/docs/connectors/building/authentication)
@@ -813,8 +795,9 @@ Cowork completed the live flow with the currently required `resource` and
 non-empty `scope` fields on `/oauth/authorize`, so those checks remain strict.
 Exact user-visible reconnect behavior on expiry is a non-blocking refresh-token
 follow-up. At directory scale Claude discourages DCR in favor of CIMD or
-`oauth_anthropic_creds` — a separate distribution follow-up. Whether generic
-OAuth warrants additional DCR abuse controls also remains open.
+`oauth_anthropic_creds` — a separate distribution follow-up. Ticket 008 remains
+responsible for documenting production DCR controls and generic-client
+compatibility guidance. It is the only unfinished epic ticket.
 
 If a first-class client cannot recover from access-token expiry with an
 acceptable visible or automatic authorization flow, it must not be marketed
@@ -822,17 +805,15 @@ as a persistent no-token connection. Unattended callers previously fell back to
 `ppat_` authentication; with that path removed in PR #42, unattended agent
 access is unsupported until a replacement credential mechanism is designed.
 
-## Distribution Order
+## Delivery Sequence
 
-1. Validate Proofplane OAuth capability gates with MCP Inspector.
-2. Ship connection persistence.
-3. Ship workspace consent, authorization-code exchange, and MCP workspace
-   grant binding.
-4. Ship connection listing, revocation, and guided website setup.
-5. Validate Claude/Cowork custom connector behavior.
-6. Document direct Codex MCP setup and reconnect behavior.
-7. Prepare directory or broader marketplace submission only for clients that
-   need that distribution path.
+Completed tickets 001–007 established the OAuth capability gates, connection
+persistence, account-level consent with internal workspace binding, runtime
+authorization, connection management, guided setup, Claude/Cowork validation,
+and direct Codex setup. Ticket 008 follows tickets 003 and 004 and remains to
+define and verify generic-client compatibility. Directory or broader
+marketplace submission remains an external follow-up only for clients that
+need that distribution path.
 
 ## Reference Material
 
@@ -845,6 +826,11 @@ access is unsupported until a replacement credential mechanism is designed.
 - [RFC 9700: OAuth Security Best Current Practice](https://datatracker.ietf.org/doc/html/rfc9700)
 
 ## Revisions
+
+- 2026-07-13: Reconciled this spec as the current source of truth after tickets
+  001–007 shipped. Removed superseded body text, described account-level consent
+  with its internal single-workspace binding consistently, and moved generic
+  client compatibility into the sole remaining ticket 008.
 
 - 2026-07-10: Ticket 005 replaced workspace-and-scope presentation with a
   simple account-level grant, added authenticated user-scoped connection
