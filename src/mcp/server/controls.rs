@@ -31,7 +31,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "list_frameworks",
-        description = "List global compliance frameworks."
+        description = "List the supported compliance frameworks that organize requirements used by controls."
     )]
     async fn list_frameworks(
         &self,
@@ -51,7 +51,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_framework_requirements",
-        description = "List global requirements for a compliance framework."
+        description = "List a compliance framework’s requirements so their IDs can be assigned to controls."
     )]
     async fn list_framework_requirements(
         &self,
@@ -75,7 +75,10 @@ impl ProofplaneMcp {
         }))
     }
 
-    #[tool(name = "list_controls", description = "List controls in a workspace.")]
+    #[tool(
+        name = "list_controls",
+        description = "List controls that define what must be proven for compliance."
+    )]
     async fn list_controls(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -92,7 +95,10 @@ impl ProofplaneMcp {
         }))
     }
 
-    #[tool(name = "get_control", description = "Get a control in a workspace.")]
+    #[tool(
+        name = "get_control",
+        description = "Get one control and its linked framework requirements by control ID."
+    )]
     async fn get_control(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -112,7 +118,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "create_control",
-        description = "Create a control in a workspace."
+        description = "Create a control that defines what must be proven and link it to the supplied framework requirement IDs."
     )]
     async fn create_control(
         &self,
@@ -146,7 +152,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "replace_control",
-        description = "Replace a control in a workspace."
+        description = "Replace a control’s code, title, description, and complete framework-requirement links by control ID."
     )]
     async fn replace_control(
         &self,
@@ -181,7 +187,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_evidence_request_control_mappings",
-        description = "List control mappings for an evidence request."
+        description = "List the controls mapped to an evidence request, including each mapping rationale."
     )]
     async fn list_evidence_request_control_mappings(
         &self,
@@ -207,7 +213,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "map_evidence_request_to_control",
-        description = "Create a mapping between an evidence request and a control."
+        description = "Map an evidence request to a control with a rationale explaining how the requested proof supports it."
     )]
     async fn map_evidence_request_to_control(
         &self,
@@ -249,7 +255,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "remove_evidence_request_control_mapping",
-        description = "Remove a mapping between an evidence request and a control."
+        description = "Remove the mapping between an evidence request and a control by their IDs."
     )]
     async fn remove_evidence_request_control_mapping(
         &self,

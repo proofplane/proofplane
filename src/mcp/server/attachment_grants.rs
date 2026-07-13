@@ -24,7 +24,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "manage_evidence_submission_attachment",
-        description = "Create a short-lived human-browser URL to upload or download an evidence submission attachment."
+        description = "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP."
     )]
     async fn manage_evidence_submission_attachment(
         &self,

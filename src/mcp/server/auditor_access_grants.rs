@@ -27,7 +27,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "create_auditor_access_link",
-        description = "Create a bearer-secret browser access link for an auditor email."
+        description = "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires."
     )]
     async fn create_auditor_access_link(
         &self,
@@ -59,7 +59,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_auditor_access_links",
-        description = "List non-secret auditor access grant metadata for this workspace."
+        description = "List auditor access grants with email, creation, expiry, and revocation metadata without returning bearer-secret URLs."
     )]
     async fn list_auditor_access_links(
         &self,
@@ -82,7 +82,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "revoke_auditor_access_link",
-        description = "Revoke an auditor access grant by id."
+        description = "Revoke an auditor access grant by grant ID and return its updated metadata."
     )]
     async fn revoke_auditor_access_link(
         &self,
