@@ -120,6 +120,20 @@ middleware-provided agent connection and request context. It requires no
 `WorkspacePermission`, performs no persistence, exposes no connection- or
 workspace-specific response fields, and emits no audit event.
 
+The resource channel is static and non-paginated. `resources/list` returns the
+five registry entries in canonical topic order with URI
+`proofplane://docs/{topic}`, `name` equal to the topic slug, the registry title,
+and MIME type `text/markdown`; it returns no `nextCursor`. `resources/read`
+accepts only an exact, case-sensitive canonical URI and returns one text content
+block with the same URI, MIME type, and registry Markdown. Unknown topics and
+all malformed variants fail with resource-not-found (`-32002`) using the
+existing `not_found` problem envelope. The server advertises `resources: {}`
+alongside `tools: {}` and supports neither templates, subscriptions,
+list-change notifications, annotations, descriptions, nor sizes. Like the
+guide tool, list and read validate only the authenticated agent connection,
+require no `WorkspacePermission`, perform no persistence, and emit no audit
+event.
+
 ### Prompts (deferred)
 
 MCP prompts are reusable, parameterized templates, but they are **user-invoked**
@@ -278,3 +292,8 @@ surface.
   exact-match/index fallback behavior, connection-only authorization, category
   pointer mapping, and post-lead instruction reference. Resources remain
   deferred to ticket 004.
+- 2026-07-14: Shipped the five static documentation resources with exact URI
+  matching, canonical non-paginated discovery, `text/markdown` content, and
+  connection-only authorization. Enabled the empty resources capability and
+  appended protocol-native resource discovery to the full server instructions
+  without changing the protected 512-character lead.
