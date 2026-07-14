@@ -14,7 +14,7 @@ use proofplane::{
     },
 };
 use rmcp::{
-    model::{CallToolRequestParams, ClientInfo, JsonObject},
+    model::{CallToolRequestParams, ClientInfo, JsonObject, ReadResourceRequestParams},
     service::{RoleClient, RunningService},
     transport::{
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
@@ -161,21 +161,28 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
     let server = app.mcp_http_server();
     let raw_token = token.raw_token.clone();
 
-    let ((known, unknown, denied), audit_logs) = capture_audit_logs(|request_id| {
-        let raw_token = raw_token.clone();
-        async move {
-            let client = McpClient::connect_with_request_id(&server, &raw_token, request_id).await;
-            let known = client
-                .call_tool("get_proofplane_guide", json!({"topic": " glossary "}))
-                .await;
-            let unknown = client
-                .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
-                .await;
-            let denied = client.call_tool_error("list_controls", json!({})).await;
-            (known, unknown, denied)
-        }
-    })
-    .await;
+    let ((known, unknown, resources, resource, bad_resource, denied), audit_logs) =
+        capture_audit_logs(|request_id| {
+            let raw_token = raw_token.clone();
+            async move {
+                let client =
+                    McpClient::connect_with_request_id(&server, &raw_token, request_id).await;
+                let known = client
+                    .call_tool("get_proofplane_guide", json!({"topic": " glossary "}))
+                    .await;
+                let unknown = client
+                    .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
+                    .await;
+                let resources = client.list_resources().await;
+                let resource = client.read_resource("proofplane://docs/glossary").await;
+                let bad_resource = client
+                    .read_resource_error("proofplane://docs/Glossary")
+                    .await;
+                let denied = client.call_tool_error("list_controls", json!({})).await;
+                (known, unknown, resources, resource, bad_resource, denied)
+            }
+        })
+        .await;
 
     assert_eq!(known["topic"], "glossary");
     assert_eq!(known["title"], "Proofplane Glossary");
@@ -208,6 +215,24 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
         ])
     );
     assert!(!unknown.to_string().contains("unknown-topic"));
+    assert_eq!(
+        resources,
+        json!({
+            "resources": [
+                {"uri": "proofplane://docs/glossary", "name": "glossary", "title": "Proofplane Glossary", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/submitting-evidence", "name": "submitting-evidence", "title": "Submitting Evidence", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/controls-and-mappings", "name": "controls-and-mappings", "title": "Controls and Mappings", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/attachments", "name": "attachments", "title": "Attachments", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/errors-and-not-found", "name": "errors-and-not-found", "title": "Errors and Not Found", "mimeType": "text/markdown"}
+            ]
+        })
+    );
+    assert_eq!(resource["contents"].as_array().map(Vec::len), Some(1));
+    assert_eq!(resource["contents"][0]["uri"], "proofplane://docs/glossary");
+    assert_eq!(resource["contents"][0]["mimeType"], "text/markdown");
+    assert_eq!(resource["contents"][0]["text"], known["markdown"]);
+    assert_eq!(bad_resource.code, rmcp::model::ErrorCode(-32002));
+    assert_eq!(bad_resource.data["problem"]["code"], "not_found");
     assert_eq!(denied.data["problem"]["code"], "not_found");
     assert!(audit_logs.is_empty());
 }
@@ -421,6 +446,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             .as_str()
             .is_some_and(|instructions| !instructions.trim().is_empty()),
         "authenticated initialization returns server instructions"
+    );
+    assert_eq!(
+        initialized_body["result"]["capabilities"]["tools"],
+        json!({})
+    );
+    assert_eq!(
+        initialized_body["result"]["capabilities"]["resources"],
+        json!({})
     );
     let session_id = initialized.header(SESSION_ID_HEADER);
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
@@ -2116,6 +2149,39 @@ impl McpClient {
             .into_iter()
             .map(|tool| serde_json::to_value(tool).expect("tool serializes"))
             .collect()
+    }
+
+    async fn list_resources(&self) -> Value {
+        let result = self
+            .service
+            .list_resources(None)
+            .await
+            .expect("resources list succeeds");
+        serde_json::to_value(result).expect("resource list serializes")
+    }
+
+    async fn read_resource(&self, uri: &str) -> Value {
+        let result = self
+            .service
+            .read_resource(ReadResourceRequestParams::new(uri))
+            .await
+            .unwrap_or_else(|error| panic!("resource {uri} reads: {error:?}"));
+        serde_json::to_value(result).expect("resource result serializes")
+    }
+
+    async fn read_resource_error(&self, uri: &str) -> McpError {
+        match self
+            .service
+            .read_resource(ReadResourceRequestParams::new(uri))
+            .await
+        {
+            Ok(result) => panic!("resource {uri} fails, got success: {result:?}"),
+            Err(ServiceError::McpError(error)) => McpError {
+                code: error.code,
+                data: error.data.expect("MCP error has problem data"),
+            },
+            Err(error) => panic!("resource {uri} fails with MCP error, got: {error:?}"),
+        }
     }
 
     async fn call_tool(&self, name: &'static str, arguments: Value) -> Value {

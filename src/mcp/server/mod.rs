@@ -5,14 +5,20 @@ mod controls;
 mod evidence_requests;
 mod evidence_submissions;
 mod guide;
+mod resources;
 
 use rmcp::{
     handler::server::router::tool::ToolRouter,
-    model::{Implementation, ServerCapabilities, ServerInfo},
-    tool_handler, ServerHandler,
+    model::{
+        Implementation, ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams,
+        ReadResourceResult, ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
+    tool_handler, RoleServer, ServerHandler,
 };
 
 use crate::{
+    mcp::server::common::authorize_connection,
     services::{
         attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
@@ -40,7 +46,8 @@ const SERVER_INSTRUCTION_DETAIL: &str = concat!(
     "define what must be proven, so review their mappings when deciding which proof satisfies a ",
     "request. Submissions record the connected agent's provenance. Treat the browser URL as a ",
     "bearer secret and share it only with the human managing the attachment before it expires. ",
-    "Call get_proofplane_guide without a topic to see its topic index."
+    "Call get_proofplane_guide without a topic to see its topic index. Clients that surface MCP ",
+    "resources can also browse these guides at proofplane://docs/{topic}."
 );
 
 fn server_instructions() -> String {
@@ -94,15 +101,38 @@ impl ProofplaneMcp {
 }
 
 fn server_info() -> ServerInfo {
-    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-        .with_server_info(Implementation::new("proofplane", VERSION))
-        .with_instructions(server_instructions())
+    ServerInfo::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .build(),
+    )
+    .with_server_info(Implementation::new("proofplane", VERSION))
+    .with_instructions(server_instructions())
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ProofplaneMcp {
     fn get_info(&self) -> ServerInfo {
         server_info()
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        authorize_connection(&context)?;
+        Ok(resources::list_doc_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        authorize_connection(&context)?;
+        resources::read_doc_resource(&request.uri)
     }
 }
 
@@ -212,6 +242,18 @@ mod tests {
 
     #[test]
     fn instruction_lead_teaches_the_domain_and_complete_core_workflow() {
+        assert_eq!(
+            SERVER_INSTRUCTION_LEAD,
+            concat!(
+                "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
+                "requests with list_evidence_requests or list_due_evidence_requests and read ",
+                "collection_instructions; second, create an evidence submission for the request with ",
+                "create_evidence_submission; third, use manage_evidence_submission_attachment to get a ",
+                "short-lived human browser flow for attachments. A human uploads files there; file bytes ",
+                "never pass through MCP or the model. "
+            ),
+            "the protected instruction lead remains byte-for-byte stable"
+        );
         let lead_length = SERVER_INSTRUCTION_LEAD.chars().count();
         assert!(
             lead_length <= 512,
@@ -253,6 +295,7 @@ mod tests {
             "browser URL as a bearer secret",
             "before it expires",
             "Call get_proofplane_guide without a topic to see its topic index",
+            "Clients that surface MCP resources can also browse these guides at proofplane://docs/{topic}",
         ] {
             assert!(
                 instructions.contains(expected),
@@ -262,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn instructions_do_not_expose_internal_or_unavailable_surfaces() {
+    fn instructions_do_not_expose_internal_surfaces() {
         let normalized = server_instructions().to_ascii_lowercase();
 
         for forbidden in [
@@ -270,7 +313,6 @@ mod tests {
             "tenant",
             "rest",
             "ppat_",
-            "proofplane://docs",
             "leading",
             "powerful",
             "seamless",
@@ -281,6 +323,16 @@ mod tests {
                 "instructions omit {forbidden:?}"
             );
         }
+    }
+
+    #[test]
+    fn server_advertises_tools_and_static_resources_without_change_flags() {
+        let capabilities = serde_json::to_value(server_info().capabilities)
+            .expect("server capabilities serialize");
+
+        assert_eq!(capabilities["tools"], serde_json::json!({}));
+        assert_eq!(capabilities["resources"], serde_json::json!({}));
+        assert!(capabilities.get("prompts").is_none());
     }
 
     #[test]
