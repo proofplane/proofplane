@@ -47,10 +47,10 @@ accessibility requirement.
 
 ## Application Boundary
 
-Add a new `ui/` workspace at the repository root:
+The UI lives in the separate sibling `landing-portal` repository:
 
 ```text
-ui/
+landing-portal/
   src/
     api/
     auth/
@@ -89,7 +89,7 @@ Auth routes:
 
 ## API Client
 
-Start with a small handwritten API client in `ui/src/api/`. The client should:
+Start with a small handwritten API client in `landing-portal/src/api/`. The client should:
 
 - attach the Auth0 access token for management-plane calls;
 - return typed DTOs for the routes the UI consumes;
