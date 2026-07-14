@@ -448,7 +448,7 @@ fn render_consent_page(context: OAuthConsentContext, message: Option<&str>) -> S
     let notice = message
         .map(|message| {
             format!(
-                r#"<section class="notice"><strong>{}</strong></section>"#,
+                r#"<section class="notice" role="alert"><strong>{}</strong></section>"#,
                 escape_html(message)
             )
         })
@@ -522,22 +522,55 @@ button {{
 button:hover {{ background: oklch(72% 0.09 174); }}
 .secondary-button {{ background: transparent; color: var(--ink); border: 1px solid var(--line); }}
 .secondary-button:hover {{ background: var(--surface-raised); }}
+.site-header {{ border-bottom: 1px solid var(--line); padding: 14px max(16px, calc((100vw - 980px) / 2)); }}
+.wordmark {{ color: var(--ink); font-size: 0.78rem; font-weight: 750; letter-spacing: 0.08em; }}
+.wordmark span {{ color: var(--muted); font-weight: 550; }}
+main {{ width: min(980px, calc(100% - 32px)); min-height: calc(100vh - 49px); display: grid; place-items: center; padding: 48px 0; }}
+.consent-layout {{ width: min(690px, 100%); }}
+.eyebrow {{ margin: 0 0 10px; color: var(--accent); font-size: 0.78rem; font-weight: 700; }}
+h1 {{ max-width: 18ch; margin-bottom: 14px; font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.04; }}
+.lede {{ margin-bottom: 24px; }}
+.client-name {{ color: var(--accent); overflow-wrap: anywhere; }}
+.panel {{ margin: 0; padding: 0; overflow: hidden; }}
+.request-summary {{ padding: 22px; }}
+.request-summary > p {{ margin: 0 0 8px; font-size: 0.78rem; font-weight: 650; }}
+.client-row {{ display: flex; gap: 12px; align-items: center; padding-bottom: 18px; border-bottom: 1px solid var(--line); }}
+.client-mark {{ display: grid; width: 38px; height: 38px; flex: none; place-items: center; border-radius: 6px; background: var(--surface-raised); color: var(--accent); font-weight: 800; }}
+.client-row strong {{ display: block; overflow-wrap: anywhere; }}
+.client-row span {{ color: var(--muted); font-size: 0.82rem; }}
+.assurances {{ display: grid; gap: 12px; margin: 18px 0 0; padding: 0; list-style: none; }}
+.assurances li {{ display: grid; grid-template-columns: 18px 1fr; gap: 9px; color: var(--muted); font-size: 0.86rem; line-height: 1.4; }}
+.assurances svg {{ width: 16px; height: 16px; margin-top: 1px; color: var(--accent); }}
+.panel form {{ max-width: none; margin: 0; padding: 18px 22px; border-top: 1px solid var(--line); background: var(--surface-raised); }}
+.actions {{ justify-content: flex-end; }}
+.notice {{ margin: 0 0 18px; border-color: var(--signal); background: oklch(27% 0.035 48); }}
+button:active {{ transform: translateY(1px); }}
+@media (max-width: 720px) {{
+  main {{ place-items: start center; padding-top: 40px; }}
+  .actions {{ justify-content: stretch; }}
+  .actions button {{ flex: 1; }}
+}}
+@media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ transition: none !important; }} }}
 </style>
 </head>
 <body>
+<header class="site-header"><div class="wordmark">PROOFPLANE <span>/ CONNECTION APPROVAL</span></div></header>
 <main>
-<h1>Grant {client_name} access to Proofplane?</h1>
-<p>You can revoke access at any time from your Proofplane connection settings.</p>
+<div class="consent-layout">
+<section aria-labelledby="consent-title"><p class="eyebrow">CONNECTION REQUEST</p><h1 id="consent-title">Allow <span class="client-name">{client_name}</span> to connect?</h1><p class="lede">Approve only if you started this connection. You can revoke it at any time.</p>
 {notice}
 <section class="panel">
+<div class="request-summary"><p>REQUESTED BY</p><div class="client-row"><div class="client-mark" aria-hidden="true">C</div><div><strong>{client_name}</strong><span>External client</span></div></div><ul class="assurances"><li><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg><span>Proofplane never shares your sign-in credentials.</span></li><li><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"/></svg><span>The connection can be revoked later.</span></li></ul></div>
 <form method="post" action="/oauth/consent">
 <input type="hidden" name="request_id" value="{request_id}">
 <div class="actions">
-<button type="submit" name="decision" value="approve">Grant access</button>
 <button class="secondary-button" type="submit" name="decision" value="cancel">Cancel</button>
+<button type="submit" name="decision" value="approve">Grant access</button>
 </div>
 </form>
 </section>
+</section>
+</div>
 </main>
 </body>
 </html>"#,
@@ -559,15 +592,18 @@ fn oauth_html_error() -> Response {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connection could not be completed</title>
 <style>
-:root { color-scheme: dark; --canvas: oklch(17% 0.012 170); --surface: oklch(24% 0.014 170); --line: oklch(39% 0.018 170); --ink: oklch(94% 0.01 150); --muted: oklch(76% 0.015 155); }
+:root { color-scheme: dark; --canvas: oklch(17% 0.012 170); --line: oklch(39% 0.018 170); --ink: oklch(94% 0.01 150); --muted: oklch(76% 0.015 155); --accent: oklch(78% 0.09 174); }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-main { width: min(680px, calc(100% - 32px)); margin: 56px auto; border: 1px solid var(--line); border-radius: 8px; padding: 24px; background: var(--surface); }
-h1 { margin: 0 0 10px; font-size: 1.75rem; line-height: 1.15; }
-p { margin-bottom: 0; color: var(--muted); line-height: 1.55; }
+header { border-bottom: 1px solid var(--line); padding: 14px max(16px, calc((100vw - 980px) / 2)); color: var(--ink); font-size: .78rem; font-weight: 750; letter-spacing: .08em; }
+header span { color: var(--muted); font-weight: 550; }
+main { width: min(690px, calc(100% - 32px)); min-height: calc(100vh - 49px); margin: 0 auto; display: grid; align-content: center; padding: 40px 0; }
+.eyebrow { margin: 0 0 10px; color: var(--accent); font-size: .78rem; font-weight: 700; }
+h1 { max-width: 20ch; margin: 0 0 12px; font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.04; }
+p { max-width: 58ch; margin: 0; color: var(--muted); line-height: 1.55; }
 </style>
 </head>
-<body><main><h1>Connection could not be completed</h1><p>Return to your client and start the Proofplane connection again.</p></main></body>
+<body><header>PROOFPLANE <span>/ CONNECTION APPROVAL</span></header><main><p class="eyebrow">REQUEST ENDED</p><h1>Connection could not be completed</h1><p>Return to your client and start the Proofplane connection again.</p></main></body>
 </html>"#
             .to_owned(),
     )
