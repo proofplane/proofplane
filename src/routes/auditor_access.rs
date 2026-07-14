@@ -81,6 +81,14 @@ pub fn router(state: AuditorAccessState) -> Router {
         .route("/auditor-access/portal", get(portal_page))
         .route("/auditor-access/portal/data", get(portal_data))
         .route(
+            "/auditor-access/portal/framework-requirements/{requirement_id}",
+            get(requirement_page),
+        )
+        .route(
+            "/auditor-access/portal/framework-requirements/{requirement_id}/controls/{control_id}",
+            get(control_page),
+        )
+        .route(
             "/auditor-access/portal/{*download_path}",
             get(download_attachment),
         )
@@ -380,6 +388,72 @@ async fn portal_page(
     Ok(Html(render_portal_page(&model)).into_response())
 }
 
+async fn requirement_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(requirement_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    match render_requirement_page(&model, requirement_id) {
+        Some(page) => Ok(Html(page).into_response()),
+        None => Ok(unavailable_response()),
+    }
+}
+
+async fn control_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path((requirement_id, control_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    match render_control_page(&model, requirement_id, control_id) {
+        Some(page) => Ok(Html(page).into_response()),
+        None => Ok(unavailable_response()),
+    }
+}
+
 async fn portal_data(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
@@ -560,125 +634,256 @@ fn render_verify_page(
 }
 
 fn render_portal_page(model: &AuditorPortalReadModel) -> String {
-    let control_count = model.controls.len();
-    let controls = if model.controls.is_empty() {
-        r#"<p class="empty">No mapped controls are available for this auditor portal.</p>"#
-            .to_owned()
+    let total = model.framework_requirements.len();
+    let requirements = &model.framework_requirements;
+
+    let framework_nav = model.framework_requirements.iter().fold(
+        Vec::<(&str, &str)>::new(),
+        |mut frameworks, requirement| {
+            if !frameworks
+                .iter()
+                .any(|(code, _)| *code == requirement.framework_code)
+            {
+                frameworks.push((&requirement.framework_code, &requirement.framework_name));
+            }
+            frameworks
+        },
+    );
+    let framework_links = if framework_nav.len() > 1 {
+        format!(
+            r#"<nav class="framework-nav" aria-label="Frameworks">{}</nav>"#,
+            framework_nav
+                .iter()
+                .map(|(code, name)| format!(
+                    r##"<a href="#framework-{}">{} <span>{}</span></a>"##,
+                    escape_html(code),
+                    escape_html(name),
+                    escape_html(code),
+                ))
+                .collect::<Vec<_>>()
+                .join("")
+        )
     } else {
-        model
-            .controls
-            .iter()
-            .map(render_control)
-            .collect::<Vec<_>>()
-            .join("")
+        String::new()
+    };
+
+    let rows = if requirements.is_empty() {
+        r#"<div class="empty-state"><h2>No framework requirements</h2><p>No framework requirements are available for this auditor portal.</p></div>"#.to_owned()
+    } else {
+        let mut output = String::new();
+        let mut current_framework = "";
+        for requirement in requirements {
+            if current_framework != requirement.framework_code {
+                if !current_framework.is_empty() {
+                    output.push_str("</tbody></table></section>");
+                }
+                current_framework = &requirement.framework_code;
+                output.push_str(&format!(
+                    r#"<section class="framework-section" id="framework-{}" aria-labelledby="framework-title-{}"><div class="section-heading"><p class="eyebrow">Framework</p><h2 id="framework-title-{}">{}</h2><p>{}</p></div><table class="ledger"><thead><tr><th>Requirement</th><th class="numeric">Mapped controls</th><th class="numeric">Evidence requests</th><th class="numeric">Evidence submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>"#,
+                    escape_html(&requirement.framework_code),
+                    escape_html(&requirement.framework_code),
+                    escape_html(&requirement.framework_code),
+                    escape_html(&requirement.framework_name),
+                    escape_html(&requirement.framework_code),
+                ));
+            }
+            output.push_str(&render_requirement_row(model, requirement));
+        }
+        output.push_str("</tbody></table></section>");
+        output
     };
 
     render_shell(
-        "Auditor portal",
+        "Framework requirements",
         &format!(
-            r#"<main class="portal">
-<header class="portal-header">
-<div>
-<p class="eyebrow">Auditor portal</p>
-<h1>{}</h1>
-<p class="lede">Read-only review of mapped controls, framework requirements, evidence requests, submissions, and attachments.</p>
-</div>
-<dl class="session-meta">
-<div><dt>Auditor</dt><dd>{}</dd></div>
-<div><dt>Workspace</dt><dd>{}</dd></div>
-<div><dt>Controls</dt><dd>{}</dd></div>
-</dl>
+            r#"{}<main class="portal" id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><span aria-current="page">Framework requirements</span></nav>
+<header class="page-header">
+<div><p class="eyebrow">Auditor portal</p><h1>Framework requirements</h1><p class="lede">Trace each requirement to its controls and submitted evidence.</p></div>
+<dl class="page-stats"><div><dt>Requirements</dt><dd>{}</dd></div><div><dt>Controls</dt><dd>{}</dd></div></dl>
 </header>
-<div class="section-heading">
-<p class="eyebrow">Review scope</p>
-<h2>Controls and evidence</h2>
-</div>
-<section class="control-list" aria-label="Workspace controls">
 {}
-</section>
+{}
 </main>"#,
-            escape_html(&model.workspace_name),
-            escape_html(&model.auditor_email),
-            escape_html(&model.workspace_name),
-            control_count,
-            controls,
+            render_portal_bar(model),
+            total,
+            model.controls.len(),
+            framework_links,
+            rows,
         ),
     )
 }
 
-fn render_control(control: &AuditorPortalControl) -> String {
-    let requirements = if control.framework_requirements.is_empty() {
-        r#"<p class="empty compact">No framework requirements are mapped to this control.</p>"#
-            .to_owned()
+fn render_requirement_row(
+    model: &AuditorPortalReadModel,
+    requirement: &FrameworkRequirement,
+) -> String {
+    let controls = controls_for_requirement(model, Uuid::from(requirement.id));
+    let request_count = controls
+        .iter()
+        .map(|control| control.evidence_requests.len())
+        .sum::<usize>();
+    let submission_count = controls
+        .iter()
+        .flat_map(|control| &control.evidence_requests)
+        .map(|request| request.submissions.len())
+        .sum::<usize>();
+    let submitted_request_count = controls
+        .iter()
+        .flat_map(|control| &control.evidence_requests)
+        .filter(|request| !request.submissions.is_empty())
+        .count();
+    let (coverage, tone) = coverage_state(controls.len(), request_count, submitted_request_count);
+    let href = format!(
+        "/auditor-access/portal/framework-requirements/{}",
+        Uuid::from(requirement.id)
+    );
+
+    format!(
+        r#"<tr class="linked-row"><td data-label="Requirement"><a class="row-link" href="{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Mapped controls">{}</td><td class="numeric" data-label="Evidence requests">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        href,
+        escape_html(&requirement.code),
+        escape_html(&requirement.title),
+        controls.len(),
+        request_count,
+        submission_count,
+        tone,
+        coverage,
+    )
+}
+
+fn render_requirement_page(model: &AuditorPortalReadModel, requirement_id: Uuid) -> Option<String> {
+    let requirement = model
+        .framework_requirements
+        .iter()
+        .find(|requirement| Uuid::from(requirement.id) == requirement_id)?;
+    let controls = controls_for_requirement(model, requirement_id);
+    let rows = if controls.is_empty() {
+        r#"<div class="empty-state"><h2>No controls mapped</h2><p>This requirement does not have any mapped controls.</p></div>"#.to_owned()
     } else {
-        format!(
-            r#"<div class="requirement-list">{}</div>"#,
-            control
-                .framework_requirements
-                .iter()
-                .map(render_framework_requirement)
-                .collect::<Vec<_>>()
-                .join("")
-        )
-    };
-    let requests = if control.evidence_requests.is_empty() {
-        r#"<p class="empty">No evidence requests are mapped to this control.</p>"#.to_owned()
-    } else {
-        control
-            .evidence_requests
+        controls
             .iter()
-            .map(render_evidence_request)
+            .map(|control| render_control_row(requirement, control))
             .collect::<Vec<_>>()
             .join("")
     };
 
+    Some(render_shell(
+        &format!("{} {}", requirement.code, requirement.title),
+        &format!(
+            r#"{}<main class="portal" id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><span>{}</span><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
+<header class="detail-header"><p class="eyebrow">Framework requirement</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></header>
+<div class="requirement-layout">
+<aside class="context-panel" aria-labelledby="context-title"><h2 id="context-title">Requirement context</h2><dl><div><dt>Framework</dt><dd>{}</dd></div><div><dt>Framework code</dt><dd>{}</dd></div><div><dt>Requirement</dt><dd>{}</dd></div></dl></aside>
+<section class="detail-ledger" aria-labelledby="controls-title"><div class="section-heading"><p class="eyebrow">Mapped controls</p><h2 id="controls-title">Controls ({})</h2></div>{}</section>
+</div></main>"#,
+            render_portal_bar(model),
+            escape_html(&requirement.framework_name),
+            escape_html(&requirement.code),
+            escape_html(&requirement.code),
+            escape_html(&requirement.title),
+            escape_html(&requirement.description),
+            escape_html(&requirement.framework_name),
+            escape_html(&requirement.framework_code),
+            escape_html(&requirement.code),
+            controls.len(),
+            if controls.is_empty() {
+                rows
+            } else {
+                format!(
+                    r#"<table class="ledger control-ledger"><thead><tr><th>Control</th><th class="numeric">Requests</th><th class="numeric">Submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
+                    rows
+                )
+            },
+        ),
+    ))
+}
+
+fn render_control_row(
+    requirement: &FrameworkRequirement,
+    control: &AuditorPortalControl,
+) -> String {
+    let request_count = control.evidence_requests.len();
+    let submission_count = control
+        .evidence_requests
+        .iter()
+        .map(|request| request.submissions.len())
+        .sum::<usize>();
+    let submitted_request_count = control
+        .evidence_requests
+        .iter()
+        .filter(|request| !request.submissions.is_empty())
+        .count();
+    let (coverage, tone) = coverage_state(1, request_count, submitted_request_count);
     format!(
-        r#"<article class="control">
-<header class="control-heading">
-<div>
-<p class="object-label">Control</p>
-<h2><span class="control-code">{}</span>{}</h2>
-<p>{}</p>
-</div>
-</header>
-<section class="framework-panel" aria-label="Framework coverage for {}">
-<p class="object-label">Framework coverage</p>
-{}
-</section>
-<section class="evidence-panel" aria-label="Evidence mapped to {}">
-<p class="object-label">Evidence requests</p>
-<div class="request-list">{}</div>
-</section>
-</article>"#,
+        r#"<tr class="linked-row"><td data-label="Control"><a class="row-link" href="/auditor-access/portal/framework-requirements/{}/controls/{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Evidence requests">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        Uuid::from(requirement.id),
+        Uuid::from(control.id),
         escape_html(&control.code),
         escape_html(&control.title),
-        escape_html(&control.description),
-        escape_html(&control.title),
-        requirements,
-        escape_html(&control.title),
-        requests,
+        request_count,
+        submission_count,
+        tone,
+        coverage,
     )
 }
 
-fn render_framework_requirement(requirement: &FrameworkRequirement) -> String {
-    format!(
-        r#"<article class="requirement">
-<dl class="details">
-<div><dt>Framework</dt><dd>{}</dd></div>
-<div><dt>Framework requirement</dt><dd><span class="requirement-code">{}</span>{}</dd></div>
-</dl>
-<p>{}</p>
-</article>"#,
-        escape_html(&requirement.framework_name),
-        escape_html(&requirement.code),
-        escape_html(&requirement.title),
-        escape_html(&requirement.description),
-    )
+fn render_control_page(
+    model: &AuditorPortalReadModel,
+    requirement_id: Uuid,
+    control_id: Uuid,
+) -> Option<String> {
+    let requirement = model
+        .framework_requirements
+        .iter()
+        .find(|requirement| Uuid::from(requirement.id) == requirement_id)?;
+    let control = controls_for_requirement(model, requirement_id)
+        .into_iter()
+        .find(|control| Uuid::from(control.id) == control_id)?;
+    let submission_count = control
+        .evidence_requests
+        .iter()
+        .map(|request| request.submissions.len())
+        .sum::<usize>();
+    let requests = if control.evidence_requests.is_empty() {
+        r#"<div class="empty-state"><h2>No evidence requested</h2><p>No evidence requests are mapped to this control.</p></div>"#.to_owned()
+    } else {
+        control
+            .evidence_requests
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(index, request)| render_evidence_request(request, index == 0))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    Some(render_shell(
+        &format!("{} {}", control.code, control.title),
+        &format!(
+            r#"{}<main class="portal" id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><a href="/auditor-access/portal/framework-requirements/{}">{}</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
+<header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence requests</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
+<section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence by request</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
+</main>"#,
+            render_portal_bar(model),
+            requirement_id,
+            escape_html(&requirement.code),
+            escape_html(&control.code),
+            escape_html(&control.code),
+            escape_html(&control.title),
+            escape_html(&control.description),
+            control.evidence_requests.len(),
+            submission_count,
+            requests,
+        ),
+    ))
 }
 
-fn render_evidence_request(request: &AuditorPortalEvidenceRequest) -> String {
+fn render_evidence_request(request: &AuditorPortalEvidenceRequest, open: bool) -> String {
     let submissions = if request.submissions.is_empty() {
-        r#"<p class="empty">No submissions have been received for this request.</p>"#.to_owned()
+        r#"<p class="empty compact">Awaiting submission. No evidence has been received for this request.</p>"#.to_owned()
     } else {
         request
             .submissions
@@ -689,34 +894,57 @@ fn render_evidence_request(request: &AuditorPortalEvidenceRequest) -> String {
     };
 
     format!(
-        r#"<section class="request" aria-labelledby="request-{}">
-<div class="request-heading">
-<div>
-<p class="object-label">Evidence request</p>
-<h3 id="request-{}">{}</h3>
-<p>{}</p>
-</div>
-<span class="status-chip">Status: {}</span>
-</div>
-<dl class="details">
-<div><dt>Due date</dt><dd>{}</dd></div>
-<div><dt>Cadence</dt><dd>{}</dd></div>
-<div><dt>Mapped to control</dt><dd>{}</dd></div>
-</dl>
-<dl class="mapping"><dt>Control mapping rationale</dt><dd>{}</dd></dl>
-<p class="object-label submissions-label">Evidence submissions</p>
-<div class="submission-list">{}</div>
-</section>"#,
-        Uuid::from(request.request.id),
-        Uuid::from(request.request.id),
+        r#"<details class="request-disclosure" {}><summary><span class="summary-title"><strong>{}</strong><small>{}</small></span><span class="summary-meta"><span>Due {}</span><span>{}</span><span>{} submissions</span><span class="status-chip">{}</span><span class="disclosure-action"><span class="when-closed sr-only">Expand evidence request</span><span class="when-open sr-only">Collapse evidence request</span><span class="disclosure-chevron" aria-hidden="true"></span></span></span></summary><div class="request-body"><p>{}</p><dl class="mapping"><dt>Control mapping rationale</dt><dd>{}</dd></dl><div class="submission-list">{}</div></div></details>"#,
+        if open { "open" } else { "" },
         escape_html(&request.request.title),
         escape_html(&request.request.description),
-        escape_html(request.request.status.as_str()),
         format_date(request.request.due_at),
         escape_html(request.request.cadence.as_str()),
-        format_date(request.mapping_created_at),
+        request.submissions.len(),
+        escape_html(request.request.status.as_str()),
+        escape_html(&request.request.description),
         escape_html(&request.mapping_rationale),
         submissions,
+    )
+}
+
+fn controls_for_requirement(
+    model: &AuditorPortalReadModel,
+    requirement_id: Uuid,
+) -> Vec<&AuditorPortalControl> {
+    model
+        .controls
+        .iter()
+        .filter(|control| {
+            control
+                .framework_requirements
+                .iter()
+                .any(|requirement| Uuid::from(requirement.id) == requirement_id)
+        })
+        .collect()
+}
+
+fn coverage_state(
+    control_count: usize,
+    request_count: usize,
+    submitted_request_count: usize,
+) -> (&'static str, &'static str) {
+    if control_count == 0 {
+        ("No controls mapped", "gap")
+    } else if request_count == 0 {
+        ("No evidence requested", "gap")
+    } else if submitted_request_count < request_count {
+        ("Awaiting submission", "gap")
+    } else {
+        ("Evidence on file", "available")
+    }
+}
+
+fn render_portal_bar(model: &AuditorPortalReadModel) -> String {
+    format!(
+        r##"<a class="skip-link" href="#main-content">Skip to main content</a><header class="portal-bar"><a class="portal-brand" href="/auditor-access/portal" aria-label="Proofplane auditor portal"><span aria-hidden="true">◇</span>Proofplane</a><div class="portal-identity"><span>{}</span><span class="readonly">Read-only</span><span class="auditor-email">{}</span><form method="post" action="/auditor-access/logout"><button class="sign-out" type="submit">Sign out</button></form></div></header>"##,
+        escape_html(&model.workspace_name),
+        escape_html(&model.auditor_email),
     )
 }
 
@@ -726,7 +954,7 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
             .to_owned()
     } else {
         format!(
-            r#"<table><caption>Evidence attachments</caption><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
+            r#"<table class="attachment-table"><caption>Evidence attachments</caption><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Checksum (SHA-256)</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
             submission
                 .attachments
                 .iter()
@@ -786,10 +1014,12 @@ fn render_attachment(attachment: &AuditorPortalAttachment) -> String {
     };
 
     format!(
-        r#"<tr><td data-label="Attachment">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td data-label="Action">{}</td></tr>"#,
+        r#"<tr><td data-label="Attachment">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td class="checksum" data-label="Checksum (SHA-256)" title="{}">{}</td><td data-label="Action">{}</td></tr>"#,
         escape_html(&attachment.filename),
         format_bytes(attachment.content_length),
         escape_html(attachment.upload_status.as_str()),
+        escape_html(&attachment.checksum_sha256),
+        compact_checksum(&attachment.checksum_sha256),
         action,
     )
 }
@@ -921,6 +1151,142 @@ td {{ font-size: 0.95rem; }}
   td::before {{ content: attr(data-label); display: block; color: var(--muted); font-size: 0.8125rem; font-weight: 620; margin-bottom: 3px; }}
   tr {{ border-top: 1px solid var(--line); padding: 10px 0; }}
 }}
+
+/* Auditor review hierarchy */
+body {{ line-height: 1.6; letter-spacing: 0.01em; }}
+.sr-only {{ position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }}
+.skip-link {{ position: fixed; top: 8px; left: 8px; z-index: 20; transform: translateY(-160%); border-radius: 6px; background: var(--accent); color: var(--canvas); padding: 10px 14px; font-weight: 700; text-decoration: none; transition: transform 180ms cubic-bezier(.25,1,.5,1); }}
+.skip-link:focus {{ transform: translateY(0); }}
+.portal-bar {{ min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 max(24px, calc((100vw - 1280px) / 2)); border-bottom: 1px solid var(--line); background: oklch(15% 0.012 170); }}
+.portal-brand {{ display: inline-flex; align-items: center; gap: 9px; color: var(--ink); font-size: 1.125rem; font-weight: 680; text-decoration: none; }}
+.portal-brand span {{ color: var(--accent); font-size: 1.4rem; }}
+.portal-identity {{ display: flex; align-items: center; gap: 16px; color: var(--muted); font-size: 0.8125rem; }}
+.readonly {{ display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }}
+.readonly::before {{ content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }}
+.portal-identity form {{ margin: 0; }}
+.sign-out {{ min-height: 44px; background: transparent; color: var(--accent); padding: 8px 4px; }}
+.sign-out:hover {{ background: transparent; color: var(--ink); }}
+main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
+.breadcrumbs {{ display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 32px; margin-bottom: 32px; color: var(--muted); font-size: 0.8125rem; }}
+.breadcrumbs a {{ color: var(--accent); text-decoration: none; }}
+.breadcrumbs a:hover {{ color: var(--ink); }}
+.page-header, .control-detail-header {{ display: flex; align-items: end; justify-content: space-between; gap: 40px; padding-bottom: 32px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }}
+.page-header h1, .detail-header h1, .control-detail-header h1 {{ font-size: 2rem; line-height: 1.15; margin-bottom: 10px; text-wrap: balance; }}
+.detail-header {{ max-width: 860px; padding-bottom: 32px; margin-bottom: 0; }}
+.detail-code {{ display: inline-block; margin-right: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }}
+.page-stats {{ display: flex; flex: 0 0 auto; gap: 0; margin: 0; }}
+.page-stats div {{ min-width: 132px; padding: 0 24px; border-inline-start: 1px solid var(--line); }}
+.page-stats dd {{ margin-top: 7px; color: var(--ink); font-size: 1.25rem; font-weight: 680; font-variant-numeric: tabular-nums; }}
+.framework-nav {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }}
+.framework-nav a {{ display: inline-flex; gap: 8px; min-height: 44px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; color: var(--ink); text-decoration: none; }}
+.framework-nav a:hover {{ background: var(--surface); border-color: var(--muted); }}
+.framework-nav span {{ color: var(--muted); }}
+.framework-section + .framework-section {{ margin-top: 48px; }}
+.section-heading {{ margin-bottom: 18px; }}
+.section-heading h2 {{ font-size: 1.25rem; margin-bottom: 4px; }}
+.section-heading p:last-child {{ margin-bottom: 0; }}
+.ledger {{ width: 100%; margin: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }}
+.ledger th {{ background: oklch(19% 0.013 170); padding: 12px 14px; color: var(--muted); font-size: 0.75rem; text-transform: none; }}
+.ledger td {{ padding: 0 14px; background: transparent; }}
+.ledger th.numeric, .ledger td.numeric {{ width: 150px; text-align: right; }}
+.ledger .linked-row {{ position: relative; padding: 0; border: 0; }}
+.ledger .linked-row:hover td {{ background: var(--surface); }}
+.ledger .linked-row:has(.row-link:focus-visible) td {{ background: var(--surface); }}
+.row-link {{ display: grid; grid-template-columns: minmax(72px, auto) 1fr; gap: 12px; align-items: baseline; min-height: 64px; padding: 18px 0; color: var(--ink); text-decoration: none; }}
+.row-link::after {{ content: ""; position: absolute; inset: 0; }}
+.row-link strong {{ color: var(--accent); font-size: 0.9375rem; }}
+.row-link span {{ color: var(--ink); }}
+.row-link small {{ grid-column: 2; color: var(--muted); font-size: 0.8125rem; line-height: 1.45; }}
+.row-arrow {{ width: 32px; color: var(--muted); font-size: 1.35rem; text-align: right; }}
+.coverage {{ display: inline-flex; align-items: center; min-height: 28px; border-radius: 4px; padding: 4px 8px; font-size: 0.8125rem; font-weight: 620; white-space: nowrap; }}
+.coverage.gap {{ background: oklch(24% 0.035 48); color: var(--signal); }}
+.coverage.available {{ background: oklch(24% 0.035 170); color: var(--accent); }}
+.pagination {{ display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-top: 24px; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }}
+.pagination div {{ display: flex; align-items: center; gap: 16px; }}
+.pagination a, .pagination div > span:first-child:last-child {{ min-height: 44px; display: inline-flex; align-items: center; color: var(--accent); text-decoration: none; }}
+.pagination [aria-disabled="true"] {{ color: var(--muted); opacity: .55; }}
+.requirement-layout {{ display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 48px; padding-top: 32px; border-top: 1px solid var(--line); }}
+.context-panel {{ padding-right: 28px; border-inline-end: 1px solid var(--line); }}
+.context-panel h2 {{ font-size: 0.8125rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }}
+.context-panel dl {{ display: grid; gap: 20px; margin: 24px 0 0; }}
+.context-panel dd {{ color: var(--ink); }}
+.detail-ledger .ledger {{ margin-top: 20px; }}
+.control-ledger .row-link {{ grid-template-columns: 72px 1fr; }}
+.evidence-dossier {{ max-width: 1180px; }}
+.request-disclosure {{ border-top: 1px solid var(--line); }}
+.request-disclosure:last-child {{ border-bottom: 1px solid var(--line); }}
+.request-disclosure summary {{ display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 24px; align-items: center; min-height: 68px; padding: 14px 16px; cursor: pointer; list-style: none; }}
+.request-disclosure summary::-webkit-details-marker {{ display: none; }}
+.request-disclosure summary:hover {{ background: var(--surface); }}
+.request-disclosure summary:focus-visible {{ outline: 2px solid var(--signal); outline-offset: -2px; }}
+.summary-title {{ display: grid; align-content: center; gap: 3px; }}
+.summary-title small {{ color: var(--muted); font-size: 0.8125rem; }}
+.summary-meta {{ display: flex; align-items: center; justify-content: end; gap: 20px; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }}
+.disclosure-action {{ display: inline-grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 6px; color: var(--accent); }}
+.request-disclosure summary:hover .disclosure-action {{ border-color: var(--accent); background: oklch(24% 0.035 170); }}
+.when-open {{ display: none; }}
+.request-disclosure[open] .when-open {{ display: inline; }}
+.request-disclosure[open] .when-closed {{ display: none; }}
+.disclosure-chevron {{ display: block; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 180ms cubic-bezier(.25,1,.5,1); }}
+.request-disclosure[open] .disclosure-chevron {{ transform: translateY(2px) rotate(225deg); }}
+.request-body {{ padding: 8px 16px 28px 40px; }}
+.request-body > p {{ max-width: 70ch; }}
+.mapping {{ max-width: 76ch; padding-top: 16px; border-top: 1px solid var(--line); }}
+.submission-list {{ gap: 0; margin-top: 24px; border-top: 1px solid var(--line); }}
+.submission {{ padding: 24px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }}
+.submission h4 {{ font-size: 1rem; }}
+.submission .details {{ margin-top: 14px; }}
+.attachment-table {{ margin-top: 20px; }}
+.attachment-table th {{ background: oklch(19% 0.013 170); }}
+.checksum {{ font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: 0.8125rem; font-variant-ligatures: none; }}
+.attachment-table .button {{ min-height: 40px; white-space: nowrap; }}
+.empty-state {{ padding: 40px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
+.empty-state h2 {{ font-size: 1.25rem; }}
+
+@media (max-width: 1100px) {{
+  .auditor-email {{ display: none; }}
+  .requirement-layout {{ grid-template-columns: 1fr; gap: 28px; }}
+  .context-panel {{ padding: 0 0 24px; border-inline-end: 0; border-bottom: 1px solid var(--line); }}
+  .context-panel dl {{ grid-template-columns: repeat(3, 1fr); }}
+}}
+
+@media (max-width: 900px) {{
+  .request-disclosure summary {{ grid-template-columns: 1fr; gap: 8px; }}
+  .summary-meta {{ justify-content: start; flex-wrap: wrap; gap: 8px 16px; }}
+}}
+
+@media (max-width: 720px) {{
+  .portal-bar {{ min-height: 56px; padding: 0 12px; }}
+  .portal-identity {{ gap: 10px; }}
+  .portal-identity > span:first-child {{ display: none; }}
+  .portal-brand {{ font-size: 1rem; }}
+  main.portal {{ width: min(100% - 24px, 1280px); padding-top: 20px; }}
+  .breadcrumbs {{ margin-bottom: 24px; }}
+  .page-header, .control-detail-header {{ display: grid; gap: 20px; align-items: start; }}
+  .page-stats {{ width: 100%; border-top: 1px solid var(--line); padding-top: 16px; }}
+  .page-stats div {{ flex: 1; min-width: 0; padding: 0 16px 0 0; border: 0; }}
+  .page-stats div + div {{ padding-left: 16px; border-inline-start: 1px solid var(--line); }}
+  .ledger, .ledger tbody {{ display: block; border: 0; }}
+  .ledger thead {{ display: none; }}
+  .ledger tr {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 18px 0; border-top: 1px solid var(--line); }}
+  .ledger tr:last-child {{ border-bottom: 1px solid var(--line); }}
+  .ledger td, .ledger td.numeric {{ display: block; width: auto; padding: 0; border: 0; text-align: left; }}
+  .ledger td::before {{ margin-bottom: 4px; }}
+  .ledger td:first-child {{ grid-column: 1 / -1; }}
+  .ledger .row-arrow {{ display: none; }}
+  .row-link {{ min-height: 44px; padding: 0; }}
+  .coverage {{ white-space: normal; }}
+  .pagination {{ align-items: start; }}
+  .pagination div {{ gap: 10px; flex-wrap: wrap; justify-content: end; }}
+  .context-panel dl {{ grid-template-columns: 1fr; }}
+  .request-disclosure summary {{ padding-left: 28px; }}
+  .request-body {{ padding-left: 12px; padding-right: 12px; }}
+  .attachment-table tr {{ display: block; padding: 16px 0; }}
+}}
+
+@media (prefers-reduced-motion: reduce) {{
+  *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; }}
+}}
 </style>
 </head>
 <body>
@@ -976,6 +1342,22 @@ fn format_date(value: DateTime<Utc>) -> String {
 
 fn format_datetime(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn compact_checksum(checksum: &str) -> String {
+    if checksum.chars().count() <= 20 {
+        return escape_html(checksum);
+    }
+    let prefix = checksum.chars().take(12).collect::<String>();
+    let suffix = checksum
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{}…{}", escape_html(&prefix), escape_html(&suffix))
 }
 
 fn escape_html(value: &str) -> String {
@@ -1089,6 +1471,7 @@ fn download_error(error: DownloadError) -> ApiError {
 struct AuditorPortalReadModelResponse {
     workspace_name: String,
     auditor_email: String,
+    framework_requirements: Vec<FrameworkRequirementResponse>,
     controls: Vec<AuditorPortalControlResponse>,
 }
 
@@ -1097,6 +1480,11 @@ impl From<AuditorPortalReadModel> for AuditorPortalReadModelResponse {
         Self {
             workspace_name: model.workspace_name,
             auditor_email: model.auditor_email,
+            framework_requirements: model
+                .framework_requirements
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             controls: model.controls.into_iter().map(Into::into).collect(),
         }
     }

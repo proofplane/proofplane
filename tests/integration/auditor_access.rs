@@ -716,20 +716,52 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
 
     assert!(body.contains("Auditor access workspace"));
     assert!(!body.contains(&workspace_id.to_string()));
-    assert!(body.contains("Framework coverage"));
-    assert!(body.contains("Framework"));
-    assert!(body.contains("Framework requirement"));
+    assert!(body.contains("Framework requirements"));
     assert!(body.contains("SOC 2"));
     assert!(body.contains("CC6.1"));
     assert!(body.contains("Logical access security"));
-    assert!(body.contains("Control"));
-    assert!(body.contains("Evidence request"));
+    assert!(body.contains("Mapped controls"));
+    assert!(body.contains("Evidence requests"));
     assert!(body.contains("Evidence submissions"));
-    assert!(body.contains("Evidence attachments"));
     assert!(body.contains("auditor@example.com"));
+    assert!(body.contains("Read-only"));
+    assert!(!body.contains("browser portal submission"));
+    assert!(!body.contains("auditor-evidence.txt"));
+
+    let requirement_id = cc61_id();
+    let requirement = app
+        .server()
+        .get(&format!(
+            "/auditor-access/portal/framework-requirements/{requirement_id}"
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    requirement.assert_status_ok();
+    let body = html_body(&requirement);
+    assert!(body.contains("Requirement context"));
     assert!(body.contains("PP-AC-01"));
+    assert!(body.contains("Access reviews"));
+    assert!(!body.contains("browser portal submission"));
+
+    let control = app
+        .server()
+        .get(&format!(
+            "/auditor-access/portal/framework-requirements/{requirement_id}/controls/{control_id}"
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    control.assert_status_ok();
+    let body = html_body(&control);
+    assert!(body.contains("Submission history"));
     assert!(body.contains("Access review evidence"));
     assert!(body.contains("browser portal submission"));
+    assert!(body.contains("Evidence attachments"));
     assert!(body.contains("auditor-evidence.txt"));
     assert!(body.contains(&auditor_download_path(submission_id, uploaded_id)));
     assert!(body.contains("pending-evidence.txt"));
@@ -823,7 +855,10 @@ async fn browser_portal_escapes_untrusted_content() {
 
     let portal = app
         .server()
-        .get("/auditor-access/portal")
+        .get(&format!(
+            "/auditor-access/portal/framework-requirements/{}/controls/{control_id}",
+            cc61_id()
+        ))
         .add_header(
             "Cookie",
             format!("proofplane_auditor_session={raw_session}"),
