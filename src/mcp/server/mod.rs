@@ -22,13 +22,19 @@ use crate::{
 };
 use url::Url;
 
-const SERVER_INSTRUCTIONS: &str = concat!(
+// The lead should be 512 characters max. OpenAI specifically documents that ChatGPT pays special
+// attention to these first 512 characters, even though that behavior isn't part of the MCP spec.
+const SERVER_INSTRUCTION_LEAD: &str = concat!(
     "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
     "requests with list_evidence_requests or list_due_evidence_requests and read ",
     "collection_instructions; second, create an evidence submission for the request with ",
     "create_evidence_submission; third, use manage_evidence_submission_attachment to get a ",
     "short-lived human browser flow for attachments. A human uploads files there; file bytes ",
-    "never pass through MCP or the model. Frameworks contain requirements, requirements are ",
+    "never pass through MCP or the model. "
+);
+
+const SERVER_INSTRUCTION_DETAIL: &str = concat!(
+    "Frameworks contain requirements, requirements are ",
     "satisfied by controls, and control mappings link controls to evidence requests. Each ",
     "evidence request can have submissions, and each submission can have attachments. Controls ",
     "define what must be proven, so review their mappings when deciding which proof satisfies a ",
@@ -36,6 +42,14 @@ const SERVER_INSTRUCTIONS: &str = concat!(
     "bearer secret and share it only with the human managing the attachment before it expires. ",
     "Call get_proofplane_guide without a topic to see its topic index."
 );
+
+fn server_instructions() -> String {
+    let mut instructions =
+        String::with_capacity(SERVER_INSTRUCTION_LEAD.len() + SERVER_INSTRUCTION_DETAIL.len());
+    instructions.push_str(SERVER_INSTRUCTION_LEAD);
+    instructions.push_str(SERVER_INSTRUCTION_DETAIL);
+    instructions
+}
 
 #[derive(Clone)]
 pub struct ProofplaneMcp {
@@ -82,7 +96,7 @@ impl ProofplaneMcp {
 fn server_info() -> ServerInfo {
     ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("proofplane", VERSION))
-        .with_instructions(SERVER_INSTRUCTIONS)
+        .with_instructions(server_instructions())
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -96,7 +110,7 @@ impl ServerHandler for ProofplaneMcp {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{server_info, ProofplaneMcp, SERVER_INSTRUCTIONS};
+    use super::{server_info, server_instructions, ProofplaneMcp, SERVER_INSTRUCTION_LEAD};
 
     fn expected_tool_descriptions() -> BTreeMap<&'static str, &'static str> {
         BTreeMap::from([
@@ -198,7 +212,11 @@ mod tests {
 
     #[test]
     fn instruction_lead_teaches_the_domain_and_complete_core_workflow() {
-        let lead = SERVER_INSTRUCTIONS.chars().take(512).collect::<String>();
+        let lead_length = SERVER_INSTRUCTION_LEAD.chars().count();
+        assert!(
+            lead_length <= 512,
+            "instruction lead is {lead_length} characters; maximum is 512"
+        );
 
         for expected in [
             "SOC 2",
@@ -210,18 +228,20 @@ mod tests {
             "file bytes never pass through MCP or the model",
         ] {
             assert!(
-                lead.contains(expected),
+                SERVER_INSTRUCTION_LEAD.contains(expected),
                 "instruction lead contains {expected:?}"
             );
         }
         assert!(
-            !lead.contains("get_proofplane_guide"),
+            !SERVER_INSTRUCTION_LEAD.contains("get_proofplane_guide"),
             "guide discovery stays outside the protected instruction lead"
         );
     }
 
     #[test]
     fn instructions_cover_relationships_and_operational_constraints() {
+        let instructions = server_instructions();
+
         for expected in [
             "Frameworks contain requirements",
             "requirements are satisfied by controls",
@@ -235,7 +255,7 @@ mod tests {
             "Call get_proofplane_guide without a topic to see its topic index",
         ] {
             assert!(
-                SERVER_INSTRUCTIONS.contains(expected),
+                instructions.contains(expected),
                 "instructions contain {expected:?}"
             );
         }
@@ -243,7 +263,7 @@ mod tests {
 
     #[test]
     fn instructions_do_not_expose_internal_or_unavailable_surfaces() {
-        let normalized = SERVER_INSTRUCTIONS.to_ascii_lowercase();
+        let normalized = server_instructions().to_ascii_lowercase();
 
         for forbidden in [
             "workspace",
