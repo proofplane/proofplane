@@ -19,20 +19,15 @@ pub struct McpRequestContext {
 }
 
 impl McpRequestContext {
-    pub fn authorize_token_workspace(
+    pub fn authorize_connection(
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
-        required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
         let connection = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
             .copied()
             .ok_or_else(internal_context_error)?;
-
-        if !connection.permissions.has(required_permission) {
-            return Err(not_found());
-        }
 
         Ok(Self {
             connection,
@@ -44,32 +39,35 @@ impl McpRequestContext {
         })
     }
 
+    pub fn authorize_token_workspace(
+        extensions: &http::Extensions,
+        headers: &http::HeaderMap,
+        required_permission: WorkspacePermission,
+    ) -> Result<Self, rmcp::ErrorData> {
+        let context = Self::authorize_connection(extensions, headers)?;
+
+        if !context.connection.permissions.has(required_permission) {
+            return Err(not_found());
+        }
+
+        Ok(context)
+    }
+
     pub fn authorize(
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
         workspace_id: WorkspaceId,
         required_permission: WorkspacePermission,
     ) -> Result<Self, rmcp::ErrorData> {
-        let connection = workspace_principal(extensions)?;
-        let request_id = extensions
-            .get::<RequestId>()
-            .copied()
-            .ok_or_else(internal_context_error)?;
+        let context = Self::authorize_connection(extensions, headers)?;
 
-        if connection.workspace_id != workspace_id
-            || !connection.permissions.has(required_permission)
+        if context.connection.workspace_id != workspace_id
+            || !context.connection.permissions.has(required_permission)
         {
             return Err(not_found());
         }
 
-        Ok(Self {
-            connection,
-            request_id,
-            session_id: headers
-                .get(SESSION_ID_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned),
-        })
+        Ok(context)
     }
 
     pub fn audit_actor(&self) -> AuditActor {
@@ -203,5 +201,23 @@ mod tests {
         )
         .expect_err("permission failure is concealed");
         assert_eq!(denied.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+    }
+
+    #[test]
+    fn connection_authorization_accepts_an_agent_connection_without_permissions() {
+        let workspace_id = WorkspaceId::from(uuid::Uuid::new_v4());
+        let mut connection = agent_connection_context(workspace_id);
+        connection.permissions = WorkspacePermissions::none();
+        let request_id = RequestId(uuid::Uuid::new_v4());
+        let mut extensions = http::Extensions::new();
+        extensions.insert(McpPrincipal::AgentConnection(connection));
+        extensions.insert(request_id);
+        let headers = http::HeaderMap::new();
+
+        let context = McpRequestContext::authorize_connection(&extensions, &headers)
+            .expect("connection-only authorization succeeds");
+
+        assert_eq!(context.connection, connection);
+        assert_eq!(context.request_id, request_id);
     }
 }

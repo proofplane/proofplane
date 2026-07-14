@@ -31,7 +31,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "list_frameworks",
-        description = "List the supported compliance frameworks that organize requirements used by controls."
+        description = "List the supported compliance frameworks that organize requirements used by controls; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn list_frameworks(
         &self,
@@ -51,7 +51,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_framework_requirements",
-        description = "List a compliance framework’s requirements so their IDs can be assigned to controls."
+        description = "List a compliance framework’s requirements so their IDs can be assigned to controls; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn list_framework_requirements(
         &self,
@@ -77,7 +77,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_controls",
-        description = "List controls that define what must be proven for compliance."
+        description = "List controls that define what must be proven for compliance; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn list_controls(
         &self,
@@ -97,7 +97,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_control",
-        description = "Get one control and its linked framework requirements by control ID."
+        description = "Get one control and its linked framework requirements by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn get_control(
         &self,
@@ -118,7 +118,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "create_control",
-        description = "Create a control that defines what must be proven and link it to the supplied framework requirement IDs."
+        description = "Create a control that defines what must be proven and link it to the supplied framework requirement IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn create_control(
         &self,
@@ -152,7 +152,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "replace_control",
-        description = "Replace a control’s code, title, description, and complete framework-requirement links by control ID."
+        description = "Replace a control’s code, title, description, and complete framework-requirement links by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn replace_control(
         &self,
@@ -187,7 +187,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_evidence_request_control_mappings",
-        description = "List the controls mapped to an evidence request, including each mapping rationale."
+        description = "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn list_evidence_request_control_mappings(
         &self,
@@ -213,7 +213,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "map_evidence_request_to_control",
-        description = "Map an evidence request to a control with a rationale explaining how the requested proof supports it."
+        description = "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn map_evidence_request_to_control(
         &self,
@@ -255,7 +255,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "remove_evidence_request_control_mapping",
-        description = "Remove the mapping between an evidence request and a control by their IDs."
+        description = "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
     async fn remove_evidence_request_control_mapping(
         &self,

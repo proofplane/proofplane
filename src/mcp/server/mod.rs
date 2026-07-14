@@ -4,6 +4,7 @@ mod common;
 mod controls;
 mod evidence_requests;
 mod evidence_submissions;
+mod guide;
 
 use rmcp::{
     handler::server::router::tool::ToolRouter,
@@ -32,7 +33,8 @@ const SERVER_INSTRUCTIONS: &str = concat!(
     "evidence request can have submissions, and each submission can have attachments. Controls ",
     "define what must be proven, so review their mappings when deciding which proof satisfies a ",
     "request. Submissions record the connected agent's provenance. Treat the browser URL as a ",
-    "bearer secret and share it only with the human managing the attachment before it expires."
+    "bearer secret and share it only with the human managing the attachment before it expires. ",
+    "Call get_proofplane_guide without a topic to see its topic index."
 );
 
 #[derive(Clone)]
@@ -73,6 +75,7 @@ impl ProofplaneMcp {
             + Self::attachment_grants_tool_router()
             + Self::auditor_access_grants_tool_router()
             + Self::controls_tool_router()
+            + Self::guide_tool_router()
     }
 }
 
@@ -103,31 +106,35 @@ mod tests {
             ),
             (
                 "create_control",
-                "Create a control that defines what must be proven and link it to the supplied framework requirement IDs.",
+                "Create a control that defines what must be proven and link it to the supplied framework requirement IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "create_evidence_request",
-                "Create an evidence request that states what proof to collect, how to collect it, and when it is due.",
+                "Create an evidence request that states what proof to collect, how to collect it, and when it is due; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "create_evidence_submission",
-                "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow.",
+                "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_control",
-                "Get one control and its linked framework requirements by control ID.",
+                "Get one control and its linked framework requirements by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "get_evidence_request",
-                "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID.",
+                "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_evidence_submission",
-                "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID.",
+                "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_latest_evidence_submission",
-                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata.",
+                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            ),
+            (
+                "get_proofplane_guide",
+                "Return embedded Proofplane guidance for a topic, or the ordered topic index when the topic is omitted or unknown.",
             ),
             (
                 "list_auditor_access_links",
@@ -135,43 +142,43 @@ mod tests {
             ),
             (
                 "list_controls",
-                "List controls that define what must be proven for compliance.",
+                "List controls that define what must be proven for compliance; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "list_due_evidence_requests",
-                "List evidence requests due at or before `now`, using the current time when `now` is omitted.",
+                "List evidence requests due at or before `now`, using the current time when `now` is omitted; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "list_evidence_request_control_mappings",
-                "List the controls mapped to an evidence request, including each mapping rationale.",
+                "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "list_evidence_requests",
-                "List evidence requests with their collection instructions, due dates, cadence, and status.",
+                "List evidence requests with their collection instructions, due dates, cadence, and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "list_framework_requirements",
-                "List a compliance framework’s requirements so their IDs can be assigned to controls.",
+                "List a compliance framework’s requirements so their IDs can be assigned to controls; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "list_frameworks",
-                "List the supported compliance frameworks that organize requirements used by controls.",
+                "List the supported compliance frameworks that organize requirements used by controls; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "manage_evidence_submission_attachment",
-                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP.",
+                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic attachments.",
             ),
             (
                 "map_evidence_request_to_control",
-                "Map an evidence request to a control with a rationale explaining how the requested proof supports it.",
+                "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "remove_evidence_request_control_mapping",
-                "Remove the mapping between an evidence request and a control by their IDs.",
+                "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "replace_control",
-                "Replace a control’s code, title, description, and complete framework-requirement links by control ID.",
+                "Replace a control’s code, title, description, and complete framework-requirement links by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "revoke_auditor_access_link",
@@ -207,6 +214,10 @@ mod tests {
                 "instruction lead contains {expected:?}"
             );
         }
+        assert!(
+            !lead.contains("get_proofplane_guide"),
+            "guide discovery stays outside the protected instruction lead"
+        );
     }
 
     #[test]
@@ -221,6 +232,7 @@ mod tests {
             "connected agent's provenance",
             "browser URL as a bearer secret",
             "before it expires",
+            "Call get_proofplane_guide without a topic to see its topic index",
         ] {
             assert!(
                 SERVER_INSTRUCTIONS.contains(expected),
@@ -238,7 +250,6 @@ mod tests {
             "tenant",
             "rest",
             "ppat_",
-            "get_proofplane_guide",
             "proofplane://docs",
             "leading",
             "powerful",
@@ -269,7 +280,17 @@ mod tests {
     }
 
     #[test]
-    fn tool_descriptions_are_concise_and_reference_only_available_surfaces() {
+    fn tool_descriptions_are_one_sentence_and_reference_registered_guide_topics() {
+        use std::collections::HashSet;
+
+        use crate::mcp::docs::TOPICS;
+
+        const GUIDE_POINTER: &str = "for guidance, call get_proofplane_guide with topic ";
+        let registered_topics = TOPICS
+            .iter()
+            .map(|topic| topic.topic)
+            .collect::<HashSet<_>>();
+
         for tool in ProofplaneMcp::tool_router().list_all() {
             let description = tool.description.as_deref().unwrap_or_default();
             assert!(!description.is_empty(), "{} has a description", tool.name);
@@ -279,24 +300,56 @@ mod tests {
                 tool.name
             );
             assert!(
-                description.len() <= 200,
+                description.len() <= 260,
                 "{} has a concise description: {description:?}",
                 tool.name
             );
 
             let normalized = description.to_ascii_lowercase();
-            for forbidden in [
-                "rest",
-                "ppat_",
-                "workspace",
-                "tenant",
-                "see guide:",
-                "get_proofplane_guide",
-                "proofplane://docs",
-            ] {
+            for forbidden in ["rest", "ppat_", "workspace", "tenant", "proofplane://docs"] {
                 assert!(
                     !normalized.contains(forbidden),
                     "{} omits {forbidden:?}: {description:?}",
+                    tool.name
+                );
+            }
+
+            let expected_topic = match tool.name.as_ref() {
+                "create_evidence_request"
+                | "list_evidence_requests"
+                | "get_evidence_request"
+                | "list_due_evidence_requests"
+                | "create_evidence_submission"
+                | "get_evidence_submission"
+                | "get_latest_evidence_submission" => Some("submitting-evidence"),
+                "manage_evidence_submission_attachment" => Some("attachments"),
+                "list_frameworks"
+                | "list_framework_requirements"
+                | "list_controls"
+                | "get_control"
+                | "create_control"
+                | "replace_control"
+                | "list_evidence_request_control_mappings"
+                | "map_evidence_request_to_control"
+                | "remove_evidence_request_control_mapping" => Some("controls-and-mappings"),
+                "create_auditor_access_link"
+                | "list_auditor_access_links"
+                | "revoke_auditor_access_link"
+                | "get_proofplane_guide" => None,
+                name => panic!("unexpected tool {name}"),
+            };
+            let actual_topic = description
+                .split_once(GUIDE_POINTER)
+                .map(|(_, topic)| topic.trim_end_matches('.'));
+            assert_eq!(
+                actual_topic, expected_topic,
+                "{} has the expected guide pointer",
+                tool.name
+            );
+            if let Some(topic) = actual_topic {
+                assert!(
+                    registered_topics.contains(topic),
+                    "{} points to registered topic {topic:?}",
                     tool.name
                 );
             }

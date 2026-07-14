@@ -28,7 +28,7 @@ use uuid::Uuid;
 impl ProofplaneMcp {
     #[tool(
         name = "create_evidence_request",
-        description = "Create an evidence request that states what proof to collect, how to collect it, and when it is due."
+        description = "Create an evidence request that states what proof to collect, how to collect it, and when it is due; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn create_evidence_request(
         &self,
@@ -64,7 +64,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_evidence_requests",
-        description = "List evidence requests with their collection instructions, due dates, cadence, and status."
+        description = "List evidence requests with their collection instructions, due dates, cadence, and status; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn list_evidence_requests(
         &self,
@@ -84,7 +84,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_evidence_request",
-        description = "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID."
+        description = "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_evidence_request(
         &self,
@@ -107,7 +107,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "list_due_evidence_requests",
-        description = "List evidence requests due at or before `now`, using the current time when `now` is omitted."
+        description = "List evidence requests due at or before `now`, using the current time when `now` is omitted; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn list_due_evidence_requests(
         &self,
