@@ -1,5 +1,6 @@
 mod auth;
 mod context;
+mod docs;
 mod server;
 mod transport;
 

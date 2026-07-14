@@ -19,7 +19,7 @@ it.
 | --- | --- | --- |
 | 001. [Server Instructions Manual](./tickets/001-server-instructions-manual.md) | Done | Added initialization guidance with explicitly client-dependent model-context handling. |
 | 002. [Tool Description Pass](./tickets/002-tool-description-pass.md) | Done | Rewrote all 20 descriptions and added exact router and authenticated discovery coverage. |
-| 003. [Guide Tool And Depth Docs](./tickets/003-guide-tool-and-depth-docs.md) | Todo | Embed the curated topic docs and expose them via `get_proofplane_guide(topic)`. |
+| 003. [Guide Tool And Depth Docs](./tickets/003-guide-tool-and-depth-docs.md) | Done | Added five embedded guides, a connection-only guide tool, discovery pointers, and contract coverage. |
 | 004. [Doc Resources Surface](./tickets/004-doc-resources-surface.md) | Todo | Expose the same docs as `proofplane://docs/{topic}` resources and enable the resources capability. |
 
 ## Sequencing

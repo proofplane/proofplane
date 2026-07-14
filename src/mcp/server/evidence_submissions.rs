@@ -29,7 +29,7 @@ use uuid::Uuid;
 impl ProofplaneMcp {
     #[tool(
         name = "create_evidence_submission",
-        description = "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow."
+        description = "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn create_evidence_submission(
         &self,
@@ -76,7 +76,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_evidence_submission",
-        description = "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID."
+        description = "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_evidence_submission(
         &self,
@@ -101,7 +101,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_latest_evidence_submission",
-        description = "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata."
+        description = "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_latest_evidence_submission(
         &self,

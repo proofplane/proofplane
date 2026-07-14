@@ -65,8 +65,11 @@ and attachments now flow through `manage_evidence_submission_attachment`.
 Ticket 002 gives each of the 20 current tools one concise sentence of domain
 semantics and does not reference guide or resource surfaces that are not yet
 registered. After registering the guide surface, ticket 003 owns adding
-guide-tool references to relevant evidence, attachment, and control
-descriptions. Auditor access tools receive no unrelated guide pointer.
+guide-tool references to relevant descriptions: evidence request and submission
+tools point to `submitting-evidence`, the attachment tool points to
+`attachments`, and framework, control, and mapping tools point to
+`controls-and-mappings`. Auditor access tools receive no unrelated guide
+pointer. Each description remains one sentence.
 
 ### Depth docs: tool + resource (progressive disclosure)
 
@@ -88,10 +91,34 @@ markdown content:
 - **`proofplane://docs/{topic}` resources** — spec-idiomatic and browsable by
   clients/humans that surface resources well (e.g. Codex, MCP Inspector).
 
+Ticket 003 ships the tool channel and shared registry. Ticket 004 remains
+responsible for the resource channel and for enabling the MCP resources
+capability; no resource URI is advertised before then.
+
 Content is embedded in the binary (`include_str!` over markdown files under
 `src/mcp/docs/`) so docs ship with the server, are unit-testable, and cannot
 drift from the deployed build. The tool and the resource handler read the same
 embedded strings; there is exactly one source per topic.
+
+The guide tool takes one optional string, `topic`. It trims surrounding
+whitespace and exact-matches the lowercase slug. Missing, blank,
+case-mismatched, and unknown values all return the deterministic index without
+echoing the rejected value. Every response uses the same envelope:
+
+- `topic: Option<String>`;
+- `title: String`;
+- `markdown: String`; and
+- `topics: Vec<{ topic, title }>`.
+
+A known topic returns its slug, title, and embedded Markdown with an empty
+`topics` list. The index returns `topic: null`, title `Proofplane guide topics`,
+Markdown asking the caller to select a listed topic, and all registry summaries
+in canonical order.
+
+Because the guide returns static content, authorization validates only the
+middleware-provided agent connection and request context. It requires no
+`WorkspacePermission`, performs no persistence, exposes no connection- or
+workspace-specific response fields, and emits no audit event.
 
 ### Prompts (deferred)
 
@@ -106,13 +133,13 @@ deferred to a future iteration.
 The depth docs are a **small, curated topic set**, not one-per-tool (20 tools
 would mean 20 drifting docs). Initial topics:
 
-| Topic (`get_proofplane_guide` arg / resource path) | Content |
-| --- | --- |
-| `glossary` | The domain vocabulary, expanded with examples. |
-| `submitting-evidence` | Request → submission → attachment, end to end. |
-| `controls-and-mappings` | Frameworks, requirements, controls, and mappings. |
-| `attachments` | Why attachment bytes move through a human browser grant, and the grant lifecycle. |
-| `errors-and-not-found` | How the server conceals workspace/permission failures as not-found, so the model does not misread them. |
+| Topic (`get_proofplane_guide` arg / resource path) | Title | Content |
+| --- | --- | --- |
+| `glossary` | Proofplane Glossary | The domain vocabulary, expanded with examples. |
+| `submitting-evidence` | Submitting Evidence | Request → submission → attachment, end to end. |
+| `controls-and-mappings` | Controls and Mappings | Frameworks, requirements, controls, and mappings. |
+| `attachments` | Attachments | Why attachment bytes move through a human browser grant, and the grant lifecycle. |
+| `errors-and-not-found` | Errors and Not Found | How the server conceals workspace/permission failures as not-found, so the model does not misread them. |
 
 `get_proofplane_guide` with no/unknown topic returns the list of valid topics
 (a lightweight index), so the model can discover what is available.
@@ -172,11 +199,13 @@ Front-loaded so the first ~512 characters are self-contained for Codex:
 > satisfies a request. Submissions record the connected agent's provenance.
 > Treat the browser URL as a bearer secret and share it only with the human
 > managing the attachment before it expires.
+>
+> Call `get_proofplane_guide` without a topic to see its topic index.
 
 Exact wording is finalized in ticket 001; this draft anchors length and the
-512-character lead. The five topics in the inventory remain canonical, but the
-instructions must not reference the guide tool or resources until tickets 003
-and 004 implement those surfaces.
+512-character lead. Ticket 003 adds guide discovery after that protected lead;
+the instructions must not reference resources until ticket 004 implements that
+surface.
 
 ## Code Touchpoints
 
@@ -197,10 +226,14 @@ and 004 implement those surfaces.
   three stages of the core loop, and the human-browser/file-byte constraint;
   and the full manual covers relationships, mappings, provenance, and secure
   browser-URL handoff.
-- Unit: every registered topic is reachable through **both**
-  `get_proofplane_guide` and `read_resource`, and the two return identical
-  content; unknown topics return the topic index, not an error dump.
-- Unit: `list_resources` enumerates exactly the registered topics with stable
+- Unit: the registry has exactly the five ordered, uniquely named topics with
+  non-empty titles and embedded Markdown; every registered guide topic resolves,
+  while missing, blank, case-mismatched, and unknown topics return the index.
+- Integration: a valid connection with zero permissions can call the guide,
+  receives no connection- or workspace-specific fields, and emits no audit
+  event.
+- Ticket 004 extends coverage so every registered topic is reachable through
+  `read_resource` with identical content and `list_resources` enumerates stable
   URIs.
 - Contract: ticket 002 descriptions do not reference REST, `ppat_`, internal
   authorization boundaries, or unavailable guide/resource surfaces. Once
@@ -241,3 +274,7 @@ and 004 implement those surfaces.
 - 2026-07-13: Corrected the current tool inventory from 17 to 20 and assigned
   guide-tool description references to ticket 003, after that surface exists;
   auditor access descriptions remain focused on auditor access.
+- 2026-07-13: Defined the shipped guide response envelope, lowercase
+  exact-match/index fallback behavior, connection-only authorization, category
+  pointer mapping, and post-lead instruction reference. Resources remain
+  deferred to ticket 004.

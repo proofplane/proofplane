@@ -155,6 +155,64 @@ async fn auth0_connection_claims_activate_connection_and_authorize_protected_too
 }
 
 #[tokio::test]
+async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
+    let app = TestApp::start_without_default_auth().await;
+    let token = app.issue_api_token(app.home_workspace_id(), vec![]).await;
+    let server = app.mcp_http_server();
+    let raw_token = token.raw_token.clone();
+
+    let ((known, unknown, denied), audit_logs) = capture_audit_logs(|request_id| {
+        let raw_token = raw_token.clone();
+        async move {
+            let client = McpClient::connect_with_request_id(&server, &raw_token, request_id).await;
+            let known = client
+                .call_tool("get_proofplane_guide", json!({"topic": " glossary "}))
+                .await;
+            let unknown = client
+                .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
+                .await;
+            let denied = client.call_tool_error("list_controls", json!({})).await;
+            (known, unknown, denied)
+        }
+    })
+    .await;
+
+    assert_eq!(known["topic"], "glossary");
+    assert_eq!(known["title"], "Proofplane Glossary");
+    assert!(known["markdown"]
+        .as_str()
+        .is_some_and(|markdown| markdown.contains("# Proofplane Glossary")));
+    assert_eq!(known["topics"], json!([]));
+    assert_eq!(
+        known
+            .as_object()
+            .expect("guide response is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ["markdown", "title", "topic", "topics"]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+
+    assert_eq!(unknown["topic"], Value::Null);
+    assert_eq!(unknown["title"], "Proofplane guide topics");
+    assert_eq!(
+        unknown["topics"],
+        json!([
+            {"topic": "glossary", "title": "Proofplane Glossary"},
+            {"topic": "submitting-evidence", "title": "Submitting Evidence"},
+            {"topic": "controls-and-mappings", "title": "Controls and Mappings"},
+            {"topic": "attachments", "title": "Attachments"},
+            {"topic": "errors-and-not-found", "title": "Errors and Not Found"}
+        ])
+    );
+    assert!(!unknown.to_string().contains("unknown-topic"));
+    assert_eq!(denied.data["problem"]["code"], "not_found");
+    assert!(audit_logs.is_empty());
+}
+
+#[tokio::test]
 async fn auth0_connection_claims_authorize_write_tools_with_agent_provenance() {
     let app = TestApp::start_without_default_auth().await;
     let subject = "auth0|agent-mcp-writer";
@@ -392,6 +450,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "list_evidence_request_control_mappings",
         "map_evidence_request_to_control",
         "remove_evidence_request_control_mapping",
+        "get_proofplane_guide",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -399,35 +458,35 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     let expected_descriptions = [
         (
             "create_evidence_request",
-            "Create an evidence request that states what proof to collect, how to collect it, and when it is due.",
+            "Create an evidence request that states what proof to collect, how to collect it, and when it is due; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "list_evidence_requests",
-            "List evidence requests with their collection instructions, due dates, cadence, and status.",
+            "List evidence requests with their collection instructions, due dates, cadence, and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_evidence_request",
-            "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID.",
+            "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "list_due_evidence_requests",
-            "List evidence requests due at or before `now`, using the current time when `now` is omitted.",
+            "List evidence requests due at or before `now`, using the current time when `now` is omitted; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "create_evidence_submission",
-            "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow.",
+            "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_evidence_submission",
-            "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID.",
+            "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_latest_evidence_submission",
-            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata.",
+            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "manage_evidence_submission_attachment",
-            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP.",
+            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic attachments.",
         ),
         (
             "create_auditor_access_link",
@@ -443,39 +502,43 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "list_frameworks",
-            "List the supported compliance frameworks that organize requirements used by controls.",
+            "List the supported compliance frameworks that organize requirements used by controls; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "list_framework_requirements",
-            "List a compliance framework’s requirements so their IDs can be assigned to controls.",
+            "List a compliance framework’s requirements so their IDs can be assigned to controls; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "list_controls",
-            "List controls that define what must be proven for compliance.",
+            "List controls that define what must be proven for compliance; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "get_control",
-            "Get one control and its linked framework requirements by control ID.",
+            "Get one control and its linked framework requirements by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "create_control",
-            "Create a control that defines what must be proven and link it to the supplied framework requirement IDs.",
+            "Create a control that defines what must be proven and link it to the supplied framework requirement IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "replace_control",
-            "Replace a control’s code, title, description, and complete framework-requirement links by control ID.",
+            "Replace a control’s code, title, description, and complete framework-requirement links by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "list_evidence_request_control_mappings",
-            "List the controls mapped to an evidence request, including each mapping rationale.",
+            "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "map_evidence_request_to_control",
-            "Map an evidence request to a control with a rationale explaining how the requested proof supports it.",
+            "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "remove_evidence_request_control_mapping",
-            "Remove the mapping between an evidence request and a control by their IDs.",
+            "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+        ),
+        (
+            "get_proofplane_guide",
+            "Return embedded Proofplane guidance for a topic, or the ordered topic index when the topic is omitted or unknown.",
         ),
     ];
     for (name, expected_description) in expected_descriptions {
@@ -490,6 +553,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .expect("submission tool has a description");
     assert!(submission_description.contains("manage_evidence_submission_attachment afterward"));
     assert!(submission_description.contains("human-browser attachment flow"));
+    assert_schema_has_property(
+        &find_tool(&tool_list, "get_proofplane_guide")["inputSchema"],
+        "topic",
+    );
+    assert_schema_lacks_property(
+        &find_tool(&tool_list, "get_proofplane_guide")["inputSchema"],
+        "workspace_id",
+    );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
         "title",
@@ -675,6 +746,12 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         &find_tool(&tool_list, "revoke_auditor_access_link")["outputSchema"],
         "grant",
     );
+    for property in ["topic", "title", "markdown", "topics"] {
+        assert_schema_has_property(
+            &find_tool(&tool_list, "get_proofplane_guide")["outputSchema"],
+            property,
+        );
+    }
 
     client
         .execute(
