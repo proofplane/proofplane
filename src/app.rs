@@ -35,6 +35,7 @@ use crate::{
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_portal::AuditorPortalReadModelService,
+        controls::ControlService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
@@ -120,6 +121,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let control_service = ControlService::new(dependencies.postgres.clone());
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         dependencies.config.mcp.resource.to_string(),
@@ -176,6 +178,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 downloads: attachment_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
+                controls: control_service,
                 secure_cookie: secure_upload_cookie,
                 max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
             },
