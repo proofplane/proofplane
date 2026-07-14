@@ -40,6 +40,7 @@ use crate::{
         attachment_downloads::DownloadGrantIssuer,
         attachment_downloads::{AttachmentDownloadService, DownloadError},
         attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
+        controls::ControlService,
         evidence_submissions::{EvidenceSubmissionService, UploadEvidenceAttachmentPayload},
         upload_sessions::{
             UploadSessionError, UploadSessionIssuer, UploadSessionTokenService,
@@ -61,6 +62,7 @@ pub struct AttachmentUploadSessionState {
     pub downloads: AttachmentDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
+    pub controls: ControlService,
     pub secure_cookie: bool,
     pub max_attachment_bytes: usize,
 }
@@ -98,6 +100,18 @@ struct UploadSessionAttachmentResponse {
     archivable: bool,
 }
 
+#[derive(Debug)]
+struct UploadSessionControlResponse {
+    code: String,
+    title: String,
+}
+
+#[derive(Debug)]
+struct UploadSessionPage {
+    attachments: Vec<UploadSessionAttachmentResponse>,
+    controls: Vec<UploadSessionControlResponse>,
+}
+
 async fn open_upload_session(
     State(state): State<AttachmentUploadSessionState>,
     headers: HeaderMap,
@@ -119,6 +133,7 @@ async fn open_upload_session(
     let body = render_upload_page(
         &inventory(
             &state.submissions,
+            &state.controls,
             session.submission_id,
             session_context(&session),
         )
@@ -140,7 +155,13 @@ async fn upload_file(
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
     let connection = session_context(&session);
-    let before = detail(&state.submissions, session.submission_id, connection).await?;
+    let before = inventory(
+        &state.submissions,
+        &state.controls,
+        session.submission_id,
+        connection,
+    )
+    .await?;
 
     let payload = match attachment_upload_from_multipart(
         &state.submissions,
@@ -255,12 +276,17 @@ async fn archive_file(
         }
         ArchiveAttachmentResult::NotFound => Ok(unavailable_response()),
         ArchiveAttachmentResult::NotTerminal => {
-            let attachments =
-                inventory(&state.submissions, session.submission_id, connection).await?;
+            let page = inventory(
+                &state.submissions,
+                &state.controls,
+                session.submission_id,
+                connection,
+            )
+            .await?;
             Ok((
                 StatusCode::CONFLICT,
                 Html(render_upload_page(
-                    &attachments,
+                    &page,
                     Some("Archive failed: attachment is still processing"),
                 )),
             )
@@ -313,15 +339,26 @@ async fn redeem_grant(
 
 async fn inventory(
     submissions: &EvidenceSubmissionService,
+    controls: &ControlService,
     submission_id: EvidenceSubmissionId,
     connection: AgentConnectionContext,
-) -> Result<Vec<UploadSessionAttachmentResponse>, ApiError> {
-    Ok(detail(submissions, submission_id, connection)
+) -> Result<UploadSessionPage, ApiError> {
+    let detail = detail(submissions, submission_id, connection).await?;
+    let mappings = controls
+        .list_evidence_request_control_mappings(connection, detail.submission.evidence_request_id)
         .await?
-        .attachments
-        .into_iter()
-        .map(Into::into)
-        .collect())
+        .ok_or_else(unavailable)?;
+
+    Ok(UploadSessionPage {
+        attachments: detail.attachments.into_iter().map(Into::into).collect(),
+        controls: mappings
+            .into_iter()
+            .map(|mapping| UploadSessionControlResponse {
+                code: mapping.control.code,
+                title: mapping.control.title,
+            })
+            .collect(),
+    })
 }
 
 async fn detail(
@@ -384,27 +421,24 @@ fn session_context(session: &VerifiedUploadSession) -> AgentConnectionContext {
     }
 }
 
-fn render_upload_page(
-    attachments: &[UploadSessionAttachmentResponse],
-    message: Option<&str>,
-) -> String {
+fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String {
     let message = message
         .map(|message| {
             format!(
-                r#"<section class="notice"><strong>{}</strong><p>Ask the MCP client to check attachment processing status.</p></section>"#,
+                r#"<section class="notice" role="alert"><strong>{}</strong><p>Choose another file or ask the MCP client to check attachment processing status.</p></section>"#,
                 escape_html(message)
             )
         })
         .unwrap_or_default();
-    let rows = if attachments.is_empty() {
-        r#"<p class="empty">No attachments have been added yet.</p>"#.to_owned()
+    let rows = if page.attachments.is_empty() {
+        r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No evidence files yet</strong><p>Choose a file to start this submission.</p></div></div>"#.to_owned()
     } else {
         format!(
             r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody>{}</tbody></table>"#,
-            attachments
+            page.attachments
                 .iter()
                 .map(|attachment| format!(
-                    "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    "<tr><td class=\"filename\" data-label=\"File\">{}</td><td data-label=\"Size\">{}</td><td data-label=\"Status\"><span class=\"status\">{}</span></td><td data-label=\"Actions\">{}</td></tr>",
                     escape_html(&attachment.filename),
                     format_bytes(attachment.content_length),
                     escape_html(&attachment.upload_status),
@@ -414,14 +448,32 @@ fn render_upload_page(
                 .join("")
         )
     };
-    let upload = r#"<section class="panel" aria-labelledby="upload-file">
-<h2 id="upload-file">Upload a file</h2>
-<form method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
-<label for="file">File</label>
+    let controls = if page.controls.is_empty() {
+        r#"<p class="control-empty">No controls are mapped to this evidence request.</p>"#
+            .to_owned()
+    } else {
+        format!(
+            r#"<ul class="control-list">{}</ul>"#,
+            page.controls
+                .iter()
+                .map(|control| format!(
+                    r#"<li><strong>{}</strong><span>{}</span></li>"#,
+                    escape_html(&control.code),
+                    escape_html(&control.title),
+                ))
+                .collect::<Vec<_>>()
+                .join("")
+        )
+    };
+    let upload = r#"<aside class="upload-panel" aria-labelledby="upload-file">
+<h2 id="upload-file">Add evidence</h2>
+<p>One file at a time. Uploads are scanned before they become available.</p>
+<form class="upload-form" method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
+<label for="file">Choose file</label>
 <input id="file" name="file" type="file" required>
-<button type="submit">Upload</button>
+<button type="submit">Upload evidence</button>
 </form>
-</section>"#
+</aside>"#
         .to_owned();
 
     format!(
@@ -443,7 +495,6 @@ fn render_upload_page(
   --accent: oklch(78% 0.09 174);
   --signal: oklch(78% 0.08 48);
   --danger: oklch(66% 0.18 28);
-  --danger-hover: oklch(60% 0.18 28);
 }}
 * {{ box-sizing: border-box; }}
 body {{
@@ -516,25 +567,74 @@ button:hover, .button:hover {{ background: oklch(72% 0.09 174); }}
   height: 40px;
   place-items: center;
   padding: 0;
+  background: transparent;
+  color: var(--muted);
+  transition: background-color 160ms ease-out, color 160ms ease-out;
 }}
 .icon-button svg {{ width: 18px; height: 18px; stroke: currentColor; }}
-.danger-button {{ background: var(--danger); color: var(--ink); }}
-.danger-button:hover {{ background: var(--danger-hover); }}
+.icon-button:hover {{ background: var(--surface-raised); color: var(--ink); }}
+.danger-button {{ color: var(--danger); }}
+.danger-button:hover {{ background: oklch(25% 0.035 28); color: var(--danger); }}
+.site-header {{ border-bottom: 1px solid var(--line); padding: 14px max(16px, calc((100vw - 1080px) / 2)); }}
+.wordmark {{ color: var(--ink); font-size: 0.78rem; font-weight: 750; letter-spacing: 0.08em; }}
+.wordmark span {{ color: var(--muted); font-weight: 550; }}
+main {{ width: min(1080px, calc(100% - 32px)); padding: 52px 0 72px; }}
+.page-header {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; }}
+.eyebrow {{ margin: 0 0 10px; color: var(--accent); font-size: 0.78rem; font-weight: 700; }}
+h1 {{ max-width: 18ch; font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.05; }}
+h2 {{ margin: 0; font-size: 1.1rem; }}
+.control-context {{ width: min(360px, 38vw); margin: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; }}
+.control-context > p:first-child {{ margin: 0 0 10px; color: var(--muted); font-size: 0.74rem; font-weight: 700; }}
+.control-list {{ display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }}
+.control-list li {{ display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: baseline; }}
+.control-list strong {{ color: var(--accent); font-size: 0.8rem; }}
+.control-list span {{ color: var(--ink); font-size: 0.88rem; line-height: 1.35; }}
+.control-empty {{ margin: 0; font-size: 0.86rem; }}
+.workspace {{ display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.85fr); gap: 28px; margin-top: 36px; align-items: start; }}
+.panel {{ margin: 0; padding: 18px 0 0; border-width: 1px 0 0; border-radius: 0; background: transparent; }}
+.panel-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: baseline; margin-bottom: 14px; }}
+.count {{ color: var(--muted); font-size: 0.78rem; font-weight: 650; }}
+.upload-panel {{ border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 22px; }}
+.upload-panel p {{ margin: 8px 0 20px; font-size: 0.9rem; }}
+.upload-form {{ display: grid; gap: 14px; margin: 0; }}
+.upload-form button {{ justify-self: start; }}
+input[type="file"]::file-selector-button {{ margin-right: 10px; border: 0; border-radius: 4px; background: var(--ink); color: var(--canvas); padding: 7px 10px; font: inherit; font-weight: 700; cursor: pointer; }}
+.filename {{ color: var(--ink); font-weight: 650; overflow-wrap: anywhere; }}
+.status {{ display: inline-block; border-radius: 4px; background: var(--surface-raised); color: var(--muted); padding: 5px 8px; font-size: 0.76rem; font-weight: 650; }}
+.empty {{ min-height: 210px; display: grid; place-content: center; justify-items: center; border: 1px dashed var(--line); border-radius: 8px; padding: 28px; text-align: center; }}
+.empty svg {{ width: 28px; height: 28px; margin-bottom: 14px; color: var(--accent); }}
+.empty strong {{ display: block; margin-bottom: 5px; }}
+.empty p {{ margin: 0; font-size: 0.9rem; }}
+@media (max-width: 760px) {{
+  main {{ padding-top: 36px; }}
+  .page-header, .workspace {{ grid-template-columns: 1fr; }}
+  .control-context {{ width: 100%; }}
+  .upload-panel {{ grid-row: 1; }}
+  thead {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }}
+  table, tbody, tr, td {{ display: block; }}
+  tr {{ padding: 12px 0; border-bottom: 1px solid var(--line); }}
+  td {{ display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 12px; padding: 6px 0; border: 0; }}
+  td::before {{ content: attr(data-label); color: var(--muted); font-size: 0.76rem; font-weight: 650; }}
+}}
+@media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ transition: none !important; }} }}
 </style>
 </head>
 <body>
+<header class="site-header"><div class="wordmark">PROOFPLANE <span>/ EVIDENCE INTAKE</span></div></header>
 <main>
-<h1>Evidence attachment management</h1>
-<p>Add evidence files for the scoped submission. This link does not grant access to the rest of Proofplane.</p>
+<header class="page-header"><div><p class="eyebrow">SCOPED EVIDENCE SUBMISSION</p><h1>Evidence attachments</h1><p>Add the files that support this submission, then return to your MCP client to continue.</p></div><aside class="control-context" aria-label="Evidence target"><p>PROVIDING EVIDENCE FOR</p>{controls}</aside></header>
 {message}
+<div class="workspace">
 <section class="panel" aria-labelledby="current-attachments">
-<h2 id="current-attachments">Current attachments</h2>
+<div class="panel-heading"><h2 id="current-attachments">Uploaded files</h2><span class="count">{count} total</span></div>
 {rows}
 </section>
 {upload}
+</div>
 </main>
 </body>
-</html>"#
+</html>"#,
+        count = page.attachments.len(),
     )
 }
 
@@ -651,7 +751,7 @@ async fn maybe_delete_uploaded_file(service: &EvidenceSubmissionService, key: St
     let _ = service.delete_uploaded_attachment_object(&key).await;
 }
 
-fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> Response {
+fn upload_error_response(page: &UploadSessionPage, error: ApiError) -> Response {
     let (status, message) = match error {
         ApiError::BadRequest(details) => details
             .into_iter()
@@ -664,17 +764,10 @@ fn upload_error_response(detail: &EvidenceSubmissionDetail, error: ApiError) -> 
         ),
         _ => (StatusCode::BAD_REQUEST, "Upload failed".to_owned()),
     };
-    let attachments = detail
-        .attachments
-        .clone()
-        .into_iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
-
     (
         status,
         Html(render_upload_page(
-            &attachments,
+            page,
             Some(&format!("Upload failed: {message}")),
         )),
     )
@@ -689,13 +782,18 @@ fn unavailable_page() -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Upload link unavailable</title>
 <style>
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: oklch(17% 0.012 170); color: oklch(94% 0.01 150); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-main { width: min(560px, calc(100% - 32px)); border: 1px solid oklch(39% 0.018 170); background: oklch(24% 0.014 170); border-radius: 8px; padding: 24px; }
-h1 { margin: 0 0 10px; font-size: 1.5rem; letter-spacing: 0; }
-p { margin: 0; color: oklch(76% 0.015 155); line-height: 1.55; }
+:root { color-scheme: dark; --canvas: oklch(17% 0.012 170); --line: oklch(39% 0.018 170); --ink: oklch(94% 0.01 150); --muted: oklch(76% 0.015 155); --accent: oklch(78% 0.09 174); }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { border-bottom: 1px solid var(--line); padding: 14px max(16px, calc((100vw - 1080px) / 2)); color: var(--ink); font-size: .78rem; font-weight: 750; letter-spacing: .08em; }
+header span { color: var(--muted); font-weight: 550; }
+main { width: min(690px, calc(100% - 32px)); min-height: calc(100vh - 49px); margin: 0 auto; display: grid; align-content: center; padding: 40px 0; }
+.eyebrow { margin: 0 0 10px; color: var(--accent); font-size: .78rem; font-weight: 700; }
+h1 { max-width: 20ch; margin: 0 0 12px; font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.05; }
+p { max-width: 58ch; margin: 0; color: var(--muted); line-height: 1.55; }
 </style>
 </head>
-<body><main><h1>This upload link is no longer available</h1><p>Ask the MCP client for a new upload link.</p></main></body>
+<body><header>PROOFPLANE <span>/ EVIDENCE INTAKE</span></header><main><p class="eyebrow">SESSION ENDED</p><h1>This upload link is no longer available</h1><p>Return to your MCP client and request a new evidence upload link.</p></main></body>
 </html>"#
         .to_owned()
 }
@@ -785,7 +883,7 @@ fn attachment_actions(attachment: &UploadSessionAttachmentResponse) -> String {
     let mut actions = Vec::new();
     if attachment.downloadable {
         actions.push(format!(
-            r#"<a class="button" href="/evidence-attachment-uploads/files/{}/download">Download</a>"#,
+            r#"<a class="button icon-button" href="/evidence-attachment-uploads/files/{}/download" aria-label="Download attachment"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
             attachment.id
         ));
     }
@@ -815,5 +913,47 @@ fn upload_session_download_error(error: DownloadError) -> ApiError {
             tracing::error!(error = %repository_error, "attachment download repository failure");
             ApiError::Internal
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        render_upload_page, UploadSessionAttachmentResponse, UploadSessionControlResponse,
+        UploadSessionPage,
+    };
+
+    #[test]
+    fn upload_page_keeps_scope_actions_and_mobile_labels_visible() {
+        let html = render_upload_page(
+            &UploadSessionPage {
+                attachments: vec![UploadSessionAttachmentResponse {
+                    id: uuid::Uuid::nil(),
+                    filename: "access-review.pdf".to_owned(),
+                    content_length: 2048,
+                    upload_status: "uploaded".to_owned(),
+                    downloadable: true,
+                    archivable: true,
+                }],
+                controls: vec![UploadSessionControlResponse {
+                    code: "CC6.1".to_owned(),
+                    title: "Logical access controls".to_owned(),
+                }],
+            },
+            None,
+        );
+
+        for expected in [
+            "PROVIDING EVIDENCE FOR",
+            "CC6.1",
+            "Logical access controls",
+            "Upload evidence",
+            "data-label=\"Status\"",
+            "aria-label=\"Download attachment\"",
+            "Archive attachment",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+        assert!(!html.contains("Limited access."));
     }
 }
