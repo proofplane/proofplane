@@ -138,6 +138,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         dependencies.postgres.clone(),
         dependencies.config.server.public_api_base_url.clone(),
         dependencies.config.mcp.resource.clone(),
+        crate::services::cimd::CimdResolver::new(),
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );

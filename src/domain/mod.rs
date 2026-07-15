@@ -44,8 +44,8 @@ pub use evidence_submission::{
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
 };
 pub use oauth::{
-    NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, NewOAuthClient,
-    OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient,
+    NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,
+    OAuthAuthorizationRequest, OAuthAuthorizationRequestId,
 };
 pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
 pub use sha256_digest::Sha256Digest;

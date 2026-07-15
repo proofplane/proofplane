@@ -272,16 +272,10 @@ ALTER TABLE evidence_submissions
 ALTER TABLE attachment_upload_grants
     ADD COLUMN issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
 
-CREATE TABLE IF NOT EXISTS oauth_clients (
-    id TEXT PRIMARY KEY,
-    client_name TEXT NOT NULL,
-    redirect_uris TEXT[] NOT NULL CHECK (cardinality(redirect_uris) > 0),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE IF NOT EXISTS oauth_authorization_requests (
     id UUID PRIMARY KEY,
-    client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
     redirect_uri TEXT NOT NULL,
     code_challenge TEXT NOT NULL,
     state TEXT NOT NULL,
@@ -301,7 +295,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
     request_id UUID NOT NULL UNIQUE REFERENCES oauth_authorization_requests(id) ON DELETE CASCADE,
     agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
     workspace_id UUID NOT NULL REFERENCES workspaces(id),
-    client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
     redirect_uri TEXT NOT NULL,
     code_challenge TEXT NOT NULL,
     resource TEXT NOT NULL,

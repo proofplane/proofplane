@@ -101,6 +101,7 @@ async fn run() -> Result<(), Error> {
         postgres.clone(),
         config.server.public_api_base_url.clone(),
         config.mcp.resource.clone(),
+        proofplane::services::cimd::CimdResolver::new(),
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );

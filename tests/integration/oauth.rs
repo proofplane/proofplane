@@ -2,7 +2,7 @@ use axum::http::{header, StatusCode};
 use bytes::Bytes;
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    NewOAuthAuthorizationRequest, NewOAuthClient, OAuthAuthorizationRequestId, WorkspacePermission,
+    NewOAuthAuthorizationRequest, OAuthAuthorizationRequestId, WorkspacePermission,
 };
 use uuid::Uuid;
 
@@ -103,6 +103,38 @@ async fn expired_invalid_and_membershipless_consent_reveal_only_recovery_guidanc
     assert_generic_recovery(&invalid, "not-a-uuid");
 }
 
+#[tokio::test]
+async fn authorization_server_metadata_advertises_cimd_and_drops_dcr() {
+    let app = TestApp::start_without_default_auth().await;
+
+    let response = app
+        .server()
+        .get("/.well-known/oauth-authorization-server")
+        .await;
+    response.assert_status_ok();
+    let metadata = response.json::<serde_json::Value>();
+    assert_eq!(
+        metadata["client_id_metadata_document_supported"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        metadata["token_endpoint_auth_methods_supported"],
+        serde_json::json!(["none"])
+    );
+    assert!(
+        metadata.get("registration_endpoint").is_none(),
+        "registration endpoint must not be advertised once DCR is removed"
+    );
+
+    // The dynamic client registration endpoint is gone entirely.
+    let register = app
+        .server()
+        .post("/oauth/register")
+        .json(&serde_json::json!({ "redirect_uris": ["https://client.example/cb"] }))
+        .await;
+    register.assert_status(StatusCode::NOT_FOUND);
+}
+
 async fn seeded_request(
     app: &TestApp,
     subject: &str,
@@ -114,17 +146,10 @@ async fn seeded_request(
     let request_id = OAuthAuthorizationRequestId::from(Uuid::new_v4());
     let client_id = format!("oauth-client-{request_id}");
     app.postgres()
-        .create_oauth_client(&NewOAuthClient {
-            id: client_id.clone(),
-            client_name: client_name.to_owned(),
-            redirect_uris: vec!["https://client.example/callback".to_owned()],
-        })
-        .await
-        .expect("OAuth client creates");
-    app.postgres()
         .create_oauth_authorization_request(&NewOAuthAuthorizationRequest {
             id: request_id,
             client_id,
+            client_name: client_name.to_owned(),
             redirect_uri: "https://client.example/callback".to_owned(),
             code_challenge: "challenge".to_owned(),
             state: "original-state".to_owned(),

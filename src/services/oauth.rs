@@ -16,8 +16,8 @@ use crate::{
     },
     domain::{
         canonical_permissions, AgentConnection, NewOAuthAuthorizationCode,
-        NewOAuthAuthorizationRequest, NewOAuthClient, OAuthAuthorizationCode,
-        OAuthAuthorizationRequest, OAuthAuthorizationRequestId, OAuthClient, WorkspacePermission,
+        NewOAuthAuthorizationRequest, OAuthAuthorizationCode, OAuthAuthorizationRequest,
+        OAuthAuthorizationRequestId, WorkspacePermission,
     },
     repository::{Error as RepositoryError, Postgres},
 };
@@ -27,6 +27,7 @@ use super::agent_connections::{
     ConsumeContinuationOutcome, ConsumeContinuationPayload, CreatePendingConnectionPayload,
     FindReusableConnectionPayload,
 };
+use super::cimd::{CimdError, CimdResolver};
 
 const AUTHORIZATION_CODE_TTL: ChronoDuration = ChronoDuration::minutes(5);
 const AUTHORIZATION_REQUEST_TTL: ChronoDuration = ChronoDuration::minutes(10);
@@ -36,6 +37,7 @@ const ACCESS_TOKEN_TTL: ChronoDuration = ChronoDuration::hours(24);
 pub struct OAuthService {
     repository: Arc<Postgres>,
     agent_connections: AgentConnectionService,
+    cimd: CimdResolver,
     resource: Url,
     token_encryptor: McpOAuthEncryptor,
     token_decryptor: McpOAuthDecryptor,
@@ -55,14 +57,10 @@ pub enum OAuthError {
     AgentConnection(#[from] AgentConnectionError),
     #[error("MCP OAuth token operation failed")]
     Token(#[from] crate::authentication::paseto::Error),
+    #[error("client id metadata document could not be resolved")]
+    Cimd(#[from] CimdError),
     #[error("random generation failed")]
     Random(#[from] getrandom::Error),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegisterClientPayload {
-    pub client_name: String,
-    pub redirect_uris: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +118,7 @@ impl OAuthService {
         repository: Arc<Postgres>,
         _issuer: Url,
         resource: Url,
+        cimd: CimdResolver,
         token_encryptor: McpOAuthEncryptor,
         token_decryptor: McpOAuthDecryptor,
     ) -> Self {
@@ -127,39 +126,24 @@ impl OAuthService {
         Self {
             repository,
             agent_connections,
+            cimd,
             resource,
             token_encryptor,
             token_decryptor,
         }
     }
 
-    pub async fn register_client(
-        &self,
-        payload: RegisterClientPayload,
-    ) -> Result<OAuthClient, OAuthError> {
-        self.repository
-            .create_oauth_client(&NewOAuthClient {
-                id: format!("ppoc_{}", random_secret(24)?),
-                client_name: payload.client_name,
-                redirect_uris: payload.redirect_uris,
-            })
-            .await
-            .map_err(OAuthError::Repository)
-    }
-
     pub async fn prepare_authorization(
         &self,
         payload: AuthorizePayload,
     ) -> Result<PreparedAuthorization, OAuthError> {
-        let client = self
-            .repository
-            .get_oauth_client(&payload.client_id)
-            .await?
-            .ok_or(OAuthError::InvalidClient)?;
+        // The client_id is a CIMD URL; fetch the client's published metadata and
+        // validate the requested redirect_uri against what it declares.
+        let client = self.cimd.resolve(&payload.client_id).await?;
         if !client
             .redirect_uris
             .iter()
-            .any(|uri| uri == &payload.redirect_uri)
+            .any(|uri| redirect_uri_matches(uri, &payload.redirect_uri))
         {
             return Err(OAuthError::InvalidRequest);
         }
@@ -169,7 +153,8 @@ impl OAuthService {
                 .repository
                 .create_oauth_authorization_request(&NewOAuthAuthorizationRequest {
                     id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
-                    client_id: client.id,
+                    client_id: payload.client_id,
+                    client_name: client.client_name,
                     redirect_uri: payload.redirect_uri,
                     code_challenge: payload.code_challenge,
                     state: payload.state.unwrap_or_default(),
@@ -242,11 +227,6 @@ impl OAuthService {
             .clone()
             .ok_or(OAuthError::InvalidGrant)?;
         let user_id = request.user_id.ok_or(OAuthError::InvalidGrant)?;
-        let client = self
-            .repository
-            .get_oauth_client(&request.client_id)
-            .await?
-            .ok_or(OAuthError::InvalidClient)?;
         let workspace = self
             .repository
             .get_workspace_with_role_for_user(user_id)
@@ -260,7 +240,7 @@ impl OAuthService {
                 workspace_id: workspace.workspace.id,
                 auth0_subject: auth0_subject.clone(),
                 auth0_client_id: request.client_id.clone(),
-                client_display_name: client.client_name,
+                client_display_name: request.client_name.clone(),
                 resource: request.resource.clone(),
                 permissions: request.scopes.clone(),
                 expires_at: request.expires_at,
@@ -357,18 +337,13 @@ impl OAuthService {
         request: OAuthAuthorizationRequest,
     ) -> Result<OAuthConsentContext, OAuthError> {
         let user_id = request.user_id.ok_or(OAuthError::InvalidGrant)?;
-        let client = self
-            .repository
-            .get_oauth_client(&request.client_id)
-            .await?
-            .ok_or(OAuthError::InvalidClient)?;
         self.repository
             .get_workspace_with_role_for_user(user_id)
             .await?
             .ok_or(OAuthError::InvalidGrant)?;
         Ok(OAuthConsentContext {
             request_id: request.id,
-            client_name: client.client_name,
+            client_name: request.client_name,
         })
     }
 
@@ -457,6 +432,34 @@ fn redirect_with_error(redirect_uri: &str, error: &str, state: &str) -> Result<U
     Ok(url)
 }
 
+/// Whether a redirect_uri requested at authorize time matches one the client
+/// declared in its metadata document. HTTPS redirects must match exactly;
+/// loopback redirects match ignoring the port per RFC 8252 §7.3, because native
+/// clients bind an ephemeral OS-assigned port they cannot know when publishing.
+fn redirect_uri_matches(declared: &str, requested: &str) -> bool {
+    if declared == requested {
+        return true;
+    }
+    let (Ok(declared_url), Ok(requested_url)) = (Url::parse(declared), Url::parse(requested))
+    else {
+        return false;
+    };
+    if is_loopback_redirect(&declared_url) && is_loopback_redirect(&requested_url) {
+        return declared_url.scheme() == requested_url.scheme()
+            && declared_url.host_str() == requested_url.host_str()
+            && declared_url.path() == requested_url.path()
+            && declared_url.query() == requested_url.query();
+    }
+    false
+}
+
+fn is_loopback_redirect(url: &Url) -> bool {
+    url.scheme() == "http"
+        && url
+            .host_str()
+            .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]"))
+}
+
 pub fn valid_redirect_uri(uri: &str) -> bool {
     let Ok(url) = Url::parse(uri) else {
         return false;
@@ -474,4 +477,48 @@ fn random_secret(bytes_len: usize) -> Result<String, getrandom::Error> {
     let mut bytes = vec![0_u8; bytes_len];
     getrandom::fill(&mut bytes)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_uri_matches;
+
+    #[test]
+    fn https_redirects_must_match_exactly() {
+        assert!(redirect_uri_matches(
+            "https://chatgpt.com/connector/oauth/abc",
+            "https://chatgpt.com/connector/oauth/abc",
+        ));
+        assert!(!redirect_uri_matches(
+            "https://chatgpt.com/connector/oauth/abc",
+            "https://chatgpt.com/connector/oauth/xyz",
+        ));
+        // A different port on an HTTPS redirect is not a loopback allowance.
+        assert!(!redirect_uri_matches(
+            "https://client.example/cb",
+            "https://client.example:8443/cb",
+        ));
+    }
+
+    #[test]
+    fn loopback_redirects_ignore_the_port() {
+        assert!(redirect_uri_matches(
+            "http://127.0.0.1/callback",
+            "http://127.0.0.1:52731/callback",
+        ));
+        assert!(redirect_uri_matches(
+            "http://localhost:1/callback",
+            "http://localhost:65535/callback",
+        ));
+        // Path and query still have to line up.
+        assert!(!redirect_uri_matches(
+            "http://127.0.0.1/callback",
+            "http://127.0.0.1:52731/other",
+        ));
+        // The loopback allowance does not bridge different loopback hosts.
+        assert!(!redirect_uri_matches(
+            "http://127.0.0.1/callback",
+            "http://localhost:52731/callback",
+        ));
+    }
 }
