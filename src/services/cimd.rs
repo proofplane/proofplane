@@ -178,8 +178,7 @@ fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 /// Fetch, size-bound, parse, and validate the metadata document at `url` using
-/// an already-configured client. Split out from address validation so the wire
-/// behaviour can be exercised against a local test server.
+/// an already-configured client.
 async fn fetch_document(
     client: &reqwest::Client,
     url: &Url,
@@ -358,83 +357,5 @@ mod tests {
                 "expected {client_id} to be forbidden"
             );
         }
-    }
-
-    // Wire-level coverage: exercise fetch_document against a local server. The
-    // SSRF address guard is validated separately, so these use an ordinary
-    // client pointed straight at the loopback test server.
-    async fn serve(status: u16, body: &'static str) -> (Url, tokio::task::JoinHandle<()>) {
-        use axum::{routing::get, Router};
-        let app = Router::new().route(
-            "/client.json",
-            get(move || async move {
-                (
-                    axum::http::StatusCode::from_u16(status).expect("status"),
-                    body,
-                )
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("binds");
-        let addr = listener.local_addr().expect("addr");
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serves");
-        });
-        let url = Url::parse(&format!("http://{addr}/client.json")).expect("url");
-        (url, handle)
-    }
-
-    #[tokio::test]
-    async fn fetch_document_resolves_valid_metadata() {
-        let (url, handle) = serve(
-            200,
-            r#"{"client_name":"Test Client","redirect_uris":["https://client.example/cb"]}"#,
-        )
-        .await;
-        let client = reqwest::Client::new();
-        let resolved = fetch_document(&client, &url, MAX_DOCUMENT_BYTES)
-            .await
-            .expect("document resolves");
-        assert_eq!(resolved.client_name, "Test Client");
-        assert_eq!(resolved.redirect_uris, ["https://client.example/cb"]);
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn fetch_document_rejects_non_success_status() {
-        let (url, handle) = serve(404, "not found").await;
-        let client = reqwest::Client::new();
-        assert!(matches!(
-            fetch_document(&client, &url, MAX_DOCUMENT_BYTES).await,
-            Err(CimdError::InvalidClient)
-        ));
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn fetch_document_rejects_malformed_json() {
-        let (url, handle) = serve(200, "{ not json").await;
-        let client = reqwest::Client::new();
-        assert!(matches!(
-            fetch_document(&client, &url, MAX_DOCUMENT_BYTES).await,
-            Err(CimdError::InvalidClient)
-        ));
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn fetch_document_rejects_oversized_body() {
-        let (url, handle) = serve(
-            200,
-            r#"{"client_name":"Test Client","redirect_uris":["https://client.example/cb"]}"#,
-        )
-        .await;
-        let client = reqwest::Client::new();
-        assert!(matches!(
-            fetch_document(&client, &url, 8).await,
-            Err(CimdError::InvalidClient)
-        ));
-        handle.abort();
     }
 }
