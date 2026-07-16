@@ -3,17 +3,14 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    authentication::{
-        client_registration::ClientRegistrar,
-        paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-            UploadGrantDecryptor, UploadGrantEncryptor,
-        },
+    authentication::paseto::{
+        DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+        UploadGrantDecryptor, UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},
     object_storage, observability, repository,
-    services::{cimd::CimdResolver, oauth::OAuthService},
+    services::{client_resolver::ClientResolver, oauth::OAuthService},
     store,
 };
 use secrecy::ExposeSecret;
@@ -100,13 +97,12 @@ async fn run() -> Result<(), Error> {
         config.mcp.resource.to_string(),
         &config.paseto.mcp_oauth,
     )?;
-    let client_registrar = ClientRegistrar::from_mcp_oauth_config(&config.paseto.mcp_oauth)?;
+    let client_resolver = ClientResolver::from_mcp_oauth_config(&config.paseto.mcp_oauth)?;
     let oauth_service = OAuthService::new(
         postgres.clone(),
         config.server.public_api_base_url.clone(),
         config.mcp.resource.clone(),
-        CimdResolver::new(),
-        client_registrar,
+        client_resolver,
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );

@@ -27,10 +27,8 @@ use super::agent_connections::{
     ConsumeContinuationOutcome, ConsumeContinuationPayload, CreatePendingConnectionPayload,
     FindReusableConnectionPayload,
 };
-use super::cimd::{CimdError, CimdResolver};
-use crate::authentication::client_registration::{
-    ClientRegistrar, ClientRegistrationError, RegisterClientPayload, RegisteredClient,
-};
+use super::client_resolver::{ClientResolutionError, ClientResolver};
+use crate::authentication::client_registration::{RegisterClientPayload, RegisteredClient};
 
 const AUTHORIZATION_CODE_TTL: ChronoDuration = ChronoDuration::minutes(5);
 const AUTHORIZATION_REQUEST_TTL: ChronoDuration = ChronoDuration::minutes(10);
@@ -40,8 +38,7 @@ const ACCESS_TOKEN_TTL: ChronoDuration = ChronoDuration::hours(24);
 pub struct OAuthService {
     repository: Arc<Postgres>,
     agent_connections: AgentConnectionService,
-    cimd: CimdResolver,
-    registration: ClientRegistrar,
+    clients: ClientResolver,
     resource: Url,
     token_encryptor: McpOAuthEncryptor,
     token_decryptor: McpOAuthDecryptor,
@@ -61,10 +58,8 @@ pub enum OAuthError {
     AgentConnection(#[from] AgentConnectionError),
     #[error("MCP OAuth token operation failed")]
     Token(#[from] crate::authentication::paseto::Error),
-    #[error("client id metadata document could not be resolved")]
-    Cimd(#[from] CimdError),
-    #[error("signed client id could not be resolved")]
-    ClientRegistration(#[from] ClientRegistrationError),
+    #[error("client id could not be resolved")]
+    ClientResolution(#[from] ClientResolutionError),
     #[error("random generation failed")]
     Random(#[from] getrandom::Error),
 }
@@ -124,8 +119,7 @@ impl OAuthService {
         repository: Arc<Postgres>,
         _issuer: Url,
         resource: Url,
-        cimd: CimdResolver,
-        registration: ClientRegistrar,
+        clients: ClientResolver,
         token_encryptor: McpOAuthEncryptor,
         token_decryptor: McpOAuthDecryptor,
     ) -> Self {
@@ -133,8 +127,7 @@ impl OAuthService {
         Self {
             repository,
             agent_connections,
-            cimd,
-            registration,
+            clients,
             resource,
             token_encryptor,
             token_decryptor,
@@ -142,29 +135,16 @@ impl OAuthService {
     }
 
     pub fn register_client(&self, payload: RegisterClientPayload) -> RegisteredClient {
-        self.registration.register(payload)
+        self.clients.register(payload)
     }
 
     pub async fn prepare_authorization(
         &self,
         payload: AuthorizePayload,
     ) -> Result<PreparedAuthorization, OAuthError> {
-        // A signed `client_id` (from dynamic registration) is self-describing and
-        // resolves offline; otherwise the `client_id` is a CIMD URL we fetch. Both
-        // paths yield the client's declared metadata, against which we validate the
-        // requested redirect_uri.
-        let (client_name, redirect_uris) =
-            match self.registration.resolve_signed(&payload.client_id) {
-                Some(result) => {
-                    let client = result?;
-                    (client.client_name, client.redirect_uris)
-                }
-                None => {
-                    let client = self.cimd.resolve(&payload.client_id).await?;
-                    (client.client_name, client.redirect_uris)
-                }
-            };
-        if !redirect_uris
+        let client = self.clients.resolve(&payload.client_id).await?;
+        if !client
+            .redirect_uris
             .iter()
             .any(|uri| redirect_uri_matches(uri, &payload.redirect_uri))
         {
@@ -177,7 +157,7 @@ impl OAuthService {
                 .create_oauth_authorization_request(&NewOAuthAuthorizationRequest {
                     id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
                     client_id: payload.client_id,
-                    client_name,
+                    client_name: client.client_name,
                     redirect_uri: payload.redirect_uri,
                     code_challenge: payload.code_challenge,
                     state: payload.state.unwrap_or_default(),

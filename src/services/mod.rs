@@ -7,6 +7,7 @@ pub mod auditor_access_grants;
 pub mod auditor_access_sessions;
 pub mod auditor_portal;
 pub mod cimd;
+pub mod client_resolver;
 pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;

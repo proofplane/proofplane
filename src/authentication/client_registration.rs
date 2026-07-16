@@ -66,6 +66,18 @@ pub struct RegisteredClient {
     pub redirect_uris: Vec<String>,
 }
 
+/// The outcome of inspecting a `client_id` for our signed-token format.
+#[derive(Debug)]
+pub enum ClientIdResolution {
+    /// A `client_id` we minted whose signature verifies.
+    Verified(RegisteredClient),
+    /// Carries our `ppcli.` format but failed verification (tampered, malformed,
+    /// or signed by a key we no longer hold).
+    Invalid(ClientRegistrationError),
+    /// Not one of our signed client IDs at all.
+    Unrecognized,
+}
+
 /// The self-describing payload embedded in a `client_id`. Field order is fixed
 /// and the redirect URIs are normalized/sorted/deduped before serialization, so
 /// `serde_json` produces byte-identical output for identical logical clients.
@@ -121,17 +133,14 @@ impl ClientRegistrar {
         }
     }
 
-    /// Resolve a `client_id` that we minted. Returns `None` when the id is not
-    /// one of ours (no `ppcli.` prefix) so the caller can fall back to CIMD;
-    /// `Some(Err)` when the id carries our prefix but fails verification.
-    pub fn resolve_signed(
-        &self,
-        client_id: &str,
-    ) -> Option<Result<RegisteredClient, ClientRegistrationError>> {
+    pub fn resolve_signed(&self, client_id: &str) -> ClientIdResolution {
         if !client_id.starts_with("ppcli.") {
-            return None;
+            return ClientIdResolution::Unrecognized;
         }
-        Some(self.decode(client_id))
+        match self.decode(client_id) {
+            Ok(client) => ClientIdResolution::Verified(client),
+            Err(error) => ClientIdResolution::Invalid(error),
+        }
     }
 
     fn encode(&self, meta: &CanonicalMeta) -> String {
@@ -258,10 +267,10 @@ mod tests {
         let registered = reg.register(payload("Codex CLI", &["http://localhost:1455/callback"]));
         assert!(registered.client_id.starts_with("ppcli.v1."));
 
-        let resolved = reg
-            .resolve_signed(&registered.client_id)
-            .expect("id carries our prefix")
-            .expect("id verifies");
+        let ClientIdResolution::Verified(resolved) = reg.resolve_signed(&registered.client_id)
+        else {
+            panic!("expected a verified client id");
+        };
         assert_eq!(resolved.client_name, "Codex CLI");
         assert_eq!(resolved.redirect_uris, registered.redirect_uris);
     }
@@ -286,16 +295,17 @@ mod tests {
 
         assert!(matches!(
             reg.resolve_signed(&forged),
-            Some(Err(ClientRegistrationError::InvalidSignature))
+            ClientIdResolution::Invalid(ClientRegistrationError::InvalidSignature)
         ));
     }
 
     #[test]
     fn foreign_client_id_is_not_ours() {
         let reg = registrar();
-        assert!(reg
-            .resolve_signed("https://client.example/metadata.json")
-            .is_none());
+        assert!(matches!(
+            reg.resolve_signed("https://client.example/metadata.json"),
+            ClientIdResolution::Unrecognized
+        ));
     }
 
     #[test]
@@ -330,7 +340,7 @@ mod tests {
         let other = registrar_with("kb", &["kb"]);
         assert!(matches!(
             other.resolve_signed(&id),
-            Some(Err(ClientRegistrationError::UnknownKey))
+            ClientIdResolution::Invalid(ClientRegistrationError::UnknownKey)
         ));
     }
 
@@ -339,7 +349,7 @@ mod tests {
         let reg = registrar();
         assert!(matches!(
             reg.resolve_signed("ppcli.v1.only-three"),
-            Some(Err(ClientRegistrationError::Malformed))
+            ClientIdResolution::Invalid(ClientRegistrationError::Malformed)
         ));
     }
 }
