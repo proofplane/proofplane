@@ -26,7 +26,7 @@ provenance, and freshness is derived from submitted evidence.
 | --- | --- | --- |
 | Platform foundation | Rust runtimes, Postgres, config, logging, health routes, Pub/Sub emulator, outbox, worker | Production Pub/Sub startup, dependency hardening, application metrics |
 | Identity and authorization | Auth0 users, one workspace per user, workspace membership, MCP OAuth connections (Proofplane PASETO), identity audit logs | `ppat_` API tokens removed in PR #42 |
-| Compliance model | Frameworks, controls, Evidence Requests, mappings | Auditor portal reads |
+| Compliance model | Frameworks, controls, Evidence Requests, mappings | Policies and auditor policy reads |
 | Evidence lifecycle | Submission create/get/latest, upload integrity, quarantine, ClamAV scan, finalization, download grants, demo seed | Submission context |
 | Audit | Structured application logging | Stable audit-log fields and business event coverage; production routing and retention planning is deferred |
 | Agent interface | Streamable HTTP MCP runtime and core compliance tools, interactive OAuth authorization (Proofplane facade), working Codex connection, and auditor access link tools | Guided connection UI, Claude/Cowork validation, generic-client support matrix |
@@ -43,6 +43,7 @@ provenance, and freshness is derived from submitted evidence.
 | [Auditor Portal Access](./auditor-portal-access/README.md) | Todo | Auditors review workspace controls, evidence, and eligible attachments through secure browser links. |
 | [MCP Server](./mcp-server/README.md) | Doing | MCP is now the sole compliance data-plane. Runtime, read tools, and write tools (001–003) are Done; only logging/equivalence (005) remains, and its REST-parity framing needs reworking since REST was removed. |
 | [MCP Attachment Management](./mcp-attachment-upload/README.md) | Todo | Agents hand humans scoped attachment-management links without moving attachment bytes through MCP. |
+| [Policies](./policies/README.md) | Todo | Compliance officers manage control-linked policies and one safely scanned document; auditors browse them workspace-wide and per control. |
 | [Agent Connector Onboarding](./agent-connector-onboarding/README.md) | Doing | OAuth facade + working Codex connection shipped (tickets 001–004, 007 Done in PR #42). Remaining: guided UI (005), Claude/Cowork (006), generic clients (008). |
 | [MCP Agent Guidance](./mcp-agent-guidance/README.md) | Todo | Teach connecting agents how to use Proofplane via server instructions, richer tool descriptions, and on-demand depth docs (guide tool + resources). |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
@@ -58,7 +59,9 @@ provenance, and freshness is derived from submitted evidence.
    without sending bytes through MCP.
 3. Build production adapters independently of the core MCP demo milestone.
 4. Build Auditor Portal Access after the evidence lifecycle and MCP foundations
-   are stable enough to issue links and serve read-only portal data.
+   are stable enough to issue links and serve read-only portal data. Build
+   Policies on the control/MCP foundation, then extend that portal with the
+   workspace policy catalog, per-control relationships, and safe documents.
 5. Add interactive MCP authorization and agent-native distribution through the
    Agent Connector Onboarding epic (the OAuth facade and Codex connection are
    done), then replace the UI's token-centric MCP preview with a verified
