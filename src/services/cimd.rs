@@ -132,7 +132,15 @@ fn permit_addr(addr: SocketAddr) -> Result<SocketAddr, CimdError> {
 }
 
 /// Reject addresses that are not safely routable on the public internet.
-/// `IpAddr::is_global` is still unstable, so the ranges are checked directly.
+///
+/// This is the heart of the SSRF (Server-Side Request Forgery) guard.
+/// SSRF is when an attacker gets a server to make a request on their
+/// behalf: here the `client_id` is an attacker-supplied URL that we fetch
+/// server-side, so without this check an attacker could aim it at hosts only
+/// we can reach — the cloud metadata endpoint (169.254.169.254), internal
+/// services on private ranges, or loopback — and use our fetch as a proxy to
+/// read them. Pinning the connection to publicly routable addresses stops CIMD
+/// resolution from becoming that proxy.
 fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_forbidden_ipv4(v4),
