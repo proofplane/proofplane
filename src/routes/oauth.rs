@@ -159,8 +159,6 @@ where
         .client_name
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "MCP client".to_owned());
-    // Registration is stateless: the returned client_id is a signed token, not a
-    // stored record, so this cannot fail on a persistence path.
     let client = state.service.register_client(RegisterClientPayload {
         client_name,
         redirect_uris: body.redirect_uris,

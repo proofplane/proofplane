@@ -19,11 +19,8 @@ use serde::Deserialize;
 use thiserror::Error;
 use url::{Host, Url};
 
-/// Maximum size of a metadata document we will read, in bytes.
 const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
-/// Total timeout for a single metadata fetch.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-/// Fallback display name when the document omits `client_name`.
 const DEFAULT_CLIENT_NAME: &str = "MCP client";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,14 +31,10 @@ pub struct ResolvedClient {
 
 #[derive(Debug, Error)]
 pub enum CimdError {
-    /// The `client_id` was not a usable HTTPS metadata URL, or the document it
-    /// pointed at was missing, malformed, or internally inconsistent.
     #[error("client id metadata document is invalid")]
     InvalidClient,
-    /// The document host resolved only to addresses we refuse to contact.
     #[error("client id metadata document host is not permitted")]
     ForbiddenHost,
-    /// The document could not be fetched (network, TLS, timeout, size).
     #[error("client id metadata document could not be fetched")]
     Unreachable,
 }

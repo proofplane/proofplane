@@ -141,8 +141,6 @@ impl OAuthService {
         }
     }
 
-    /// Mint a deterministic, signed `client_id` for a dynamically registering
-    /// client (RFC 7591). Stateless: no persistence.
     pub fn register_client(&self, payload: RegisterClientPayload) -> RegisteredClient {
         self.registration.register(payload)
     }
@@ -453,7 +451,7 @@ fn redirect_with_error(redirect_uri: &str, error: &str, state: &str) -> Result<U
 
 /// Whether a redirect_uri requested at authorize time matches one the client
 /// declared in its metadata document. HTTPS redirects must match exactly;
-/// loopback redirects match ignoring the port per RFC 8252 §7.3, because native
+/// loopback redirects match ignoring the port because native
 /// clients bind an ephemeral OS-assigned port they cannot know when publishing.
 fn redirect_uri_matches(declared: &str, requested: &str) -> bool {
     if declared == requested {
