@@ -9,6 +9,9 @@ pub enum DomainError {
     BlankOptionalText { field: &'static str },
 
     #[error("{field} must be at most {maximum} characters")]
+    RequiredTextTooLong { field: &'static str, maximum: usize },
+
+    #[error("{field} must be at most {maximum} characters")]
     OptionalTextTooLong { field: &'static str, maximum: usize },
 
     #[error("{field} has invalid value {value}")]
@@ -16,6 +19,9 @@ pub enum DomainError {
 
     #[error("permissions contains duplicate value {permission}")]
     DuplicatePermission { permission: String },
+
+    #[error("control_ids contains a duplicate value")]
+    DuplicatePolicyControlId,
 
     #[error("freshness_window_days must be positive")]
     InvalidFreshnessWindowDays,

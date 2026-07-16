@@ -164,6 +164,10 @@ impl From<DomainError> for FieldIssue {
                 field,
                 message: format!("{field} must not be blank when provided"),
             },
+            DomainError::RequiredTextTooLong { field, maximum } => Self {
+                field,
+                message: format!("{field} must be at most {maximum} characters"),
+            },
             DomainError::OptionalTextTooLong { field, maximum } => Self {
                 field,
                 message: format!("{field} must be at most {maximum} characters"),
@@ -180,6 +184,10 @@ impl From<DomainError> for FieldIssue {
             DomainError::DuplicatePermission { permission } => Self {
                 field: "permissions",
                 message: format!("permissions contains duplicate value {permission}"),
+            },
+            DomainError::DuplicatePolicyControlId => Self {
+                field: "control_ids",
+                message: "control_ids contains a duplicate value".to_owned(),
             },
             DomainError::InvalidEnumValue { field, value } => Self {
                 field,

@@ -6,6 +6,7 @@ mod dequeuer_pubsub;
 mod mcp;
 mod me;
 mod oauth;
+mod policies;
 mod repository;
 mod support;
 mod worker_handlers;

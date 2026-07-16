@@ -9,6 +9,7 @@ mod evidence_submission;
 mod ids;
 mod oauth;
 mod permission;
+mod policy;
 mod sha256_digest;
 mod user;
 mod validation;
@@ -48,6 +49,10 @@ pub use oauth::{
     OAuthAuthorizationRequest, OAuthAuthorizationRequestId,
 };
 pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
+pub use policy::{
+    validate_policy_name, validate_unique_policy_control_ids, CreatePolicyPayload, Policy,
+    PolicyControlMapping, PolicyId, UpdatePolicyPayload,
+};
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};
 pub use validation::{

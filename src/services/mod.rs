@@ -12,6 +12,7 @@ pub mod controls;
 pub mod evidence_requests;
 pub mod evidence_submissions;
 pub mod oauth;
+pub mod policies;
 pub mod upload_sessions;
 pub mod user;
 pub mod workspaces;

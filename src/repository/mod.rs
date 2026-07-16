@@ -16,6 +16,7 @@ mod evidence_requests;
 mod evidence_submissions;
 mod oauth;
 mod outbox;
+mod policies;
 mod users;
 mod workspace_memberships;
 mod workspaces;
@@ -29,6 +30,7 @@ pub use evidence_submissions::{
     PendingAttachmentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
+pub use policies::ArchivePolicyResult;
 pub use workspace_memberships::NewWorkspaceMembership;
 
 pub struct Postgres {

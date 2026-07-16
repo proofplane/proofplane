@@ -26,8 +26,8 @@ attachment owner.
 
 **Tasks**
 
-- [ ] Add policy attachment domain types and migration with the partial
-  single-active index.
+- [ ] Add policy attachment domain types on the schema and partial
+  single-active index established by ticket 001.
 - [ ] Add workspace-scoped attachment create, read, archive, and worker work
   repository operations.
 - [ ] Generalize scan/finalization work around an explicit typed owner without

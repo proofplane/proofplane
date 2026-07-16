@@ -271,6 +271,9 @@ comments, and a compliance-officer policy SPA are deferred.
 
 ## Revisions
 
+- 2026-07-15: Moved the policy attachment table and its single-active index into
+  ticket 001 so policy archival can enforce its in-progress attachment guard.
+  Ticket 003 still owns attachment lifecycle, storage, and worker behavior.
 - 2026-07-15: Renamed the policy mutation from `replace_policy` to
   `update_policy`. The operation changes name and description only; it does not
   replace mappings, attachment state, or the policy record.
