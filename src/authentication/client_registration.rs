@@ -29,9 +29,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
 
-use crate::authentication::paseto::Error as PasetoError;
+use super::paseto::Error as PasetoError;
 use crate::config::PasetoMcpOAuthConfig;
-use crate::services::cimd::ResolvedClient;
 
 /// Fixed version prefix of every minted `client_id`.
 const PREFIX: &str = "ppcli.v1";
@@ -128,7 +127,7 @@ impl ClientRegistrar {
     pub fn resolve_signed(
         &self,
         client_id: &str,
-    ) -> Option<Result<ResolvedClient, ClientRegistrationError>> {
+    ) -> Option<Result<RegisteredClient, ClientRegistrationError>> {
         if !client_id.starts_with("ppcli.") {
             return None;
         }
@@ -148,7 +147,7 @@ impl ClientRegistrar {
         format!("{signing_input}.{tag}")
     }
 
-    fn decode(&self, client_id: &str) -> Result<ResolvedClient, ClientRegistrationError> {
+    fn decode(&self, client_id: &str) -> Result<RegisteredClient, ClientRegistrationError> {
         // ppcli . v1 . <kid> . <meta> . <tag>
         let parts: Vec<&str> = client_id.split('.').collect();
         if parts.len() != 5 || parts[0] != "ppcli" || parts[1] != "v1" {
@@ -176,7 +175,8 @@ impl ClientRegistrar {
             .map_err(|_| ClientRegistrationError::Malformed)?;
         let meta: CanonicalMeta =
             serde_json::from_slice(&meta_json).map_err(|_| ClientRegistrationError::Malformed)?;
-        Ok(ResolvedClient {
+        Ok(RegisteredClient {
+            client_id: client_id.to_owned(),
             client_name: meta.client_name,
             redirect_uris: meta.redirect_uris,
         })

@@ -14,16 +14,14 @@ use uuid::Uuid;
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
+        client_registration::RegisterClientPayload,
         UserAuthenticator,
     },
     config::Auth0Config,
     domain::{OAuthAuthorizationRequestId, WorkspacePermission},
-    services::{
-        client_registration::RegisterClientPayload,
-        oauth::{
-            parse_scope, valid_redirect_uri, ApproveConsentPayload, AuthorizePayload,
-            CallbackOutcome, OAuthConsentContext, OAuthError, OAuthService, TokenPayload,
-        },
+    services::oauth::{
+        parse_scope, valid_redirect_uri, ApproveConsentPayload, AuthorizePayload, CallbackOutcome,
+        OAuthConsentContext, OAuthError, OAuthService, TokenPayload,
     },
 };
 

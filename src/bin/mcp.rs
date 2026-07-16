@@ -3,14 +3,17 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    authentication::paseto::{
-        DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-        UploadGrantDecryptor, UploadGrantEncryptor,
+    authentication::{
+        client_registration::ClientRegistrar,
+        paseto::{
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            UploadGrantDecryptor, UploadGrantEncryptor,
+        },
     },
     config,
     mcp::{self, McpAppDependencies},
     object_storage, observability, repository,
-    services::{cimd::CimdResolver, client_registration::ClientRegistrar, oauth::OAuthService},
+    services::{cimd::CimdResolver, oauth::OAuthService},
     store,
 };
 use secrecy::ExposeSecret;

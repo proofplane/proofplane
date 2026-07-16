@@ -28,7 +28,7 @@ use super::agent_connections::{
     FindReusableConnectionPayload,
 };
 use super::cimd::{CimdError, CimdResolver};
-use super::client_registration::{
+use crate::authentication::client_registration::{
     ClientRegistrar, ClientRegistrationError, RegisterClientPayload, RegisteredClient,
 };
 
@@ -153,12 +153,18 @@ impl OAuthService {
         // resolves offline; otherwise the `client_id` is a CIMD URL we fetch. Both
         // paths yield the client's declared metadata, against which we validate the
         // requested redirect_uri.
-        let client = match self.registration.resolve_signed(&payload.client_id) {
-            Some(result) => result?,
-            None => self.cimd.resolve(&payload.client_id).await?,
-        };
-        if !client
-            .redirect_uris
+        let (client_name, redirect_uris) =
+            match self.registration.resolve_signed(&payload.client_id) {
+                Some(result) => {
+                    let client = result?;
+                    (client.client_name, client.redirect_uris)
+                }
+                None => {
+                    let client = self.cimd.resolve(&payload.client_id).await?;
+                    (client.client_name, client.redirect_uris)
+                }
+            };
+        if !redirect_uris
             .iter()
             .any(|uri| redirect_uri_matches(uri, &payload.redirect_uri))
         {
@@ -171,7 +177,7 @@ impl OAuthService {
                 .create_oauth_authorization_request(&NewOAuthAuthorizationRequest {
                     id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
                     client_id: payload.client_id,
-                    client_name: client.client_name,
+                    client_name,
                     redirect_uri: payload.redirect_uri,
                     code_challenge: payload.code_challenge,
                     state: payload.state.unwrap_or_default(),

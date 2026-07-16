@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
+        client_registration::ClientRegistrar,
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
@@ -36,7 +37,6 @@ use crate::{
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_portal::AuditorPortalReadModelService,
         cimd::CimdResolver,
-        client_registration::ClientRegistrar,
         controls::ControlService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
