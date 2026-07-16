@@ -104,7 +104,7 @@ async fn expired_invalid_and_membershipless_consent_reveal_only_recovery_guidanc
 }
 
 #[tokio::test]
-async fn authorization_server_metadata_advertises_cimd_and_drops_dcr() {
+async fn authorization_server_metadata_advertises_dcr_alongside_cimd() {
     let app = TestApp::start_without_default_auth().await;
 
     let response = app
@@ -113,6 +113,7 @@ async fn authorization_server_metadata_advertises_cimd_and_drops_dcr() {
         .await;
     response.assert_status_ok();
     let metadata = response.json::<serde_json::Value>();
+    // CIMD stays supported for clients (e.g. Claude) that use it.
     assert_eq!(
         metadata["client_id_metadata_document_supported"],
         serde_json::json!(true)
@@ -121,18 +122,75 @@ async fn authorization_server_metadata_advertises_cimd_and_drops_dcr() {
         metadata["token_endpoint_auth_methods_supported"],
         serde_json::json!(["none"])
     );
+    // Dynamic client registration is advertised for clients (e.g. Codex) that
+    // require it.
     assert!(
-        metadata.get("registration_endpoint").is_none(),
-        "registration endpoint must not be advertised once DCR is removed"
+        metadata["registration_endpoint"]
+            .as_str()
+            .is_some_and(|endpoint| endpoint.ends_with("/oauth/register")),
+        "registration endpoint must be advertised for DCR clients"
     );
 
-    // The dynamic client registration endpoint is gone entirely.
     let register = app
         .server()
         .post("/oauth/register")
-        .json(&serde_json::json!({ "redirect_uris": ["https://client.example/cb"] }))
+        .json(&serde_json::json!({
+            "redirect_uris": ["http://localhost:1455/callback"],
+            "client_name": "Codex CLI",
+        }))
         .await;
-    register.assert_status(StatusCode::NOT_FOUND);
+    register.assert_status(StatusCode::CREATED);
+    let registered = register.json::<serde_json::Value>();
+    assert!(registered["client_id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("ppcli.v1.")));
+}
+
+#[tokio::test]
+async fn dynamic_registration_is_deterministic_and_drives_authorize() {
+    let app = TestApp::start_without_default_auth().await;
+
+    // The same client re-registering on each login binds a different ephemeral
+    // loopback port; the minted client_id must be identical so agent-connection
+    // dedup keys on a stable identity.
+    let first = register_client(&app, "http://localhost:1455/callback").await;
+    let second = register_client(&app, "http://localhost:1456/callback").await;
+    assert_eq!(
+        first, second,
+        "same client with a different ephemeral port must yield the same client_id"
+    );
+
+    // The minted client_id resolves offline and carries the client past redirect
+    // validation into the upstream Auth0 login (a 303 redirect), even though the
+    // authorize request presents yet another ephemeral port.
+    let authorize = app
+        .server()
+        .get("/oauth/authorize")
+        .add_query_param("response_type", "code")
+        .add_query_param("client_id", &first)
+        .add_query_param("redirect_uri", "http://localhost:52731/callback")
+        .add_query_param("code_challenge", "challenge")
+        .add_query_param("code_challenge_method", "S256")
+        .add_query_param("resource", "https://mcp.proofplane.test/mcp")
+        .add_query_param("scope", "read_controls")
+        .await;
+    authorize.assert_status(StatusCode::SEE_OTHER);
+}
+
+async fn register_client(app: &TestApp, redirect_uri: &str) -> String {
+    let response = app
+        .server()
+        .post("/oauth/register")
+        .json(&serde_json::json!({
+            "redirect_uris": [redirect_uri],
+            "client_name": "Codex CLI",
+        }))
+        .await;
+    response.assert_status(StatusCode::CREATED);
+    response.json::<serde_json::Value>()["client_id"]
+        .as_str()
+        .expect("client_id is a string")
+        .to_owned()
 }
 
 async fn seeded_request(

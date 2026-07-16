@@ -28,6 +28,9 @@ use super::agent_connections::{
     FindReusableConnectionPayload,
 };
 use super::cimd::{CimdError, CimdResolver};
+use super::client_registration::{
+    ClientRegistrar, ClientRegistrationError, RegisterClientPayload, RegisteredClient,
+};
 
 const AUTHORIZATION_CODE_TTL: ChronoDuration = ChronoDuration::minutes(5);
 const AUTHORIZATION_REQUEST_TTL: ChronoDuration = ChronoDuration::minutes(10);
@@ -38,6 +41,7 @@ pub struct OAuthService {
     repository: Arc<Postgres>,
     agent_connections: AgentConnectionService,
     cimd: CimdResolver,
+    registration: ClientRegistrar,
     resource: Url,
     token_encryptor: McpOAuthEncryptor,
     token_decryptor: McpOAuthDecryptor,
@@ -59,6 +63,8 @@ pub enum OAuthError {
     Token(#[from] crate::authentication::paseto::Error),
     #[error("client id metadata document could not be resolved")]
     Cimd(#[from] CimdError),
+    #[error("signed client id could not be resolved")]
+    ClientRegistration(#[from] ClientRegistrationError),
     #[error("random generation failed")]
     Random(#[from] getrandom::Error),
 }
@@ -119,6 +125,7 @@ impl OAuthService {
         _issuer: Url,
         resource: Url,
         cimd: CimdResolver,
+        registration: ClientRegistrar,
         token_encryptor: McpOAuthEncryptor,
         token_decryptor: McpOAuthDecryptor,
     ) -> Self {
@@ -127,19 +134,31 @@ impl OAuthService {
             repository,
             agent_connections,
             cimd,
+            registration,
             resource,
             token_encryptor,
             token_decryptor,
         }
     }
 
+    /// Mint a deterministic, signed `client_id` for a dynamically registering
+    /// client (RFC 7591). Stateless: no persistence.
+    pub fn register_client(&self, payload: RegisterClientPayload) -> RegisteredClient {
+        self.registration.register(payload)
+    }
+
     pub async fn prepare_authorization(
         &self,
         payload: AuthorizePayload,
     ) -> Result<PreparedAuthorization, OAuthError> {
-        // The client_id is a CIMD URL; fetch the client's published metadata and
-        // validate the requested redirect_uri against what it declares.
-        let client = self.cimd.resolve(&payload.client_id).await?;
+        // A signed `client_id` (from dynamic registration) is self-describing and
+        // resolves offline; otherwise the `client_id` is a CIMD URL we fetch. Both
+        // paths yield the client's declared metadata, against which we validate the
+        // requested redirect_uri.
+        let client = match self.registration.resolve_signed(&payload.client_id) {
+            Some(result) => result?,
+            None => self.cimd.resolve(&payload.client_id).await?,
+        };
         if !client
             .redirect_uris
             .iter()

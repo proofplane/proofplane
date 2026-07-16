@@ -134,11 +134,17 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         &dependencies.config.paseto.mcp_oauth,
     )
     .map_err(crate::authentication::Error::from)?;
+    let client_registrar =
+        crate::services::client_registration::ClientRegistrar::from_mcp_oauth_config(
+            &dependencies.config.paseto.mcp_oauth,
+        )
+        .map_err(crate::authentication::Error::from)?;
     let oauth_service = OAuthService::new(
         dependencies.postgres.clone(),
         dependencies.config.server.public_api_base_url.clone(),
         dependencies.config.mcp.resource.clone(),
         crate::services::cimd::CimdResolver::new(),
+        client_registrar,
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );

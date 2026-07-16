@@ -18,9 +18,12 @@ use crate::{
     },
     config::Auth0Config,
     domain::{OAuthAuthorizationRequestId, WorkspacePermission},
-    services::oauth::{
-        parse_scope, ApproveConsentPayload, AuthorizePayload, CallbackOutcome, OAuthConsentContext,
-        OAuthError, OAuthService, TokenPayload,
+    services::{
+        client_registration::RegisterClientPayload,
+        oauth::{
+            parse_scope, valid_redirect_uri, ApproveConsentPayload, AuthorizePayload,
+            CallbackOutcome, OAuthConsentContext, OAuthError, OAuthService, TokenPayload,
+        },
     },
 };
 
@@ -55,6 +58,7 @@ where
             "/.well-known/oauth-authorization-server",
             get(authorization_server_metadata::<V>),
         )
+        .route("/oauth/register", post(register::<V>))
         .route("/oauth/authorize", get(authorize::<V>))
         .route("/oauth/auth0/callback", get(auth0_callback::<V>))
         .route("/oauth/consent", post(submit_consent::<V>))
@@ -67,6 +71,7 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    registration_endpoint: String,
     response_types_supported: Vec<&'static str>,
     grant_types_supported: Vec<&'static str>,
     code_challenge_methods_supported: Vec<&'static str>,
@@ -85,6 +90,7 @@ where
         issuer: state.issuer.to_string(),
         authorization_endpoint: endpoint(&state.issuer, "oauth/authorize"),
         token_endpoint: endpoint(&state.issuer, "oauth/token"),
+        registration_endpoint: endpoint(&state.issuer, "oauth/register"),
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code"],
         code_challenge_methods_supported: vec!["S256"],
@@ -95,6 +101,83 @@ where
             .map(|permission| permission.as_str())
             .collect(),
     })
+}
+
+#[derive(Deserialize)]
+struct RegisterRequest {
+    #[serde(default)]
+    client_name: Option<String>,
+    redirect_uris: Vec<String>,
+    #[serde(default)]
+    token_endpoint_auth_method: Option<String>,
+    #[serde(default)]
+    grant_types: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct RegisterResponse {
+    client_id: String,
+    client_name: String,
+    redirect_uris: Vec<String>,
+    token_endpoint_auth_method: &'static str,
+    grant_types: Vec<&'static str>,
+    response_types: Vec<&'static str>,
+    client_id_issued_at: i64,
+}
+
+async fn register<V>(
+    State(state): State<OAuthState<V>>,
+    Json(body): Json<RegisterRequest>,
+) -> Response
+where
+    V: TokenVerifier<Claims = VerifiedClaims>,
+{
+    if !body.grant_types.is_empty()
+        && !body
+            .grant_types
+            .iter()
+            .any(|grant_type| grant_type == "authorization_code")
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    }
+    if body
+        .token_endpoint_auth_method
+        .as_deref()
+        .is_some_and(|method| method != "none")
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    }
+    if body.redirect_uris.is_empty()
+        || body
+            .redirect_uris
+            .iter()
+            .any(|uri| !valid_redirect_uri(uri))
+    {
+        return oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    }
+    let client_name = body
+        .client_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "MCP client".to_owned());
+    // Registration is stateless: the returned client_id is a signed token, not a
+    // stored record, so this cannot fail on a persistence path.
+    let client = state.service.register_client(RegisterClientPayload {
+        client_name,
+        redirect_uris: body.redirect_uris,
+    });
+    (
+        StatusCode::CREATED,
+        Json(RegisterResponse {
+            client_id: client.client_id,
+            client_name: client.client_name,
+            redirect_uris: client.redirect_uris,
+            token_endpoint_auth_method: "none",
+            grant_types: vec!["authorization_code"],
+            response_types: vec!["code"],
+            client_id_issued_at: chrono::Utc::now().timestamp(),
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]

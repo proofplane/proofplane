@@ -97,11 +97,16 @@ async fn run() -> Result<(), Error> {
         config.mcp.resource.to_string(),
         &config.paseto.mcp_oauth,
     )?;
+    let client_registrar =
+        proofplane::services::client_registration::ClientRegistrar::from_mcp_oauth_config(
+            &config.paseto.mcp_oauth,
+        )?;
     let oauth_service = OAuthService::new(
         postgres.clone(),
         config.server.public_api_base_url.clone(),
         config.mcp.resource.clone(),
         proofplane::services::cimd::CimdResolver::new(),
+        client_registrar,
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );
