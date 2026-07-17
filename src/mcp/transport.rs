@@ -41,6 +41,7 @@ use crate::{
         attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
+        policies::PolicyService,
     },
 };
 use url::Url;
@@ -110,6 +111,7 @@ where
     );
     let auditor_access_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
     let controls = ControlService::new(dependencies.postgres.clone());
+    let policies = PolicyService::new(dependencies.postgres.clone());
     let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
         dependencies.oauth_verifier,
@@ -121,6 +123,7 @@ where
             attachment_upload_grants,
             auditor_access_grants,
             controls,
+            policies,
             dependencies.public_api_base_url,
         ),
         dependencies.allowed_hosts,

@@ -1,11 +1,16 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, CreatePolicyPayload, Policy, PolicyControlMapping, PolicyId,
-        UpdatePolicyPayload, WorkspaceId,
+        AttachmentUploadStatus, ControlId, ControlSummary, CreatePolicyPayload, Policy,
+        PolicyAttachmentId, PolicyControlMapping, PolicyId, UpdatePolicyPayload, WorkspaceId,
+    },
+    projections::policy_projection::{
+        PolicyAttachmentDetail, PolicyAttachmentStatus, PolicyCatalogEntry, PolicyDetail,
     },
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -257,12 +262,26 @@ RETURNING control_id
         let rows = self
             .transaction
             .query(
-                POLICY_DETAIL_QUERY,
+                POLICY_ENTITY_DETAIL_QUERY,
                 &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
         Ok(policies_from_joined_rows(rows)?.into_iter().next())
+    }
+
+    pub async fn get_policy_detail(
+        &self,
+        policy_id: PolicyId,
+    ) -> Result<Option<PolicyDetail>, Error> {
+        let rows = self
+            .transaction
+            .query(
+                POLICY_READ_DETAIL_QUERY,
+                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+        policy_detail_from_joined_rows(rows)
     }
 
     async fn get_policy_control_mapping(
@@ -302,32 +321,32 @@ WHERE m.policy_id = $1
 }
 
 impl WorkspaceReadContext {
-    pub async fn list_policies(&self) -> Result<Vec<Policy>, Error> {
+    pub async fn list_policy_catalog(&self) -> Result<Vec<PolicyCatalogEntry>, Error> {
         let rows = self
             .client
-            .query(POLICY_LIST_QUERY, &[&Uuid::from(self.workspace_id)])
+            .query(POLICY_CATALOG_QUERY, &[&Uuid::from(self.workspace_id)])
             .await?;
-        policies_from_joined_rows(rows)
+        rows.into_iter()
+            .map(policy_catalog_entry_from_row)
+            .collect()
     }
 
-    pub async fn get_policy(&self, policy_id: PolicyId) -> Result<Option<Policy>, Error> {
+    pub async fn get_policy_detail(
+        &self,
+        policy_id: PolicyId,
+    ) -> Result<Option<PolicyDetail>, Error> {
         let rows = self
             .client
             .query(
-                POLICY_DETAIL_QUERY,
+                POLICY_READ_DETAIL_QUERY,
                 &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
             )
             .await?;
-        Ok(policies_from_joined_rows(rows)?.into_iter().next())
+        policy_detail_from_joined_rows(rows)
     }
 }
 
-const POLICY_LIST_QUERY: &str = const_format_policy_query(false);
-const POLICY_DETAIL_QUERY: &str = const_format_policy_query(true);
-
-const fn const_format_policy_query(detail: bool) -> &'static str {
-    if detail {
-        r#"
+const POLICY_ENTITY_DETAIL_QUERY: &str = r#"
 SELECT
     p.id,
     p.id AS policy_id,
@@ -349,9 +368,9 @@ WHERE p.id = $1
   AND p.workspace_id = $2
   AND p.archived_at IS NULL
 ORDER BY lower(c.code), c.id
-"#
-    } else {
-        r#"
+"#;
+
+const POLICY_READ_DETAIL_QUERY: &str = r#"
 SELECT
     p.id,
     p.id AS policy_id,
@@ -361,20 +380,44 @@ SELECT
     p.created_at,
     p.updated_at,
     p.archived_at,
+    a.id AS attachment_id,
+    a.filename AS attachment_filename,
+    a.content_type AS attachment_content_type,
+    a.content_length AS attachment_content_length,
+    a.checksum_sha256 AS attachment_checksum_sha256,
+    a.checksum_crc32c AS attachment_checksum_crc32c,
+    a.upload_status AS attachment_upload_status,
+    a.created_at AS attachment_created_at,
     c.id AS control_id,
     c.code AS control_code,
     c.title AS control_title,
     c.description AS control_description,
     m.created_at AS mapping_created_at
 FROM policies p
+LEFT JOIN policy_attachments a ON a.policy_id = p.id AND a.archived = false
 LEFT JOIN policy_control_mappings m ON m.policy_id = p.id
 LEFT JOIN controls c ON c.id = m.control_id AND c.workspace_id = p.workspace_id
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND p.archived_at IS NULL
+ORDER BY lower(c.code), c.id
+"#;
+
+const POLICY_CATALOG_QUERY: &str = r#"
+SELECT
+    p.id,
+    p.name,
+    p.description,
+    count(m.control_id) AS mapped_control_count,
+    a.upload_status AS attachment_upload_status
+FROM policies p
+LEFT JOIN policy_control_mappings m ON m.policy_id = p.id
+LEFT JOIN policy_attachments a ON a.policy_id = p.id AND a.archived = false
 WHERE p.workspace_id = $1
   AND p.archived_at IS NULL
-ORDER BY lower(p.name), p.id, lower(c.code), c.id
-"#
-    }
-}
+GROUP BY p.id, a.upload_status
+ORDER BY lower(p.name), p.id
+"#;
 
 fn policies_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Policy>, Error> {
     let mut policies = Vec::new();
@@ -409,6 +452,53 @@ fn policy_from_row(row: &Row) -> Result<Policy, Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         archived_at: row.try_get("archived_at")?,
+    })
+}
+
+fn policy_detail_from_joined_rows(rows: Vec<Row>) -> Result<Option<PolicyDetail>, Error> {
+    let attachment = rows
+        .first()
+        .map(policy_attachment_detail_from_row)
+        .transpose()?
+        .flatten();
+    let policy = policies_from_joined_rows(rows)?.into_iter().next();
+
+    Ok(policy.map(|policy| PolicyDetail { policy, attachment }))
+}
+
+fn policy_attachment_detail_from_row(row: &Row) -> Result<Option<PolicyAttachmentDetail>, Error> {
+    let Some(id) = row.try_get::<_, Option<Uuid>>("attachment_id")? else {
+        return Ok(None);
+    };
+    let upload_status = row.try_get::<_, String>("attachment_upload_status")?;
+
+    Ok(Some(PolicyAttachmentDetail {
+        id: PolicyAttachmentId::from(id),
+        filename: row.try_get("attachment_filename")?,
+        content_type: row.try_get("attachment_content_type")?,
+        content_length: row.try_get("attachment_content_length")?,
+        checksum_sha256: row.try_get("attachment_checksum_sha256")?,
+        checksum_crc32c: row.try_get("attachment_checksum_crc32c")?,
+        upload_status: AttachmentUploadStatus::from_str(&upload_status)?,
+        created_at: row.try_get("attachment_created_at")?,
+    }))
+}
+
+fn policy_catalog_entry_from_row(row: Row) -> Result<PolicyCatalogEntry, Error> {
+    let attachment = row
+        .try_get::<_, Option<String>>("attachment_upload_status")?
+        .map(|status| {
+            AttachmentUploadStatus::from_str(&status)
+                .map(|upload_status| PolicyAttachmentStatus { upload_status })
+        })
+        .transpose()?;
+
+    Ok(PolicyCatalogEntry {
+        id: PolicyId::from(row.try_get::<_, Uuid>("id")?),
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        mapped_control_count: row.try_get("mapped_control_count")?,
+        attachment,
     })
 }
 

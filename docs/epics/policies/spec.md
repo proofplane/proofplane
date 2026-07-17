@@ -121,6 +121,16 @@ and adds mapped control summaries plus safe attachment metadata. Neither tool
 returns object keys, storage details, attachment bytes, archived history, or a
 browser bearer URL.
 
+The MCP JSON contract represents the current attachment as a nested nullable
+`attachment`. List summaries include only its `upload_status`; policy detail
+includes ID, filename, content type and length, checksums, upload status, and
+creation time. Policy responses do not serialize workspace IDs.
+
+Persistence entities and read projections remain separate. The `Policy` entity
+does not embed attachment data; the dedicated `projections::policy_projection`
+module composes policy state with count or safe attachment projections for MCP
+serialization and no projection types live under `domain`.
+
 `create_policy` returns the created detailed policy. `update_policy` returns
 the updated detail. Mapping tools return compact policy and control identifiers.
 `archive_policy` returns the archived policy ID and archival timestamp.
@@ -246,6 +256,10 @@ checksums, object keys, bearer URLs/tokens, session cookies, or malware scanner
 details. Policy and attachment IDs, control IDs, workspace ID, actor IDs,
 operation, outcome, and coarse lifecycle status are allowed.
 
+The MCP catalog uses `policy.listed`, `policy.read`, `policy.created`,
+`policy.updated`, `policy.archived`, `policy_control_mapping.created`, and
+`policy_control_mapping.deleted` as its stable success event names.
+
 ## Testing
 
 Use unit tests for validation, typed attachment-owner messages, and status
@@ -271,6 +285,10 @@ comments, and a compliance-officer policy SPA are deferred.
 
 ## Revisions
 
+- 2026-07-16: Recorded the shipped MCP policy attachment response shape,
+  workspace-ID omission, stable catalog audit event names, and strict separation
+  between policy entities and catalog projections in a dedicated projection
+  layer from ticket 002.
 - 2026-07-15: Moved the policy attachment table and its single-active index into
   ticket 001 so policy archival can enforce its in-progress attachment guard.
   Ticket 003 still owns attachment lifecycle, storage, and worker behavior.

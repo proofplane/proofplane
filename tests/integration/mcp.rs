@@ -483,6 +483,13 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "list_evidence_request_control_mappings",
         "map_evidence_request_to_control",
         "remove_evidence_request_control_mapping",
+        "list_policies",
+        "get_policy",
+        "create_policy",
+        "update_policy",
+        "archive_policy",
+        "attach_policy_to_control",
+        "detach_policy_from_control",
         "get_proofplane_guide",
     ]
     .into_iter()
@@ -570,6 +577,34 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
+            "list_policies",
+            "List active policies with their mapped-control counts and current document status.",
+        ),
+        (
+            "get_policy",
+            "Get one active policy with its mapped controls and safe current document metadata by policy ID.",
+        ),
+        (
+            "create_policy",
+            "Create a policy with optional control mappings and return its complete active metadata.",
+        ),
+        (
+            "update_policy",
+            "Update an active policy’s name and optional description without changing mappings or document state.",
+        ),
+        (
+            "archive_policy",
+            "Archive an active policy when its current document is not being processed.",
+        ),
+        (
+            "attach_policy_to_control",
+            "Attach an active policy to a control without changing the control or its other mappings.",
+        ),
+        (
+            "detach_policy_from_control",
+            "Detach an active policy from a control without changing the control or its other mappings.",
+        ),
+        (
             "get_proofplane_guide",
             "Return embedded Proofplane guidance for a topic, or the ordered topic index when the topic is omitted or unknown.",
         ),
@@ -651,6 +686,22 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "control_id",
     );
     assert_schema_has_property(
+        &find_tool(&tool_list, "get_policy")["inputSchema"],
+        "policy_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_policy")["inputSchema"],
+        "control_ids",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "update_policy")["inputSchema"],
+        "description",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "attach_policy_to_control")["inputSchema"],
+        "control_id",
+    );
+    assert_schema_has_property(
         &find_tool(&tool_list, "list_framework_requirements")["inputSchema"],
         "framework_id",
     );
@@ -722,6 +773,26 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "remove_evidence_request_control_mapping")["outputSchema"],
         "removed",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "list_policies")["outputSchema"],
+        "policies",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "get_policy")["outputSchema"],
+        "controls",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_policy")["outputSchema"],
+        "attachment",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "archive_policy")["outputSchema"],
+        "archived_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "detach_policy_from_control")["outputSchema"],
+        "policy_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submission_attachment")["outputSchema"],
@@ -1883,6 +1954,271 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
 }
 
 #[tokio::test]
+async fn mcp_policy_tools_cover_catalog_lifecycle_safe_attachments_and_success_audits() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP policy lifecycle workspace")
+        .with_control("PP-B", "Second policy control", vec![])
+        .with_control("PP-A", "First policy control", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let control_a = app.control_id("workspace", "PP-A");
+    let control_b = app.control_id("workspace", "PP-B");
+    let token = app.api_token().to_owned();
+
+    let ((created, listed, got, updated, attached, detached, archived), logs) =
+        capture_audit_logs(|request_id| {
+            let server = &server;
+            let app = &app;
+            let token = token.clone();
+            async move {
+                let client = McpClient::connect_with_request_id(server, &token, request_id).await;
+                let created = client
+                    .call_tool(
+                        "create_policy",
+                        json!({
+                            "name": "Zulu policy",
+                            "description": "Original policy description.",
+                            "control_ids": [control_b]
+                        }),
+                    )
+                    .await;
+                let policy_id = uuid_from(&created["id"]);
+                insert_policy_attachment_row(app, policy_id, "uploaded").await;
+                let listed = client.call_tool("list_policies", json!({})).await;
+                let got = client
+                    .call_tool("get_policy", json!({ "policy_id": policy_id }))
+                    .await;
+                let updated = client
+                    .call_tool(
+                        "update_policy",
+                        json!({ "policy_id": policy_id, "name": "Alpha policy" }),
+                    )
+                    .await;
+                let attached = client
+                    .call_tool(
+                        "attach_policy_to_control",
+                        json!({ "policy_id": policy_id, "control_id": control_a }),
+                    )
+                    .await;
+                let detached = client
+                    .call_tool(
+                        "detach_policy_from_control",
+                        json!({ "policy_id": policy_id, "control_id": control_a }),
+                    )
+                    .await;
+                let archived = client
+                    .call_tool("archive_policy", json!({ "policy_id": policy_id }))
+                    .await;
+                (created, listed, got, updated, attached, detached, archived)
+            }
+        })
+        .await;
+
+    let policy_id = uuid_from(&created["id"]);
+    assert_eq!(created["name"], "Zulu policy");
+    assert_eq!(created["controls"][0]["id"], control_b.to_string());
+    assert_eq!(created["attachment"], Value::Null);
+    assert!(created.get("workspace_id").is_none());
+
+    assert_eq!(listed["policies"][0]["id"], policy_id.to_string());
+    assert_eq!(listed["policies"][0]["mapped_control_count"], 1);
+    assert_eq!(
+        listed["policies"][0]["attachment"],
+        json!({ "upload_status": "uploaded" })
+    );
+    assert!(!listed.to_string().contains("policy.pdf"));
+    assert!(!listed.to_string().contains("object_key"));
+
+    assert_eq!(got["controls"][0]["id"], control_b.to_string());
+    assert_eq!(got["attachment"]["filename"], "policy.pdf");
+    assert_eq!(got["attachment"]["upload_status"], "uploaded");
+    assert!(!got.to_string().contains("policy-test/"));
+    assert!(got.get("workspace_id").is_none());
+
+    assert_eq!(updated["name"], "Alpha policy");
+    assert_eq!(updated["description"], Value::Null);
+    assert_eq!(updated["controls"][0]["id"], control_b.to_string());
+    assert_eq!(updated["attachment"]["filename"], "policy.pdf");
+    assert_eq!(
+        attached,
+        json!({ "policy_id": policy_id, "control_id": control_a })
+    );
+    assert_eq!(
+        detached,
+        json!({ "policy_id": policy_id, "control_id": control_a })
+    );
+    assert_eq!(archived["policy_id"], policy_id.to_string());
+    assert!(archived["archived_at"].as_str().is_some());
+
+    let event_names = logs
+        .iter()
+        .map(|record| {
+            record["fields"]["event_name"]
+                .as_str()
+                .expect("audit event name")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        event_names,
+        [
+            "policy.created",
+            "policy.listed",
+            "policy.read",
+            "policy.updated",
+            "policy_control_mapping.created",
+            "policy_control_mapping.deleted",
+            "policy.archived",
+        ]
+    );
+    for log in &logs {
+        let serialized = log.to_string();
+        assert!(!serialized.contains("Alpha policy"));
+        assert!(!serialized.contains("Original policy description"));
+        assert!(!serialized.contains("policy.pdf"));
+        assert_eq!(log["fields"]["workspace_id"], workspace_id.to_string());
+    }
+}
+
+#[tokio::test]
+async fn mcp_policy_tools_conceal_tenants_reject_invalid_state_and_enforce_permissions() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP policy validation workspace")
+        .with_control("PP-A", "Policy control", vec![])
+        .with_default_membership()
+        .workspace("other", "Hidden policy workspace")
+        .with_control("PP-X", "Hidden control", vec![])
+        .without_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-A");
+    let other_control_id = app.control_id("other", "PP-X");
+    let client = McpClient::connect(&server, app.api_token()).await;
+    let created = client
+        .call_tool(
+            "create_policy",
+            json!({ "name": "Access Policy", "control_ids": [control_id] }),
+        )
+        .await;
+    let policy_id = uuid_from(&created["id"]);
+
+    let (_, failed_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = app.api_token().to_owned();
+        async move {
+            let client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            let duplicate = client
+                .call_tool_error("create_policy", json!({ "name": "access policy" }))
+                .await;
+            assert_eq!(duplicate.data["problem"]["code"], "policy_name_taken");
+
+            let invalid_reference = client
+                .call_tool_error(
+                    "create_policy",
+                    json!({
+                        "name": "Must roll back",
+                        "control_ids": [control_id, other_control_id]
+                    }),
+                )
+                .await;
+            assert_eq!(
+                invalid_reference.data["problem"]["code"],
+                "validation_failed"
+            );
+            assert_eq!(field_issue_names(&invalid_reference.data), ["control_ids"]);
+
+            let duplicate_mapping = client
+                .call_tool_error(
+                    "attach_policy_to_control",
+                    json!({ "policy_id": policy_id, "control_id": control_id }),
+                )
+                .await;
+            assert_eq!(
+                duplicate_mapping.data["problem"]["code"],
+                "policy_control_mapping_exists"
+            );
+
+            for error in [
+                client
+                    .call_tool_error(
+                        "attach_policy_to_control",
+                        json!({ "policy_id": policy_id, "control_id": other_control_id }),
+                    )
+                    .await,
+                client
+                    .call_tool_error(
+                        "detach_policy_from_control",
+                        json!({ "policy_id": policy_id, "control_id": Uuid::new_v4() }),
+                    )
+                    .await,
+                client
+                    .call_tool_error("get_policy", json!({ "policy_id": Uuid::new_v4() }))
+                    .await,
+            ] {
+                assert_eq!(error.data["problem"]["code"], "not_found");
+            }
+        }
+    })
+    .await;
+    assert!(failed_logs.is_empty());
+    assert_eq!(policy_count_for_workspace(&app, workspace_id).await, 1);
+
+    let attachment_id = insert_policy_attachment_row(&app, policy_id, "pending").await;
+    let blocked = client
+        .call_tool_error("archive_policy", json!({ "policy_id": policy_id }))
+        .await;
+    assert_eq!(
+        blocked.data["problem"]["code"],
+        "policy_attachment_in_progress"
+    );
+    set_policy_attachment_status(&app, attachment_id, "finalizing").await;
+    let blocked = client
+        .call_tool_error("archive_policy", json!({ "policy_id": policy_id }))
+        .await;
+    assert_eq!(
+        blocked.data["problem"]["code"],
+        "policy_attachment_in_progress"
+    );
+
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let read_only_client = McpClient::connect(&server, &read_only.raw_token).await;
+    assert_eq!(
+        read_only_client
+            .call_tool_error(
+                "update_policy",
+                json!({ "policy_id": policy_id, "name": "Denied" })
+            )
+            .await
+            .data["problem"]["code"],
+        "not_found"
+    );
+
+    let write_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::WriteControls])
+        .await;
+    let write_only_client = McpClient::connect(&server, &write_only.raw_token).await;
+    assert_eq!(
+        write_only_client
+            .call_tool_error("list_policies", json!({}))
+            .await
+            .data["problem"]["code"],
+        "not_found"
+    );
+
+    let control = client
+        .call_tool("get_control", json!({ "control_id": control_id }))
+        .await;
+    assert_eq!(control["title"], "Policy control");
+    assert_eq!(control["framework_requirements"], json!([]));
+}
+
+#[tokio::test]
 async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP controls workspace")
@@ -2421,6 +2757,55 @@ VALUES ($1, $2, $3)
         )
         .await
         .expect("control mapping fixture inserts");
+}
+
+async fn insert_policy_attachment_row(app: &TestApp, policy_id: Uuid, status: &str) -> Uuid {
+    let attachment_id = Uuid::new_v4();
+    let object_key = format!("policy-test/{attachment_id}");
+    app.postgres()
+        .get()
+        .await
+        .expect("policy attachment fixture connection opens")
+        .execute(
+            r#"
+INSERT INTO policy_attachments (
+    id, policy_id, filename, content_type, content_length, object_key,
+    checksum_sha256, checksum_crc32c, upload_status
+)
+VALUES ($1, $2, 'policy.pdf', 'application/pdf', 10, $3, 'sha256', 'crc32c', $4)
+"#,
+            &[&attachment_id, &policy_id, &object_key, &status],
+        )
+        .await
+        .expect("policy attachment fixture inserts");
+    attachment_id
+}
+
+async fn set_policy_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+    app.postgres()
+        .get()
+        .await
+        .expect("policy attachment fixture connection opens")
+        .execute(
+            "UPDATE policy_attachments SET upload_status = $2 WHERE id = $1",
+            &[&attachment_id, &status],
+        )
+        .await
+        .expect("policy attachment fixture status updates");
+}
+
+async fn policy_count_for_workspace(app: &TestApp, workspace_id: Uuid) -> i64 {
+    app.postgres()
+        .get()
+        .await
+        .expect("policy count connection opens")
+        .query_one(
+            "SELECT count(*) AS count FROM policies WHERE workspace_id = $1",
+            &[&workspace_id],
+        )
+        .await
+        .expect("policy count reads")
+        .get("count")
 }
 
 fn field_issue_names(data: &Value) -> Vec<&str> {

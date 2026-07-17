@@ -37,9 +37,9 @@ async fn policy_lifecycle_normalizes_metadata_and_preserves_independent_state() 
         )
         .await
         .expect("policy creates");
-    assert_eq!(created.name, "Zulu policy");
+    assert_eq!(created.policy.name, "Zulu policy");
     assert_eq!(
-        created.description.as_deref(),
+        created.policy.description.as_deref(),
         Some("Original description.")
     );
     assert_eq!(mapping_codes(&created), ["PP-A", "PP-B"]);
@@ -58,49 +58,49 @@ async fn policy_lifecycle_normalizes_metadata_and_preserves_independent_state() 
     let listed = service.list(context).await.expect("policies list");
     assert_eq!(
         listed.iter().map(|policy| policy.id).collect::<Vec<_>>(),
-        [alpha.id, created.id]
+        [alpha.policy.id, created.policy.id]
     );
 
-    let updated_at = created.updated_at;
+    let updated_at = created.policy.updated_at;
     assert!(service
-        .detach_from_control(context, created.id, control_a)
+        .detach_from_control(context, created.policy.id, control_a)
         .await
         .expect("mapping detaches"));
     assert!(!service
-        .detach_from_control(context, created.id, control_a)
+        .detach_from_control(context, created.policy.id, control_a)
         .await
         .expect("missing mapping resolves"));
     let attached = service
-        .attach_to_control(context, created.id, control_a)
+        .attach_to_control(context, created.policy.id, control_a)
         .await
         .expect("mapping attaches")
         .expect("policy and control are visible");
     assert_eq!(attached.control.id, control_a);
     assert!(matches!(
         service
-            .attach_to_control(context, created.id, control_a)
+            .attach_to_control(context, created.policy.id, control_a)
             .await,
         Err(PolicyMutationError::MappingExists)
     ));
     assert!(service
-        .attach_to_control(context, created.id, other_control)
+        .attach_to_control(context, created.policy.id, other_control)
         .await
         .expect("cross-workspace mapping resolves")
         .is_none());
 
     let after_mapping = service
-        .get(context, created.id)
+        .get(context, created.policy.id)
         .await
         .expect("policy reads")
         .expect("policy exists");
-    assert_eq!(after_mapping.updated_at, updated_at);
+    assert_eq!(after_mapping.policy.updated_at, updated_at);
     assert_eq!(mapping_codes(&after_mapping), ["PP-A", "PP-B"]);
 
-    insert_policy_attachment(&app, created.id, "uploaded").await;
+    insert_policy_attachment(&app, created.policy.id, "uploaded").await;
     let updated = service
         .update(
             context,
-            created.id,
+            created.policy.id,
             UpdatePolicyPayload {
                 name: "  Renamed policy  ".to_owned(),
                 description: None,
@@ -109,10 +109,10 @@ async fn policy_lifecycle_normalizes_metadata_and_preserves_independent_state() 
         .await
         .expect("policy updates")
         .expect("policy exists");
-    assert_eq!(updated.name, "Renamed policy");
-    assert_eq!(updated.description, None);
+    assert_eq!(updated.policy.name, "Renamed policy");
+    assert_eq!(updated.policy.description, None);
     assert_eq!(mapping_codes(&updated), ["PP-A", "PP-B"]);
-    assert_eq!(active_attachment_count(&app, created.id).await, 1);
+    assert_eq!(active_attachment_count(&app, created.policy.id).await, 1);
 }
 
 #[tokio::test]
@@ -203,7 +203,7 @@ async fn policy_creation_rolls_back_invalid_references_and_enforces_active_names
         .expect("same name in another workspace creates");
 
     assert!(matches!(
-        service.archive(context, original.id).await,
+        service.archive(context, original.policy.id).await,
         Ok(ArchivePolicyResult::Archived { .. })
     ));
     service
@@ -245,11 +245,11 @@ async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows()
         )
         .await
         .expect("policy creates");
-    let attachment_id = insert_policy_attachment(&app, policy.id, "pending").await;
+    let attachment_id = insert_policy_attachment(&app, policy.policy.id, "pending").await;
 
     assert_eq!(
         service
-            .archive(context, policy.id)
+            .archive(context, policy.policy.id)
             .await
             .expect("archive resolves"),
         ArchivePolicyResult::AttachmentInProgress
@@ -257,31 +257,31 @@ async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows()
     set_attachment_status(&app, attachment_id, "finalizing").await;
     assert_eq!(
         service
-            .archive(context, policy.id)
+            .archive(context, policy.policy.id)
             .await
             .expect("archive resolves"),
         ArchivePolicyResult::AttachmentInProgress
     );
     set_attachment_status(&app, attachment_id, "contains_virus").await;
     assert!(matches!(
-        service.archive(context, policy.id).await,
-        Ok(ArchivePolicyResult::Archived { policy_id, .. }) if policy_id == policy.id
+        service.archive(context, policy.policy.id).await,
+        Ok(ArchivePolicyResult::Archived { policy_id, .. }) if policy_id == policy.policy.id
     ));
 
     assert!(service
-        .get(context, policy.id)
+        .get(context, policy.policy.id)
         .await
         .expect("archived read resolves")
         .is_none());
     assert!(service
-        .get(other_context, policy.id)
+        .get(other_context, policy.policy.id)
         .await
         .expect("cross-workspace read resolves")
         .is_none());
     assert!(service
         .update(
             context,
-            policy.id,
+            policy.policy.id,
             UpdatePolicyPayload {
                 name: "Cannot update".to_owned(),
                 description: None,
@@ -291,26 +291,27 @@ async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows()
         .expect("archived update resolves")
         .is_none());
     assert!(service
-        .attach_to_control(context, policy.id, control)
+        .attach_to_control(context, policy.policy.id, control)
         .await
         .expect("archived attach resolves")
         .is_none());
     assert!(!service
-        .detach_from_control(context, policy.id, control)
+        .detach_from_control(context, policy.policy.id, control)
         .await
         .expect("archived detach resolves"));
     assert_eq!(
         service
-            .archive(context, policy.id)
+            .archive(context, policy.policy.id)
             .await
             .expect("second archive resolves"),
         ArchivePolicyResult::NotFound
     );
-    assert_eq!(retained_mapping_count(&app, policy.id).await, 1);
-    assert_eq!(active_attachment_count(&app, policy.id).await, 1);
+    assert_eq!(retained_mapping_count(&app, policy.policy.id).await, 1);
+    assert_eq!(active_attachment_count(&app, policy.policy.id).await, 1);
 }
 
-fn mapping_codes(policy: &proofplane::domain::Policy) -> Vec<&str> {
+fn mapping_codes(detail: &proofplane::projections::policy_projection::PolicyDetail) -> Vec<&str> {
+    let policy = &detail.policy;
     policy
         .control_mappings
         .iter()

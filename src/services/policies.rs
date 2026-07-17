@@ -5,9 +5,9 @@ use thiserror::Error as ThisError;
 use crate::{
     domain::{
         optional_text, validate_policy_name, validate_unique_policy_control_ids, ControlId,
-        CreatePolicyPayload, DomainError, Policy, PolicyControlMapping, PolicyId,
-        UpdatePolicyPayload,
+        CreatePolicyPayload, DomainError, PolicyControlMapping, PolicyId, UpdatePolicyPayload,
     },
+    projections::policy_projection::{PolicyCatalogEntry, PolicyDetail},
     repository::{ArchivePolicyResult, ConflictKind, Error as RepositoryError, Postgres},
     validation::Validation,
 };
@@ -55,11 +55,14 @@ impl PolicyService {
         Self { repository }
     }
 
-    pub async fn list(&self, connection: AgentConnectionContext) -> Result<Vec<Policy>, Error> {
+    pub async fn list(
+        &self,
+        connection: AgentConnectionContext,
+    ) -> Result<Vec<PolicyCatalogEntry>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async |context| {
-                context.list_policies().await
+                context.list_policy_catalog().await
             })
             .await?)
     }
@@ -68,11 +71,11 @@ impl PolicyService {
         &self,
         connection: AgentConnectionContext,
         policy_id: PolicyId,
-    ) -> Result<Option<Policy>, Error> {
+    ) -> Result<Option<PolicyDetail>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.get_policy(policy_id).await
+                context.get_policy_detail(policy_id).await
             })
             .await?)
     }
@@ -81,7 +84,7 @@ impl PolicyService {
         &self,
         connection: AgentConnectionContext,
         payload: CreatePolicyPayload,
-    ) -> Result<Policy, PolicyMutationError> {
+    ) -> Result<PolicyDetail, PolicyMutationError> {
         let payload = validate_create_payload(payload)?;
         Ok(self
             .repository
@@ -89,7 +92,14 @@ impl PolicyService {
                 connection.workspace_id,
                 connection.user_id,
                 connection.connection_id,
-                async move |context| context.create_policy(&payload).await,
+                async move |context| {
+                    let policy = context.create_policy(&payload).await?;
+                    context.get_policy_detail(policy.id).await?.ok_or(
+                        RepositoryError::InvariantViolation(
+                            "created policy detail must be readable in transaction",
+                        ),
+                    )
+                },
             )
             .await?)
     }
@@ -99,7 +109,7 @@ impl PolicyService {
         connection: AgentConnectionContext,
         policy_id: PolicyId,
         payload: UpdatePolicyPayload,
-    ) -> Result<Option<Policy>, PolicyMutationError> {
+    ) -> Result<Option<PolicyDetail>, PolicyMutationError> {
         let payload = validate_update_payload(payload)?;
         Ok(self
             .repository
@@ -107,7 +117,18 @@ impl PolicyService {
                 connection.workspace_id,
                 connection.user_id,
                 connection.connection_id,
-                async move |context| context.update_policy(policy_id, &payload).await,
+                async move |context| {
+                    if context.update_policy(policy_id, &payload).await?.is_none() {
+                        return Ok(None);
+                    }
+                    context
+                        .get_policy_detail(policy_id)
+                        .await?
+                        .ok_or(RepositoryError::InvariantViolation(
+                            "updated policy detail must be readable in transaction",
+                        ))
+                        .map(Some)
+                },
             )
             .await?)
     }

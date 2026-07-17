@@ -14,7 +14,7 @@ Full schema, lifecycle, MCP, attachment, and auditor decisions live in
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Policy Domain And Persistence](./tickets/001-policy-domain-and-persistence.md) | Done | Added active policy lifecycle, mappings, and the attachment schema prerequisite. |
-| 002. [MCP Policy Catalog Tools](./tickets/002-mcp-policy-catalog-tools.md) | Todo | Expose authorized policy reads, writes, mappings, and archival through MCP. |
+| 002. [MCP Policy Catalog Tools](./tickets/002-mcp-policy-catalog-tools.md) | Done | Added policy MCP tools with catalog types in the dedicated projections layer. |
 | 003. [Policy Attachment Lifecycle](./tickets/003-policy-attachment-lifecycle.md) | Todo | Add one policy attachment and extend scan/finalization safely. |
 | 004. [MCP Policy Attachment Grants](./tickets/004-mcp-policy-attachment-grants.md) | Todo | Issue and redeem scoped human-browser attachment sessions. |
 | 005. [Policy Attachment Management Page](./tickets/005-policy-attachment-management-page.md) | Todo | Add the evidence-like upload, status, archive, and download UI. |
