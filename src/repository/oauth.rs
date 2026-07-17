@@ -3,9 +3,9 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, NewOAuthClient,
-        OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthAuthorizationRequestId,
-        OAuthClient, UserId, WorkspaceId, WorkspacePermission,
+        NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,
+        OAuthAuthorizationRequest, OAuthAuthorizationRequestId, UserId, WorkspaceId,
+        WorkspacePermission,
     },
     services::agent_connections::digest_secret,
 };
@@ -13,37 +13,6 @@ use crate::{
 use super::{constraints::classify_db_error, Error, Postgres};
 
 impl Postgres {
-    pub async fn create_oauth_client(&self, client: &NewOAuthClient) -> Result<OAuthClient, Error> {
-        let db = self.get().await?;
-        let row = db
-            .query_one(
-                r#"
-INSERT INTO oauth_clients (id, client_name, redirect_uris)
-VALUES ($1, $2, $3)
-RETURNING id, client_name, redirect_uris, created_at
-"#,
-                &[&client.id, &client.client_name, &client.redirect_uris],
-            )
-            .await
-            .map_err(classify_db_error)?;
-        oauth_client_from_row(&row)
-    }
-
-    pub async fn get_oauth_client(&self, id: &str) -> Result<Option<OAuthClient>, Error> {
-        let db = self.get().await?;
-        db.query_opt(
-            r#"
-SELECT id, client_name, redirect_uris, created_at
-FROM oauth_clients
-WHERE id = $1
-"#,
-            &[&id],
-        )
-        .await?
-        .map(|row| oauth_client_from_row(&row))
-        .transpose()
-    }
-
     pub async fn create_oauth_authorization_request(
         &self,
         request: &NewOAuthAuthorizationRequest,
@@ -56,16 +25,17 @@ WHERE id = $1
             .query_one(
                 r#"
 INSERT INTO oauth_authorization_requests (
-    id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    csrf_token_digest, expires_at
+    id, client_id, client_name, redirect_uri, code_challenge, state, resource,
+    scopes, csrf_token_digest, expires_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    auth0_subject, user_id, expires_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, client_id, client_name, redirect_uri, code_challenge, state,
+    resource, scopes, auth0_subject, user_id, expires_at
 "#,
                 &[
                     &Uuid::from(request.id),
                     &request.client_id,
+                    &request.client_name,
                     &request.redirect_uri,
                     &request.code_challenge,
                     &request.state,
@@ -89,8 +59,8 @@ RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
         let digest: &[u8] = digest.as_bytes();
         db.query_opt(
             r#"
-SELECT id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    auth0_subject, user_id, expires_at
+SELECT id, client_id, client_name, redirect_uri, code_challenge, state, resource,
+    scopes, auth0_subject, user_id, expires_at
 FROM oauth_authorization_requests
 WHERE csrf_token_digest = $1
   AND expires_at > now()
@@ -110,8 +80,8 @@ WHERE csrf_token_digest = $1
         let db = self.get().await?;
         db.query_opt(
             r#"
-SELECT id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    auth0_subject, user_id, expires_at
+SELECT id, client_id, client_name, redirect_uri, code_challenge, state, resource,
+    scopes, auth0_subject, user_id, expires_at
 FROM oauth_authorization_requests
 WHERE id = $1
   AND expires_at > now()
@@ -138,8 +108,8 @@ SET auth0_subject = $2, user_id = $3
 WHERE id = $1
   AND expires_at > now()
   AND consumed_at IS NULL
-RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    auth0_subject, user_id, expires_at
+RETURNING id, client_id, client_name, redirect_uri, code_challenge, state,
+    resource, scopes, auth0_subject, user_id, expires_at
 "#,
             &[
                 &Uuid::from(request_id),
@@ -166,8 +136,8 @@ WHERE id = $1
   AND consumed_at IS NULL
   AND auth0_subject IS NOT NULL
   AND user_id IS NOT NULL
-RETURNING id, client_id, redirect_uri, code_challenge, state, resource, scopes,
-    auth0_subject, user_id, expires_at
+RETURNING id, client_id, client_name, redirect_uri, code_challenge, state,
+    resource, scopes, auth0_subject, user_id, expires_at
 "#,
             &[&Uuid::from(request_id)],
         )
@@ -256,19 +226,11 @@ JOIN oauth_authorization_requests r ON r.id = consumed.request_id
     }
 }
 
-fn oauth_client_from_row(row: &Row) -> Result<OAuthClient, Error> {
-    Ok(OAuthClient {
-        id: row.try_get("id")?,
-        client_name: row.try_get("client_name")?,
-        redirect_uris: row.try_get("redirect_uris")?,
-        created_at: row.try_get("created_at")?,
-    })
-}
-
 fn oauth_request_from_row(row: &Row) -> Result<OAuthAuthorizationRequest, Error> {
     Ok(OAuthAuthorizationRequest {
         id: OAuthAuthorizationRequestId::from(row.try_get::<_, Uuid>("id")?),
         client_id: row.try_get("client_id")?,
+        client_name: row.try_get("client_name")?,
         redirect_uri: row.try_get("redirect_uri")?,
         code_challenge: row.try_get("code_challenge")?,
         state: row.try_get("state")?,

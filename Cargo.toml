@@ -42,6 +42,7 @@ futures-core = "0.3"
 futures-util = "0.3"
 getrandom = "0.4.3"
 hex = "0.4"
+hmac = "0.12"
 http = "1"
 jwtk = { version = "0.5", features = ["openssl"] }
 metrics = "0.24.6"

@@ -14,13 +14,14 @@ use uuid::Uuid;
 use crate::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
+        client_registration::RegisterClientPayload,
         UserAuthenticator,
     },
     config::Auth0Config,
     domain::{OAuthAuthorizationRequestId, WorkspacePermission},
     services::oauth::{
         parse_scope, valid_redirect_uri, ApproveConsentPayload, AuthorizePayload, CallbackOutcome,
-        OAuthConsentContext, OAuthError, OAuthService, RegisterClientPayload, TokenPayload,
+        OAuthConsentContext, OAuthError, OAuthService, TokenPayload,
     },
 };
 
@@ -55,7 +56,7 @@ where
             "/.well-known/oauth-authorization-server",
             get(authorization_server_metadata::<V>),
         )
-        .route("/oauth/register", post(register_client::<V>))
+        .route("/oauth/register", post(register::<V>))
         .route("/oauth/authorize", get(authorize::<V>))
         .route("/oauth/auth0/callback", get(auth0_callback::<V>))
         .route("/oauth/consent", post(submit_consent::<V>))
@@ -73,6 +74,7 @@ struct AuthorizationServerMetadata {
     grant_types_supported: Vec<&'static str>,
     code_challenge_methods_supported: Vec<&'static str>,
     token_endpoint_auth_methods_supported: Vec<&'static str>,
+    client_id_metadata_document_supported: bool,
     scopes_supported: Vec<&'static str>,
 }
 
@@ -91,6 +93,7 @@ where
         grant_types_supported: vec!["authorization_code"],
         code_challenge_methods_supported: vec!["S256"],
         token_endpoint_auth_methods_supported: vec!["none"],
+        client_id_metadata_document_supported: true,
         scopes_supported: WorkspacePermission::ALL
             .iter()
             .map(|permission| permission.as_str())
@@ -120,7 +123,7 @@ struct RegisterResponse {
     client_id_issued_at: i64,
 }
 
-async fn register_client<V>(
+async fn register<V>(
     State(state): State<OAuthState<V>>,
     Json(body): Json<RegisterRequest>,
 ) -> Response
@@ -154,29 +157,23 @@ where
         .client_name
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "MCP client".to_owned());
-    match state
-        .service
-        .register_client(RegisterClientPayload {
-            client_name,
-            redirect_uris: body.redirect_uris,
-        })
-        .await
-    {
-        Ok(client) => (
-            StatusCode::CREATED,
-            Json(RegisterResponse {
-                client_id: client.id,
-                client_name: client.client_name,
-                redirect_uris: client.redirect_uris,
-                token_endpoint_auth_method: "none",
-                grant_types: vec!["authorization_code"],
-                response_types: vec!["code"],
-                client_id_issued_at: client.created_at.timestamp(),
-            }),
-        )
-            .into_response(),
-        Err(_) => oauth_json_error(StatusCode::BAD_REQUEST, "invalid_client_metadata"),
-    }
+    let client = state.service.register_client(RegisterClientPayload {
+        client_name,
+        redirect_uris: body.redirect_uris,
+    });
+    (
+        StatusCode::CREATED,
+        Json(RegisterResponse {
+            client_id: client.client_id,
+            client_name: client.client_name,
+            redirect_uris: client.redirect_uris,
+            token_endpoint_auth_method: "none",
+            grant_types: vec!["authorization_code"],
+            response_types: vec!["code"],
+            client_id_issued_at: chrono::Utc::now().timestamp(),
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]

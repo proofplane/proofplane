@@ -10,7 +10,7 @@ use proofplane::{
     config,
     mcp::{self, McpAppDependencies},
     object_storage, observability, repository,
-    services::oauth::OAuthService,
+    services::{client_resolver::ClientResolver, oauth::OAuthService},
     store,
 };
 use secrecy::ExposeSecret;
@@ -97,10 +97,12 @@ async fn run() -> Result<(), Error> {
         config.mcp.resource.to_string(),
         &config.paseto.mcp_oauth,
     )?;
+    let client_resolver = ClientResolver::from_mcp_oauth_config(&config.paseto.mcp_oauth)?;
     let oauth_service = OAuthService::new(
         postgres.clone(),
         config.server.public_api_base_url.clone(),
         config.mcp.resource.clone(),
+        client_resolver,
         mcp_oauth_encryptor,
         mcp_oauth_decryptor,
     );

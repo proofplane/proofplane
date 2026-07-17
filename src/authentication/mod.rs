@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub mod auth0;
+pub mod client_registration;
 mod jwks;
 pub mod opaque_token;
 pub mod paseto;
