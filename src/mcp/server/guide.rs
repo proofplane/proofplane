@@ -74,15 +74,16 @@ fn guide_response(topic: Option<&str>) -> GetProofplaneGuideResponse {
 #[cfg(test)]
 mod tests {
     use super::{guide_response, INDEX_MARKDOWN, INDEX_TITLE};
-    use crate::mcp::docs::TOPICS;
+    use crate::mcp::docs::{find_topic, TOPICS};
 
     #[test]
     fn known_topic_returns_embedded_markdown_without_the_index() {
         let response = guide_response(Some("  submitting-evidence\t"));
+        let expected = find_topic("submitting-evidence").expect("topic is registered");
 
         assert_eq!(response.topic.as_deref(), Some("submitting-evidence"));
         assert_eq!(response.title, "Submitting Evidence");
-        assert_eq!(response.markdown, TOPICS[1].markdown);
+        assert_eq!(response.markdown, expected.markdown);
         assert!(response.topics.is_empty());
     }
 

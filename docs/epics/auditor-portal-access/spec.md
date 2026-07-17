@@ -3,7 +3,7 @@
 ## Goal
 
 Let a workspace user give a named auditor secure browser access to all controls,
-evidence submissions, and eligible evidence attachments in one workspace,
+evidence submissions, and eligible evidence submissions in one workspace,
 without turning the auditor into a workspace member or issuing an API token.
 
 ## Trust Model
@@ -72,7 +72,7 @@ sessions because every route checks the backing grant.
 ## Portal Read Model
 
 The portal exposes all workspace controls, mapped Evidence Requests, all
-historical Evidence Submissions, and attachment metadata in deterministic
+historical Evidence Submissions, and submission metadata in deterministic
 order. This is intentionally broader than the old latest-only packet idea:
 auditors need the submitted record, not a curated snapshot.
 
@@ -81,21 +81,21 @@ Ticket 005 ships the backend read model as
 cookie. The endpoint uses the session workspace as its scope rather than a
 workspace path parameter.
 
-Non-archived attachment metadata includes download eligibility, filename,
+Non-archived submission metadata includes download eligibility, filename,
 content type, content length, checksums, and lifecycle status. Archived
-attachments are filtered out and do not appear in the portal response. Internal
+submissions are filtered out and do not appear in the portal response. Internal
 object keys and storage backend details are never serialized.
 
-## Attachment Downloads
+## Submission Downloads
 
-Verified auditor sessions may download uploaded, unarchived attachments.
+Verified auditor sessions may download uploaded, unarchived submissions.
 Pending, finalizing, failed, malicious, archived, missing, or cross-workspace
-attachments are not downloadable.
+submissions are not downloadable.
 
 Ticket 006 ships the backend download route as
-`GET /auditor-access/portal/evidence-submissions/{submission_id}/attachments/{attachment_id}/download`,
+`GET /auditor-access/portal/evidence-submissions/{submission_id}/download`,
 authenticated only by the auditor session cookie. It does not issue browser
-API tokens or new attachment download grants for auditors.
+API tokens or new submission download grants for auditors.
 
 Ticket 007 ships the server-rendered portal page as
 `GET /auditor-access/portal`, authenticated by the same auditor session cookie
@@ -103,15 +103,15 @@ and backed by the existing portal read model.
 
 Downloads stream through Proofplane, not directly from object storage. The
 download path rechecks the session, underlying auditor access grant, workspace,
-attachment status, and object metadata before streaming with safe
+submission status, and object metadata before streaming with safe
 `Cache-Control`, `Referrer-Policy`, and `Content-Disposition` headers.
 
 ## Audit Logging
 
 Grant creation, revocation, OTP send, OTP verification, session creation,
-portal read, and attachment download emit structured audit logs with stable
+portal read, and submission download emit structured audit logs with stable
 identifiers. Logs must not include invite secrets, OTPs, session IDs, cookies,
-object keys, attachment bytes, or free-text attachment contents.
+object keys, submission bytes, or free-text submission contents.
 
 ## Deferred Work
 
@@ -129,11 +129,11 @@ so raw OTP codes are never stored in durable queue payloads.
   mail wiring does not leave the request path responsible for provider retries.
 - 2026-07-01: Replaced the stale packet/export plan with email-bound
   auditor portal access, OTP verification, seven-day sessions, and direct
-  attachment downloads.
+  submission downloads.
 - 2026-07-02: Recorded the shipped portal read model endpoint and clarified
-  that archived attachments are omitted from portal metadata.
-- 2026-07-02: Recorded the shipped direct auditor attachment download route
+  that archived submissions are omitted from portal metadata.
+- 2026-07-02: Recorded the shipped direct auditor submission download route
   and clarified that it uses the auditor session cookie rather than a new
-  attachment download grant.
+  submission download grant.
 - 2026-07-04: Recorded the shipped server-rendered browser invite and portal
   routes.

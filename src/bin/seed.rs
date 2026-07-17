@@ -13,14 +13,14 @@ async fn main() {
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence requests, SOC 2 controls, and demo evidence submission"
+        "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence, SOC 2 controls, and demo evidence submission"
     );
-    match summary.demo_attachment {
-        seed::DemoAttachmentSeedStatus::Seeded => {
-            println!("demo evidence attachment/object: seeded for filesystem storage");
+    match summary.demo_submission {
+        seed::DemoSubmissionSeedStatus::Seeded => {
+            println!("demo evidence submission/object: seeded for filesystem storage");
         }
-        seed::DemoAttachmentSeedStatus::SkippedNonFilesystemStorage => {
-            println!("demo evidence attachment/object: skipped for non-filesystem storage");
+        seed::DemoSubmissionSeedStatus::SkippedNonFilesystemStorage => {
+            println!("demo evidence submission/object: skipped for non-filesystem storage");
         }
     }
     println!(

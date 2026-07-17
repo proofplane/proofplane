@@ -5,14 +5,14 @@
 Proofplane is a single Rust crate. Application code lives in `src/`, organized
 by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
 persistence in `repository/` and `store/`, types in `domain/`, and external
-adapters in `authorization/`, `object_storage/`, `pubsub/`, and `scanner/`.
-Executable entry points are in
-`src/bin/` (`api`, `worker`, `dequeuer`, `mcp`, `seed`, and `authz-schema`).
+adapters in `authentication`, `object_storage/`, `pubsub/`, and `scanner/`.
+Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
+and `seed`).
 
 Unit tests are colocated with source modules. Docker-backed integration tests
 live under `tests/integration/`, with shared setup in `support.rs`. Database
-migrations belong in `migrations/`; SpiceDB schema files belong in
-`authz/spicedb/`. API fixtures and project design notes live in `docs/`.
+migrations belong in `migrations/`. API fixtures and project design notes live
+in `docs/`.
 
 ## Build, Test, and Development Commands
 
@@ -20,9 +20,8 @@ migrations belong in `migrations/`; SpiceDB schema files belong in
 - `make check`: run formatting checks, Clippy with warnings denied, and all
   tests. Run this before submitting changes.
 - `make up && make health`: start and verify local Postgres, Pub/Sub, and
-  SpiceDB dependencies.
-- `make authz-schema && make seed`: apply authorization schema, run database
-  migrations, and seed local data.
+  ClamAV dependencies.
+- `make seed`: run database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `config/local.yaml`.
 - `cargo test --test integration worker_handlers`: run a focused integration
@@ -39,12 +38,21 @@ independent of generated adapter types. Prefer existing concrete Postgres
 gateways for internal persistence and traits for genuine external adapter
 boundaries.
 
+Never call `.expect(...)` in long-running server or runtime paths where a panic
+could cause application downtime. This includes the API, MCP server, worker,
+dequeuer, and shared library code reachable by those processes. Propagate
+recoverable failures with `Result` and `?`, and handle invariants without a
+panic path. Tests and one-shot utilities such as seed, migration, and local
+development commands may use `expect` when aborting is the intended behavior
+and the message is actionable. Before completing a change, search modified
+runtime code for `.expect(` and remove every occurrence.
+
 ## Testing Guidelines
 
 Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,
 transaction, HTTP, worker coordination, and dependency-boundary behavior in
 `tests/integration/`. Name tests after observable outcomes, such as
-`malicious_scan_marks_attachment_contains_virus`. There is no numeric coverage
+`malicious_scan_marks_submission_contains_virus`. There is no numeric coverage
 threshold; changes should cover success, failure, and rollback paths appropriate
 to their risk.
 

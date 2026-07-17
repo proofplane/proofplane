@@ -38,9 +38,9 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
+        evidence::EvidenceService, evidence_submissions::EvidenceSubmissionService,
+        evidence_upload_grants::EvidenceUploadGrantService,
     },
 };
 use url::Url;
@@ -97,12 +97,12 @@ pub fn create_app<V>(dependencies: McpAppDependencies<V>) -> Result<Router, McpA
 where
     V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
 {
-    let evidence_requests = EvidenceRequestService::new(dependencies.postgres.clone());
+    let evidence = EvidenceService::new(dependencies.postgres.clone());
     let evidence_submissions = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let attachment_upload_grants = AttachmentUploadGrantService::new(
+    let upload_grants = EvidenceUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
         dependencies.upload_grant_encryptor,
@@ -116,9 +116,9 @@ where
         dependencies.resource.clone(),
         agent_connections,
         ProofplaneMcp::new(
-            evidence_requests,
+            evidence,
             evidence_submissions,
-            attachment_upload_grants,
+            upload_grants,
             auditor_access_grants,
             controls,
             dependencies.public_api_base_url,

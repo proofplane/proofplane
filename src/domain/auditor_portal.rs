@@ -1,9 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use super::{
-    AttachmentUploadStatus, ControlId, EvidenceAttachmentId, EvidenceRequest, EvidenceSubmission,
-    EvidenceSubmissionId, FrameworkRequirement, WorkspaceId,
-};
+use super::{ControlId, Evidence, EvidenceSubmission, FrameworkRequirement, WorkspaceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalReadModel {
@@ -21,32 +18,19 @@ pub struct AuditorPortalControl {
     pub title: String,
     pub description: String,
     pub framework_requirements: Vec<FrameworkRequirement>,
-    pub evidence_requests: Vec<AuditorPortalEvidenceRequest>,
+    pub evidence: Vec<AuditorPortalEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditorPortalEvidenceRequest {
+pub struct AuditorPortalEvidence {
     pub mapping_rationale: String,
     pub mapping_created_at: DateTime<Utc>,
-    pub request: EvidenceRequest,
+    pub evidence: Evidence,
     pub submissions: Vec<AuditorPortalSubmission>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalSubmission {
     pub submission: EvidenceSubmission,
-    pub attachments: Vec<AuditorPortalAttachment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditorPortalAttachment {
-    pub id: EvidenceAttachmentId,
-    pub evidence_submission_id: EvidenceSubmissionId,
-    pub filename: String,
-    pub content_type: String,
-    pub content_length: i64,
-    pub checksum_sha256: String,
-    pub checksum_crc32c: String,
-    pub upload_status: AttachmentUploadStatus,
     pub download_eligible: bool,
 }

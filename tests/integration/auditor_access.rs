@@ -17,7 +17,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::support::{capture_audit_logs, cc61_id, upload_attachment, TestApp};
+use super::support::{capture_audit_logs, cc61_id, upload_evidence_file, TestApp};
+use proofplane::domain::CoverageWindow;
 
 #[tokio::test]
 async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_secrets() {
@@ -185,84 +186,77 @@ async fn logout_and_grant_revocation_invalidate_existing_session() {
 }
 
 #[tokio::test]
-async fn portal_data_returns_workspace_graph_and_filters_archived_attachments() {
+async fn portal_data_returns_workspace_graph_and_filters_archived_submissions() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-01");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
 
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Access review evidence", "2026-03-01T00:00:00Z"),
-        )
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Access review evidence"))
         .await;
-    let request_id = uuid_field(&request["id"]);
+    let evidence_id = uuid_field(&evidence["id"]);
     insert_control_mapping(
         &app,
-        request_id,
+        evidence_id,
         control_id,
         "Shows access reviews were performed.",
     )
     .await;
 
     let unmapped = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Unmapped evidence", "2026-02-01T00:00:00Z"),
-        )
+        .create_evidence(workspace_id, &evidence_body("Unmapped evidence"))
         .await;
     app.create_evidence_submission(
         workspace_id,
         uuid_field(&unmapped["id"]),
-        &submission("unmapped should not appear"),
+        test_coverage(),
+        "unmapped.txt",
+        b"unmapped should not appear",
     )
     .await;
 
-    let older = app
-        .create_evidence_submission(workspace_id, request_id, &submission("older submission"))
+    // Three files against one piece of evidence, all sharing a coverage window:
+    // one finalized and downloadable, one still scanning, one archived.
+    let eligible = app
+        .create_evidence_submission(
+            workspace_id,
+            evidence_id,
+            test_coverage(),
+            "eligible.txt",
+            b"eligible",
+        )
         .await;
-    let newer = app
-        .create_evidence_submission(workspace_id, request_id, &submission("newer submission"))
+    let eligible_id = uuid_field(&eligible["id"]);
+    finalize_submission(&app, workspace_id, evidence_id, eligible_id).await;
+
+    let pending = app
+        .create_evidence_submission(
+            workspace_id,
+            evidence_id,
+            test_coverage(),
+            "pending.txt",
+            b"pending",
+        )
         .await;
-    let older_submission_id = uuid_field(&older["id"]);
-    let newer_submission_id = uuid_field(&newer["id"]);
-    set_received_at(&app, older_submission_id, "2026-04-01T00:00:00Z").await;
-    set_received_at(&app, newer_submission_id, "2026-05-01T00:00:00Z").await;
-
-    let uploaded = upload_attachment(
-        &app,
-        workspace_id,
-        newer_submission_id,
-        "eligible.txt",
-        b"eligible",
-    )
-    .await;
-    let uploaded_id = uuid_field(&uploaded["id"]);
-    finalize_attachment(&app, workspace_id, newer_submission_id, uploaded_id).await;
-
-    let pending = upload_attachment(
-        &app,
-        workspace_id,
-        newer_submission_id,
-        "pending.txt",
-        b"pending",
-    )
-    .await;
     let pending_id = uuid_field(&pending["id"]);
 
-    let archived = upload_attachment(
-        &app,
-        workspace_id,
-        older_submission_id,
-        "archived.txt",
-        b"archived",
-    )
-    .await;
+    let archived = app
+        .create_evidence_submission(
+            workspace_id,
+            evidence_id,
+            test_coverage(),
+            "archived.txt",
+            b"archived",
+        )
+        .await;
     let archived_id = uuid_field(&archived["id"]);
-    finalize_attachment(&app, workspace_id, older_submission_id, archived_id).await;
-    archive_attachment(&app, archived_id).await;
+    finalize_submission(&app, workspace_id, evidence_id, archived_id).await;
+    archive_submission(&app, archived_id).await;
+
+    set_received_at(&app, eligible_id, "2026-05-01T00:00:00Z").await;
+    set_received_at(&app, pending_id, "2026-04-01T00:00:00Z").await;
 
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
     let request = app.server().get("/auditor-access/portal/data").add_header(
@@ -302,34 +296,49 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_attachments() 
     assert_eq!(requirement["framework_name"], "SOC 2");
     assert_eq!(requirement["code"], "CC6.1");
     assert_eq!(requirement["title"], "Logical access security");
-    let portal_request = &control["evidence_requests"][0];
+    let portal_evidence = &control["evidence"][0];
     assert_eq!(
-        portal_request["mapping_rationale"],
+        portal_evidence["mapping_rationale"],
         "Shows access reviews were performed."
     );
-    let submissions = portal_request["submissions"]
-        .as_array()
-        .expect("submissions is array");
-    assert_eq!(submissions.len(), 2);
-    assert_eq!(
-        submissions[0]["submission"]["id"],
-        newer_submission_id.to_string()
-    );
-    assert_eq!(
-        submissions[1]["submission"]["id"],
-        older_submission_id.to_string()
+    assert!(
+        portal_evidence["evidence"].get("cadence").is_none(),
+        "an auditor is not shown a schedule that does not exist"
     );
 
-    let attachments = submissions[0]["attachments"]
+    let submissions = portal_evidence["submissions"]
         .as_array()
-        .expect("attachments is array");
-    assert_eq!(attachments[0]["filename"], "eligible.txt");
-    assert_eq!(attachments[0]["upload_status"], "uploaded");
-    assert_eq!(attachments[0]["download_eligible"], true);
-    assert_eq!(attachments[1]["filename"], "pending.txt");
-    assert_eq!(attachments[1]["upload_status"], "pending");
-    assert_eq!(attachments[1]["download_eligible"], false);
-    assert_eq!(uuid_field(&attachments[1]["id"]), pending_id);
+        .expect("submissions is array");
+    assert_eq!(
+        submissions.len(),
+        2,
+        "the archived file is withheld; the other two remain"
+    );
+    assert_eq!(submissions[0]["id"], eligible_id.to_string());
+    assert_eq!(submissions[0]["filename"], "eligible.txt");
+    assert_eq!(submissions[0]["upload_status"], "uploaded");
+    assert_eq!(submissions[0]["download_eligible"], true);
+    assert!(
+        submissions[0]["received_at"].is_string(),
+        "an auditor sees when the file arrived"
+    );
+    assert!(submissions[0]["valid_from"].is_string());
+    assert!(submissions[0]["valid_until"].is_string());
+
+    assert_eq!(submissions[1]["id"], pending_id.to_string());
+    assert_eq!(submissions[1]["filename"], "pending.txt");
+    assert_eq!(submissions[1]["upload_status"], "pending");
+    assert_eq!(
+        submissions[1]["download_eligible"], false,
+        "a file that has not finished scanning cannot be downloaded"
+    );
+    assert_eq!(
+        submissions[0]["valid_from"], submissions[1]["valid_from"],
+        "files uploaded through one link cover the same period"
+    );
+    assert!(!submissions
+        .iter()
+        .any(|submission| submission["id"] == archived_id.to_string()));
 
     let logs = serde_json::to_string(&logs).expect("logs serialize");
     assert!(logs.contains("auditor_portal.read"));
@@ -373,26 +382,27 @@ async fn portal_data_rejects_missing_tampered_and_revoked_sessions() {
 }
 
 #[tokio::test]
-async fn auditor_session_downloads_uploaded_attachment_with_safe_headers_and_audit() {
+async fn auditor_session_downloads_uploaded_submission_with_safe_headers_and_audit() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_download_evidence(&app, workspace_id).await;
     let content = b"auditor downloadable bytes";
-    let attachment = upload_attachment(
+    let submission = upload_evidence_file(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
+        test_coverage(),
         "Auditor packet.txt",
         content,
     )
     .await;
-    let attachment_id = uuid_field(&attachment["id"]);
-    let final_key = finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let submission_id = uuid_field(&submission["id"]);
+    let final_key = finalize_submission(&app, workspace_id, evidence_id, submission_id).await;
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
 
-    let path = auditor_download_path(submission_id, attachment_id);
+    let path = auditor_download_path(submission_id);
     let request = app.server().get(&path).add_header(
         "Cookie",
         format!("proofplane_auditor_session={raw_session}"),
@@ -416,11 +426,10 @@ async fn auditor_session_downloads_uploaded_attachment_with_safe_headers_and_aud
     assert_eq!(response.header("referrer-policy"), "no-referrer");
 
     let logs = serde_json::to_string(&logs).expect("logs serialize");
-    assert!(logs.contains("auditor_attachment.downloaded"));
+    assert!(logs.contains("auditor_submission.downloaded"));
     assert!(logs.contains("auditor@example.com"));
     assert!(logs.contains(&workspace_id.to_string()));
     assert!(logs.contains(&submission_id.to_string()));
-    assert!(logs.contains(&attachment_id.to_string()));
     assert!(!logs.contains(invite_token));
     assert!(!logs.contains(&raw_session));
     assert!(!logs.contains(final_key.as_str()));
@@ -428,60 +437,68 @@ async fn auditor_session_downloads_uploaded_attachment_with_safe_headers_and_aud
 }
 
 #[tokio::test]
-async fn auditor_download_rejects_ineligible_missing_and_cross_workspace_attachments() {
+async fn auditor_download_rejects_ineligible_missing_and_cross_workspace_submissions() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let other_workspace_id = app.workspace_id("other");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_download_evidence(&app, workspace_id).await;
 
-    let pending =
-        upload_attachment(&app, workspace_id, submission_id, "pending.txt", b"pending").await;
-    let pending_id = uuid_field(&pending["id"]);
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
-
-    for status in ["finalizing", "failed", "contains_virus"] {
-        set_attachment_status(&app, pending_id, status).await;
-        assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
-    }
-
-    let archived = upload_attachment(
+    let pending = upload_evidence_file(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
+        test_coverage(),
+        "pending.txt",
+        b"pending",
+    )
+    .await;
+    let pending_id = uuid_field(&pending["id"]);
+    assert_auditor_download_not_found(&app, &raw_session, pending_id).await;
+
+    for status in ["finalizing", "failed", "contains_virus"] {
+        set_submission_status(&app, pending_id, status).await;
+        assert_auditor_download_not_found(&app, &raw_session, pending_id).await;
+    }
+
+    let archived = upload_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        test_coverage(),
         "archived.txt",
         b"archived",
     )
     .await;
     let archived_id = uuid_field(&archived["id"]);
-    finalize_attachment(&app, workspace_id, submission_id, archived_id).await;
-    archive_attachment(&app, archived_id).await;
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, archived_id).await;
+    finalize_submission(&app, workspace_id, evidence_id, archived_id).await;
+    archive_submission(&app, archived_id).await;
+    assert_auditor_download_not_found(&app, &raw_session, archived_id).await;
 
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, Uuid::new_v4()).await;
-    assert_auditor_download_not_found(&app, &raw_session, Uuid::new_v4(), archived_id).await;
+    assert_auditor_download_not_found(&app, &raw_session, Uuid::new_v4()).await;
+    assert_auditor_download_not_found(&app, &raw_session, archived_id).await;
 
-    let other_submission_id = create_submission(&app, other_workspace_id).await;
-    let other = upload_attachment(
+    let other_evidence_id = create_download_evidence(&app, other_workspace_id).await;
+    let other_submission = upload_evidence_file(
         &app,
         other_workspace_id,
-        other_submission_id,
+        other_evidence_id,
+        test_coverage(),
         "other.txt",
         b"other",
     )
     .await;
-    let other_attachment_id = uuid_field(&other["id"]);
-    finalize_attachment(
+    let other_submission_id = uuid_field(&other_submission["id"]);
+    finalize_submission(
         &app,
         other_workspace_id,
+        other_evidence_id,
         other_submission_id,
-        other_attachment_id,
     )
     .await;
-    assert_auditor_download_not_found(&app, &raw_session, other_submission_id, other_attachment_id)
-        .await;
+    assert_auditor_download_not_found(&app, &raw_session, other_submission_id).await;
 }
 
 #[tokio::test]
@@ -490,12 +507,19 @@ async fn auditor_download_rejects_logged_out_tampered_expired_and_grant_revoked_
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
-    let attachment =
-        upload_attachment(&app, workspace_id, submission_id, "session.txt", b"session").await;
-    let attachment_id = uuid_field(&attachment["id"]);
-    finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
-    let path = auditor_download_path(submission_id, attachment_id);
+    let evidence_id = create_download_evidence(&app, workspace_id).await;
+    let submission = upload_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        test_coverage(),
+        "session.txt",
+        b"session",
+    )
+    .await;
+    let submission_id = uuid_field(&submission["id"]);
+    finalize_submission(&app, workspace_id, evidence_id, submission_id).await;
+    let path = auditor_download_path(submission_id);
 
     app.server().get(&path).await.assert_status_not_found();
     app.server()
@@ -573,12 +597,19 @@ async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_d
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_download_evidence(&app, workspace_id).await;
     let content = b"mismatch bytes";
-    let attachment =
-        upload_attachment(&app, workspace_id, submission_id, "mismatch.txt", content).await;
-    let attachment_id = uuid_field(&attachment["id"]);
-    let final_key = finalize_attachment(&app, workspace_id, submission_id, attachment_id).await;
+    let submission = upload_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        test_coverage(),
+        "mismatch.txt",
+        content,
+    )
+    .await;
+    let submission_id = uuid_field(&submission["id"]);
+    let final_key = finalize_submission(&app, workspace_id, evidence_id, submission_id).await;
     let metadata_path = app
         .object_storage_root()
         .join("metadata")
@@ -596,7 +627,7 @@ async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_d
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
     let response = app
         .server()
-        .get(&auditor_download_path(submission_id, attachment_id))
+        .get(&auditor_download_path(submission_id))
         .add_header(
             "Cookie",
             format!("proofplane_auditor_session={raw_session}"),
@@ -662,10 +693,7 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     .to_owned();
 
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Access review evidence", "2026-03-01T00:00:00Z"),
-        )
+        .create_evidence(workspace_id, &evidence_body("Access review evidence"))
         .await;
     let request_id = uuid_field(&request["id"]);
     insert_control_mapping(
@@ -675,28 +703,23 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
         "Shows access reviews were performed.",
     )
     .await;
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            request_id,
-            &submission("browser portal submission"),
-        )
-        .await;
-    let submission_id = uuid_field(&submission["id"]);
-    let uploaded = upload_attachment(
+    let evidence_id = request_id;
+    let uploaded = upload_evidence_file(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
+        test_coverage(),
         "auditor-evidence.txt",
         b"eligible",
     )
     .await;
     let uploaded_id = uuid_field(&uploaded["id"]);
-    finalize_attachment(&app, workspace_id, submission_id, uploaded_id).await;
-    let pending = upload_attachment(
+    finalize_submission(&app, workspace_id, evidence_id, uploaded_id).await;
+    let pending = upload_evidence_file(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
+        test_coverage(),
         "pending-evidence.txt",
         b"pending",
     )
@@ -760,14 +783,11 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     let body = html_body(&control);
     assert!(body.contains("Submission history"));
     assert!(body.contains("Access review evidence"));
-    assert!(body.contains("browser portal submission"));
-    assert!(body.contains("Evidence attachments"));
+    assert!(body.contains("Evidence submission"));
     assert!(body.contains("auditor-evidence.txt"));
-    assert!(body.contains(&auditor_download_path(submission_id, uploaded_id)));
+    assert!(body.contains(&auditor_download_path(uploaded_id)));
     assert!(body.contains("pending-evidence.txt"));
-    assert!(!body.contains(&auditor_download_path(submission_id, pending_id)));
-    assert!(!body.contains(invite_token));
-    assert!(!body.contains(&raw_session));
+    assert!(!body.contains(&auditor_download_path(pending_id)));
 }
 
 #[tokio::test]
@@ -819,39 +839,28 @@ async fn browser_portal_escapes_untrusted_content() {
     let invite_token = grant.raw_secret.expose_secret();
     let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
 
-    let request = app
-        .create_evidence_request(
+    let evidence = app
+        .create_evidence(
             workspace_id,
-            &evidence_request("<script>alert('request')</script>", "2026-03-01T00:00:00Z"),
+            &evidence_body("<script>alert('evidence')</script>"),
         )
         .await;
-    let request_id = uuid_field(&request["id"]);
-    insert_control_mapping(&app, request_id, control_id, "<b>mapped</b>").await;
-    let submission = app
+    let evidence_id = uuid_field(&evidence["id"]);
+    insert_control_mapping(&app, evidence_id, control_id, "<b>mapped</b>").await;
+    let uploaded = app
         .create_evidence_submission(
             workspace_id,
-            request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-03-31T23:59:59Z",
-            "source_system": "<source>",
-            "collection_method": "manual",
-            "summary": "<img src=x onerror=alert(1)>",
-            "description": "Description with <strong>markup</strong>."
-            }),
+            evidence_id,
+            test_coverage(),
+            "portable evidence.txt",
+            b"eligible",
         )
         .await;
-    let submission_id = uuid_field(&submission["id"]);
-    let uploaded = upload_attachment(
-        &app,
-        workspace_id,
-        submission_id,
-        "portable evidence.txt",
-        b"eligible",
-    )
-    .await;
     let uploaded_id = uuid_field(&uploaded["id"]);
-    finalize_attachment(&app, workspace_id, submission_id, uploaded_id).await;
+    finalize_submission(&app, workspace_id, evidence_id, uploaded_id).await;
+    // Filename validation rejects markup on the way in, so force a hostile one
+    // straight into the row: the renderer must not trust stored data either.
+    set_submission_filename(&app, uploaded_id, "<img src=x onerror=alert(1)>.txt").await;
 
     let portal = app
         .server()
@@ -867,16 +876,25 @@ async fn browser_portal_escapes_untrusted_content() {
     portal.assert_status_ok();
     let body = html_body(&portal);
 
-    assert!(body.contains("&lt;script&gt;alert(&#39;request&#39;)&lt;/script&gt;"));
+    assert!(body.contains("&lt;script&gt;alert(&#39;evidence&#39;)&lt;/script&gt;"));
     assert!(body.contains("&lt;b&gt;mapped&lt;/b&gt;"));
-    assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;"));
-    assert!(body.contains("&lt;source&gt;"));
-    assert!(body.contains("Description with &lt;strong&gt;markup&lt;/strong&gt;."));
+    assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;.txt"));
     assert!(!body.contains("<script>alert"));
     assert!(!body.contains("<b>mapped</b>"));
     assert!(!body.contains("<img src=x"));
-    assert!(!body.contains("<source>"));
-    assert!(!body.contains("<strong>markup</strong>"));
+}
+
+async fn set_submission_filename(app: &TestApp, submission_id: Uuid, filename: &str) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE evidence_submissions SET filename = $2 WHERE id = $1",
+            &[&submission_id, &filename],
+        )
+        .await
+        .expect("submission filename updates");
 }
 
 async fn verified_session_cookie(app: &TestApp, workspace_id: Uuid, invite_token: &str) -> String {
@@ -992,62 +1010,40 @@ fn assert_unavailable(result: Result<impl std::fmt::Debug, AuditorAccessSessionE
     ));
 }
 
-fn evidence_request(title: &str, due_at: &str) -> Value {
+fn evidence_body(title: &str) -> Value {
     json!({
         "title": title,
         "description": format!("Description for {title}."),
         "collection_instructions": format!("Collect {title}."),
-        "cadence": "quarterly",
-        "due_at": due_at,
-        "schedule_anchor_at": "2026-01-01T00:00:00Z",
-        "freshness_window_days": 90,
         "status": "active"
     })
 }
 
-fn submission(summary: &str) -> Value {
-    json!({
-        "coverage_start_at": "2026-01-01T00:00:00Z",
-        "coverage_end_at": "2026-03-31T23:59:59Z",
-        "source_system": "test",
-        "collection_method": "manual",
-        "summary": summary,
-        "description": format!("Description for {summary}.")
-    })
-}
-
-async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Auditor download evidence", "2099-01-01T00:00:00Z"),
-        )
-        .await;
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            uuid_field(&request["id"]),
-            &submission("auditor download submission"),
-        )
-        .await;
-
-    uuid_field(&submission["id"])
-}
-
-fn auditor_download_path(submission_id: Uuid, attachment_id: Uuid) -> String {
-    format!(
-        "/auditor-access/portal/evidence-submissions/{submission_id}/attachments/{attachment_id}/download"
+fn test_coverage() -> CoverageWindow {
+    CoverageWindow::new(
+        "2026-01-01T00:00:00Z"
+            .parse()
+            .expect("coverage start parses"),
+        "2026-03-31T23:59:59Z".parse().expect("coverage end parses"),
     )
+    .expect("coverage window is ordered")
 }
 
-async fn assert_auditor_download_not_found(
-    app: &TestApp,
-    raw_session: &str,
-    submission_id: Uuid,
-    attachment_id: Uuid,
-) {
+async fn create_download_evidence(app: &TestApp, workspace_id: Uuid) -> Uuid {
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Auditor download evidence"))
+        .await;
+
+    uuid_field(&evidence["id"])
+}
+
+fn auditor_download_path(submission_id: Uuid) -> String {
+    format!("/auditor-access/portal/evidence-submissions/{submission_id}/download")
+}
+
+async fn assert_auditor_download_not_found(app: &TestApp, raw_session: &str, submission_id: Uuid) {
     app.server()
-        .get(&auditor_download_path(submission_id, attachment_id))
+        .get(&auditor_download_path(submission_id))
         .add_header(
             "Cookie",
             format!("proofplane_auditor_session={raw_session}"),
@@ -1056,17 +1052,17 @@ async fn assert_auditor_download_not_found(
         .assert_status_not_found();
 }
 
-async fn set_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+async fn set_submission_status(app: &TestApp, submission_id: Uuid, status: &str) {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .execute(
-            "UPDATE evidence_attachments SET upload_status = $2 WHERE id = $1",
-            &[&attachment_id, &status],
+            "UPDATE evidence_submissions SET upload_status = $2 WHERE id = $1",
+            &[&submission_id, &status],
         )
         .await
-        .expect("attachment status updates");
+        .expect("submission status updates");
 }
 fn uuid_field(value: &Value) -> Uuid {
     Uuid::parse_str(value.as_str().expect("UUID field is a string")).expect("field is a UUID")
@@ -1074,7 +1070,7 @@ fn uuid_field(value: &Value) -> Uuid {
 
 async fn insert_control_mapping(
     app: &TestApp,
-    evidence_request_id: Uuid,
+    evidence_id: Uuid,
     control_id: Uuid,
     rationale: &str,
 ) {
@@ -1084,10 +1080,10 @@ async fn insert_control_mapping(
         .expect("connection opens")
         .execute(
             r#"
-INSERT INTO evidence_request_control_mappings (evidence_request_id, control_id, rationale)
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
 VALUES ($1, $2, $3)
 "#,
-            &[&evidence_request_id, &control_id, &rationale],
+            &[&evidence_id, &control_id, &rationale],
         )
         .await
         .expect("control mapping inserts");
@@ -1108,47 +1104,49 @@ async fn set_received_at(app: &TestApp, submission_id: Uuid, received_at: &str) 
         .expect("submission received_at updates");
 }
 
-async fn archive_attachment(app: &TestApp, attachment_id: Uuid) {
+async fn archive_submission(app: &TestApp, submission_id: Uuid) {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .execute(
-            "UPDATE evidence_attachments SET archived = true WHERE id = $1",
-            &[&attachment_id],
+            "UPDATE evidence_submissions SET archived = true WHERE id = $1",
+            &[&submission_id],
         )
         .await
-        .expect("attachment archives");
+        .expect("submission archives");
 }
 
-async fn finalize_attachment(
+/// Moves a submission to its final key the way the finalization worker does,
+/// so portal tests can exercise download eligibility without running the worker.
+async fn finalize_submission(
     app: &TestApp,
     workspace_id: Uuid,
+    evidence_id: Uuid,
     submission_id: Uuid,
-    attachment_id: Uuid,
 ) -> String {
     let client = app.postgres().get().await.expect("connection opens");
     let row = client
         .query_one(
-            "SELECT filename, object_key FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
+            "SELECT filename, object_key FROM evidence_submissions WHERE id = $1",
+            &[&submission_id],
         )
         .await
-        .expect("attachment reads");
+        .expect("submission reads");
     let filename: String = row.get("filename");
     let quarantine_key: String = row.get("object_key");
     let final_key = format!(
-        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/{filename}"
+        "workspaces/{workspace_id}/evidence/{evidence_id}/submissions/{submission_id}/{filename}"
     );
     copy_filesystem_object(app, &quarantine_key, &final_key);
 
     client
         .execute(
-            "UPDATE evidence_attachments SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
-            &[&attachment_id, &final_key],
+            "UPDATE evidence_submissions SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
+            &[&submission_id, &final_key],
         )
         .await
-        .expect("attachment finalizes");
+        .expect("submission finalizes");
 
     final_key
 }

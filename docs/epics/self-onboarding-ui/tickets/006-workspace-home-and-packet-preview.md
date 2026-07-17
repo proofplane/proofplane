@@ -3,13 +3,13 @@
 **Status:** Done - Will Do Later · **Depends on:** 003 · **Spec:** [spec.md](../spec.md#workspace-home)
 
 **Summary** - Build the authenticated workspace home that shows setup progress,
-starter controls, evidence request status, token/MCP readiness, suggested
+starter controls, evidence status, token/MCP readiness, suggested
 prompts, and auditor access preview or unavailable states.
 
 **Acceptance criteria**
 
 - [ ] Given a workspace with available compliance data, when the home renders,
-  then controls, evidence request status, and readiness are shown from API data.
+  then controls, evidence status, and readiness are shown from API data.
 - [ ] Given auditor access APIs are unavailable, when the home renders, then the
   auditor access area clearly states what is waiting and links to the relevant
   setup.

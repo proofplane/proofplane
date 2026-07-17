@@ -87,9 +87,9 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
         serde_json::from_slice::<serde_json::Value>(&message.data).expect("message data is JSON"),
         json!({
             "outbox_message_id": outbox_id.to_string(),
-            "event_type": "attachment.scan_requested",
-            "aggregate_type": "evidence_attachment",
-            "aggregate_id": "attachment-1",
+            "event_type": "submission.scan_requested",
+            "aggregate_type": "evidence_submission",
+            "aggregate_id": "submission-1",
             "request_id": null,
             "payload": { "scan_id": "scan-1" },
         })
@@ -226,9 +226,9 @@ async fn ensure_subscription(
 async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
     let message = NewOutboxMessage {
         topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: "attachment.scan_requested".to_owned(),
-        aggregate_type: "evidence_attachment".to_owned(),
-        aggregate_id: "attachment-1".to_owned(),
+        event_type: "submission.scan_requested".to_owned(),
+        aggregate_type: "evidence_submission".to_owned(),
+        aggregate_id: "submission-1".to_owned(),
         payload: json!({ "scan_id": "scan-1" }),
         request_id: None,
     };

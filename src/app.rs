@@ -16,29 +16,29 @@ use crate::{
     repository::Postgres,
     routes::{
         agent_connections::{self, AgentConnectionsState},
-        attachment_downloads::{self, AttachmentDownloadState},
-        attachment_upload_sessions::{self, AttachmentUploadSessionState},
         auditor_access::{self, AuditorAccessState},
         error::not_found,
+        evidence_upload_sessions::{self, EvidenceUploadSessionState},
         health::{self, ReadyState},
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
         oauth::{self, OAuthState},
         request_context::attach_request_id,
+        submission_downloads::{self, SubmissionDownloadState},
         version,
         workspaces::{self, WorkspacesState},
     },
     services::{
         agent_connections::AgentConnectionService,
-        attachment_downloads::AttachmentDownloadService,
-        attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_portal::AuditorPortalReadModelService,
         client_resolver::ClientResolver,
         controls::ControlService,
         evidence_submissions::EvidenceSubmissionService,
+        evidence_upload_grants::EvidenceUploadGrantService,
         oauth::OAuthService,
+        submission_downloads::SubmissionDownloadService,
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
         workspaces::WorkspaceService,
@@ -73,17 +73,17 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-attachment-download",
+        "proofplane-submission-download",
         &dependencies.config.paseto.download,
     )
     .map_err(crate::authentication::Error::from)?;
     let download_grant_decryptor = DownloadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-attachment-download",
+        "proofplane-submission-download",
         &dependencies.config.paseto.download,
     )
     .map_err(crate::authentication::Error::from)?;
-    let attachment_download_service = AttachmentDownloadService::new(
+    let submission_download_service = SubmissionDownloadService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
         dependencies.config.server.public_api_base_url.clone(),
@@ -92,13 +92,13 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_grant_encryptor = UploadGrantEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-attachment-upload-grant",
+        "proofplane-evidence-upload-grant",
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(crate::authentication::Error::from)?;
     let upload_grant_decryptor = UploadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-attachment-upload-grant",
+        "proofplane-evidence-upload-grant",
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(crate::authentication::Error::from)?;
@@ -114,7 +114,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(crate::authentication::Error::from)?;
-    let attachment_upload_grant_service = AttachmentUploadGrantService::new(
+    let evidence_upload_grant_service = EvidenceUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.config.server.public_api_base_url.clone(),
         upload_grant_encryptor,
@@ -174,25 +174,25 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 handle: dependencies.metrics,
             }),
         )
-        .merge(attachment_downloads::router(AttachmentDownloadState {
-            service: attachment_download_service.clone(),
+        .merge(submission_downloads::router(SubmissionDownloadState {
+            service: submission_download_service.clone(),
         }))
-        .merge(attachment_upload_sessions::router(
-            AttachmentUploadSessionState {
-                grants: attachment_upload_grant_service,
-                downloads: attachment_download_service.clone(),
+        .merge(evidence_upload_sessions::router(
+            EvidenceUploadSessionState {
+                grants: evidence_upload_grant_service,
+                downloads: submission_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
                 controls: control_service,
                 secure_cookie: secure_upload_cookie,
-                max_attachment_bytes: dependencies.config.uploads.max_attachment_bytes,
+                max_file_bytes: dependencies.config.uploads.max_file_bytes,
             },
         ))
         .merge(auditor_access::router(AuditorAccessState {
             grants: auditor_grants,
             sessions: auditor_sessions,
             portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
-            downloads: attachment_download_service,
+            downloads: submission_download_service,
             secure_cookie: secure_auditor_cookie,
         }))
         .merge(me::router(MeState {
@@ -268,10 +268,10 @@ mod tests {
     #[test]
     fn http_trace_path_never_contains_query_parameters() {
         let request = Request::builder()
-            .uri("/attachment-downloads?token=secret-jwt")
+            .uri("/submission-downloads?token=secret-jwt")
             .body(Body::empty())
             .unwrap();
 
-        assert_eq!(trace_path(&request), "/attachment-downloads");
+        assert_eq!(trace_path(&request), "/submission-downloads");
     }
 }

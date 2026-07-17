@@ -17,21 +17,18 @@ pub enum DomainError {
     #[error("permissions contains duplicate value {permission}")]
     DuplicatePermission { permission: String },
 
-    #[error("freshness_window_days must be positive")]
-    InvalidFreshnessWindowDays,
-
-    #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
+    #[error("valid_until must be greater than or equal to valid_from")]
     InvalidCoverageWindow,
 
-    #[error("attachment filename must not be empty")]
-    EmptyAttachmentFilename,
+    #[error("filename must not be empty")]
+    EmptySubmissionFilename,
 
-    #[error("attachment filename must be at most 255 bytes")]
-    AttachmentFilenameTooLong,
+    #[error("filename must be at most 255 bytes")]
+    SubmissionFilenameTooLong,
 
-    #[error("attachment filename contains unsupported characters")]
-    InvalidAttachmentFilenameCharacters,
+    #[error("filename contains unsupported characters")]
+    InvalidSubmissionFilenameCharacters,
 
-    #[error("attachment filename must not be . or ..")]
-    ReservedAttachmentFilename,
+    #[error("filename must not be . or ..")]
+    ReservedSubmissionFilename,
 }

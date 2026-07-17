@@ -8,28 +8,29 @@ use crate::{
     authentication::paseto::{
         RegisteredClaims, UploadSessionDecryptor, UploadSessionEncryptor, VerifiedPasetoToken,
     },
-    domain::{AgentConnectionId, EvidenceSubmissionId, UserId, WorkspaceId},
+    domain::{AgentConnectionId, CoverageWindow, EvidenceId, UserId, WorkspaceId},
 };
 
-const UPLOAD_SESSION_TOKEN_VERSION: u8 = 1;
+const UPLOAD_SESSION_TOKEN_VERSION: u8 = 2;
 pub const UPLOAD_SESSION_TTL: Duration = Duration::from_secs(15 * 60);
-pub const UPLOAD_SESSION_AUDIENCE: &str = "proofplane-attachment-upload-session";
+pub const UPLOAD_SESSION_AUDIENCE: &str = "proofplane-evidence-upload-session";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UploadSessionClaims {
     version: u8,
     workspace_id: String,
-    submission_id: String,
+    evidence_id: String,
+    valid_from: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
     issued_by_user_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    issued_via_api_token_id: Option<String>,
     issued_via_agent_connection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedUploadSession {
     pub workspace_id: WorkspaceId,
-    pub submission_id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub issued_by_user_id: UserId,
     pub issued_via: UploadSessionIssuer,
     pub expires_at: DateTime<Utc>,
@@ -65,7 +66,8 @@ impl UploadSessionTokenService {
     pub fn issue_until(
         &self,
         workspace_id: WorkspaceId,
-        submission_id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
         issued_by_user_id: UserId,
         issued_via: UploadSessionIssuer,
         expires_at: DateTime<Utc>,
@@ -81,9 +83,10 @@ impl UploadSessionTokenService {
                 &UploadSessionClaims {
                     version: UPLOAD_SESSION_TOKEN_VERSION,
                     workspace_id: workspace_id.to_string(),
-                    submission_id: submission_id.to_string(),
+                    evidence_id: evidence_id.to_string(),
+                    valid_from: coverage.valid_from,
+                    valid_until: coverage.valid_until,
                     issued_by_user_id: issued_by_user_id.to_string(),
-                    issued_via_api_token_id: None,
                     issued_via_agent_connection_id: Some(
                         issued_via.agent_connection_id().to_string(),
                     ),
@@ -121,13 +124,15 @@ impl TryFrom<VerifiedPasetoToken<UploadSessionClaims>> for VerifiedUploadSession
         if issued_by_user_id != UserId::from(subject) {
             return Err(InvalidUploadSessionClaims);
         }
+        let coverage = CoverageWindow::new(claims.valid_from, claims.valid_until)
+            .map_err(|_| InvalidUploadSessionClaims)?;
 
         Ok(Self {
             workspace_id: WorkspaceId::from(parse_uuid(&claims.workspace_id)?),
-            submission_id: EvidenceSubmissionId::from(parse_uuid(&claims.submission_id)?),
+            evidence_id: EvidenceId::from(parse_uuid(&claims.evidence_id)?),
+            coverage,
             issued_by_user_id,
             issued_via: upload_session_issuer_from_claims(
-                claims.issued_via_api_token_id.as_deref(),
                 claims.issued_via_agent_connection_id.as_deref(),
             )?,
             expires_at,
@@ -136,14 +141,13 @@ impl TryFrom<VerifiedPasetoToken<UploadSessionClaims>> for VerifiedUploadSession
 }
 
 fn upload_session_issuer_from_claims(
-    api_token_id: Option<&str>,
     agent_connection_id: Option<&str>,
 ) -> Result<UploadSessionIssuer, InvalidUploadSessionClaims> {
-    match (api_token_id, agent_connection_id) {
-        (None, Some(id)) => Ok(UploadSessionIssuer::AgentConnection(
+    match agent_connection_id {
+        Some(id) => Ok(UploadSessionIssuer::AgentConnection(
             AgentConnectionId::from(parse_uuid(id)?),
         )),
-        _ => Err(InvalidUploadSessionClaims),
+        None => Err(InvalidUploadSessionClaims),
     }
 }
 
@@ -152,9 +156,9 @@ struct InvalidUploadSessionClaims;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadSessionError {
-    #[error("attachment upload session is unavailable")]
+    #[error("evidence upload session is unavailable")]
     Unavailable,
-    #[error("internal attachment upload session error")]
+    #[error("internal evidence upload session error")]
     Internal,
 }
 
@@ -189,6 +193,10 @@ mod tests {
         Url::parse("https://api.proofplane.test/").unwrap()
     }
 
+    fn coverage() -> CoverageWindow {
+        CoverageWindow::new(Utc::now() - chrono::Duration::days(90), Utc::now()).unwrap()
+    }
+
     fn service() -> UploadSessionTokenService {
         let config = config();
         UploadSessionTokenService::new(
@@ -203,14 +211,16 @@ mod tests {
     fn upload_session_round_trip_succeeds_for_valid_claims() {
         let service = service();
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
-        let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
+        let evidence_id = EvidenceId::from(Uuid::new_v4());
+        let coverage = coverage();
         let user_id = UserId::from(Uuid::new_v4());
         let agent_connection_id = AgentConnectionId::from(Uuid::new_v4());
 
         let token = service
             .issue_until(
                 workspace_id,
-                submission_id,
+                evidence_id,
+                coverage,
                 user_id,
                 UploadSessionIssuer::AgentConnection(agent_connection_id),
                 Utc::now() + chrono::Duration::minutes(15),
@@ -219,7 +229,8 @@ mod tests {
         let session = service.verify(&token).unwrap();
 
         assert_eq!(session.workspace_id, workspace_id);
-        assert_eq!(session.submission_id, submission_id);
+        assert_eq!(session.evidence_id, evidence_id);
+        assert_eq!(session.coverage, coverage);
         assert_eq!(session.issued_by_user_id, user_id);
         assert_eq!(
             session.issued_via,
@@ -234,7 +245,8 @@ mod tests {
         let token = service()
             .issue_until(
                 WorkspaceId::from(Uuid::new_v4()),
-                EvidenceSubmissionId::from(Uuid::new_v4()),
+                EvidenceId::from(Uuid::new_v4()),
+                coverage(),
                 UserId::from(Uuid::new_v4()),
                 UploadSessionIssuer::AgentConnection(AgentConnectionId::from(Uuid::new_v4())),
                 Utc::now() + chrono::Duration::minutes(15),
@@ -259,9 +271,10 @@ mod tests {
                     &UploadSessionClaims {
                         version: UPLOAD_SESSION_TOKEN_VERSION,
                         workspace_id: Uuid::new_v4().to_string(),
-                        submission_id: Uuid::new_v4().to_string(),
+                        evidence_id: Uuid::new_v4().to_string(),
+                        valid_from: coverage().valid_from,
+                        valid_until: coverage().valid_until,
                         issued_by_user_id: Uuid::new_v4().to_string(),
-                        issued_via_api_token_id: None,
                         issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
                     },
                 )
@@ -275,9 +288,10 @@ mod tests {
         let valid = UploadSessionClaims {
             version: UPLOAD_SESSION_TOKEN_VERSION,
             workspace_id: Uuid::new_v4().to_string(),
-            submission_id: Uuid::new_v4().to_string(),
+            evidence_id: Uuid::new_v4().to_string(),
+            valid_from: coverage().valid_from,
+            valid_until: coverage().valid_until,
             issued_by_user_id: subject.to_string(),
-            issued_via_api_token_id: None,
             issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
         };
 
@@ -287,7 +301,7 @@ mod tests {
 
         for mutate in [
             |claims: &mut UploadSessionClaims| claims.workspace_id = "bad".to_owned(),
-            |claims: &mut UploadSessionClaims| claims.submission_id = "bad".to_owned(),
+            |claims: &mut UploadSessionClaims| claims.evidence_id = "bad".to_owned(),
             |claims: &mut UploadSessionClaims| claims.issued_by_user_id = "bad".to_owned(),
             |claims: &mut UploadSessionClaims| {
                 claims.issued_via_agent_connection_id = Some("bad".to_owned())
@@ -315,9 +329,10 @@ mod tests {
                 &UploadSessionClaims {
                     version: UPLOAD_SESSION_TOKEN_VERSION,
                     workspace_id: Uuid::new_v4().to_string(),
-                    submission_id: Uuid::new_v4().to_string(),
+                    evidence_id: Uuid::new_v4().to_string(),
+                    valid_from: coverage().valid_from,
+                    valid_until: coverage().valid_until,
                     issued_by_user_id: Uuid::new_v4().to_string(),
-                    issued_via_api_token_id: None,
                     issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
                 },
             )

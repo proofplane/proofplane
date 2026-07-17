@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AgentConnectionId, AttachmentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId,
+        AgentConnectionId, CoverageWindow, EvidenceId, EvidenceUploadGrantId, UserId, WorkspaceId,
     },
     repository::WorkspaceTransactionContext,
 };
@@ -12,17 +12,19 @@ use crate::{
 use super::{Error, Postgres};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NewAttachmentUploadGrant {
-    pub id: AttachmentUploadGrantId,
-    pub evidence_submission_id: EvidenceSubmissionId,
+pub struct NewEvidenceUploadGrant {
+    pub id: EvidenceUploadGrantId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AttachmentUploadGrant {
-    pub id: AttachmentUploadGrantId,
+pub struct EvidenceUploadGrant {
+    pub id: EvidenceUploadGrantId,
     pub workspace_id: WorkspaceId,
-    pub evidence_submission_id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub issued_by_user_id: UserId,
     pub issued_via_agent_connection_id: Option<AgentConnectionId>,
     pub issued_at: DateTime<Utc>,
@@ -31,40 +33,43 @@ pub struct AttachmentUploadGrant {
 }
 
 impl WorkspaceTransactionContext<'_> {
-    pub async fn create_attachment_upload_grant(
+    pub async fn create_evidence_upload_grant(
         &self,
-        grant: NewAttachmentUploadGrant,
-    ) -> Result<Option<AttachmentUploadGrant>, Error> {
+        grant: NewEvidenceUploadGrant,
+    ) -> Result<Option<EvidenceUploadGrant>, Error> {
         let agent_connection_id = self.credential.agent_connection_uuid();
         let rows = self
             .transaction
             .query(
                 r#"
-WITH scoped_submission AS (
-    SELECT s.id
-    FROM evidence_submissions s
-    JOIN evidence_requests er ON er.id = s.evidence_request_id
-    WHERE s.id = $2
-      AND er.workspace_id = $3
+WITH scoped_evidence AS (
+    SELECT e.id
+    FROM evidence e
+    WHERE e.id = $2
+      AND e.workspace_id = $3
 ),
 inserted AS (
-    INSERT INTO attachment_upload_grants (
+    INSERT INTO evidence_upload_grants (
         id,
         workspace_id,
-	        evidence_submission_id,
-	        issued_by_user_id,
-	        issued_via_agent_connection_id,
-	        expires_at
-	    )
-	    SELECT $1, $3, scoped_submission.id, $4, $5, $6
-	    FROM scoped_submission
+        evidence_id,
+        valid_from,
+        valid_until,
+        issued_by_user_id,
+        issued_via_agent_connection_id,
+        expires_at
+    )
+    SELECT $1, $3, scoped_evidence.id, $4, $5, $6, $7, $8
+    FROM scoped_evidence
     RETURNING
         id,
         workspace_id,
-	        evidence_submission_id,
-	        issued_by_user_id,
-	        issued_via_agent_connection_id,
-	        issued_at,
+        evidence_id,
+        valid_from,
+        valid_until,
+        issued_by_user_id,
+        issued_via_agent_connection_id,
+        issued_at,
         expires_at,
         redeemed_at
 )
@@ -73,8 +78,10 @@ FROM inserted
 "#,
                 &[
                     &Uuid::from(grant.id),
-                    &Uuid::from(grant.evidence_submission_id),
+                    &Uuid::from(grant.evidence_id),
                     &Uuid::from(self.workspace_id),
+                    &grant.coverage.valid_from,
+                    &grant.coverage.valid_until,
                     &Uuid::from(self.user_id),
                     &agent_connection_id,
                     &grant.expires_at,
@@ -84,61 +91,64 @@ FROM inserted
 
         rows.into_iter()
             .next()
-            .map(|row| attachment_upload_grant_from_row(&row))
+            .map(|row| evidence_upload_grant_from_row(&row))
             .transpose()
     }
 }
 
 impl Postgres {
-    pub async fn redeem_attachment_upload_grant(
+    pub async fn redeem_evidence_upload_grant(
         &self,
-        grant_id: AttachmentUploadGrantId,
+        grant_id: EvidenceUploadGrantId,
         workspace_id: WorkspaceId,
-        evidence_submission_id: EvidenceSubmissionId,
-    ) -> Result<Option<AttachmentUploadGrant>, Error> {
+        evidence_id: EvidenceId,
+    ) -> Result<Option<EvidenceUploadGrant>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
                 r#"
-UPDATE attachment_upload_grants
+UPDATE evidence_upload_grants
 SET redeemed_at = now()
 WHERE id = $1
   AND workspace_id = $2
-  AND evidence_submission_id = $3
+  AND evidence_id = $3
   AND redeemed_at IS NULL
   AND expires_at > now()
 RETURNING
     id,
     workspace_id,
-	    evidence_submission_id,
-	    issued_by_user_id,
-	    issued_via_agent_connection_id,
-	    issued_at,
+    evidence_id,
+    valid_from,
+    valid_until,
+    issued_by_user_id,
+    issued_via_agent_connection_id,
+    issued_at,
     expires_at,
     redeemed_at
 "#,
                 &[
                     &Uuid::from(grant_id),
                     &Uuid::from(workspace_id),
-                    &Uuid::from(evidence_submission_id),
+                    &Uuid::from(evidence_id),
                 ],
             )
             .await?;
 
         rows.into_iter()
             .next()
-            .map(|row| attachment_upload_grant_from_row(&row))
+            .map(|row| evidence_upload_grant_from_row(&row))
             .transpose()
     }
 }
 
-fn attachment_upload_grant_from_row(row: &Row) -> Result<AttachmentUploadGrant, Error> {
-    Ok(AttachmentUploadGrant {
-        id: AttachmentUploadGrantId::from(row.try_get::<_, Uuid>("id")?),
+fn evidence_upload_grant_from_row(row: &Row) -> Result<EvidenceUploadGrant, Error> {
+    let coverage = CoverageWindow::new(row.try_get("valid_from")?, row.try_get("valid_until")?)?;
+
+    Ok(EvidenceUploadGrant {
+        id: EvidenceUploadGrantId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
-        evidence_submission_id: EvidenceSubmissionId::from(
-            row.try_get::<_, Uuid>("evidence_submission_id")?,
-        ),
+        evidence_id: EvidenceId::from(row.try_get::<_, Uuid>("evidence_id")?),
+        coverage,
         issued_by_user_id: UserId::from(row.try_get::<_, Uuid>("issued_by_user_id")?),
         issued_via_agent_connection_id: row
             .try_get::<_, Option<Uuid>>("issued_via_agent_connection_id")?

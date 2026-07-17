@@ -86,7 +86,7 @@ CREATE INDEX idx_api_credentials_actor_id ON api_credentials (actor_id);
 CREATE TABLE actor_permissions (
     actor_id   UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
     permission TEXT NOT NULL CHECK (permission IN (
-        'read_evidence_requests', 'write_evidence_requests',
+        'read_evidence', 'write_evidence',
         'read_evidence_submissions', 'write_evidence_submissions',
         'read_controls', 'write_controls')),
     PRIMARY KEY (actor_id, permission)
@@ -210,7 +210,7 @@ SpiceDB was removed, so creating an actor is a single Postgres transaction
 (actor row + its `actor_permissions` rows) with no second store to reconcile.
 
 The `outbox_messages` table, dequeuer, and worker remain — they are used by the
-attachment virus-scanning pipeline (Pub/Sub), which is unrelated to actor
+submission virus-scanning pipeline (Pub/Sub), which is unrelated to actor
 authorization.
 
 ## Build order

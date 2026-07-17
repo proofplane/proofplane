@@ -1,14 +1,14 @@
 pub mod agent_connections;
-pub mod attachment_downloads;
-pub mod attachment_upload_sessions;
 pub mod auditor_access;
 pub mod authentication;
 pub mod error;
+pub mod evidence_upload_sessions;
 pub mod health;
 pub mod me;
 pub mod metrics;
 pub mod oauth;
 pub mod protected_resource_metadata;
 pub mod request_context;
+pub mod submission_downloads;
 pub mod version;
 pub mod workspaces;

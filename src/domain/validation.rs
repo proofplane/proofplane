@@ -30,29 +30,22 @@ pub fn optional_text(
     Validation::valid(Some(value))
 }
 
-pub fn validate_freshness_window_days(value: Option<i32>) -> Validation<Option<i32>, DomainError> {
-    match value {
-        Some(days) if days <= 0 => Validation::invalid(DomainError::InvalidFreshnessWindowDays),
-        _ => Validation::valid(value),
-    }
-}
-
-pub fn validate_attachment_filename(value: String) -> Validation<String, DomainError> {
+pub fn validate_submission_filename(value: String) -> Validation<String, DomainError> {
     let mut errors = Vec::new();
 
     if value.trim().is_empty() {
-        errors.push(DomainError::EmptyAttachmentFilename);
+        errors.push(DomainError::EmptySubmissionFilename);
     }
     if value.len() > 255 {
-        errors.push(DomainError::AttachmentFilenameTooLong);
+        errors.push(DomainError::SubmissionFilenameTooLong);
     }
     if !value.bytes().all(|byte| {
         byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'_' | b'-' | b'(' | b')')
     }) {
-        errors.push(DomainError::InvalidAttachmentFilenameCharacters);
+        errors.push(DomainError::InvalidSubmissionFilenameCharacters);
     }
     if matches!(value.as_str(), "." | "..") {
-        errors.push(DomainError::ReservedAttachmentFilename);
+        errors.push(DomainError::ReservedSubmissionFilename);
     }
 
     if errors.is_empty() {
@@ -64,9 +57,7 @@ pub fn validate_attachment_filename(value: String) -> Validation<String, DomainE
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,
-    };
+    use super::{optional_text, required_text, validate_submission_filename};
     use crate::domain::DomainError;
 
     #[test]
@@ -118,59 +109,38 @@ mod tests {
     }
 
     #[test]
-    fn freshness_window_days_must_be_positive_when_present() {
-        assert_eq!(
-            validate_freshness_window_days(Some(0)).into_result(),
-            Err(vec![DomainError::InvalidFreshnessWindowDays])
-        );
-        assert_eq!(
-            validate_freshness_window_days(Some(-1)).into_result(),
-            Err(vec![DomainError::InvalidFreshnessWindowDays])
-        );
-    }
-
-    #[test]
-    fn freshness_window_days_allows_absent_or_positive_values() {
-        assert_eq!(validate_freshness_window_days(None).into_result(), Ok(None));
-        assert_eq!(
-            validate_freshness_window_days(Some(30)).into_result(),
-            Ok(Some(30))
-        );
-    }
-
-    #[test]
-    fn attachment_filename_accepts_portable_ascii_and_preserves_it() {
+    fn submission_filename_accepts_portable_ascii_and_preserves_it() {
         let filename = "  Quarterly evidence (final).csv  ".to_owned();
         let maximum_length_filename = "a".repeat(255);
 
         assert_eq!(
-            validate_attachment_filename(filename.clone()).into_result(),
+            validate_submission_filename(filename.clone()).into_result(),
             Ok(filename)
         );
         assert_eq!(
-            validate_attachment_filename(maximum_length_filename.clone()).into_result(),
+            validate_submission_filename(maximum_length_filename.clone()).into_result(),
             Ok(maximum_length_filename)
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_blank_values() {
+    fn submission_filename_rejects_blank_values() {
         assert_eq!(
-            validate_attachment_filename("   ".to_owned()).into_result(),
-            Err(vec![DomainError::EmptyAttachmentFilename])
+            validate_submission_filename("   ".to_owned()).into_result(),
+            Err(vec![DomainError::EmptySubmissionFilename])
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_names_over_255_bytes() {
+    fn submission_filename_rejects_names_over_255_bytes() {
         assert_eq!(
-            validate_attachment_filename("a".repeat(256)).into_result(),
-            Err(vec![DomainError::AttachmentFilenameTooLong])
+            validate_submission_filename("a".repeat(256)).into_result(),
+            Err(vec![DomainError::SubmissionFilenameTooLong])
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_separators_quotes_unicode_and_controls() {
+    fn submission_filename_rejects_separators_quotes_unicode_and_controls() {
         for filename in [
             "path/file.txt",
             r"path\file.txt",
@@ -179,32 +149,32 @@ mod tests {
             "file\tname.txt",
         ] {
             assert_eq!(
-                validate_attachment_filename(filename.to_owned()).into_result(),
-                Err(vec![DomainError::InvalidAttachmentFilenameCharacters]),
+                validate_submission_filename(filename.to_owned()).into_result(),
+                Err(vec![DomainError::InvalidSubmissionFilenameCharacters]),
                 "{filename}"
             );
         }
     }
 
     #[test]
-    fn attachment_filename_rejects_dot_and_dot_dot() {
+    fn submission_filename_rejects_dot_and_dot_dot() {
         for filename in [".", ".."] {
             assert_eq!(
-                validate_attachment_filename(filename.to_owned()).into_result(),
-                Err(vec![DomainError::ReservedAttachmentFilename]),
+                validate_submission_filename(filename.to_owned()).into_result(),
+                Err(vec![DomainError::ReservedSubmissionFilename]),
                 "{filename}"
             );
         }
     }
 
     #[test]
-    fn attachment_filename_accumulates_independent_errors() {
+    fn submission_filename_accumulates_independent_errors() {
         assert_eq!(
-            validate_attachment_filename("\t".repeat(256)).into_result(),
+            validate_submission_filename("\t".repeat(256)).into_result(),
             Err(vec![
-                DomainError::EmptyAttachmentFilename,
-                DomainError::AttachmentFilenameTooLong,
-                DomainError::InvalidAttachmentFilenameCharacters,
+                DomainError::EmptySubmissionFilename,
+                DomainError::SubmissionFilenameTooLong,
+                DomainError::InvalidSubmissionFilenameCharacters,
             ])
         );
     }

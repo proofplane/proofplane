@@ -123,6 +123,6 @@ token shown once, token not saved, no workspace, no permission, MCP unavailable,
 export pending, and evidence missing should each have clear recovery paths.
 
 Use plain language for compliance and authorization concepts. Technical terms
-such as workspace, actor, token, permission, MCP, evidence request, and auditor
+such as workspace, actor, token, permission, MCP, evidence, and auditor
 packet are acceptable, but each screen should make the next action clear without
 requiring prior product knowledge.

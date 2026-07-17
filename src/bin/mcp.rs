@@ -69,22 +69,22 @@ async fn run() -> Result<(), Error> {
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        "proofplane-attachment-download",
+        "proofplane-submission-download",
         &config.paseto.download,
     )?;
     let download_grant_decryptor = DownloadGrantDecryptor::from_config(
         config.server.public_api_base_url.clone(),
-        "proofplane-attachment-download",
+        "proofplane-submission-download",
         &config.paseto.download,
     )?;
     let upload_grant_encryptor = UploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        "proofplane-attachment-upload-grant",
+        "proofplane-evidence-upload-grant",
         &config.paseto.upload_grant,
     )?;
     let upload_grant_decryptor = UploadGrantDecryptor::from_config(
         config.server.public_api_base_url.clone(),
-        "proofplane-attachment-upload-grant",
+        "proofplane-evidence-upload-grant",
         &config.paseto.upload_grant,
     )?;
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(

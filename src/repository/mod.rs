@@ -5,29 +5,29 @@ use uuid::Uuid;
 use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
-mod attachment_upload_grants;
 mod auditor_access_grants;
 mod auditor_access_sessions;
 mod auditor_portal;
 pub mod constraints;
 mod controls;
 pub mod error;
-mod evidence_requests;
+mod evidence;
 mod evidence_submissions;
+mod evidence_upload_grants;
 mod oauth;
 mod outbox;
 mod users;
 mod workspace_memberships;
 mod workspaces;
 
-pub use attachment_upload_grants::{AttachmentUploadGrant, NewAttachmentUploadGrant};
 pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
 pub use constraints::ConflictKind;
 pub use error::Error;
 pub use evidence_submissions::{
-    ArchiveAttachmentResult, AttachmentDownloadCandidate, FinalizingAttachmentUploadWork,
-    PendingAttachmentUploadWork,
+    ArchiveSubmissionResult, FinalizingSubmissionUploadWork, PendingSubmissionUploadWork,
+    SubmissionDownloadCandidate,
 };
+pub use evidence_upload_grants::{EvidenceUploadGrant, NewEvidenceUploadGrant};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use workspace_memberships::NewWorkspaceMembership;
 

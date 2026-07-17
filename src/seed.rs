@@ -8,9 +8,8 @@ use uuid::Uuid;
 use crate::{
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        AgentConnectionId, CreateEvidenceRequestPayload, CreateWorkspacePayload,
-        EvidenceRequestCadence, EvidenceRequestStatus, ProvisionUserPayload,
-        UpdateEvidenceRequestPayload, UpdateWorkspacePayload, UserId, WorkspaceId,
+        AgentConnectionId, CreateEvidencePayload, CreateWorkspacePayload, EvidenceStatus,
+        ProvisionUserPayload, UpdateEvidencePayload, UpdateWorkspacePayload, UserId, WorkspaceId,
         WorkspacePermission, WorkspacePermissions, WorkspaceRole,
     },
     object_storage::{
@@ -58,18 +57,15 @@ const LOCAL_OWNER_AUTH0_SUB: &str = "auth0|local-owner";
 const LOCAL_AGENT_CONNECTION_ID: &str = "00000000-0000-4000-8000-000000000302";
 const DEMO_SUBMISSION_FILENAME: &str = "quarterly-access-review.csv";
 const DEMO_SUBMISSION_CONTENT_TYPE: &str = "text/csv";
-const DEMO_SUBMISSION_SUMMARY: &str =
-    "Quarterly production access review completed with all entries approved.";
-const DEMO_SUBMISSION_DESCRIPTION: &str = "Export of the Q2 2026 production console access review, including reviewer decisions for the local owner and deployment service account.";
 const DEMO_SUBMISSION_BYTES: &[u8] = b"user,email,system,reviewer,reviewed_at,decision\nLocal Owner,owner@proofplane.local,Production Console,System,2026-06-14T16:00:00Z,approved\nLocal Service Account,service@proofplane.local,Deployment Pipeline,System,2026-06-14T16:10:00Z,approved\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedSummary {
-    pub demo_attachment: DemoAttachmentSeedStatus,
+    pub demo_submission: DemoSubmissionSeedStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DemoAttachmentSeedStatus {
+pub enum DemoSubmissionSeedStatus {
     Seeded,
     SkippedNonFilesystemStorage,
 }
@@ -91,12 +87,12 @@ pub async fn run() -> Result<SeedSummary, Error> {
     seed_workspace(&postgres).await?;
     let owner_id = seed_local_owner(&postgres).await?;
     let connection = seed_agent_connection(&postgres, owner_id).await?;
-    seed_evidence_requests(&postgres, connection).await?;
+    seed_evidence(&postgres, connection).await?;
     seed_frameworks_and_controls(&postgres).await?;
-    let demo_attachment = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
+    let demo_submission = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
     debug!("done seeding local data");
 
-    Ok(SeedSummary { demo_attachment })
+    Ok(SeedSummary { demo_submission })
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
@@ -234,16 +230,14 @@ SET user_id = EXCLUDED.user_id,
     })
 }
 
-async fn seed_evidence_requests(
+async fn seed_evidence(
     repository: &Postgres,
     connection: AgentConnectionContext,
 ) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
-    let seeds = demo_evidence_requests()?;
+    let seeds = demo_evidence()?;
     let existing = repository
-        .in_workspace_context_read(workspace_id, async |context| {
-            context.list_evidence_requests().await
-        })
+        .in_workspace_context_read(workspace_id, async |context| context.list_evidence().await)
         .await?;
 
     repository
@@ -253,16 +247,17 @@ async fn seed_evidence_requests(
             connection.connection_id,
             async move |context| {
                 for seed in seeds {
-                    if let Some(existing_request) =
-                        existing.iter().find(|request| request.title == seed.title)
+                    if let Some(existing_evidence) = existing
+                        .iter()
+                        .find(|evidence| evidence.title == seed.title)
                     {
                         let update = seed.into_update();
                         context
-                            .replace_evidence_request(existing_request.id, &update)
+                            .replace_evidence(existing_evidence.id, &update)
                             .await?;
                     } else {
-                        let request = seed.into_new();
-                        context.create_evidence_request(&request).await?;
+                        let evidence = seed.into_new();
+                        context.create_evidence(&evidence).await?;
                     }
                 }
 
@@ -365,57 +360,54 @@ ON CONFLICT DO NOTHING
 async fn seed_demo_evidence_submission(
     repository: &Postgres,
     object_storage: &ObjectStorageConfig,
-) -> Result<DemoAttachmentSeedStatus, Error> {
+) -> Result<DemoSubmissionSeedStatus, Error> {
+    let evidence_id = {
+        let client = repository.get().await?;
+        demo_evidence_id(&client).await?
+    };
+
     let ObjectStorageConfig::Filesystem { root } = object_storage else {
-        seed_demo_submission_row(repository).await?;
-        return Ok(DemoAttachmentSeedStatus::SkippedNonFilesystemStorage);
+        upsert_demo_submission_row(repository, evidence_id, None).await?;
+        return Ok(DemoSubmissionSeedStatus::SkippedNonFilesystemStorage);
     };
 
     let object_store = FilesystemObjectStore::new(root).await?;
-    let object_key = demo_attachment_object_key()?;
     let metadata = object_store
         .put_object(PutObjectRequest {
-            key: object_key,
+            key: demo_submission_object_key(evidence_id)?,
             content_type: DEMO_SUBMISSION_CONTENT_TYPE.to_owned(),
             chunks: stream::once(async { Ok(Bytes::from_static(DEMO_SUBMISSION_BYTES)) }),
         })
         .await?;
 
-    upsert_demo_submission_and_attachment(repository, &metadata.sha256).await?;
+    upsert_demo_submission_row(repository, evidence_id, Some(&metadata.sha256)).await?;
 
-    Ok(DemoAttachmentSeedStatus::Seeded)
+    Ok(DemoSubmissionSeedStatus::Seeded)
 }
 
-async fn seed_demo_submission_row(repository: &Postgres) -> Result<(), Error> {
-    let mut client = repository.get().await?;
-    let transaction = client.transaction().await?;
-    let request_id = demo_evidence_request_id(&transaction).await?;
-    upsert_demo_submission(&transaction, request_id).await?;
-    transaction.commit().await?;
-
-    Ok(())
-}
-
-async fn upsert_demo_submission_and_attachment(
+/// Writes the demo submission at `uploaded`, deliberately bypassing the scan
+/// pipeline so a fresh local database has downloadable evidence immediately.
+async fn upsert_demo_submission_row(
     repository: &Postgres,
-    checksum_sha256: &str,
+    evidence_id: Uuid,
+    checksum_sha256: Option<&str>,
 ) -> Result<(), Error> {
-    let mut client = repository.get().await?;
-    let transaction = client.transaction().await?;
-    let request_id = demo_evidence_request_id(&transaction).await?;
-    upsert_demo_submission(&transaction, request_id).await?;
-
-    let attachment_id = demo_attachment_id();
-    let attachment_object_key = demo_attachment_object_key()?.to_string();
-    let checksum_crc32c = demo_attachment_crc32c_base64();
+    let object_key = demo_submission_object_key(evidence_id)?.to_string();
+    let checksum_sha256 = checksum_sha256.unwrap_or_default();
+    let checksum_crc32c = demo_submission_crc32c_base64();
     let content_length = DEMO_SUBMISSION_BYTES.len() as i64;
+    let client = repository.get().await?;
 
-    transaction
+    client
         .execute(
             r#"
-INSERT INTO evidence_attachments (
+INSERT INTO evidence_submissions (
     id,
-    evidence_submission_id,
+    evidence_id,
+    submitted_by_agent_connection_id,
+    received_at,
+    valid_from,
+    valid_until,
     filename,
     content_type,
     content_length,
@@ -424,9 +416,13 @@ INSERT INTO evidence_attachments (
     checksum_crc32c,
     upload_status
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'uploaded')
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'uploaded')
 ON CONFLICT (id) DO UPDATE
-SET evidence_submission_id = EXCLUDED.evidence_submission_id,
+SET evidence_id = EXCLUDED.evidence_id,
+    submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
+    received_at = EXCLUDED.received_at,
+    valid_from = EXCLUDED.valid_from,
+    valid_until = EXCLUDED.valid_until,
     filename = EXCLUDED.filename,
     content_type = EXCLUDED.content_type,
     content_length = EXCLUDED.content_length,
@@ -436,31 +432,31 @@ SET evidence_submission_id = EXCLUDED.evidence_submission_id,
     upload_status = EXCLUDED.upload_status
 "#,
             &[
-                &attachment_id,
                 &demo_submission_id(),
+                &evidence_id,
+                &Uuid::from(local_agent_connection_id()),
+                &timestamp("2026-06-14T16:30:00Z")?,
+                &timestamp("2026-04-01T00:00:00Z")?,
+                &timestamp("2026-06-30T23:59:59Z")?,
                 &DEMO_SUBMISSION_FILENAME,
                 &DEMO_SUBMISSION_CONTENT_TYPE,
                 &content_length,
-                &attachment_object_key,
+                &object_key,
                 &checksum_sha256,
                 &checksum_crc32c,
             ],
         )
         .await?;
 
-    transaction.commit().await?;
-
     Ok(())
 }
 
-async fn demo_evidence_request_id(
-    transaction: &tokio_postgres::Transaction<'_>,
-) -> Result<Uuid, Error> {
-    let row = transaction
+async fn demo_evidence_id(client: &deadpool_postgres::Object) -> Result<Uuid, Error> {
+    let row = client
         .query_one(
             r#"
 SELECT id
-FROM evidence_requests
+FROM evidence
 WHERE workspace_id = $1
   AND title = 'Quarterly access review'
 "#,
@@ -471,64 +467,11 @@ WHERE workspace_id = $1
     Ok(row.get("id"))
 }
 
-async fn upsert_demo_submission(
-    transaction: &tokio_postgres::Transaction<'_>,
-    request_id: Uuid,
-) -> Result<(), Error> {
-    transaction
-        .execute(
-            r#"
-INSERT INTO evidence_submissions (
-    id,
-    evidence_request_id,
-    submitted_by_agent_connection_id,
-    received_at,
-    coverage_start_at,
-    coverage_end_at,
-    source_system,
-    collection_method,
-    summary,
-    description
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (id) DO UPDATE
-SET evidence_request_id = EXCLUDED.evidence_request_id,
-    submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
-    received_at = EXCLUDED.received_at,
-    coverage_start_at = EXCLUDED.coverage_start_at,
-    coverage_end_at = EXCLUDED.coverage_end_at,
-    source_system = EXCLUDED.source_system,
-    collection_method = EXCLUDED.collection_method,
-    summary = EXCLUDED.summary,
-    description = EXCLUDED.description
-"#,
-            &[
-                &demo_submission_id(),
-                &request_id,
-                &Uuid::from(local_agent_connection_id()),
-                &timestamp("2026-06-14T16:30:00Z")?,
-                &timestamp("2026-04-01T00:00:00Z")?,
-                &timestamp("2026-06-30T23:59:59Z")?,
-                &"local-demo",
-                &"seed",
-                &DEMO_SUBMISSION_SUMMARY,
-                &DEMO_SUBMISSION_DESCRIPTION,
-            ],
-        )
-        .await?;
-
-    Ok(())
-}
-
-struct SeedEvidenceRequest {
+struct SeedEvidence {
     title: String,
     description: String,
     collection_instructions: String,
-    cadence: EvidenceRequestCadence,
-    due_at: DateTime<Utc>,
-    schedule_anchor_at: DateTime<Utc>,
-    freshness_window_days: Option<i32>,
-    status: EvidenceRequestStatus,
+    status: EvidenceStatus,
 }
 
 struct SeedFrameworkRequirement {
@@ -546,50 +489,38 @@ struct SeedControl {
     requirement_ids: Vec<Uuid>,
 }
 
-impl SeedEvidenceRequest {
-    fn into_new(self) -> CreateEvidenceRequestPayload {
-        CreateEvidenceRequestPayload {
+impl SeedEvidence {
+    fn into_new(self) -> CreateEvidencePayload {
+        CreateEvidencePayload {
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,
-            cadence: self.cadence,
-            due_at: self.due_at,
-            schedule_anchor_at: self.schedule_anchor_at,
-            freshness_window_days: self.freshness_window_days,
             status: self.status,
         }
     }
 
-    fn into_update(self) -> UpdateEvidenceRequestPayload {
-        UpdateEvidenceRequestPayload {
+    fn into_update(self) -> UpdateEvidencePayload {
+        UpdateEvidencePayload {
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,
-            cadence: self.cadence,
-            due_at: self.due_at,
-            schedule_anchor_at: self.schedule_anchor_at,
-            freshness_window_days: self.freshness_window_days,
             status: self.status,
         }
     }
 }
 
-fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
+fn demo_evidence() -> Result<Vec<SeedEvidence>, Error> {
     Ok(vec![
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Quarterly access review".to_owned(),
             description: "Confirm user access reviews are completed for production systems."
                 .to_owned(),
             collection_instructions:
                 "Export the completed access review report from the identity provider and include reviewer sign-off."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Quarterly,
-            due_at: timestamp("2026-06-30T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-03-31T17:00:00Z")?,
-            freshness_window_days: Some(90),
-            status: EvidenceRequestStatus::Active,
+            status: EvidenceStatus::Active,
         },
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Monthly vulnerability scan".to_owned(),
             description:
                 "Confirm vulnerability scans are performed for the production environment."
@@ -597,24 +528,16 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
             collection_instructions:
                 "Attach the monthly scanner summary showing scan scope, date, and critical findings."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Monthly,
-            due_at: timestamp("2026-05-31T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-05-01T17:00:00Z")?,
-            freshness_window_days: Some(30),
-            status: EvidenceRequestStatus::Active,
+            status: EvidenceStatus::Active,
         },
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Annual incident response tabletop".to_owned(),
             description: "Confirm the incident response tabletop exercise is completed annually."
                 .to_owned(),
             collection_instructions:
                 "Attach the exercise agenda, participant list, findings, and remediation actions."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Annually,
-            due_at: timestamp("2026-12-15T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-01-15T17:00:00Z")?,
-            freshness_window_days: Some(365),
-            status: EvidenceRequestStatus::Paused,
+            status: EvidenceStatus::Paused,
         },
     ])
 }
@@ -703,21 +626,16 @@ fn demo_submission_id() -> Uuid {
     seed_uuid("demo:evidence-submission:quarterly-access-review")
 }
 
-fn demo_attachment_id() -> Uuid {
-    seed_uuid("demo:evidence-attachment:quarterly-access-review")
-}
-
-fn demo_attachment_object_key() -> Result<ObjectKey, StorageError> {
+fn demo_submission_object_key(evidence_id: Uuid) -> Result<ObjectKey, StorageError> {
     ObjectKey::parse(format!(
-        "workspaces/{}/evidence-submissions/{}/attachments/{}/{}",
+        "workspaces/{}/evidence/{evidence_id}/submissions/{}/{}",
         Uuid::from(local_authorized_workspace_id()),
         demo_submission_id(),
-        demo_attachment_id(),
         DEMO_SUBMISSION_FILENAME
     ))
 }
 
-fn demo_attachment_crc32c_base64() -> String {
+fn demo_submission_crc32c_base64() -> String {
     BASE64_STANDARD.encode(crc32c::crc32c(DEMO_SUBMISSION_BYTES).to_be_bytes())
 }
 

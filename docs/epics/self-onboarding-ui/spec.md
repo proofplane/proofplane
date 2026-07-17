@@ -106,10 +106,10 @@ show the underlying granular permissions before submission.
 
 Initial presets:
 
-- **Read compliance data:** read evidence requests, evidence submissions, and
+- **Read compliance data:** read evidence, evidence submissions, and
   controls.
-- **Submit evidence:** read evidence requests and write evidence submissions.
-- **Manage mappings:** read/write controls and read/write evidence requests when
+- **Submit evidence:** read evidence and write evidence submissions.
+- **Manage mappings:** read/write controls and read/write evidence when
   supported by the API contract.
 - **Custom:** granular permission selection.
 
@@ -135,7 +135,7 @@ The workspace home should not be an empty dashboard. It should show:
 
 - workspace identity and setup progress;
 - starter SOC 2 controls;
-- sample evidence request status;
+- sample evidence status;
 - token/MCP readiness;
 - suggested agent prompts;
 - an auditor portal access area with a clear unavailable or preview state until

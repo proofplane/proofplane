@@ -15,19 +15,19 @@ use uuid::Uuid;
 use crate::{
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{error::ApiError, request_context::RequestId},
-    services::attachment_downloads::{AttachmentDownloadService, DownloadError},
+    services::submission_downloads::{DownloadError, SubmissionDownloadService},
 };
 
 const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 
 #[derive(Clone)]
-pub struct AttachmentDownloadState {
-    pub service: AttachmentDownloadService,
+pub struct SubmissionDownloadState {
+    pub service: SubmissionDownloadService,
 }
 
-pub fn router(state: AttachmentDownloadState) -> Router {
+pub fn router(state: SubmissionDownloadState) -> Router {
     Router::new()
-        .route("/attachment-downloads", get(redeem_download_grant))
+        .route("/submission-downloads", get(redeem_download_grant))
         .with_state(state)
 }
 
@@ -37,7 +37,7 @@ struct DownloadGrantQuery {
 }
 
 async fn redeem_download_grant(
-    State(state): State<AttachmentDownloadState>,
+    State(state): State<SubmissionDownloadState>,
     Extension(request_id): Extension<RequestId>,
     query: Result<Query<DownloadGrantQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
@@ -52,14 +52,14 @@ async fn redeem_download_grant(
         .await
         .map_err(download_error)?;
     AuditEvent::new(
-        "evidence_attachment_download_grant.redeemed",
+        "evidence_submission_download_grant.redeemed",
         AuditOutcome::Success,
         download_audit_actor(
             downloaded.audit.issued_by_user_id,
             downloaded.audit.issued_via,
         ),
         AuditClientType::Rest,
-        "redeem_attachment_download_grant",
+        "redeem_submission_download_grant",
     )
     .workspace_id(downloaded.audit.workspace_id.into())
     .request_id(request_id.0)
@@ -67,27 +67,23 @@ async fn redeem_download_grant(
         "evidence_submission_id",
         Uuid::from(downloaded.audit.submission_id),
     )
-    .metadata(
-        "evidence_attachment_id",
-        Uuid::from(downloaded.audit.attachment_id),
-    )
     .object(AuditObject::new(
-        "evidence_attachment",
-        downloaded.audit.attachment_id.into(),
+        "evidence_submission",
+        downloaded.audit.submission_id.into(),
     ))
     .emit();
-    let disposition = content_disposition(&downloaded.attachment.filename);
+    let disposition = content_disposition(&downloaded.submission.filename);
     let mut response = Body::from_stream(downloaded.object.chunks).into_response();
     *response.status_mut() = StatusCode::OK;
     let headers = response.headers_mut();
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_str(&downloaded.attachment.content_type)
+        HeaderValue::from_str(&downloaded.submission.content_type)
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
         CONTENT_LENGTH,
-        HeaderValue::from_str(&downloaded.attachment.content_length.to_string())
+        HeaderValue::from_str(&downloaded.submission.content_length.to_string())
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
@@ -106,7 +102,7 @@ pub(crate) fn content_disposition(filename: &str) -> String {
 
 fn download_audit_actor(
     user_id: crate::domain::UserId,
-    issued_via: crate::services::attachment_downloads::DownloadGrantIssuer,
+    issued_via: crate::services::submission_downloads::DownloadGrantIssuer,
 ) -> AuditActor {
     AuditActor::AgentConnection {
         user_id: user_id.into(),
@@ -118,15 +114,15 @@ fn download_error(error: DownloadError) -> ApiError {
     match error {
         DownloadError::NotFound => ApiError::NotFound,
         DownloadError::NotReady => ApiError::Conflict {
-            code: "attachment_not_ready",
-            message: "attachment is not ready for download".to_owned(),
+            code: "submission_not_ready",
+            message: "submission is not ready for download".to_owned(),
         },
         DownloadError::MetadataMismatch | DownloadError::Internal => {
-            tracing::error!(%error, "attachment download failed");
+            tracing::error!(%error, "submission download failed");
             ApiError::Internal
         }
         DownloadError::Repository(repository_error) => {
-            tracing::error!(error = %repository_error, "attachment download repository failure");
+            tracing::error!(error = %repository_error, "submission download repository failure");
             ApiError::Internal
         }
     }
@@ -141,7 +137,7 @@ mod tests {
 
     #[test]
     fn query_extractor_accepts_one_token() {
-        let query = download_query("/attachment-downloads?token=abc.def").unwrap();
+        let query = download_query("/submission-downloads?token=abc.def").unwrap();
         assert_eq!(
             query.token, "abc.def",
             "valid single token should deserialize"
@@ -150,14 +146,14 @@ mod tests {
 
     #[test]
     fn query_extractor_rejects_missing_or_duplicate_token() {
-        assert!(download_query("/attachment-downloads").is_err());
-        assert!(download_query("/attachment-downloads?other=value").is_err());
-        assert!(download_query("/attachment-downloads?token=a&token=b").is_err());
+        assert!(download_query("/submission-downloads").is_err());
+        assert!(download_query("/submission-downloads?other=value").is_err());
+        assert!(download_query("/submission-downloads?token=a&token=b").is_err());
     }
 
     #[test]
     fn query_extractor_allows_empty_token_for_handler_guard() {
-        let query = download_query("/attachment-downloads?token=").unwrap();
+        let query = download_query("/submission-downloads?token=").unwrap();
         assert_eq!(query.token, "");
     }
 

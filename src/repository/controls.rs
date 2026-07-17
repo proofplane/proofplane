@@ -4,9 +4,9 @@ use uuid::Uuid;
 use crate::{
     domain::{
         Control, ControlId, ControlSummary, CreateControlPayload,
-        CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping,
-        EvidenceRequestId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
-        UpdateControlPayload, WorkspaceId,
+        CreateEvidenceControlMappingPayload, EvidenceControlMapping, EvidenceId, Framework,
+        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+        WorkspaceId,
     },
     repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -162,24 +162,24 @@ RETURNING id
             .map(Some)
     }
 
-    pub async fn create_evidence_request_control_mapping(
+    pub async fn create_evidence_control_mapping(
         &self,
-        payload: &CreateEvidenceRequestControlMappingPayload,
-    ) -> Result<Option<EvidenceRequestControlMapping>, Error> {
+        payload: &CreateEvidenceControlMappingPayload,
+    ) -> Result<Option<EvidenceControlMapping>, Error> {
         let rows = self
             .transaction
             .query(
                 r#"
-INSERT INTO evidence_request_control_mappings (evidence_request_id, control_id, rationale)
-SELECT er.id, c.id, $3
-FROM evidence_requests er
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
+SELECT e.id, c.id, $3
+FROM evidence e
 JOIN controls c ON c.id = $2 AND c.workspace_id = $4
-WHERE er.id = $1
-  AND er.workspace_id = $4
-RETURNING evidence_request_id, control_id
+WHERE e.id = $1
+  AND e.workspace_id = $4
+RETURNING evidence_id, control_id
 "#,
                 &[
-                    &Uuid::from(payload.evidence_request_id),
+                    &Uuid::from(payload.evidence_id),
                     &Uuid::from(payload.control_id),
                     &payload.rationale,
                     &Uuid::from(self.workspace_id),
@@ -192,37 +192,34 @@ RETURNING evidence_request_id, control_id
             return Ok(None);
         }
 
-        self.get_evidence_request_control_mapping_in_transaction(
-            payload.evidence_request_id,
-            payload.control_id,
-        )
-        .await?
-        .ok_or(Error::InvariantViolation(
-            "created evidence request control mapping must be readable in transaction",
-        ))
-        .map(Some)
+        self.get_evidence_control_mapping_in_transaction(payload.evidence_id, payload.control_id)
+            .await?
+            .ok_or(Error::InvariantViolation(
+                "created evidence control mapping must be readable in transaction",
+            ))
+            .map(Some)
     }
 
-    pub async fn delete_evidence_request_control_mapping(
+    pub async fn delete_evidence_control_mapping(
         &self,
-        evidence_request_id: EvidenceRequestId,
+        evidence_id: EvidenceId,
         control_id: ControlId,
     ) -> Result<bool, Error> {
         let rows = self
             .transaction
             .execute(
                 r#"
-DELETE FROM evidence_request_control_mappings m
-USING evidence_requests er, controls c
-WHERE m.evidence_request_id = er.id
+DELETE FROM evidence_control_mappings m
+USING evidence e, controls c
+WHERE m.evidence_id = e.id
   AND m.control_id = c.id
-  AND er.id = $1
+  AND e.id = $1
   AND c.id = $2
-  AND er.workspace_id = $3
+  AND e.workspace_id = $3
   AND c.workspace_id = $3
 "#,
                 &[
-                    &Uuid::from(evidence_request_id),
+                    &Uuid::from(evidence_id),
                     &Uuid::from(control_id),
                     &Uuid::from(self.workspace_id),
                 ],
@@ -267,31 +264,31 @@ ORDER BY fr.code
         Ok(controls_from_joined_rows(rows)?.into_iter().next())
     }
 
-    async fn get_evidence_request_control_mapping_in_transaction(
+    async fn get_evidence_control_mapping_in_transaction(
         &self,
-        evidence_request_id: EvidenceRequestId,
+        evidence_id: EvidenceId,
         control_id: ControlId,
-    ) -> Result<Option<EvidenceRequestControlMapping>, Error> {
+    ) -> Result<Option<EvidenceControlMapping>, Error> {
         let rows = self
             .transaction
             .query(
                 r#"
 SELECT
-    m.evidence_request_id,
+    m.evidence_id,
     c.id AS control_id,
     c.code AS control_code,
     c.title AS control_title,
     c.description AS control_description,
     m.rationale,
     m.created_at
-FROM evidence_request_control_mappings m
+FROM evidence_control_mappings m
 JOIN controls c ON c.id = m.control_id
-WHERE m.evidence_request_id = $1
+WHERE m.evidence_id = $1
   AND m.control_id = $2
   AND c.workspace_id = $3
 "#,
                 &[
-                    &Uuid::from(evidence_request_id),
+                    &Uuid::from(evidence_id),
                     &Uuid::from(control_id),
                     &Uuid::from(self.workspace_id),
                 ],
@@ -300,7 +297,7 @@ WHERE m.evidence_request_id = $1
 
         rows.into_iter()
             .next()
-            .map(evidence_request_control_mapping_from_row)
+            .map(evidence_control_mapping_from_row)
             .transpose()
     }
 
@@ -416,33 +413,30 @@ ORDER BY fr.code
         Ok(controls_from_joined_rows(rows)?.into_iter().next())
     }
 
-    pub async fn list_evidence_request_control_mappings(
+    pub async fn list_evidence_control_mappings(
         &self,
-        evidence_request_id: EvidenceRequestId,
-    ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
+        evidence_id: EvidenceId,
+    ) -> Result<Option<Vec<EvidenceControlMapping>>, Error> {
         let rows = self
             .client
             .query(
                 r#"
 SELECT
-    er.id AS evidence_request_id,
+    e.id AS evidence_id,
     c.id AS control_id,
     c.code AS control_code,
     c.title AS control_title,
     c.description AS control_description,
     m.rationale,
     m.created_at
-FROM evidence_requests er
-LEFT JOIN evidence_request_control_mappings m ON m.evidence_request_id = er.id
-LEFT JOIN controls c ON c.id = m.control_id AND c.workspace_id = er.workspace_id
-WHERE er.id = $1
-  AND er.workspace_id = $2
+FROM evidence e
+LEFT JOIN evidence_control_mappings m ON m.evidence_id = e.id
+LEFT JOIN controls c ON c.id = m.control_id AND c.workspace_id = e.workspace_id
+WHERE e.id = $1
+  AND e.workspace_id = $2
 ORDER BY c.code
 "#,
-                &[
-                    &Uuid::from(evidence_request_id),
-                    &Uuid::from(self.workspace_id),
-                ],
+                &[&Uuid::from(evidence_id), &Uuid::from(self.workspace_id)],
             )
             .await?;
 
@@ -451,7 +445,7 @@ ORDER BY c.code
         }
 
         rows.into_iter()
-            .filter_map(evidence_request_control_mapping_from_joined_row)
+            .filter_map(evidence_control_mapping_from_joined_row)
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
@@ -532,13 +526,9 @@ fn push_joined_framework_requirement(control: &mut Control, row: &Row) -> Result
     Ok(())
 }
 
-fn evidence_request_control_mapping_from_row(
-    row: Row,
-) -> Result<EvidenceRequestControlMapping, Error> {
-    Ok(EvidenceRequestControlMapping {
-        evidence_request_id: EvidenceRequestId::from(
-            row.try_get::<_, Uuid>("evidence_request_id")?,
-        ),
+fn evidence_control_mapping_from_row(row: Row) -> Result<EvidenceControlMapping, Error> {
+    Ok(EvidenceControlMapping {
+        evidence_id: EvidenceId::from(row.try_get::<_, Uuid>("evidence_id")?),
         control: ControlSummary {
             id: ControlId::from(row.try_get::<_, Uuid>("control_id")?),
             code: row.try_get("control_code")?,
@@ -550,11 +540,11 @@ fn evidence_request_control_mapping_from_row(
     })
 }
 
-fn evidence_request_control_mapping_from_joined_row(
+fn evidence_control_mapping_from_joined_row(
     row: Row,
-) -> Option<Result<EvidenceRequestControlMapping, Error>> {
+) -> Option<Result<EvidenceControlMapping, Error>> {
     match row.try_get::<_, Option<Uuid>>("control_id") {
-        Ok(Some(_)) => Some(evidence_request_control_mapping_from_row(row)),
+        Ok(Some(_)) => Some(evidence_control_mapping_from_row(row)),
         Ok(None) => None,
         Err(error) => Some(Err(Error::Database(error))),
     }

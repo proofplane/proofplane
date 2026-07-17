@@ -3,7 +3,7 @@
 ## Goal
 
 Give auditors a narrow browser experience for verifying access, reviewing
-workspace evidence, and downloading eligible attachments. This is not a full
+workspace evidence, and downloading eligible submissions. This is not a full
 workflow app in v1.
 
 ## Browser Flow
@@ -12,9 +12,9 @@ workflow app in v1.
 2. Proofplane shows the intended auditor email and an action to send an OTP.
 3. Auditor enters the OTP.
 4. Proofplane creates a seven-day session and opens the portal.
-5. Auditor reviews controls, mapped evidence requests, submissions, and
-   attachment states.
-6. Auditor downloads eligible attachments.
+5. Auditor reviews controls, mapped evidence, submissions, and
+   submission states.
+6. Auditor downloads eligible submissions.
 
 ## UI Shape
 
@@ -22,9 +22,9 @@ Use simple server-rendered HTML from the Rust API. Keep the page quiet and
 scannable:
 
 - compact header with workspace and auditor email;
-- controls grouped with mapped evidence requests;
+- controls grouped with mapped evidence;
 - submissions ordered by received time within each request;
-- attachment rows with status and download action when eligible;
+- submission rows with status and download action when eligible;
 - clear expired, revoked, and invalid-link states.
 
 Do not add a separate frontend app for v1. Revisit a SPA only when auditors

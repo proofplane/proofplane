@@ -91,7 +91,7 @@ The home screen should be an operational snapshot, not analytics:
 - setup progress;
 - token and MCP readiness;
 - starter controls;
-- evidence request status;
+- evidence status;
 - auditor access preview or unavailable state;
 - suggested agent prompts.
 

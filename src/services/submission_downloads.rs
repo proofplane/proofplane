@@ -10,14 +10,16 @@ use crate::{
         DownloadGrantDecryptor, DownloadGrantEncryptor, RegisteredClaims, VerifiedPasetoToken,
     },
     domain::{
-        AgentConnectionId, AttachmentUploadStatus, EvidenceAttachment, EvidenceAttachmentId,
-        EvidenceSubmissionId, UserId, WorkspaceId,
+        AgentConnectionId, EvidenceSubmission, EvidenceSubmissionId, SubmissionUploadStatus,
+        UserId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
-    repository::{AttachmentDownloadCandidate, Postgres},
+    repository::{Postgres, SubmissionDownloadCandidate},
 };
 
-const DOWNLOAD_TOKEN_VERSION: u8 = 1;
+/// Bumped from 1 when submissions absorbed attachments and the grant stopped
+/// naming a separate attachment. Old tokens must be rejected, not reinterpreted.
+const DOWNLOAD_TOKEN_VERSION: u8 = 2;
 const DOWNLOAD_TTL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,10 +27,7 @@ struct DownloadClaims {
     version: u8,
     workspace_id: String,
     submission_id: String,
-    attachment_id: String,
     issued_by_user_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    issued_via_api_token_id: Option<String>,
     issued_via_agent_connection_id: Option<String>,
 }
 
@@ -36,7 +35,6 @@ struct DownloadClaims {
 struct VerifiedDownloadGrant {
     workspace_id: WorkspaceId,
     submission_id: EvidenceSubmissionId,
-    attachment_id: EvidenceAttachmentId,
     issued_by_user_id: UserId,
     issued_via: DownloadGrantIssuer,
 }
@@ -51,14 +49,14 @@ pub struct IssuedDownloadGrant {
     pub audit: DownloadGrantAuditContext,
 }
 
-pub struct DownloadedAttachment {
-    pub attachment: EvidenceAttachment,
+pub struct DownloadedSubmission {
+    pub submission: EvidenceSubmission,
     pub object: ObjectStream,
     pub audit: DownloadGrantAuditContext,
 }
 
-pub struct WorkspaceDownloadedAttachment {
-    pub attachment: EvidenceAttachment,
+pub struct WorkspaceDownloadedSubmission {
+    pub submission: EvidenceSubmission,
     pub object: ObjectStream,
     pub audit: WorkspaceDownloadAuditContext,
 }
@@ -67,7 +65,6 @@ pub struct WorkspaceDownloadedAttachment {
 pub struct DownloadGrantAuditContext {
     pub workspace_id: WorkspaceId,
     pub submission_id: EvidenceSubmissionId,
-    pub attachment_id: EvidenceAttachmentId,
     pub issued_by_user_id: UserId,
     pub issued_via: DownloadGrantIssuer,
 }
@@ -89,11 +86,10 @@ impl DownloadGrantIssuer {
 pub struct WorkspaceDownloadAuditContext {
     pub workspace_id: WorkspaceId,
     pub submission_id: EvidenceSubmissionId,
-    pub attachment_id: EvidenceAttachmentId,
 }
 
 #[derive(Clone)]
-pub struct AttachmentDownloadService {
+pub struct SubmissionDownloadService {
     repository: Arc<Postgres>,
     object_store: Arc<FilesystemObjectStore>,
     public_api_base_url: Url,
@@ -101,7 +97,7 @@ pub struct AttachmentDownloadService {
     grant_decryptor: DownloadGrantDecryptor,
 }
 
-impl AttachmentDownloadService {
+impl SubmissionDownloadService {
     pub fn new(
         repository: Arc<Postgres>,
         object_store: Arc<FilesystemObjectStore>,
@@ -124,26 +120,25 @@ impl AttachmentDownloadService {
         user_id: UserId,
         issued_via: DownloadGrantIssuer,
         submission_id: EvidenceSubmissionId,
-        attachment_id: EvidenceAttachmentId,
     ) -> Result<IssuedDownloadGrant, DownloadError> {
         let candidate = self
             .repository
             .in_workspace_context_read(workspace_id, async move |context| {
                 context
-                    .get_attachment_for_download_grant(submission_id, attachment_id)
+                    .get_submission_for_download_grant(submission_id)
                     .await
             })
             .await?
             .ok_or(DownloadError::NotFound)?;
 
-        match candidate.attachment.upload_status {
-            AttachmentUploadStatus::PendingUpload | AttachmentUploadStatus::Finalizing => {
+        match candidate.submission.upload_status {
+            SubmissionUploadStatus::PendingUpload | SubmissionUploadStatus::Finalizing => {
                 return Err(DownloadError::NotReady)
             }
-            AttachmentUploadStatus::ContainsVirus | AttachmentUploadStatus::FailedUpload => {
+            SubmissionUploadStatus::ContainsVirus | SubmissionUploadStatus::FailedUpload => {
                 return Err(DownloadError::NotFound)
             }
-            AttachmentUploadStatus::Uploaded => {}
+            SubmissionUploadStatus::Uploaded => {}
         }
 
         self.validate_metadata(&candidate).await?;
@@ -162,9 +157,7 @@ impl AttachmentDownloadService {
                     version: DOWNLOAD_TOKEN_VERSION,
                     workspace_id: workspace_id.to_string(),
                     submission_id: submission_id.to_string(),
-                    attachment_id: candidate.attachment.id.to_string(),
                     issued_by_user_id: user_id.to_string(),
-                    issued_via_api_token_id: None,
                     issued_via_agent_connection_id: Some(
                         issued_via.agent_connection_id().to_string(),
                     ),
@@ -173,27 +166,26 @@ impl AttachmentDownloadService {
             .map_err(|_| DownloadError::Internal)?;
         let mut url = self
             .public_api_base_url
-            .join("attachment-downloads")
+            .join("submission-downloads")
             .map_err(|_| DownloadError::Internal)?;
         url.query_pairs_mut().append_pair("token", &issued.token);
 
         Ok(IssuedDownloadGrant {
             url,
             expires_at: issued.expires_at,
-            filename: candidate.attachment.filename,
-            content_type: candidate.attachment.content_type,
-            content_length: candidate.attachment.content_length,
+            filename: candidate.submission.filename,
+            content_type: candidate.submission.content_type,
+            content_length: candidate.submission.content_length,
             audit: DownloadGrantAuditContext {
                 workspace_id,
                 submission_id,
-                attachment_id: candidate.attachment.id,
                 issued_by_user_id: user_id,
                 issued_via,
             },
         })
     }
 
-    pub async fn redeem(&self, token: &str) -> Result<DownloadedAttachment, DownloadError> {
+    pub async fn redeem(&self, token: &str) -> Result<DownloadedSubmission, DownloadError> {
         let verified = self
             .grant_decryptor
             .decrypt::<DownloadClaims>(token)
@@ -203,16 +195,15 @@ impl AttachmentDownloadService {
             VerifiedDownloadGrant::try_from(verified).map_err(|_| DownloadError::NotFound)?;
 
         let downloaded = self
-            .download_for_workspace(grant.workspace_id, grant.submission_id, grant.attachment_id)
+            .download_for_workspace(grant.workspace_id, grant.submission_id)
             .await?;
 
-        Ok(DownloadedAttachment {
-            attachment: downloaded.attachment,
+        Ok(DownloadedSubmission {
+            submission: downloaded.submission,
             object: downloaded.object,
             audit: DownloadGrantAuditContext {
                 workspace_id: grant.workspace_id,
                 submission_id: grant.submission_id,
-                attachment_id: grant.attachment_id,
                 issued_by_user_id: grant.issued_by_user_id,
                 issued_via: grant.issued_via,
             },
@@ -223,20 +214,19 @@ impl AttachmentDownloadService {
         &self,
         workspace_id: WorkspaceId,
         submission_id: EvidenceSubmissionId,
-        attachment_id: EvidenceAttachmentId,
-    ) -> Result<WorkspaceDownloadedAttachment, DownloadError> {
+    ) -> Result<WorkspaceDownloadedSubmission, DownloadError> {
         let candidate = self
             .repository
             .in_workspace_context_read(workspace_id, async move |context| {
                 context
-                    .get_attachment_for_download_grant(submission_id, attachment_id)
+                    .get_submission_for_download_grant(submission_id)
                     .await
             })
             .await?
             .ok_or(DownloadError::NotFound)?;
 
-        match candidate.attachment.upload_status {
-            AttachmentUploadStatus::Uploaded => {}
+        match candidate.submission.upload_status {
+            SubmissionUploadStatus::Uploaded => {}
             _ => return Err(DownloadError::NotFound),
         }
 
@@ -246,22 +236,21 @@ impl AttachmentDownloadService {
             .get_object(&key)
             .await
             .map_err(storage_download_error)?;
-        validate_metadata(&candidate.attachment, &object.metadata)?;
+        validate_metadata(&candidate.submission, &object.metadata)?;
 
-        Ok(WorkspaceDownloadedAttachment {
-            attachment: candidate.attachment,
+        Ok(WorkspaceDownloadedSubmission {
+            submission: candidate.submission,
             object,
             audit: WorkspaceDownloadAuditContext {
                 workspace_id,
                 submission_id,
-                attachment_id,
             },
         })
     }
 
     async fn validate_metadata(
         &self,
-        candidate: &AttachmentDownloadCandidate,
+        candidate: &SubmissionDownloadCandidate,
     ) -> Result<(), DownloadError> {
         let key = finalized_object_key(candidate)?;
         let metadata = self
@@ -269,7 +258,7 @@ impl AttachmentDownloadService {
             .head_object(&key)
             .await
             .map_err(storage_download_error)?;
-        validate_metadata(&candidate.attachment, &metadata)
+        validate_metadata(&candidate.submission, &metadata)
     }
 }
 
@@ -295,10 +284,8 @@ impl TryFrom<VerifiedPasetoToken<DownloadClaims>> for VerifiedDownloadGrant {
         Ok(Self {
             workspace_id: WorkspaceId::from(parse_uuid(&claims.workspace_id)?),
             submission_id: EvidenceSubmissionId::from(parse_uuid(&claims.submission_id)?),
-            attachment_id: EvidenceAttachmentId::from(parse_uuid(&claims.attachment_id)?),
             issued_by_user_id,
             issued_via: download_grant_issuer_from_claims(
-                claims.issued_via_api_token_id.as_deref(),
                 claims.issued_via_agent_connection_id.as_deref(),
             )?,
         })
@@ -306,14 +293,13 @@ impl TryFrom<VerifiedPasetoToken<DownloadClaims>> for VerifiedDownloadGrant {
 }
 
 fn download_grant_issuer_from_claims(
-    api_token_id: Option<&str>,
     agent_connection_id: Option<&str>,
 ) -> Result<DownloadGrantIssuer, InvalidDownloadClaims> {
-    match (api_token_id, agent_connection_id) {
-        (None, Some(id)) => Ok(DownloadGrantIssuer::AgentConnection(
+    match agent_connection_id {
+        Some(id) => Ok(DownloadGrantIssuer::AgentConnection(
             AgentConnectionId::from(parse_uuid(id)?),
         )),
-        _ => Err(InvalidDownloadClaims),
+        None => Err(InvalidDownloadClaims),
     }
 }
 
@@ -322,31 +308,31 @@ struct InvalidDownloadClaims;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
-    #[error("attachment download is not found or no longer eligible")]
+    #[error("submission download is not found or no longer eligible")]
     NotFound,
-    #[error("attachment is not ready for download")]
+    #[error("submission is not ready for download")]
     NotReady,
-    #[error("attachment metadata does not match object storage")]
+    #[error("submission metadata does not match object storage")]
     MetadataMismatch,
-    #[error("internal attachment download error")]
+    #[error("internal submission download error")]
     Internal,
     #[error("repository error")]
     Repository(#[from] crate::repository::Error),
 }
 
 fn finalized_object_key(
-    candidate: &AttachmentDownloadCandidate,
+    candidate: &SubmissionDownloadCandidate,
 ) -> Result<ObjectKey, DownloadError> {
     let expected = ObjectKey::new(
         candidate.workspace_id,
         format!(
-            "evidence-submissions/{}/attachments/{}",
-            candidate.attachment.evidence_submission_id, candidate.attachment.id
+            "evidence/{}/submissions/{}",
+            candidate.submission.evidence_id, candidate.submission.id
         ),
-        &candidate.attachment.filename,
+        &candidate.submission.filename,
     )
     .map_err(|_| DownloadError::NotFound)?;
-    if expected.as_str() != candidate.attachment.object_key {
+    if expected.as_str() != candidate.submission.object_key {
         return Err(DownloadError::NotFound);
     }
 
@@ -354,14 +340,14 @@ fn finalized_object_key(
 }
 
 fn validate_metadata(
-    attachment: &EvidenceAttachment,
+    submission: &EvidenceSubmission,
     metadata: &ObjectMetadata,
 ) -> Result<(), DownloadError> {
     let expected_length =
-        u64::try_from(attachment.content_length).map_err(|_| DownloadError::MetadataMismatch)?;
-    if metadata.content_type != attachment.content_type
+        u64::try_from(submission.content_length).map_err(|_| DownloadError::MetadataMismatch)?;
+    if metadata.content_type != submission.content_type
         || metadata.content_length != expected_length
-        || metadata.sha256 != attachment.checksum_sha256
+        || metadata.sha256 != submission.checksum_sha256
     {
         return Err(DownloadError::MetadataMismatch);
     }
@@ -399,9 +385,7 @@ mod tests {
             version: DOWNLOAD_TOKEN_VERSION,
             workspace_id: "00000000-0000-4000-8000-000000000001".to_owned(),
             submission_id: "00000000-0000-4000-8000-000000000002".to_owned(),
-            attachment_id: "00000000-0000-4000-8000-000000000003".to_owned(),
             issued_by_user_id: "00000000-0000-4000-8000-000000000004".to_owned(),
-            issued_via_api_token_id: None,
             issued_via_agent_connection_id: Some("00000000-0000-4000-8000-000000000005".to_owned()),
         }
     }
@@ -413,7 +397,6 @@ mod tests {
 
         assert_eq!(grant.workspace_id.to_string(), claims.workspace_id);
         assert_eq!(grant.submission_id.to_string(), claims.submission_id);
-        assert_eq!(grant.attachment_id.to_string(), claims.attachment_id);
         assert_eq!(
             grant.issued_by_user_id.to_string(),
             claims.issued_by_user_id
@@ -425,35 +408,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_download_claim_versions() {
-        let mut claims = claims();
-        claims.version += 1;
-
-        assert!(VerifiedDownloadGrant::try_from(verified_token(claims)).is_err());
-    }
-
-    #[test]
-    fn rejects_malformed_download_identity_claims() {
-        for malformed in [
-            |claims: &mut DownloadClaims| claims.workspace_id = "invalid".to_owned(),
-            |claims: &mut DownloadClaims| claims.submission_id = "invalid".to_owned(),
-            |claims: &mut DownloadClaims| claims.attachment_id = "invalid".to_owned(),
-            |claims: &mut DownloadClaims| claims.issued_by_user_id = "invalid".to_owned(),
-            |claims: &mut DownloadClaims| {
-                claims.issued_via_agent_connection_id = Some("invalid".to_owned())
-            },
-        ] {
+    fn rejects_superseded_and_unknown_token_versions() {
+        for version in [1, DOWNLOAD_TOKEN_VERSION + 1] {
             let mut claims = claims();
-            malformed(&mut claims);
+            claims.version = version;
             assert!(VerifiedDownloadGrant::try_from(verified_token(claims)).is_err());
         }
     }
 
     #[test]
-    fn rejects_mismatched_subject_and_user_claim() {
-        let mut verified = verified_token(claims());
-        verified.subject = Uuid::new_v4();
+    fn rejects_malformed_identifiers_and_missing_agent_connection() {
+        for mutate in [
+            |claims: &mut DownloadClaims| claims.workspace_id = "bad".to_owned(),
+            |claims: &mut DownloadClaims| claims.submission_id = "bad".to_owned(),
+            |claims: &mut DownloadClaims| {
+                claims.issued_via_agent_connection_id = Some("bad".to_owned())
+            },
+            |claims: &mut DownloadClaims| claims.issued_via_agent_connection_id = None,
+        ] {
+            let mut claims = claims();
+            mutate(&mut claims);
+            assert!(VerifiedDownloadGrant::try_from(verified_token(claims)).is_err());
+        }
+    }
 
-        assert!(VerifiedDownloadGrant::try_from(verified).is_err());
+    #[test]
+    fn rejects_subject_mismatch() {
+        let mut claims = claims();
+        claims.issued_by_user_id = "00000000-0000-4000-8000-000000000009".to_owned();
+
+        assert!(VerifiedDownloadGrant::try_from(verified_token(claims)).is_err());
     }
 }

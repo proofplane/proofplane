@@ -91,7 +91,7 @@ Recommended sandbox defaults:
 - starter controls: access review, MFA, vulnerability management, incident
   response, vendor review;
 - starter actors: workspace owner and AI agent;
-- sample evidence request: quarterly user access review;
+- sample evidence: quarterly user access review;
 - sample agent action: "identify missing evidence for SOC 2 controls";
 - sample auditor access preview: intended auditor email, link status, session
   state, and evidence readiness.
@@ -109,12 +109,12 @@ auditor verifies by email before reviewing evidence in a narrow browser portal.
 Core MVP auditor portal capabilities:
 
 - control-to-evidence mapping summary;
-- evidence request list and history;
+- evidence list and submission history;
 - submitted artifact inventory and metadata;
 - provenance, actor, and timestamp trail;
 - review or approval trail only if that state exists in the product;
 - all historical submissions;
-- downloadable uploaded attachments.
+- downloadable uploaded submissions.
 
 Richer auditor workflow can come later:
 
@@ -275,7 +275,7 @@ trigger-based and personal:
 Even then, the ask should be low-pressure:
 
 > I am building a self-serve SOC 2 workspace for startups that want to create
-> controls and evidence requests without buying a full GRC suite. If you are
+> controls and evidence without buying a full GRC suite. If you are
 > dealing with this now, the sandbox is here. I would also love blunt feedback
 > on whether it matches how you think about SOC 2.
 

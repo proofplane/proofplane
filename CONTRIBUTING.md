@@ -31,7 +31,7 @@ make seed
 checks that those services are reachable and creates the local filesystem
 storage directory when needed. `make seed` runs the database migrations and
 writes demo data (an owner user, a workspace, frameworks, controls, and an
-evidence request).
+evidence).
 
 The local Docker services listen on:
 
@@ -54,7 +54,7 @@ make seed
   token via Authorization Code + PKCE, brokered by the Proofplane OAuth facade,
   with Auth0 as the upstream human login.
 - The control-plane REST routes (`/me`, `/workspaces`, the OAuth endpoints, and
-  browser attachment flows) authenticate with Auth0 user JWTs.
+  browser submission flows) authenticate with Auth0 user JWTs.
 
 Because there is no static token, exercising MCP locally means completing the
 OAuth flow with a real agent (or the MCP Inspector's OAuth mode). The setup

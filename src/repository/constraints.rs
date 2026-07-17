@@ -8,7 +8,7 @@ pub enum ConflictKind {
     WorkspaceSlugTaken,
     ControlCodeTaken,
     WorkspaceMembershipExists,
-    EvidenceRequestControlMappingExists,
+    EvidenceControlMappingExists,
 }
 
 impl ConflictKind {
@@ -18,7 +18,7 @@ impl ConflictKind {
             Self::WorkspaceSlugTaken => "slug_taken",
             Self::ControlCodeTaken => "control_code_taken",
             Self::WorkspaceMembershipExists => "user_already_has_workspace",
-            Self::EvidenceRequestControlMappingExists => "evidence_request_control_mapping_exists",
+            Self::EvidenceControlMappingExists => "evidence_control_mapping_exists",
         }
     }
 
@@ -30,9 +30,7 @@ impl ConflictKind {
             Self::WorkspaceSlugTaken => "a workspace with this slug already exists",
             Self::ControlCodeTaken => "a control with this code already exists in the workspace",
             Self::WorkspaceMembershipExists => "the user already belongs to a workspace",
-            Self::EvidenceRequestControlMappingExists => {
-                "this control is already mapped to the evidence request"
-            }
+            Self::EvidenceControlMappingExists => "this control is already mapped to the evidence",
         }
     }
 }
@@ -43,9 +41,7 @@ fn conflict_kind_for_constraint(constraint: &str) -> Option<ConflictKind> {
         "workspaces_slug_key" => Some(ConflictKind::WorkspaceSlugTaken),
         "controls_workspace_id_code_key" => Some(ConflictKind::ControlCodeTaken),
         "workspace_memberships_pkey" => Some(ConflictKind::WorkspaceMembershipExists),
-        "evidence_request_control_mappings_pkey" => {
-            Some(ConflictKind::EvidenceRequestControlMappingExists)
-        }
+        "evidence_control_mappings_pkey" => Some(ConflictKind::EvidenceControlMappingExists),
         _ => None,
     }
 }
@@ -81,8 +77,8 @@ mod tests {
             Some(ConflictKind::WorkspaceMembershipExists)
         );
         assert_eq!(
-            conflict_kind_for_constraint("evidence_request_control_mappings_pkey"),
-            Some(ConflictKind::EvidenceRequestControlMappingExists)
+            conflict_kind_for_constraint("evidence_control_mappings_pkey"),
+            Some(ConflictKind::EvidenceControlMappingExists)
         );
     }
 

@@ -17,17 +17,16 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuditorPortalAttachment, AuditorPortalControl, AuditorPortalEvidenceRequest,
-        AuditorPortalReadModel, AuditorPortalSubmission, EvidenceRequest, EvidenceSubmission,
-        FrameworkRequirement,
+        AuditorPortalControl, AuditorPortalEvidence, AuditorPortalReadModel,
+        AuditorPortalSubmission, Evidence, FrameworkRequirement,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{error::ApiError, request_context::RequestId},
     services::{
-        attachment_downloads::{AttachmentDownloadService, DownloadError},
         auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
         auditor_portal::AuditorPortalReadModelService,
+        submission_downloads::{DownloadError, SubmissionDownloadService},
     },
 };
 use chrono::{DateTime, Utc};
@@ -40,7 +39,7 @@ pub struct AuditorAccessState {
     pub grants: AuditorAccessGrantService,
     pub sessions: AuditorAccessSessionService,
     pub portal: AuditorPortalReadModelService,
-    pub downloads: AttachmentDownloadService,
+    pub downloads: SubmissionDownloadService,
     pub secure_cookie: bool,
 }
 
@@ -90,7 +89,7 @@ pub fn router(state: AuditorAccessState) -> Router {
         )
         .route(
             "/auditor-access/portal/{*download_path}",
-            get(download_attachment),
+            get(download_submission),
         )
         .route("/auditor-access/{workspace_id}", get(open_invite))
         .route(
@@ -481,13 +480,13 @@ async fn portal_data(
     Ok(Json(model.into()))
 }
 
-async fn download_attachment(
+async fn download_submission(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
     Path(download_path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (submission_id, attachment_id) = parse_download_path(&download_path)?;
+    let submission_id = parse_download_path(&download_path)?;
     let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
     let session = state
         .sessions
@@ -496,22 +495,18 @@ async fn download_attachment(
         .map_err(session_error)?;
     let downloaded = state
         .downloads
-        .download_for_workspace(
-            session.workspace_id,
-            submission_id.into(),
-            attachment_id.into(),
-        )
+        .download_for_workspace(session.workspace_id, submission_id.into())
         .await
         .map_err(download_error)?;
 
     AuditEvent::new(
-        "auditor_attachment.downloaded",
+        "auditor_submission.downloaded",
         AuditOutcome::Success,
         AuditActor::System {
             name: "auditor_browser",
         },
         AuditClientType::Rest,
-        "download_auditor_attachment",
+        "download_auditor_submission",
     )
     .workspace_id(Uuid::from(downloaded.audit.workspace_id))
     .request_id(request_id.0)
@@ -520,29 +515,25 @@ async fn download_attachment(
         "evidence_submission_id",
         Uuid::from(downloaded.audit.submission_id),
     )
-    .metadata(
-        "evidence_attachment_id",
-        Uuid::from(downloaded.audit.attachment_id),
-    )
     .object(AuditObject::new(
-        "evidence_attachment",
-        downloaded.audit.attachment_id.into(),
+        "evidence_submission",
+        downloaded.audit.submission_id.into(),
     ))
     .emit();
 
     let disposition =
-        crate::routes::attachment_downloads::content_disposition(&downloaded.attachment.filename);
+        crate::routes::submission_downloads::content_disposition(&downloaded.submission.filename);
     let mut response = Body::from_stream(downloaded.object.chunks).into_response();
     *response.status_mut() = StatusCode::OK;
     let headers = response.headers_mut();
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_str(&downloaded.attachment.content_type)
+        HeaderValue::from_str(&downloaded.submission.content_type)
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
         CONTENT_LENGTH,
-        HeaderValue::from_str(&downloaded.attachment.content_length.to_string())
+        HeaderValue::from_str(&downloaded.submission.content_length.to_string())
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
@@ -555,13 +546,11 @@ async fn download_attachment(
     Ok(response)
 }
 
-fn parse_download_path(path: &str) -> Result<(Uuid, Uuid), ApiError> {
+fn parse_download_path(path: &str) -> Result<Uuid, ApiError> {
     let segments = path.split('/').collect::<Vec<_>>();
     match segments.as_slice() {
-        ["evidence-submissions", submission_id, "attachments", attachment_id, "download"] => {
-            let submission_id = Uuid::parse_str(submission_id).map_err(|_| ApiError::NotFound)?;
-            let attachment_id = Uuid::parse_str(attachment_id).map_err(|_| ApiError::NotFound)?;
-            Ok((submission_id, attachment_id))
+        ["evidence-submissions", submission_id, "download"] => {
+            Uuid::parse_str(submission_id).map_err(|_| ApiError::NotFound)
         }
         _ => Err(ApiError::NotFound),
     }
@@ -721,16 +710,16 @@ fn render_requirement_row(
     let controls = controls_for_requirement(model, Uuid::from(requirement.id));
     let request_count = controls
         .iter()
-        .map(|control| control.evidence_requests.len())
+        .map(|control| control.evidence.len())
         .sum::<usize>();
     let submission_count = controls
         .iter()
-        .flat_map(|control| &control.evidence_requests)
-        .map(|request| request.submissions.len())
+        .flat_map(|control| &control.evidence)
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
     let submitted_request_count = controls
         .iter()
-        .flat_map(|control| &control.evidence_requests)
+        .flat_map(|control| &control.evidence)
         .filter(|request| !request.submissions.is_empty())
         .count();
     let (coverage, tone) = coverage_state(controls.len(), request_count, submitted_request_count);
@@ -804,14 +793,14 @@ fn render_control_row(
     requirement: &FrameworkRequirement,
     control: &AuditorPortalControl,
 ) -> String {
-    let request_count = control.evidence_requests.len();
+    let request_count = control.evidence.len();
     let submission_count = control
-        .evidence_requests
+        .evidence
         .iter()
-        .map(|request| request.submissions.len())
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
     let submitted_request_count = control
-        .evidence_requests
+        .evidence
         .iter()
         .filter(|request| !request.submissions.is_empty())
         .count();
@@ -842,19 +831,19 @@ fn render_control_page(
         .into_iter()
         .find(|control| Uuid::from(control.id) == control_id)?;
     let submission_count = control
-        .evidence_requests
+        .evidence
         .iter()
-        .map(|request| request.submissions.len())
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
-    let requests = if control.evidence_requests.is_empty() {
-        r#"<div class="empty-state"><h2>No evidence requested</h2><p>No evidence requests are mapped to this control.</p></div>"#.to_owned()
+    let evidence_sections = if control.evidence.is_empty() {
+        r#"<div class="empty-state"><h2>No evidence mapped</h2><p>No evidence is mapped to this control.</p></div>"#.to_owned()
     } else {
         control
-            .evidence_requests
+            .evidence
             .iter()
             .rev()
             .enumerate()
-            .map(|(index, request)| render_evidence_request(request, index == 0))
+            .map(|(index, evidence)| render_evidence(evidence, index == 0))
             .collect::<Vec<_>>()
             .join("")
     };
@@ -864,8 +853,8 @@ fn render_control_page(
         &format!(
             r#"{}<main class="portal" id="main-content">
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><a href="/auditor-access/portal/framework-requirements/{}">{}</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
-<header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence requests</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
-<section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence by request</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
+<header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
+<section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
 </main>"#,
             render_portal_bar(model),
             requirement_id,
@@ -874,36 +863,43 @@ fn render_control_page(
             escape_html(&control.code),
             escape_html(&control.title),
             escape_html(&control.description),
-            control.evidence_requests.len(),
+            control.evidence.len(),
             submission_count,
-            requests,
+            evidence_sections,
         ),
     ))
 }
 
-fn render_evidence_request(request: &AuditorPortalEvidenceRequest, open: bool) -> String {
-    let submissions = if request.submissions.is_empty() {
-        r#"<p class="empty compact">Awaiting submission. No evidence has been received for this request.</p>"#.to_owned()
+fn render_evidence(evidence: &AuditorPortalEvidence, open: bool) -> String {
+    let submissions = if evidence.submissions.is_empty() {
+        r#"<p class="empty compact">Awaiting submission. No evidence has been received.</p>"#
+            .to_owned()
     } else {
-        request
+        let rows = evidence
             .submissions
             .iter()
             .map(render_submission)
             .collect::<Vec<_>>()
-            .join("")
+            .join("");
+        format!(
+            r#"<table class="submission-table"><thead><tr><th>File</th><th>Received</th><th>Valid from</th><th>Valid until</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table>"#
+        )
+    };
+
+    let chip_tone = if evidence.submissions.is_empty() {
+        "status-chip gap"
+    } else {
+        "status-chip available"
     };
 
     format!(
-        r#"<details class="request-disclosure" {}><summary><span class="summary-title"><strong>{}</strong><small>{}</small></span><span class="summary-meta"><span>Due {}</span><span>{}</span><span>{} submissions</span><span class="status-chip">{}</span><span class="disclosure-action"><span class="when-closed sr-only">Expand evidence request</span><span class="when-open sr-only">Collapse evidence request</span><span class="disclosure-chevron" aria-hidden="true"></span></span></span></summary><div class="request-body"><p>{}</p><dl class="mapping"><dt>Control mapping rationale</dt><dd>{}</dd></dl><div class="submission-list">{}</div></div></details>"#,
+        r#"<details class="request-disclosure" {}><summary><span class="summary-title"><strong>{}</strong><small>{}</small></span><span class="summary-meta"><span>{} submissions</span><span class="{}">{}</span><span class="disclosure-action"><span class="when-closed sr-only">Expand evidence</span><span class="when-open sr-only">Collapse evidence</span><span class="disclosure-chevron" aria-hidden="true"></span></span></span></summary><div class="request-body"><div class="submission-list">{}</div></div></details>"#,
         if open { "open" } else { "" },
-        escape_html(&request.request.title),
-        escape_html(&request.request.description),
-        format_date(request.request.due_at),
-        escape_html(request.request.cadence.as_str()),
-        request.submissions.len(),
-        escape_html(request.request.status.as_str()),
-        escape_html(&request.request.description),
-        escape_html(&request.mapping_rationale),
+        escape_html(&evidence.evidence.title),
+        escape_html(&evidence.evidence.description),
+        evidence.submissions.len(),
+        chip_tone,
+        escape_html(evidence.evidence.status.as_str()),
         submissions,
     )
 }
@@ -932,7 +928,7 @@ fn coverage_state(
     if control_count == 0 {
         ("No controls mapped", "gap")
     } else if request_count == 0 {
-        ("No evidence requested", "gap")
+        ("No evidence mapped", "gap")
     } else if submitted_request_count < request_count {
         ("Awaiting submission", "gap")
     } else {
@@ -949,78 +945,22 @@ fn render_portal_bar(model: &AuditorPortalReadModel) -> String {
 }
 
 fn render_submission(submission: &AuditorPortalSubmission) -> String {
-    let attachments = if submission.attachments.is_empty() {
-        r#"<p class="empty compact">No attachments are available for this submission.</p>"#
-            .to_owned()
-    } else {
+    let download = if submission.download_eligible {
         format!(
-            r#"<table class="attachment-table"><caption>Evidence attachments</caption><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Checksum (SHA-256)</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
-            submission
-                .attachments
-                .iter()
-                .map(render_attachment)
-                .collect::<Vec<_>>()
-                .join("")
+            r#"<a class="button icon-button" href="/auditor-access/portal/evidence-submissions/{}/download" aria-label="Download evidence"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
+            Uuid::from(submission.submission.id),
         )
+    } else {
+        r#"<span class="unavailable">Unavailable</span>"#.to_owned()
     };
-    let summary = submission
-        .submission
-        .summary
-        .as_deref()
-        .map(|summary| format!(r#"<p>{}</p>"#, escape_html(summary)))
-        .unwrap_or_default();
-    let description = submission
-        .submission
-        .description
-        .as_deref()
-        .map(|description| format!(r#"<p class="muted">{}</p>"#, escape_html(description)))
-        .unwrap_or_default();
 
     format!(
-        r#"<article class="submission">
-<header>
-<p class="object-label">Evidence submission</p>
-<h4>Received {}</h4>
-</header>
-<dl class="details">
-<div><dt>Coverage period</dt><dd>{} to {}</dd></div>
-<div><dt>Source system</dt><dd>{}</dd></div>
-<div><dt>Collection method</dt><dd>{}</dd></div>
-</dl>
-{}
-{}
-{}
-</article>"#,
+        r#"<tr><td data-label="File">{}</td><td data-label="Received">{}</td><td data-label="Valid from">{}</td><td data-label="Valid until">{}</td><td class="download-cell" data-label="Actions">{}</td></tr>"#,
+        escape_html(&submission.submission.filename),
         format_datetime(submission.submission.received_at),
-        format_date(submission.submission.coverage_start_at),
-        format_date(submission.submission.coverage_end_at),
-        escape_html(&submission.submission.source_system),
-        escape_html(&submission.submission.collection_method),
-        summary,
-        description,
-        attachments,
-    )
-}
-
-fn render_attachment(attachment: &AuditorPortalAttachment) -> String {
-    let action = if attachment.download_eligible {
-        format!(
-            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/attachments/{}/download">Download evidence</a>"#,
-            Uuid::from(attachment.evidence_submission_id),
-            Uuid::from(attachment.id),
-        )
-    } else {
-        "Unavailable".to_owned()
-    };
-
-    format!(
-        r#"<tr><td data-label="Attachment">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td class="checksum" data-label="Checksum (SHA-256)" title="{}">{}</td><td data-label="Action">{}</td></tr>"#,
-        escape_html(&attachment.filename),
-        format_bytes(attachment.content_length),
-        escape_html(attachment.upload_status.as_str()),
-        escape_html(&attachment.checksum_sha256),
-        compact_checksum(&attachment.checksum_sha256),
-        action,
+        format_date(submission.submission.valid_from),
+        format_date(submission.submission.valid_until),
+        download,
     )
 }
 
@@ -1128,8 +1068,6 @@ dd {{ margin: 4px 0 0; }}
 .request-list {{ display: grid; gap: 14px; margin-top: 18px; }}
 .request {{ padding: 18px; background: var(--surface-raised); }}
 .request-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: start; }}
-.mapping {{ margin: 14px 0 0; }}
-.mapping dd {{ color: var(--ink); line-height: 1.5; }}
 .submissions-label {{ margin-top: 18px; }}
 .submission-list {{ display: grid; gap: 12px; margin-top: 16px; }}
 .submission {{ padding: 16px; background: var(--surface); }}
@@ -1201,6 +1139,11 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .coverage {{ display: inline-flex; align-items: center; min-height: 28px; border-radius: 4px; padding: 4px 8px; font-size: 0.8125rem; font-weight: 620; white-space: nowrap; }}
 .coverage.gap {{ background: oklch(24% 0.035 48); color: var(--signal); }}
 .coverage.available {{ background: oklch(24% 0.035 170); color: var(--accent); }}
+.coverage::before {{ content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: currentColor; }}
+.status-chip {{ display: inline-flex; align-items: center; }}
+.status-chip::before {{ content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: currentColor; }}
+.status-chip.available {{ background: oklch(24% 0.035 170); color: var(--accent); }}
+.status-chip.gap {{ background: oklch(24% 0.035 48); color: var(--signal); }}
 .pagination {{ display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-top: 24px; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }}
 .pagination div {{ display: flex; align-items: center; gap: 16px; }}
 .pagination a, .pagination div > span:first-child:last-child {{ min-height: 44px; display: inline-flex; align-items: center; color: var(--accent); text-decoration: none; }}
@@ -1230,16 +1173,15 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .disclosure-chevron {{ display: block; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 180ms cubic-bezier(.25,1,.5,1); }}
 .request-disclosure[open] .disclosure-chevron {{ transform: translateY(2px) rotate(225deg); }}
 .request-body {{ padding: 8px 16px 28px 40px; }}
-.request-body > p {{ max-width: 70ch; }}
-.mapping {{ max-width: 76ch; padding-top: 16px; border-top: 1px solid var(--line); }}
-.submission-list {{ gap: 0; margin-top: 24px; border-top: 1px solid var(--line); }}
-.submission {{ padding: 24px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }}
-.submission h4 {{ font-size: 1rem; }}
-.submission .details {{ margin-top: 14px; }}
-.attachment-table {{ margin-top: 20px; }}
-.attachment-table th {{ background: oklch(19% 0.013 170); }}
-.checksum {{ font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: 0.8125rem; font-variant-ligatures: none; }}
-.attachment-table .button {{ min-height: 40px; white-space: nowrap; }}
+.submission-list {{ margin-top: 8px; }}
+.submission-table {{ margin-top: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }}
+.submission-table th {{ background: oklch(19% 0.013 170); padding: 11px 14px; font-size: 0.75rem; }}
+.submission-table td {{ padding: 9px 14px; font-size: 0.9375rem; }}
+.submission-table .download-cell {{ width: 56px; text-align: right; }}
+.submission-table .unavailable {{ color: var(--muted); font-size: 0.8125rem; }}
+.icon-button {{ display: inline-grid; width: 40px; height: 40px; place-items: center; padding: 0; background: transparent; color: var(--muted); border-radius: 6px; transition: background-color 160ms ease-out, color 160ms ease-out; }}
+.icon-button svg {{ width: 18px; height: 18px; stroke: currentColor; }}
+.icon-button:hover {{ background: var(--surface-raised); color: var(--ink); }}
 .empty-state {{ padding: 40px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
 .empty-state h2 {{ font-size: 1.25rem; }}
 
@@ -1281,7 +1223,7 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
   .context-panel dl {{ grid-template-columns: 1fr; }}
   .request-disclosure summary {{ padding-left: 28px; }}
   .request-body {{ padding-left: 12px; padding-right: 12px; }}
-  .attachment-table tr {{ display: block; padding: 16px 0; }}
+  .submission-table tr {{ display: block; padding: 16px 0; }}
 }}
 
 @media (prefers-reduced-motion: reduce) {{
@@ -1324,40 +1266,12 @@ fn notice(message: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn format_bytes(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = 1024 * KB;
-    if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn format_date(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d").to_string()
 }
 
 fn format_datetime(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M UTC").to_string()
-}
-
-fn compact_checksum(checksum: &str) -> String {
-    if checksum.chars().count() <= 20 {
-        return escape_html(checksum);
-    }
-    let prefix = checksum.chars().take(12).collect::<String>();
-    let suffix = checksum
-        .chars()
-        .rev()
-        .take(6)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    format!("{}…{}", escape_html(&prefix), escape_html(&suffix))
 }
 
 fn escape_html(value: &str) -> String {
@@ -1457,11 +1371,11 @@ fn download_error(error: DownloadError) -> ApiError {
     match error {
         DownloadError::NotFound | DownloadError::NotReady => ApiError::NotFound,
         DownloadError::MetadataMismatch | DownloadError::Internal => {
-            tracing::error!(%error, "auditor attachment download failed");
+            tracing::error!(%error, "auditor submission download failed");
             ApiError::Internal
         }
         DownloadError::Repository(repository_error) => {
-            tracing::error!(error = %repository_error, "auditor attachment download repository failure");
+            tracing::error!(error = %repository_error, "auditor submission download repository failure");
             ApiError::Internal
         }
     }
@@ -1497,7 +1411,7 @@ struct AuditorPortalControlResponse {
     title: String,
     description: String,
     framework_requirements: Vec<FrameworkRequirementResponse>,
-    evidence_requests: Vec<AuditorPortalEvidenceRequestResponse>,
+    evidence: Vec<AuditorPortalEvidenceResponse>,
 }
 
 impl From<AuditorPortalControl> for AuditorPortalControlResponse {
@@ -1512,11 +1426,7 @@ impl From<AuditorPortalControl> for AuditorPortalControlResponse {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            evidence_requests: control
-                .evidence_requests
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            evidence: control.evidence.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1547,101 +1457,83 @@ impl From<FrameworkRequirement> for FrameworkRequirementResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct AuditorPortalEvidenceRequestResponse {
+struct AuditorPortalEvidenceResponse {
     mapping_rationale: String,
     mapping_created_at: DateTime<Utc>,
-    request: EvidenceRequestResponse,
+    evidence: EvidenceResponse,
     submissions: Vec<AuditorPortalSubmissionResponse>,
 }
 
-impl From<AuditorPortalEvidenceRequest> for AuditorPortalEvidenceRequestResponse {
-    fn from(request: AuditorPortalEvidenceRequest) -> Self {
+impl From<AuditorPortalEvidence> for AuditorPortalEvidenceResponse {
+    fn from(evidence: AuditorPortalEvidence) -> Self {
         Self {
-            mapping_rationale: request.mapping_rationale,
-            mapping_created_at: request.mapping_created_at,
-            request: request.request.into(),
-            submissions: request.submissions.into_iter().map(Into::into).collect(),
+            mapping_rationale: evidence.mapping_rationale,
+            mapping_created_at: evidence.mapping_created_at,
+            evidence: evidence.evidence.into(),
+            submissions: evidence.submissions.into_iter().map(Into::into).collect(),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceRequestResponse {
+struct EvidenceResponse {
     id: Uuid,
     title: String,
     description: String,
     collection_instructions: String,
-    cadence: &'static str,
-    due_at: DateTime<Utc>,
-    schedule_anchor_at: DateTime<Utc>,
-    freshness_window_days: Option<i32>,
     status: &'static str,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl From<EvidenceRequest> for EvidenceRequestResponse {
-    fn from(request: EvidenceRequest) -> Self {
+impl From<Evidence> for EvidenceResponse {
+    fn from(evidence: Evidence) -> Self {
         Self {
-            id: Uuid::from(request.id),
-            title: request.title,
-            description: request.description,
-            collection_instructions: request.collection_instructions,
-            cadence: request.cadence.as_str(),
-            due_at: request.due_at,
-            schedule_anchor_at: request.schedule_anchor_at,
-            freshness_window_days: request.freshness_window_days,
-            status: request.status.as_str(),
-            created_at: request.created_at,
-            updated_at: request.updated_at,
+            id: Uuid::from(evidence.id),
+            title: evidence.title,
+            description: evidence.description,
+            collection_instructions: evidence.collection_instructions,
+            status: evidence.status.as_str(),
+            created_at: evidence.created_at,
+            updated_at: evidence.updated_at,
         }
     }
 }
 
 #[derive(Debug, Serialize)]
 struct AuditorPortalSubmissionResponse {
-    submission: EvidenceSubmissionResponse,
-    attachments: Vec<AuditorPortalAttachmentResponse>,
+    id: Uuid,
+    evidence_id: Uuid,
+    submitted_by: EvidenceSubmitterResponse,
+    received_at: DateTime<Utc>,
+    valid_from: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
+    filename: String,
+    content_type: String,
+    content_length: i64,
+    checksum_sha256: String,
+    checksum_crc32c: String,
+    upload_status: &'static str,
+    download_eligible: bool,
 }
 
 impl From<AuditorPortalSubmission> for AuditorPortalSubmissionResponse {
-    fn from(submission: AuditorPortalSubmission) -> Self {
-        Self {
-            submission: submission.submission.into(),
-            attachments: submission.attachments.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct EvidenceSubmissionResponse {
-    id: Uuid,
-    evidence_request_id: Uuid,
-    submitted_by: EvidenceSubmitterResponse,
-    received_at: DateTime<Utc>,
-    coverage_start_at: DateTime<Utc>,
-    coverage_end_at: DateTime<Utc>,
-    source_system: String,
-    collection_method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
-impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
-    fn from(submission: EvidenceSubmission) -> Self {
+    fn from(entry: AuditorPortalSubmission) -> Self {
+        let submission = entry.submission;
         Self {
             id: Uuid::from(submission.id),
-            evidence_request_id: Uuid::from(submission.evidence_request_id),
+            evidence_id: Uuid::from(submission.evidence_id),
             submitted_by: EvidenceSubmitterResponse::from(submission.submitted_by),
             received_at: submission.received_at,
-            coverage_start_at: submission.coverage_start_at,
-            coverage_end_at: submission.coverage_end_at,
-            source_system: submission.source_system,
-            collection_method: submission.collection_method,
-            summary: submission.summary,
-            description: submission.description,
+            valid_from: submission.valid_from,
+            valid_until: submission.valid_until,
+            filename: submission.filename,
+            content_type: submission.content_type,
+            content_length: submission.content_length,
+            checksum_sha256: submission.checksum_sha256,
+            checksum_crc32c: submission.checksum_crc32c,
+            upload_status: submission.upload_status.as_str(),
+            download_eligible: entry.download_eligible,
         }
     }
 }
@@ -1657,35 +1549,6 @@ impl From<crate::domain::EvidenceSubmitter> for EvidenceSubmitterResponse {
         Self {
             agent_connection_id: submitter.agent_connection_id().map(Uuid::from),
             user_id: Uuid::from(submitter.user_id()),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct AuditorPortalAttachmentResponse {
-    id: Uuid,
-    evidence_submission_id: Uuid,
-    filename: String,
-    content_type: String,
-    content_length: i64,
-    checksum_sha256: String,
-    checksum_crc32c: String,
-    upload_status: &'static str,
-    download_eligible: bool,
-}
-
-impl From<AuditorPortalAttachment> for AuditorPortalAttachmentResponse {
-    fn from(attachment: AuditorPortalAttachment) -> Self {
-        Self {
-            id: Uuid::from(attachment.id),
-            evidence_submission_id: Uuid::from(attachment.evidence_submission_id),
-            filename: attachment.filename,
-            content_type: attachment.content_type,
-            content_length: attachment.content_length,
-            checksum_sha256: attachment.checksum_sha256,
-            checksum_crc32c: attachment.checksum_crc32c,
-            upload_status: attachment.upload_status.as_str(),
-            download_eligible: attachment.download_eligible,
         }
     }
 }

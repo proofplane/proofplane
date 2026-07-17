@@ -5,7 +5,7 @@ pub(crate) struct GuideTopic {
     pub markdown: &'static str,
 }
 
-pub(crate) const TOPICS: [GuideTopic; 5] = [
+pub(crate) const TOPICS: [GuideTopic; 4] = [
     GuideTopic {
         topic: "glossary",
         title: "Proofplane Glossary",
@@ -20,11 +20,6 @@ pub(crate) const TOPICS: [GuideTopic; 5] = [
         topic: "controls-and-mappings",
         title: "Controls and Mappings",
         markdown: include_str!("controls-and-mappings.md"),
-    },
-    GuideTopic {
-        topic: "attachments",
-        title: "Attachments",
-        markdown: include_str!("attachments.md"),
     },
     GuideTopic {
         topic: "errors-and-not-found",
@@ -56,7 +51,6 @@ mod tests {
                 ("glossary", "Proofplane Glossary"),
                 ("submitting-evidence", "Submitting Evidence"),
                 ("controls-and-mappings", "Controls and Mappings"),
-                ("attachments", "Attachments"),
                 ("errors-and-not-found", "Errors and Not Found"),
             ]
         );

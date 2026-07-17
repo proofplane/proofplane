@@ -6,209 +6,114 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
-        required_timestamp, required_uuid, service_error,
+        argument_errors, authorize_token_workspace, format_datetime, not_found, required_uuid,
+        service_error,
     },
-    evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest},
+    evidence::{parse_evidence_args, EvidenceArgs},
     ProofplaneMcp,
 };
 use crate::{
-    domain::{
-        optional_text, required_text, CreateEvidenceSubmissionPayload, DomainError,
-        EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId, WorkspacePermission,
-    },
-    observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    domain::{EvidenceSubmission, EvidenceSubmissionId, EvidenceSubmitter, WorkspacePermission},
     validate,
-    validation::Validation,
 };
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
 #[tool_router(router = evidence_submissions_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
     #[tool(
-        name = "create_evidence_submission",
-        description = "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence."
-    )]
-    async fn create_evidence_submission(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<CreateEvidenceSubmissionRequest>,
-    ) -> Result<Json<CreateEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let (evidence_request_id, payload) = parse_create_submission_request(args)?;
-        let context =
-            authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
-        let workspace_id = context.connection.workspace_id;
-        let submission = self
-            .evidence_submissions
-            .create(
-                context.agent_connection_context(),
-                evidence_request_id,
-                payload,
-            )
-            .await
-            .map_err(service_error)?
-            .ok_or_else(not_found)?;
-
-        AuditEvent::new(
-            "evidence_submission.created",
-            AuditOutcome::Success,
-            context.audit_actor(),
-            AuditClientType::Mcp,
-            "create_evidence_submission",
-        )
-        .workspace_id(workspace_id.into())
-        .request_id(context.request_id.0)
-        .metadata("evidence_request_id", Uuid::from(evidence_request_id))
-        .metadata("evidence_submission_id", Uuid::from(submission.id))
-        .object(AuditObject::new(
-            "evidence_submission",
-            submission.id.into(),
-        ))
-        .emit();
-
-        Ok(Json(CreateEvidenceSubmissionResponse::new(
-            workspace_id,
-            submission,
-        )))
-    }
-
-    #[tool(
         name = "get_evidence_submission",
-        description = "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Get one evidence submission with its file metadata, coverage window, provenance, and upload status by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_evidence_submission(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<GetEvidenceSubmissionRequest>,
+        Parameters(args): Parameters<GetEvidenceSubmissionArgs>,
     ) -> Result<Json<GetEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let submission_id = parse_evidence_submission_request(args)?;
+        let submission_id = parse_evidence_submission_args(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
-        let detail = self
+        let submission = self
             .evidence_submissions
             .get(context.agent_connection_context(), submission_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
 
-        Ok(Json(GetEvidenceSubmissionResponse::from_detail(
-            detail,
-            SubmissionDetailMode::Direct,
-        )))
+        Ok(Json(GetEvidenceSubmissionResponse {
+            submission: submission.into(),
+        }))
     }
 
     #[tool(
-        name = "get_latest_evidence_submission",
-        description = "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        name = "list_evidence_submissions",
+        description = "List the submissions filed for one piece of evidence, newest first, with coverage windows and upload status; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
-    async fn get_latest_evidence_submission(
+    async fn list_evidence_submissions(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<EvidenceRequestRequest>,
-    ) -> Result<Json<GetEvidenceSubmissionResponse>, rmcp::ErrorData> {
-        let evidence_request_id = parse_evidence_request_request(args)?;
+        Parameters(args): Parameters<EvidenceArgs>,
+    ) -> Result<Json<ListEvidenceSubmissionsResponse>, rmcp::ErrorData> {
+        let evidence_id = parse_evidence_args(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
-        let detail = self
+        let submissions = self
             .evidence_submissions
-            .latest_for_request(context.agent_connection_context(), evidence_request_id)
+            .list_for_evidence(context.agent_connection_context(), evidence_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
 
-        Ok(Json(GetEvidenceSubmissionResponse::from_detail(
-            detail,
-            SubmissionDetailMode::Latest,
-        )))
+        Ok(Json(ListEvidenceSubmissionsResponse {
+            submissions: submissions.into_iter().map(Into::into).collect(),
+        }))
     }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct CreateEvidenceSubmissionRequest {
-    evidence_request_id: Option<String>,
-    coverage_start_at: Option<String>,
-    coverage_end_at: Option<String>,
-    source_system: Option<String>,
-    collection_method: Option<String>,
-    summary: Option<String>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct GetEvidenceSubmissionRequest {
+pub(super) struct GetEvidenceSubmissionArgs {
     pub(super) submission_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-struct CreateEvidenceSubmissionResponse {
-    submission_id: String,
-    evidence_request_id: String,
-}
-
-impl CreateEvidenceSubmissionResponse {
-    fn new(_workspace_id: WorkspaceId, submission: EvidenceSubmission) -> Self {
-        Self {
-            submission_id: submission.id.to_string(),
-            evidence_request_id: submission.evidence_request_id.to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct GetEvidenceSubmissionResponse {
     submission: EvidenceSubmissionResponseDTO,
-    attachments: Vec<EvidenceAttachmentResponseDTO>,
 }
 
-enum SubmissionDetailMode {
-    Direct,
-    Latest,
-}
-
-impl GetEvidenceSubmissionResponse {
-    fn from_detail(detail: EvidenceSubmissionDetail, mode: SubmissionDetailMode) -> Self {
-        Self {
-            submission: EvidenceSubmissionResponseDTO::from_submission(detail.submission, mode),
-            attachments: detail.attachments.into_iter().map(Into::into).collect(),
-        }
-    }
+#[derive(Debug, Serialize, JsonSchema)]
+struct ListEvidenceSubmissionsResponse {
+    submissions: Vec<EvidenceSubmissionResponseDTO>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct EvidenceSubmissionResponseDTO {
     id: String,
-    evidence_request_id: String,
+    evidence_id: String,
     submitted_by: EvidenceSubmitterResponseDTO,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    received_at: Option<String>,
-    coverage_start_at: String,
-    coverage_end_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_system: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    collection_method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    received_at: String,
+    valid_from: String,
+    valid_until: String,
+    filename: String,
+    content_type: String,
+    content_length: i64,
+    checksum_sha256: String,
+    checksum_crc32c: String,
+    upload_status: &'static str,
 }
 
-impl EvidenceSubmissionResponseDTO {
-    fn from_submission(submission: EvidenceSubmission, mode: SubmissionDetailMode) -> Self {
-        let direct = matches!(mode, SubmissionDetailMode::Direct);
+impl From<EvidenceSubmission> for EvidenceSubmissionResponseDTO {
+    fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: submission.id.to_string(),
-            evidence_request_id: submission.evidence_request_id.to_string(),
+            evidence_id: submission.evidence_id.to_string(),
             submitted_by: EvidenceSubmitterResponseDTO::from(submission.submitted_by),
-            received_at: direct.then_some(format_datetime(submission.received_at)),
-            coverage_start_at: format_datetime(submission.coverage_start_at),
-            coverage_end_at: format_datetime(submission.coverage_end_at),
-            source_system: direct.then_some(submission.source_system),
-            collection_method: direct.then_some(submission.collection_method),
-            summary: submission.summary,
-            description: direct.then_some(submission.description).flatten(),
+            received_at: format_datetime(submission.received_at),
+            valid_from: format_datetime(submission.valid_from),
+            valid_until: format_datetime(submission.valid_until),
+            filename: submission.filename,
+            content_type: submission.content_type,
+            content_length: submission.content_length,
+            checksum_sha256: submission.checksum_sha256,
+            checksum_crc32c: submission.checksum_crc32c,
+            upload_status: submission.upload_status.as_str(),
         }
     }
 }
@@ -228,35 +133,8 @@ impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
     }
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
-struct EvidenceAttachmentResponseDTO {
-    id: String,
-    evidence_submission_id: String,
-    filename: String,
-    content_type: String,
-    content_length: i64,
-    checksum_sha256: String,
-    checksum_crc32c: String,
-    upload_status: &'static str,
-}
-
-impl From<EvidenceAttachment> for EvidenceAttachmentResponseDTO {
-    fn from(attachment: EvidenceAttachment) -> Self {
-        Self {
-            id: attachment.id.to_string(),
-            evidence_submission_id: attachment.evidence_submission_id.to_string(),
-            filename: attachment.filename,
-            content_type: attachment.content_type,
-            content_length: attachment.content_length,
-            checksum_sha256: attachment.checksum_sha256,
-            checksum_crc32c: attachment.checksum_crc32c,
-            upload_status: attachment.upload_status.as_str(),
-        }
-    }
-}
-
-pub(super) fn parse_evidence_submission_request(
-    args: GetEvidenceSubmissionRequest,
+pub(super) fn parse_evidence_submission_args(
+    args: GetEvidenceSubmissionArgs,
 ) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
     validate! {
         submission_id <- required_uuid("submission_id", args.submission_id)
@@ -267,51 +145,45 @@ pub(super) fn parse_evidence_submission_request(
     .map_err(argument_errors)
 }
 
-fn parse_create_submission_request(
-    args: CreateEvidenceSubmissionRequest,
-) -> Result<(EvidenceRequestId, CreateEvidenceSubmissionPayload), rmcp::ErrorData> {
-    let (evidence_request_id, coverage_start_at, coverage_end_at) = validate! {
-        evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
-            .map(EvidenceRequestId::from),
-        coverage_start_at <- required_timestamp("coverage_start_at", args.coverage_start_at),
-        coverage_end_at <- required_timestamp("coverage_end_at", args.coverage_end_at),
-        => (evidence_request_id, coverage_start_at, coverage_end_at),
-    }
-    .into_result()
-    .map_err(argument_errors)?;
+#[cfg(test)]
+mod tests {
+    use rmcp::model::ErrorCode;
 
-    let payload = validate! {
-        source_system <- required_text("source_system", args.source_system.unwrap_or_default()),
-        collection_method <- required_text(
-            "collection_method",
-            args.collection_method.unwrap_or_default()
-        ),
-        summary <- optional_text("summary", args.summary, 500),
-        description <- optional_text("description", args.description, 4_000),
-        coverage_window <- validate_coverage_window(coverage_start_at, coverage_end_at),
-        => CreateEvidenceSubmissionPayload {
-            evidence_request_id,
-            coverage_start_at: coverage_window.0,
-            coverage_end_at: coverage_window.1,
-            source_system,
-            collection_method,
-            summary,
-            description,
-        },
-    }
-    .into_result()
-    .map_err(domain_errors)?;
+    use super::{parse_evidence_submission_args, GetEvidenceSubmissionArgs};
 
-    Ok((evidence_request_id, payload))
-}
-
-fn validate_coverage_window(
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> Validation<(DateTime<Utc>, DateTime<Utc>), DomainError> {
-    if end < start {
-        return Validation::invalid(DomainError::InvalidCoverageWindow);
+    fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
+        error.data.as_ref().expect("error data")["problem"]["field_issues"]
+            .as_array()
+            .expect("field issues")
+            .iter()
+            .map(|issue| {
+                (
+                    issue["field"].as_str().expect("field").to_owned(),
+                    issue["message"].as_str().expect("message").to_owned(),
+                )
+            })
+            .collect()
     }
 
-    Validation::valid((start, end))
+    #[test]
+    fn submission_args_require_a_uuid() {
+        let missing = parse_evidence_submission_args(GetEvidenceSubmissionArgs {
+            submission_id: None,
+        })
+        .expect_err("missing submission");
+        assert_eq!(missing.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            field_issues(&missing),
+            [("submission_id".to_owned(), "is required".to_owned())]
+        );
+
+        let invalid = parse_evidence_submission_args(GetEvidenceSubmissionArgs {
+            submission_id: Some("nope".to_owned()),
+        })
+        .expect_err("invalid submission");
+        assert_eq!(
+            field_issues(&invalid),
+            [("submission_id".to_owned(), "must be a UUID".to_owned())]
+        );
+    }
 }

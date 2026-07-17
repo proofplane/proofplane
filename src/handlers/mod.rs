@@ -1,2 +1,2 @@
-pub mod attachment_finalization;
-pub mod attachment_scan;
+pub mod submission_finalization;
+pub mod submission_scan;

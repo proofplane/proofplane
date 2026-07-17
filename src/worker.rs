@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 use crate::{
     handlers::{
-        attachment_finalization::AttachmentFinalizationHandler,
-        attachment_scan::AttachmentScanHandler,
+        submission_finalization::SubmissionFinalizationHandler,
+        submission_scan::SubmissionScanHandler,
     },
     object_storage::FilesystemObjectStore,
     repository::Postgres,
@@ -36,8 +36,8 @@ use crate::{
 
 // TODO: create a more robust pubsub library that has the message types in
 // one place
-pub const ATTACHMENT_SCAN_REQUESTED: &str = "attachment.scan_requested";
-pub const ATTACHMENT_FINALIZATION_REQUESTED: &str = "attachment.finalization_requested";
+pub const SUBMISSION_SCAN_REQUESTED: &str = "submission.scan_requested";
+pub const SUBMISSION_FINALIZATION_REQUESTED: &str = "submission.finalization_requested";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMessage {
@@ -90,8 +90,8 @@ pub struct WorkerAppDependencies {
 
 #[derive(Clone)]
 pub struct WorkerState {
-    attachment_scan_handler: AttachmentScanHandler,
-    attachment_finalization_handler: AttachmentFinalizationHandler<FilesystemObjectStore>,
+    submission_scan_handler: SubmissionScanHandler,
+    submission_finalization_handler: SubmissionFinalizationHandler<FilesystemObjectStore>,
 }
 
 impl WorkerState {
@@ -102,13 +102,13 @@ impl WorkerState {
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {
-            attachment_scan_handler: AttachmentScanHandler::new(
+            submission_scan_handler: SubmissionScanHandler::new(
                 postgres.clone(),
                 object_store.clone(),
                 scanner,
                 worker_max_delivery_attempts,
             ),
-            attachment_finalization_handler: AttachmentFinalizationHandler::new(
+            submission_finalization_handler: SubmissionFinalizationHandler::new(
                 postgres,
                 object_store,
             ),
@@ -214,9 +214,9 @@ async fn pubsub_message(State(state): State<WorkerState>, body: Bytes) -> Status
 
 pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode {
     match message.event_type.as_str() {
-        ATTACHMENT_SCAN_REQUESTED => {
+        SUBMISSION_SCAN_REQUESTED => {
             let result = state
-                .attachment_scan_handler
+                .submission_scan_handler
                 .handle_scan_requested(message)
                 .await;
 
@@ -228,9 +228,9 @@ pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode 
                 }
             }
         }
-        ATTACHMENT_FINALIZATION_REQUESTED => {
+        SUBMISSION_FINALIZATION_REQUESTED => {
             let result = state
-                .attachment_finalization_handler
+                .submission_finalization_handler
                 .handle_finalization_requested(message)
                 .await;
 
@@ -367,13 +367,13 @@ mod tests {
 
     #[test]
     fn decodes_valid_push_envelope_into_worker_message() {
-        let message = decode_worker_message(&valid_envelope("attachment.scan_requested"))
+        let message = decode_worker_message(&valid_envelope("submission.scan_requested"))
             .expect("worker message decodes");
 
         assert_eq!(message.message_id, "message-1");
-        assert_eq!(message.event_type, "attachment.scan_requested");
-        assert_eq!(message.aggregate_type, "evidence_attachment");
-        assert_eq!(message.aggregate_id, "attachment-1");
+        assert_eq!(message.event_type, "submission.scan_requested");
+        assert_eq!(message.aggregate_type, "evidence_submission");
+        assert_eq!(message.aggregate_id, "submission-1");
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
         assert_eq!(message.request_id, Some(request_id()));
         assert_eq!(message.delivery_attempt, Some(2));
@@ -386,9 +386,9 @@ mod tests {
                 "messageId": "message-1",
                 "data": STANDARD.encode(
                     json!({
-                        "event_type": "attachment.scan_requested",
-                        "aggregate_type": "evidence_attachment",
-                        "aggregate_id": "attachment-1",
+                        "event_type": "submission.scan_requested",
+                        "aggregate_type": "evidence_submission",
+                        "aggregate_id": "submission-1",
                         "request_id": request_id(),
                         "payload": { "scan_id": "scan-1" }
                     })
@@ -407,9 +407,9 @@ mod tests {
             decode_worker_message(envelope.to_string().as_bytes()).expect("worker message decodes");
 
         assert_eq!(message.message_id, "message-1");
-        assert_eq!(message.event_type, "attachment.scan_requested");
-        assert_eq!(message.aggregate_type, "evidence_attachment");
-        assert_eq!(message.aggregate_id, "attachment-1");
+        assert_eq!(message.event_type, "submission.scan_requested");
+        assert_eq!(message.aggregate_type, "evidence_submission");
+        assert_eq!(message.aggregate_id, "submission-1");
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
         assert_eq!(message.request_id, Some(request_id()));
     }
@@ -418,9 +418,9 @@ mod tests {
     fn decodes_missing_and_null_request_ids() {
         for request_id_value in [None, Some(Value::Null)] {
             let mut data = json!({
-                "event_type": "attachment.scan_requested",
-                "aggregate_type": "evidence_attachment",
-                "aggregate_id": "attachment-1",
+                "event_type": "submission.scan_requested",
+                "aggregate_type": "evidence_submission",
+                "aggregate_id": "submission-1",
                 "payload": { "scan_id": "scan-1" }
             });
             if let Some(request_id_value) = request_id_value {
@@ -437,9 +437,9 @@ mod tests {
     #[test]
     fn rejects_non_uuid_request_id() {
         let data = json!({
-            "event_type": "attachment.scan_requested",
-            "aggregate_type": "evidence_attachment",
-            "aggregate_id": "attachment-1",
+            "event_type": "submission.scan_requested",
+            "aggregate_type": "evidence_submission",
+            "aggregate_id": "submission-1",
             "request_id": "not-a-uuid",
             "payload": { "scan_id": "scan-1" }
         });
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn rejects_invalid_base64_payload() {
         assert_eq!(
-            decode_worker_message(br#"{"message":{"messageId":"message-1","data":"%%","attributes":{"event_type":"attachment.scan_requested","aggregate_type":"evidence_attachment","aggregate_id":"attachment-1"}}}"#)
+            decode_worker_message(br#"{"message":{"messageId":"message-1","data":"%%","attributes":{"event_type":"submission.scan_requested","aggregate_type":"evidence_submission","aggregate_id":"submission-1"}}}"#)
                 .expect_err("base64 is invalid"),
             WorkerMessageDecodeError::InvalidBase64
         );
@@ -509,8 +509,8 @@ mod tests {
     fn valid_envelope(event_type: &str) -> Vec<u8> {
         envelope_with_data(json!({
             "event_type": event_type,
-            "aggregate_type": "evidence_attachment",
-            "aggregate_id": "attachment-1",
+            "aggregate_type": "evidence_submission",
+            "aggregate_id": "submission-1",
             "request_id": request_id(),
             "payload": { "scan_id": "scan-1" }
         }))

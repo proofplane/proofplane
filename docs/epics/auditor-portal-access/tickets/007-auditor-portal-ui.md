@@ -10,18 +10,18 @@ server-rendered HTML from the Rust API instead of a separate frontend app.
 - [x] Given an invite link, when opened, then the auditor can request and submit
   an OTP for the intended email.
 - [x] Given a valid session, when the portal opens, then it shows controls,
-  mapped requests, submissions, attachment states, and eligible download
+  mapped requests, submissions, submission states, and eligible download
   actions.
 - [x] Given an expired, revoked, missing, or invalid session, when the portal
   opens, then it shows a recovery path without leaking workspace data.
-- [x] Given unavailable attachments, when displayed, then their state is clear
+- [x] Given unavailable submissions, when displayed, then their state is clear
   and no download link is shown.
 
 **Tasks**
 
 - [x] Add simple server-rendered HTML pages and minimal CSS.
-- [x] Add OTP, expired/revoked, portal, and attachment unavailable states.
-- [x] Add download links only for eligible attachments.
+- [x] Add OTP, expired/revoked, portal, and submission unavailable states.
+- [x] Add download links only for eligible submissions.
 - [x] Add keyboard and screen-reader friendly labels.
 - [x] Add HTTP integration tests for the main browser flows.
 

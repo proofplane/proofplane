@@ -247,9 +247,8 @@ mod tests {
         let workspace_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
-        let evidence_request_id = Uuid::new_v4();
+        let evidence_id = Uuid::new_v4();
         let evidence_submission_id = Uuid::new_v4();
-        let evidence_attachment_id = Uuid::new_v4();
         let object_id = Uuid::new_v4();
 
         let record = capture(|| {
@@ -266,9 +265,8 @@ mod tests {
             .workspace_id(workspace_id)
             .request_id(request_id)
             .session_id(session_id)
-            .metadata("evidence_request_id", evidence_request_id)
+            .metadata("evidence_id", evidence_id)
             .metadata("evidence_submission_id", evidence_submission_id)
-            .metadata("evidence_attachment_id", evidence_attachment_id)
             .metadata("lifecycle_status", "uploaded")
             .object(AuditObject::new("evidence_submission", object_id))
             .emit();
@@ -295,28 +293,20 @@ mod tests {
         assert_eq!(
             fields["metadata"],
             format!(
-                r#"{{"evidence_attachment_id":"{}","evidence_request_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
-                evidence_attachment_id, evidence_request_id, evidence_submission_id
+                r#"{{"evidence_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
+                evidence_id, evidence_submission_id
             )
         );
         let metadata: serde_json::Value =
             serde_json::from_str(fields["metadata"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            metadata["evidence_request_id"],
-            evidence_request_id.to_string()
-        );
+        assert_eq!(metadata["evidence_id"], evidence_id.to_string());
         assert_eq!(
             metadata["evidence_submission_id"],
             evidence_submission_id.to_string()
         );
-        assert_eq!(
-            metadata["evidence_attachment_id"],
-            evidence_attachment_id.to_string()
-        );
         assert_eq!(metadata["lifecycle_status"], "uploaded");
-        assert!(fields.get("evidence_request_id").is_none());
+        assert!(fields.get("evidence_id").is_none());
         assert!(fields.get("evidence_submission_id").is_none());
-        assert!(fields.get("evidence_attachment_id").is_none());
         assert!(fields.get("lifecycle_status").is_none());
         assert_eq!(fields["object_type"], "evidence_submission");
         assert_eq!(fields["object_id"], object_id.to_string());

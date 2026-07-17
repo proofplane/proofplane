@@ -11,14 +11,14 @@ The MVP has two release boundaries:
   and `ppat_` API tokens were removed in PR #42 — see the [Agent Connector
   Onboarding](./agent-connector-onboarding/spec.md) 2026-07-09 decision banner.
   MCP is now the sole compliance data interface; REST remains only for
-  control-plane routes: auth, `me`, workspaces, OAuth, and browser attachment
+  control-plane routes: auth, `me`, workspaces, OAuth, and browser submission
   flows.)_
 - **Launch MVP:** the backend MVP plus auditor portal access, self-serve
   sandbox, first-run product experience, public pricing, and launch operations.
 
-Native submission approval remains deferred. Trust is explicit: attachments
+Native submission approval remains deferred. Trust is explicit: submissions
 must be malware-scanned and finalized, submission summaries retain actor
-provenance, and freshness is derived from submitted evidence.
+provenance, and coverage is stated by each submission.
 
 ## Current Reality
 
@@ -40,9 +40,9 @@ provenance, and freshness is derived from submitted evidence.
 | API Token And PASETO Migration _(archived)_ | Done | Delivered compact workspace-scoped API tokens and encrypted PASETO download grants. Folder removed in commit a36b836; the `ppat_` API-token half was later removed entirely in PR #42, leaving the PASETO/download-grant work. |
 | Evidence Lifecycle Completion _(archived)_ | Done | Evidence can be queried, safely downloaded, and demonstrated end to end. Folder removed in commit a36b836. |
 | [Production Runtime Adapters](./production-runtime-adapters/README.md) | Todo | GCS and production Google Pub/Sub work without emulator-only assumptions. |
-| [Auditor Portal Access](./auditor-portal-access/README.md) | Todo | Auditors review workspace controls, evidence, and eligible attachments through secure browser links. |
+| [Auditor Portal Access](./auditor-portal-access/README.md) | Todo | Auditors review workspace controls, evidence, and eligible submissions through secure browser links. |
 | [MCP Server](./mcp-server/README.md) | Doing | MCP is now the sole compliance data-plane. Runtime, read tools, and write tools (001–003) are Done; only logging/equivalence (005) remains, and its REST-parity framing needs reworking since REST was removed. |
-| [MCP Attachment Management](./mcp-attachment-upload/README.md) | Todo | Agents hand humans scoped attachment-management links without moving attachment bytes through MCP. |
+| [MCP Submission Management](./mcp-submission-upload/README.md) | Todo | Agents hand humans scoped submission-management links without moving submission bytes through MCP. |
 | [Agent Connector Onboarding](./agent-connector-onboarding/README.md) | Doing | OAuth facade + working Codex connection shipped (tickets 001–004, 007 Done in PR #42). Remaining: guided UI (005), Claude/Cowork (006), generic clients (008). |
 | [MCP Agent Guidance](./mcp-agent-guidance/README.md) | Todo | Teach connecting agents how to use Proofplane via server instructions, richer tool descriptions, and on-demand depth docs (guide tool + resources). |
 | [Reliability and Observability](./reliability-observability/README.md) | Todo | Dependency failures and runtime behavior are visible and tested. |
@@ -54,7 +54,7 @@ provenance, and freshness is derived from submitted evidence.
    complete foundations.
 2. Build the MCP runtime and core evidence/control tools while the shared audit
    contract and evidence audit events land; this produces the core MCP demo.
-   Add MCP Attachment Management when the demo needs human attachment management
+   Add MCP Submission Management when the demo needs human submission management
    without sending bytes through MCP.
 3. Build production adapters independently of the core MCP demo milestone.
 4. Build Auditor Portal Access after the evidence lifecycle and MCP foundations
@@ -78,7 +78,7 @@ provenance, and freshness is derived from submitted evidence.
 - Production configuration supports Postgres, Google Pub/Sub, GCS,
   Auth0, and ClamAV without local emulator requirements.
 - An OAuth-connected agent can submit evidence, retrieve only finalized
-  attachments, inspect summarized evidence, and perform the supported MCP
+  submissions, inspect summarized evidence, and perform the supported MCP
   workflows. (Previously scoped to user-owned API tokens; `ppat_` was removed
   in PR #42 and MCP OAuth connections are the sole credential.)
 - Structured audit logs use the stable identifier-only field contract and cover

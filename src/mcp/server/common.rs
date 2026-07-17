@@ -169,13 +169,8 @@ impl From<DomainError> for FieldIssue {
                 message: format!("{field} must be at most {maximum} characters"),
             },
             DomainError::InvalidCoverageWindow => Self {
-                field: "coverage_end_at",
-                message: "coverage_end_at must be greater than or equal to coverage_start_at"
-                    .to_owned(),
-            },
-            DomainError::InvalidFreshnessWindowDays => Self {
-                field: "freshness_window_days",
-                message: "freshness_window_days must be positive".to_owned(),
+                field: "valid_until",
+                message: "valid_until must be greater than or equal to valid_from".to_owned(),
             },
             DomainError::DuplicatePermission { permission } => Self {
                 field: "permissions",
@@ -185,21 +180,21 @@ impl From<DomainError> for FieldIssue {
                 field,
                 message: format!("{field} has invalid value {value}"),
             },
-            DomainError::EmptyAttachmentFilename => Self {
+            DomainError::EmptySubmissionFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be empty".to_owned(),
+                message: "filename must not be empty".to_owned(),
             },
-            DomainError::AttachmentFilenameTooLong => Self {
+            DomainError::SubmissionFilenameTooLong => Self {
                 field: "filename",
-                message: "attachment filename must be at most 255 bytes".to_owned(),
+                message: "filename must be at most 255 bytes".to_owned(),
             },
-            DomainError::InvalidAttachmentFilenameCharacters => Self {
+            DomainError::InvalidSubmissionFilenameCharacters => Self {
                 field: "filename",
-                message: "attachment filename contains unsupported characters".to_owned(),
+                message: "filename contains unsupported characters".to_owned(),
             },
-            DomainError::ReservedAttachmentFilename => Self {
+            DomainError::ReservedSubmissionFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be . or ..".to_owned(),
+                message: "filename must not be . or ..".to_owned(),
             },
         }
     }
@@ -342,23 +337,23 @@ mod tests {
 
     #[test]
     fn required_timestamp_maps_missing_and_invalid_values() {
-        let missing = required_timestamp("coverage_start_at", None)
+        let missing = required_timestamp("valid_from", None)
             .into_result()
             .map_err(argument_errors)
             .expect_err("missing timestamp");
         assert_eq!(
             field_issues(&missing),
-            [("coverage_start_at".to_owned(), "is required".to_owned())]
+            [("valid_from".to_owned(), "is required".to_owned())]
         );
 
-        let invalid = required_timestamp("coverage_start_at", Some("nope".to_owned()))
+        let invalid = required_timestamp("valid_from", Some("nope".to_owned()))
             .into_result()
             .map_err(argument_errors)
             .expect_err("invalid timestamp");
         assert_eq!(
             field_issues(&invalid),
             [(
-                "coverage_start_at".to_owned(),
+                "valid_from".to_owned(),
                 "must be an RFC 3339 timestamp".to_owned()
             )]
         );
@@ -390,8 +385,8 @@ mod tests {
                     "description must be at most 4000 characters".to_owned()
                 ),
                 (
-                    "coverage_end_at".to_owned(),
-                    "coverage_end_at must be greater than or equal to coverage_start_at".to_owned()
+                    "valid_until".to_owned(),
+                    "valid_until must be greater than or equal to valid_from".to_owned()
                 ),
             ]
         );

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, EvidenceRequestId, WorkspaceId};
+use super::{ids::uuid_id, EvidenceId, WorkspaceId};
 
 uuid_id!(FrameworkId);
 uuid_id!(FrameworkRequirementId);
@@ -73,20 +73,20 @@ pub struct UpdateControlPayload {
 }
 
 /**
- * Controls are satisfied by fulfilling requests for evidence. Sometimes,
- * the same thing can be evidence of compliance with different controls.
+ * Controls are satisfied by collecting evidence. Sometimes the same
+ * evidence proves compliance with different controls.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceRequestControlMapping {
-    pub evidence_request_id: EvidenceRequestId,
+pub struct EvidenceControlMapping {
+    pub evidence_id: EvidenceId,
     pub control: ControlSummary,
     pub rationale: String,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateEvidenceRequestControlMappingPayload {
-    pub evidence_request_id: EvidenceRequestId,
+pub struct CreateEvidenceControlMappingPayload {
+    pub evidence_id: EvidenceId,
     pub control_id: ControlId,
     pub rationale: String,
 }

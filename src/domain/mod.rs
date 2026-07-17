@@ -4,7 +4,7 @@ mod auditor_access_session;
 mod auditor_portal;
 mod controls;
 mod error;
-mod evidence_request;
+mod evidence;
 mod evidence_submission;
 mod ids;
 mod oauth;
@@ -25,23 +25,20 @@ pub use auditor_access_session::{
     AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
 };
 pub use auditor_portal::{
-    AuditorPortalAttachment, AuditorPortalControl, AuditorPortalEvidenceRequest,
-    AuditorPortalReadModel, AuditorPortalSubmission,
+    AuditorPortalControl, AuditorPortalEvidence, AuditorPortalReadModel, AuditorPortalSubmission,
 };
 pub use controls::{
-    Control, ControlId, ControlSummary, CreateControlPayload,
-    CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, Framework,
-    FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+    Control, ControlId, ControlSummary, CreateControlPayload, CreateEvidenceControlMappingPayload,
+    EvidenceControlMapping, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
+    UpdateControlPayload,
 };
 pub use error::DomainError;
-pub use evidence_request::{
-    CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
-    EvidenceRequestStatus, UpdateEvidenceRequestPayload,
+pub use evidence::{
+    CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
 };
 pub use evidence_submission::{
-    AttachmentUploadGrantId, AttachmentUploadStatus, CreateEvidenceAttachmentPayload,
-    CreateEvidenceSubmissionPayload, EvidenceAttachment, EvidenceAttachmentId, EvidenceSubmission,
-    EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
+    CoverageWindow, CreateEvidenceSubmissionPayload, EvidenceSubmission, EvidenceSubmissionId,
+    EvidenceSubmitter, EvidenceUploadGrantId, SubmissionUploadStatus,
 };
 pub use oauth::{
     NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,
@@ -50,9 +47,7 @@ pub use oauth::{
 pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};
-pub use validation::{
-    optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,
-};
+pub use validation::{optional_text, required_text, validate_submission_filename};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId, WorkspaceMembership,
     WorkspaceRole, WorkspaceWithRole,

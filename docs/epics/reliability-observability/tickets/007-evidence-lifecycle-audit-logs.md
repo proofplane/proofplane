@@ -4,7 +4,7 @@
 [spec.md](../spec.md#evidence-lifecycle-audit-events)
 
 **Summary** - Emit structured audit logs for evidence submission creation,
-attachment acceptance, download grant issuance and redemption, scan terminal
+submission acceptance, download grant issuance and redemption, scan terminal
 outcomes, and finalization so lifecycle-sensitive evidence actions are
 attributable without exposing secrets.
 
@@ -18,10 +18,10 @@ attributable without exposing secrets.
   success audit record is emitted.
 - [ ] Given audit fields are inspected, then workspace, user, agent connection,
   system client, request correlation, event name, outcome, grant ID, submission
-  ID, and attachment ID may appear where applicable. (Actor is the agent
+  ID, and submission ID may appear where applicable. (Actor is the agent
   connection ID, not an API token ID — `ppat_` removed in PR #42.)
 - [ ] Given sensitive values exist during the flow, then raw grant tokens, API
-  tokens, authorization headers, attachment bytes, object keys treated as
+  tokens, authorization headers, submission bytes, object keys treated as
   storage internals, submission summaries and descriptions, scanner raw error
   strings, and credentials are absent.
 
@@ -29,7 +29,7 @@ attributable without exposing secrets.
 
 - [ ] Define stable evidence audit event names and allowed fields in the
   Reliability spec.
-- [ ] Instrument submission creation and attachment acceptance after successful
+- [ ] Instrument submission creation and submission acceptance after successful
   commits.
 - [ ] Instrument download grant issuance and redemption without logging the
   PASETO token.

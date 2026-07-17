@@ -17,7 +17,7 @@ use futures_util::stream;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::services::{
     agent_connections::{digest_secret, AgentConnectionContext},
-    evidence_requests::EvidenceRequestService,
+    evidence::EvidenceService,
     evidence_submissions::EvidenceSubmissionService,
 };
 use proofplane::{
@@ -38,9 +38,8 @@ use proofplane::{
         PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
-        AgentAuthorizationTransactionId, AgentConnectionId, CreateEvidenceRequestPayload,
-        CreateEvidenceSubmissionPayload, CreateWorkspacePayload, EvidenceRequestCadence,
-        EvidenceRequestId, EvidenceRequestStatus, NewPendingAgentConnection, ProvisionUserPayload,
+        AgentAuthorizationTransactionId, AgentConnectionId, CoverageWindow, CreateEvidencePayload,
+        CreateWorkspacePayload, EvidenceStatus, NewPendingAgentConnection, ProvisionUserPayload,
         UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions, WorkspaceRole,
     },
     mailer::CapturingMailAdapter,
@@ -73,10 +72,13 @@ pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
 static AUDIT_LOG_SINK: OnceLock<Arc<StdMutex<Vec<u8>>>> = OnceLock::new();
 
-pub async fn upload_attachment(
+/// Uploads one file the way the browser session does: through the service, so
+/// it lands as a submission stamped with the given evidence and coverage window.
+pub async fn upload_evidence_file(
     app: &TestApp,
     workspace_id: Uuid,
-    submission_id: Uuid,
+    evidence_id: Uuid,
+    coverage: CoverageWindow,
     filename: &str,
     content: &[u8],
 ) -> Value {
@@ -84,30 +86,45 @@ pub async fn upload_attachment(
     let connection = app.agent_connection_context(workspace_id);
     let bytes = Bytes::copy_from_slice(content);
     let mut payload = service
-        .upload_attachment(
+        .upload_file(
             &connection,
-            submission_id.into(),
+            evidence_id.into(),
             filename.to_owned(),
             "text/plain".to_owned(),
             stream::once(async move { Ok(bytes) }),
         )
         .await
-        .expect("attachment object uploads");
+        .expect("submission object uploads");
     payload.checksum_crc32c = crc32c_base64(content);
-    let attachment = service
-        .create_attachment(&connection, Uuid::new_v4(), submission_id.into(), payload)
+    let submission = service
+        .create_submission(
+            &connection,
+            Uuid::new_v4(),
+            evidence_id.into(),
+            coverage,
+            payload,
+        )
         .await
-        .expect("attachment row creates");
+        .expect("submission row creates")
+        .expect("submission evidence exists");
 
+    submission_json(&submission)
+}
+
+pub fn submission_json(submission: &proofplane::domain::EvidenceSubmission) -> Value {
     serde_json::json!({
-        "id": Uuid::from(attachment.id),
-        "evidence_submission_id": Uuid::from(attachment.evidence_submission_id),
-        "filename": attachment.filename,
-        "content_type": attachment.content_type,
-        "content_length": attachment.content_length,
-        "checksum_sha256": attachment.checksum_sha256,
-        "checksum_crc32c": attachment.checksum_crc32c,
-        "upload_status": attachment.upload_status.as_str(),
+        "id": Uuid::from(submission.id),
+        "evidence_id": Uuid::from(submission.evidence_id),
+        "received_at": submission.received_at,
+        "valid_from": submission.valid_from,
+        "valid_until": submission.valid_until,
+        "filename": submission.filename,
+        "content_type": submission.content_type,
+        "content_length": submission.content_length,
+        "checksum_sha256": submission.checksum_sha256,
+        "checksum_crc32c": submission.checksum_crc32c,
+        "upload_status": submission.upload_status.as_str(),
+        "archived": submission.archived,
     })
 }
 
@@ -304,7 +321,7 @@ impl TestApp {
 
         let app_config = config(
             database_url.clone(),
-            builder.max_attachment_bytes,
+            builder.max_file_bytes,
             builder.public_api_base_url,
         );
 
@@ -390,90 +407,45 @@ impl TestApp {
         }
     }
 
-    pub async fn create_evidence_request(&self, workspace_id: Uuid, body: &Value) -> Value {
-        let request = EvidenceRequestService::new(self.postgres.clone())
+    pub async fn create_evidence(&self, workspace_id: Uuid, body: &Value) -> Value {
+        let evidence = EvidenceService::new(self.postgres.clone())
             .create(
                 self.agent_connection_context(workspace_id),
-                CreateEvidenceRequestPayload {
+                CreateEvidencePayload {
                     title: string_field(body, "title"),
                     description: string_field(body, "description"),
                     collection_instructions: string_field(body, "collection_instructions"),
-                    cadence: string_field(body, "cadence")
-                        .parse::<EvidenceRequestCadence>()
-                        .expect("fixture cadence parses"),
-                    due_at: string_field(body, "due_at")
-                        .parse()
-                        .expect("fixture due_at parses"),
-                    schedule_anchor_at: string_field(body, "schedule_anchor_at")
-                        .parse()
-                        .expect("fixture schedule_anchor_at parses"),
-                    freshness_window_days: body["freshness_window_days"]
-                        .as_i64()
-                        .map(|value| i32::try_from(value).expect("freshness window fits i32")),
                     status: string_field(body, "status")
-                        .parse::<EvidenceRequestStatus>()
+                        .parse::<EvidenceStatus>()
                         .expect("fixture status parses"),
                 },
             )
             .await
-            .expect("evidence request fixture creates");
+            .expect("evidence fixture creates");
 
         serde_json::json!({
-            "id": Uuid::from(request.id),
-            "workspace_id": Uuid::from(request.workspace_id),
-            "title": request.title,
-            "description": request.description,
-            "collection_instructions": request.collection_instructions,
-            "cadence": request.cadence.as_str(),
-            "due_at": request.due_at,
-            "schedule_anchor_at": request.schedule_anchor_at,
-            "freshness_window_days": request.freshness_window_days,
-            "status": request.status.as_str(),
-            "created_at": request.created_at,
-            "updated_at": request.updated_at,
+            "id": Uuid::from(evidence.id),
+            "workspace_id": Uuid::from(evidence.workspace_id),
+            "title": evidence.title,
+            "description": evidence.description,
+            "collection_instructions": evidence.collection_instructions,
+            "status": evidence.status.as_str(),
+            "created_at": evidence.created_at,
+            "updated_at": evidence.updated_at,
         })
     }
 
+    /// Files one submission against `evidence_id` by uploading a file, which is
+    /// the only way submissions come into existence.
     pub async fn create_evidence_submission(
         &self,
         workspace_id: Uuid,
-        evidence_request_id: Uuid,
-        body: &Value,
+        evidence_id: Uuid,
+        coverage: CoverageWindow,
+        filename: &str,
+        content: &[u8],
     ) -> Value {
-        let submission =
-            EvidenceSubmissionService::new(self.postgres.clone(), self.object_store.clone())
-                .create(
-                    self.agent_connection_context(workspace_id),
-                    EvidenceRequestId::from(evidence_request_id),
-                    CreateEvidenceSubmissionPayload {
-                        evidence_request_id: EvidenceRequestId::from(evidence_request_id),
-                        coverage_start_at: string_field(body, "coverage_start_at")
-                            .parse()
-                            .expect("fixture coverage_start_at parses"),
-                        coverage_end_at: string_field(body, "coverage_end_at")
-                            .parse()
-                            .expect("fixture coverage_end_at parses"),
-                        source_system: string_field(body, "source_system"),
-                        collection_method: string_field(body, "collection_method"),
-                        summary: body["summary"].as_str().map(str::to_owned),
-                        description: body["description"].as_str().map(str::to_owned),
-                    },
-                )
-                .await
-                .expect("evidence submission fixture creates")
-                .expect("evidence submission fixture exists");
-
-        serde_json::json!({
-            "id": Uuid::from(submission.id),
-            "evidence_request_id": Uuid::from(submission.evidence_request_id),
-            "received_at": submission.received_at,
-            "coverage_start_at": submission.coverage_start_at,
-            "coverage_end_at": submission.coverage_end_at,
-            "source_system": submission.source_system,
-            "collection_method": submission.collection_method,
-            "summary": submission.summary,
-            "description": submission.description,
-        })
+        upload_evidence_file(self, workspace_id, evidence_id, coverage, filename, content).await
     }
 
     pub fn agent_connection_context(&self, workspace_id: Uuid) -> AgentConnectionContext {
@@ -502,27 +474,26 @@ impl TestApp {
         .await
     }
 
-    /// Inserts an evidence request directly, bypassing the API, so tests can seed
-    /// a workspace the default API token is not scoped to.
-    pub async fn insert_evidence_request_row(&self, workspace_id: Uuid, title: &str) {
+    /// Inserts evidence directly, bypassing the API, so tests can seed a
+    /// workspace the default connection is not scoped to.
+    pub async fn insert_evidence_row(&self, workspace_id: Uuid, title: &str) {
         let client = self
             .postgres
             .get()
             .await
-            .expect("evidence request fixture connection opens");
+            .expect("evidence fixture connection opens");
         client
             .execute(
                 r#"
-INSERT INTO evidence_requests (
-    workspace_id, title, description, collection_instructions,
-    cadence, due_at, schedule_anchor_at, freshness_window_days, status
+INSERT INTO evidence (
+    workspace_id, title, description, collection_instructions, status
 )
-VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(), now(), 90, 'active')
+VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
 "#,
                 &[&workspace_id, &title],
             )
             .await
-            .expect("evidence request fixture inserts");
+            .expect("evidence fixture inserts");
     }
 
     pub fn server(&self) -> &TestServer {
@@ -635,25 +606,25 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
     {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-download",
+            "proofplane-submission-download",
             &self.app_config.paseto.download,
         )
         .expect("download grant encryptor initializes");
         let download_grant_decryptor = DownloadGrantDecryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-download",
+            "proofplane-submission-download",
             &self.app_config.paseto.download,
         )
         .expect("download grant decryptor initializes");
         let upload_grant_encryptor = UploadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-upload-grant",
+            "proofplane-evidence-upload-grant",
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant encryptor initializes");
         let upload_grant_decryptor = UploadGrantDecryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-upload-grant",
+            "proofplane-evidence-upload-grant",
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes");
@@ -718,7 +689,7 @@ pub struct TestAppBuilder {
     clamav: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
-    max_attachment_bytes: usize,
+    max_file_bytes: usize,
     public_api_base_url: url::Url,
 }
 
@@ -762,7 +733,7 @@ impl Default for TestAppBuilder {
             clamav: false,
             soc2_reference_data: false,
             workspaces: Vec::new(),
-            max_attachment_bytes: 25 * 1024 * 1024,
+            max_file_bytes: 25 * 1024 * 1024,
             public_api_base_url: url::Url::parse("https://api.proofplane.test/")
                 .expect("public API base URL parses"),
         }
@@ -1091,11 +1062,7 @@ async fn shared_clamav() -> Arc<TestClamAv> {
     clamav
 }
 
-fn config(
-    database_url: String,
-    max_attachment_bytes: usize,
-    public_api_base_url: url::Url,
-) -> AppConfig {
+fn config(database_url: String, max_file_bytes: usize, public_api_base_url: url::Url) -> AppConfig {
     let storage_root =
         std::env::temp_dir().join(format!("proofplane-integration-storage-{}", Uuid::new_v4()));
 
@@ -1165,9 +1132,7 @@ fn config(
             connection_timeout_ms: 1000,
             scan_timeout_ms: 30000,
         },
-        uploads: UploadsConfig {
-            max_attachment_bytes,
-        },
+        uploads: UploadsConfig { max_file_bytes },
         mail: MailConfig {
             adapter: MailAdapterConfig::Disabled,
         },

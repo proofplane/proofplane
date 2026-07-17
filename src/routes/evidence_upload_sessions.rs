@@ -26,22 +26,22 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        validate_attachment_filename, AttachmentUploadStatus, EvidenceAttachment,
-        EvidenceAttachmentId, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        validate_submission_filename, CoverageWindow, CreateEvidenceSubmissionPayload, EvidenceId,
+        EvidenceSubmission, EvidenceSubmissionId, SubmissionUploadStatus,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::ArchiveAttachmentResult,
+    repository::ArchiveSubmissionResult,
     routes::{
         error::{domain_errors, ApiError},
         request_context::RequestId,
     },
     services::{
         agent_connections::AgentConnectionContext,
-        attachment_downloads::DownloadGrantIssuer,
-        attachment_downloads::{AttachmentDownloadService, DownloadError},
-        attachment_upload_grants::{AttachmentUploadGrantService, UploadGrantError},
         controls::ControlService,
-        evidence_submissions::{EvidenceSubmissionService, UploadEvidenceAttachmentPayload},
+        evidence_submissions::EvidenceSubmissionService,
+        evidence_upload_grants::{EvidenceUploadGrantService, UploadGrantError},
+        submission_downloads::DownloadGrantIssuer,
+        submission_downloads::{DownloadError, SubmissionDownloadService},
         upload_sessions::{
             UploadSessionError, UploadSessionIssuer, UploadSessionTokenService,
             VerifiedUploadSession,
@@ -49,37 +49,37 @@ use crate::{
     },
 };
 
-const UPLOAD_SESSION_COOKIE: &str = "proofplane_attachment_upload_session";
+const UPLOAD_SESSION_COOKIE: &str = "proofplane_evidence_upload_session";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AttachmentUploadDigest {
+enum SubmissionUploadDigest {
     ComputeOnly,
 }
 
 #[derive(Clone)]
-pub struct AttachmentUploadSessionState {
-    pub grants: AttachmentUploadGrantService,
-    pub downloads: AttachmentDownloadService,
+pub struct EvidenceUploadSessionState {
+    pub grants: EvidenceUploadGrantService,
+    pub downloads: SubmissionDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
     pub controls: ControlService,
     pub secure_cookie: bool,
-    pub max_attachment_bytes: usize,
+    pub max_file_bytes: usize,
 }
 
-pub fn router(state: AttachmentUploadSessionState) -> Router {
+pub fn router(state: EvidenceUploadSessionState) -> Router {
     Router::new()
-        .route("/evidence-attachment-uploads", get(open_upload_session))
+        .route("/evidence-uploads", get(open_upload_session))
         .route(
-            "/evidence-attachment-uploads/files",
-            post(upload_file).layer(DefaultBodyLimit::max(state.max_attachment_bytes)),
+            "/evidence-uploads/files",
+            post(upload_file).layer(DefaultBodyLimit::max(state.max_file_bytes)),
         )
         .route(
-            "/evidence-attachment-uploads/files/{attachment_id}/download",
+            "/evidence-uploads/files/{submission_id}/download",
             get(download_file),
         )
         .route(
-            "/evidence-attachment-uploads/files/{attachment_id}/archive",
+            "/evidence-uploads/files/{submission_id}/archive",
             post(archive_file),
         )
         .with_state(state)
@@ -91,7 +91,7 @@ struct UploadSessionQuery {
 }
 
 #[derive(Debug)]
-struct UploadSessionAttachmentResponse {
+struct UploadSessionSubmissionResponse {
     id: Uuid,
     filename: String,
     content_length: i64,
@@ -108,12 +108,13 @@ struct UploadSessionControlResponse {
 
 #[derive(Debug)]
 struct UploadSessionPage {
-    attachments: Vec<UploadSessionAttachmentResponse>,
+    coverage: CoverageWindow,
+    submissions: Vec<UploadSessionSubmissionResponse>,
     controls: Vec<UploadSessionControlResponse>,
 }
 
 async fn open_upload_session(
-    State(state): State<AttachmentUploadSessionState>,
+    State(state): State<EvidenceUploadSessionState>,
     headers: HeaderMap,
     query: Result<Query<UploadSessionQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
@@ -130,21 +131,12 @@ async fn open_upload_session(
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
-    let body = render_upload_page(
-        &inventory(
-            &state.submissions,
-            &state.controls,
-            session.submission_id,
-            session_context(&session),
-        )
-        .await?,
-        None,
-    );
+    let body = render_upload_page(&inventory(&state, &session).await?, None);
     Ok(Html(body).into_response())
 }
 
 async fn upload_file(
-    State(state): State<AttachmentUploadSessionState>,
+    State(state): State<EvidenceUploadSessionState>,
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
     multipart: Multipart,
@@ -155,20 +147,14 @@ async fn upload_file(
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
     let connection = session_context(&session);
-    let before = inventory(
-        &state.submissions,
-        &state.controls,
-        session.submission_id,
-        connection,
-    )
-    .await?;
+    let before = inventory(&state, &session).await?;
 
-    let payload = match attachment_upload_from_multipart(
+    let payload = match submission_upload_from_multipart(
         &state.submissions,
         &connection,
-        session.submission_id,
+        session.evidence_id,
         multipart,
-        AttachmentUploadDigest::ComputeOnly,
+        SubmissionUploadDigest::ComputeOnly,
     )
     .await
     {
@@ -179,25 +165,31 @@ async fn upload_file(
         Err(error) => return Err(error),
     };
 
-    let attachment = state
+    let submission = state
         .submissions
-        .create_attachment(&connection, request_id.0, session.submission_id, payload)
-        .await?;
-    emit_upload_audit(&session, request_id.0, &attachment);
+        .create_submission(
+            &connection,
+            request_id.0,
+            session.evidence_id,
+            session.coverage,
+            payload,
+        )
+        .await?
+        .ok_or_else(unavailable)?;
+    emit_upload_audit(&session, request_id.0, &submission);
 
     let mut response = StatusCode::SEE_OTHER.into_response();
-    response.headers_mut().insert(
-        LOCATION,
-        HeaderValue::from_static("/evidence-attachment-uploads"),
-    );
+    response
+        .headers_mut()
+        .insert(LOCATION, HeaderValue::from_static("/evidence-uploads"));
     Ok(response)
 }
 
 async fn download_file(
-    State(state): State<AttachmentUploadSessionState>,
+    State(state): State<EvidenceUploadSessionState>,
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    Path(attachment_id): Path<Uuid>,
+    Path(submission_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let session = match verify_session(&state, &headers) {
         Ok(session) => session,
@@ -210,17 +202,16 @@ async fn download_file(
             session.workspace_id,
             session.issued_by_user_id,
             DownloadGrantIssuer::AgentConnection(session.issued_via.agent_connection_id()),
-            session.submission_id,
-            attachment_id.into(),
+            EvidenceSubmissionId::from(submission_id),
         )
         .await
         .map_err(upload_session_download_error)?;
     AuditEvent::new(
-        "evidence_attachment_download_grant.issued",
+        "evidence_submission_download_grant.issued",
         AuditOutcome::Success,
         session_audit_actor(&session),
         AuditClientType::Rest,
-        "issue_attachment_download_grant_via_upload_session",
+        "issue_submission_download_grant_via_upload_session",
     )
     .workspace_id(session.workspace_id.into())
     .request_id(request_id.0)
@@ -228,13 +219,9 @@ async fn download_file(
         "evidence_submission_id",
         Uuid::from(grant.audit.submission_id),
     )
-    .metadata(
-        "evidence_attachment_id",
-        Uuid::from(grant.audit.attachment_id),
-    )
     .object(AuditObject::new(
-        "evidence_attachment",
-        grant.audit.attachment_id.into(),
+        "evidence_submission",
+        grant.audit.submission_id.into(),
     ))
     .emit();
 
@@ -247,9 +234,9 @@ async fn download_file(
 }
 
 async fn archive_file(
-    State(state): State<AttachmentUploadSessionState>,
+    State(state): State<EvidenceUploadSessionState>,
     headers: HeaderMap,
-    Path(attachment_id): Path<Uuid>,
+    Path(submission_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let session = match verify_session(&state, &headers) {
         Ok(session) => session,
@@ -259,35 +246,24 @@ async fn archive_file(
     let connection = session_context(&session);
     match state
         .submissions
-        .archive_attachment(
-            &connection,
-            session.submission_id,
-            EvidenceAttachmentId::from(attachment_id),
-        )
+        .archive_submission(&connection, EvidenceSubmissionId::from(submission_id))
         .await?
     {
-        ArchiveAttachmentResult::Archived => {
+        ArchiveSubmissionResult::Archived => {
             let mut response = StatusCode::SEE_OTHER.into_response();
-            response.headers_mut().insert(
-                LOCATION,
-                HeaderValue::from_static("/evidence-attachment-uploads"),
-            );
+            response
+                .headers_mut()
+                .insert(LOCATION, HeaderValue::from_static("/evidence-uploads"));
             Ok(response)
         }
-        ArchiveAttachmentResult::NotFound => Ok(unavailable_response()),
-        ArchiveAttachmentResult::NotTerminal => {
-            let page = inventory(
-                &state.submissions,
-                &state.controls,
-                session.submission_id,
-                connection,
-            )
-            .await?;
+        ArchiveSubmissionResult::NotFound => Ok(unavailable_response()),
+        ArchiveSubmissionResult::NotTerminal => {
+            let page = inventory(&state, &session).await?;
             Ok((
                 StatusCode::CONFLICT,
                 Html(render_upload_page(
                     &page,
-                    Some("Archive failed: attachment is still processing"),
+                    Some("Archive failed: submission is still processing"),
                 )),
             )
                 .into_response())
@@ -296,7 +272,7 @@ async fn archive_file(
 }
 
 async fn redeem_grant(
-    state: AttachmentUploadSessionState,
+    state: EvidenceUploadSessionState,
     token: String,
 ) -> Result<Response, ApiError> {
     if token.is_empty() {
@@ -314,17 +290,17 @@ async fn redeem_grant(
         .sessions
         .issue_until(
             grant.workspace_id,
-            grant.submission_id,
+            grant.evidence_id,
+            grant.coverage,
             grant.issued_by_user_id,
             UploadSessionIssuer::AgentConnection(grant.issued_via.agent_connection_id()),
             grant.expires_at,
         )
         .map_err(upload_session_error)?;
     let mut response = StatusCode::SEE_OTHER.into_response();
-    response.headers_mut().insert(
-        LOCATION,
-        HeaderValue::from_static("/evidence-attachment-uploads"),
-    );
+    response
+        .headers_mut()
+        .insert(LOCATION, HeaderValue::from_static("/evidence-uploads"));
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&session_cookie(
@@ -338,19 +314,23 @@ async fn redeem_grant(
 }
 
 async fn inventory(
-    submissions: &EvidenceSubmissionService,
-    controls: &ControlService,
-    submission_id: EvidenceSubmissionId,
-    connection: AgentConnectionContext,
+    state: &EvidenceUploadSessionState,
+    session: &VerifiedUploadSession,
 ) -> Result<UploadSessionPage, ApiError> {
-    let detail = detail(submissions, submission_id, connection).await?;
-    let mappings = controls
-        .list_evidence_request_control_mappings(connection, detail.submission.evidence_request_id)
+    let connection = session_context(session);
+    let submissions = state
+        .submissions
+        .list_for_coverage(&connection, session.evidence_id, session.coverage)
+        .await?;
+    let mappings = state
+        .controls
+        .list_evidence_control_mappings(connection, session.evidence_id)
         .await?
         .ok_or_else(unavailable)?;
 
     Ok(UploadSessionPage {
-        attachments: detail.attachments.into_iter().map(Into::into).collect(),
+        coverage: session.coverage,
+        submissions: submissions.into_iter().map(Into::into).collect(),
         controls: mappings
             .into_iter()
             .map(|mapping| UploadSessionControlResponse {
@@ -361,20 +341,8 @@ async fn inventory(
     })
 }
 
-async fn detail(
-    submissions: &EvidenceSubmissionService,
-    submission_id: EvidenceSubmissionId,
-    connection: AgentConnectionContext,
-) -> Result<EvidenceSubmissionDetail, ApiError> {
-    submissions
-        .get(connection, submission_id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(unavailable)
-}
-
 fn verify_session(
-    state: &AttachmentUploadSessionState,
+    state: &EvidenceUploadSessionState,
     headers: &HeaderMap,
 ) -> Result<VerifiedUploadSession, UploadSessionError> {
     let token = upload_session_cookie(headers).ok_or(UploadSessionError::Unavailable)?;
@@ -384,23 +352,23 @@ fn verify_session(
 fn emit_upload_audit(
     session: &VerifiedUploadSession,
     request_id: Uuid,
-    attachment: &EvidenceAttachment,
+    submission: &EvidenceSubmission,
 ) {
     AuditEvent::new(
-        "evidence_attachment.accepted",
+        "evidence_submission.accepted",
         AuditOutcome::Success,
         session_audit_actor(session),
         AuditClientType::Rest,
-        "upload_evidence_attachment_via_upload_session",
+        "upload_evidence_submission_via_upload_session",
     )
     .workspace_id(session.workspace_id.into())
     .request_id(request_id)
-    .metadata("evidence_submission_id", Uuid::from(session.submission_id))
-    .metadata("evidence_attachment_id", Uuid::from(attachment.id))
-    .metadata("lifecycle_status", attachment.upload_status.as_str())
+    .metadata("evidence_id", Uuid::from(session.evidence_id))
+    .metadata("evidence_submission_id", Uuid::from(submission.id))
+    .metadata("lifecycle_status", submission.upload_status.as_str())
     .object(AuditObject::new(
-        "evidence_attachment",
-        attachment.id.into(),
+        "evidence_submission",
+        submission.id.into(),
     ))
     .emit();
 }
@@ -425,32 +393,31 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
     let message = message
         .map(|message| {
             format!(
-                r#"<section class="notice" role="alert"><strong>{}</strong><p>Choose another file or ask the MCP client to check attachment processing status.</p></section>"#,
+                r#"<section class="notice" role="alert"><strong>{}</strong><p>Choose another file or ask the MCP client to check submission processing status.</p></section>"#,
                 escape_html(message)
             )
         })
         .unwrap_or_default();
-    let rows = if page.attachments.is_empty() {
-        r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No evidence files yet</strong><p>Choose a file to start this submission.</p></div></div>"#.to_owned()
+    let rows = if page.submissions.is_empty() {
+        r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No evidence files yet</strong><p>Choose a file to cover this period.</p></div></div>"#.to_owned()
     } else {
         format!(
             r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody>{}</tbody></table>"#,
-            page.attachments
+            page.submissions
                 .iter()
-                .map(|attachment| format!(
+                .map(|submission| format!(
                     "<tr><td class=\"filename\" data-label=\"File\">{}</td><td data-label=\"Size\">{}</td><td data-label=\"Status\"><span class=\"status\">{}</span></td><td data-label=\"Actions\">{}</td></tr>",
-                    escape_html(&attachment.filename),
-                    format_bytes(attachment.content_length),
-                    escape_html(&attachment.upload_status),
-                    attachment_actions(attachment),
+                    escape_html(&submission.filename),
+                    format_bytes(submission.content_length),
+                    escape_html(&submission.upload_status),
+                    submission_actions(submission),
                 ))
                 .collect::<Vec<_>>()
                 .join("")
         )
     };
     let controls = if page.controls.is_empty() {
-        r#"<p class="control-empty">No controls are mapped to this evidence request.</p>"#
-            .to_owned()
+        r#"<p class="control-empty">No controls are mapped to this evidence.</p>"#.to_owned()
     } else {
         format!(
             r#"<ul class="control-list">{}</ul>"#,
@@ -465,10 +432,15 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
                 .join("")
         )
     };
+    let coverage_window = format!(
+        r#"<div class="coverage-window"><p>Valid from <strong>{}</strong> until <strong>{}</strong></p></div>"#,
+        format_date(page.coverage.valid_from),
+        format_date(page.coverage.valid_until),
+    );
     let upload = r#"<aside class="upload-panel" aria-labelledby="upload-file">
 <h2 id="upload-file">Add evidence</h2>
 <p>One file at a time. Uploads are scanned before they become available.</p>
-<form class="upload-form" method="post" action="/evidence-attachment-uploads/files" enctype="multipart/form-data">
+<form class="upload-form" method="post" action="/evidence-uploads/files" enctype="multipart/form-data">
 <label for="file">Choose file</label>
 <input id="file" name="file" type="file" required>
 <button type="submit">Upload evidence</button>
@@ -482,7 +454,7 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Evidence attachment management</title>
+<title>Evidence upload</title>
 <style>
 :root {{
   color-scheme: dark;
@@ -582,6 +554,10 @@ main {{ width: min(1080px, calc(100% - 32px)); padding: 52px 0 72px; }}
 .page-header {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; }}
 .eyebrow {{ margin: 0 0 10px; color: var(--accent); font-size: 0.78rem; font-weight: 700; }}
 h1 {{ max-width: 18ch; font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.05; }}
+.coverage-window {{ display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 20px 0 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }}
+.coverage-window {{ color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; }}
+.coverage-window p {{ margin: 0; color: var(--muted); font-size: 0.95rem; }}
+.coverage-window strong {{ color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }}
 h2 {{ margin: 0; font-size: 1.1rem; }}
 .control-context {{ width: min(360px, 38vw); margin: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; }}
 .control-context > p:first-child {{ margin: 0 0 10px; color: var(--muted); font-size: 0.74rem; font-weight: 700; }}
@@ -622,11 +598,11 @@ input[type="file"]::file-selector-button {{ margin-right: 10px; border: 0; borde
 <body>
 <header class="site-header"><div class="wordmark">PROOFPLANE <span>/ EVIDENCE INTAKE</span></div></header>
 <main>
-<header class="page-header"><div><p class="eyebrow">SCOPED EVIDENCE SUBMISSION</p><h1>Evidence attachments</h1><p>Add the files that support this submission, then return to your MCP client to continue.</p></div><aside class="control-context" aria-label="Evidence target"><p>PROVIDING EVIDENCE FOR</p>{controls}</aside></header>
+<header class="page-header"><div><p class="eyebrow">SCOPED EVIDENCE SUBMISSION</p><h1>Evidence files</h1><p>Add the files that cover this period, then return to your MCP client to continue.</p>{coverage_window}</div><aside class="control-context" aria-label="Evidence target"><p>PROVIDING EVIDENCE FOR</p>{controls}</aside></header>
 {message}
 <div class="workspace">
-<section class="panel" aria-labelledby="current-attachments">
-<div class="panel-heading"><h2 id="current-attachments">Uploaded files</h2><span class="count">{count} total</span></div>
+<section class="panel" aria-labelledby="current-submissions">
+<div class="panel-heading"><h2 id="current-submissions">Uploaded files</h2><span class="count">{count} total</span></div>
 {rows}
 </section>
 {upload}
@@ -634,17 +610,17 @@ input[type="file"]::file-selector-button {{ margin-right: 10px; border: 0; borde
 </main>
 </body>
 </html>"#,
-        count = page.attachments.len(),
+        count = page.submissions.len(),
     )
 }
 
-async fn attachment_upload_from_multipart(
+async fn submission_upload_from_multipart(
     service: &EvidenceSubmissionService,
     connection: &AgentConnectionContext,
-    evidence_submission_id: EvidenceSubmissionId,
+    evidence_id: EvidenceId,
     mut multipart: Multipart,
-    digest: AttachmentUploadDigest,
-) -> Result<UploadEvidenceAttachmentPayload, ApiError> {
+    digest: SubmissionUploadDigest,
+) -> Result<CreateEvidenceSubmissionPayload, ApiError> {
     let field = multipart
         .next_field()
         .await
@@ -671,25 +647,19 @@ async fn attachment_upload_from_multipart(
         .content_type()
         .map(str::to_owned)
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    let filename = validate_attachment_filename(filename)
+    let filename = validate_submission_filename(filename)
         .into_result()
         .map_err(domain_errors)?;
 
     let crc32c = Arc::new(AtomicU32::new(0));
     let chunks = file_chunks(field, Arc::clone(&crc32c));
     let mut uploaded_file = service
-        .upload_attachment(
-            connection,
-            evidence_submission_id,
-            filename,
-            content_type,
-            chunks,
-        )
+        .upload_file(connection, evidence_id, filename, content_type, chunks)
         .await?;
 
     let actual_crc32c = crc32c.load(Ordering::Relaxed);
 
-    if digest == AttachmentUploadDigest::ComputeOnly
+    if digest == SubmissionUploadDigest::ComputeOnly
         && multipart
             .next_field()
             .await
@@ -748,7 +718,7 @@ fn multipart_stream_error(error: MultipartError) -> crate::object_storage::Stora
 }
 
 async fn maybe_delete_uploaded_file(service: &EvidenceSubmissionService, key: String) {
-    let _ = service.delete_uploaded_attachment_object(&key).await;
+    let _ = service.delete_uploaded_object(&key).await;
 }
 
 fn upload_error_response(page: &UploadSessionPage, error: ApiError) -> Response {
@@ -798,6 +768,10 @@ p { max-width: 58ch; margin: 0; color: var(--muted); line-height: 1.55; }
         .to_owned()
 }
 
+fn format_date(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d").to_string()
+}
+
 fn format_bytes(bytes: i64) -> String {
     const KB: i64 = 1024;
     const MB: i64 = 1024 * KB;
@@ -833,7 +807,7 @@ fn upload_session_cookie(headers: &HeaderMap) -> Option<&str> {
 fn session_cookie(token: &str, secure: bool, expires_at: DateTime<Utc>) -> String {
     let max_age = (expires_at - Utc::now()).num_seconds().max(1);
     let mut cookie = format!(
-        "{UPLOAD_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/evidence-attachment-uploads; Max-Age={}",
+        "{UPLOAD_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/evidence-uploads; Max-Age={}",
         max_age
     );
     if secure {
@@ -857,40 +831,36 @@ fn unavailable_response() -> Response {
     (StatusCode::NOT_FOUND, Html(unavailable_page())).into_response()
 }
 
-impl From<EvidenceAttachment> for UploadSessionAttachmentResponse {
-    fn from(attachment: EvidenceAttachment) -> Self {
+impl From<EvidenceSubmission> for UploadSessionSubmissionResponse {
+    fn from(submission: EvidenceSubmission) -> Self {
         Self {
-            id: Uuid::from(attachment.id),
-            filename: attachment.filename,
-            content_length: attachment.content_length,
-            upload_status: upload_status(attachment.upload_status).to_owned(),
-            downloadable: attachment.upload_status == AttachmentUploadStatus::Uploaded,
+            id: Uuid::from(submission.id),
+            filename: submission.filename,
+            content_length: submission.content_length,
+            upload_status: submission.upload_status.as_str().to_owned(),
+            downloadable: submission.upload_status == SubmissionUploadStatus::Uploaded,
             archivable: matches!(
-                attachment.upload_status,
-                AttachmentUploadStatus::Uploaded
-                    | AttachmentUploadStatus::ContainsVirus
-                    | AttachmentUploadStatus::FailedUpload
+                submission.upload_status,
+                SubmissionUploadStatus::Uploaded
+                    | SubmissionUploadStatus::ContainsVirus
+                    | SubmissionUploadStatus::FailedUpload
             ),
         }
     }
 }
 
-fn upload_status(status: AttachmentUploadStatus) -> &'static str {
-    status.as_str()
-}
-
-fn attachment_actions(attachment: &UploadSessionAttachmentResponse) -> String {
+fn submission_actions(submission: &UploadSessionSubmissionResponse) -> String {
     let mut actions = Vec::new();
-    if attachment.downloadable {
+    if submission.downloadable {
         actions.push(format!(
-            r#"<a class="button icon-button" href="/evidence-attachment-uploads/files/{}/download" aria-label="Download attachment"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
-            attachment.id
+            r#"<a class="button icon-button" href="/evidence-uploads/files/{}/download" aria-label="Download file"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
+            submission.id
         ));
     }
-    if attachment.archivable {
+    if submission.archivable {
         actions.push(format!(
-            r#"<form method="post" action="/evidence-attachment-uploads/files/{}/archive" onsubmit="return confirm('Archive this attachment?');"><button class="icon-button danger-button" type="submit" aria-label="Archive attachment"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg><span class="sr-only">Archive</span></button></form>"#,
-            attachment.id
+            r#"<form method="post" action="/evidence-uploads/files/{}/archive" onsubmit="return confirm('Archive this file?');"><button class="icon-button danger-button" type="submit" aria-label="Archive file"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg><span class="sr-only">Archive</span></button></form>"#,
+            submission.id
         ));
     }
 
@@ -905,12 +875,12 @@ fn upload_session_download_error(error: DownloadError) -> ApiError {
     match error {
         DownloadError::NotFound => ApiError::NotFound,
         DownloadError::NotReady => ApiError::Conflict {
-            code: "attachment_not_ready",
-            message: "attachment is not ready for download".to_owned(),
+            code: "submission_not_ready",
+            message: "submission is not ready for download".to_owned(),
         },
         DownloadError::MetadataMismatch | DownloadError::Internal => ApiError::Internal,
         DownloadError::Repository(repository_error) => {
-            tracing::error!(error = %repository_error, "attachment download repository failure");
+            tracing::error!(error = %repository_error, "submission download repository failure");
             ApiError::Internal
         }
     }
@@ -919,15 +889,20 @@ fn upload_session_download_error(error: DownloadError) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_upload_page, UploadSessionAttachmentResponse, UploadSessionControlResponse,
-        UploadSessionPage,
+        render_upload_page, CoverageWindow, UploadSessionControlResponse, UploadSessionPage,
+        UploadSessionSubmissionResponse,
     };
 
     #[test]
     fn upload_page_keeps_scope_actions_and_mobile_labels_visible() {
         let html = render_upload_page(
             &UploadSessionPage {
-                attachments: vec![UploadSessionAttachmentResponse {
+                coverage: CoverageWindow::new(
+                    "2026-04-01T00:00:00Z".parse().unwrap(),
+                    "2026-06-30T23:59:59Z".parse().unwrap(),
+                )
+                .unwrap(),
+                submissions: vec![UploadSessionSubmissionResponse {
                     id: uuid::Uuid::nil(),
                     filename: "access-review.pdf".to_owned(),
                     content_length: 2048,
@@ -949,8 +924,10 @@ mod tests {
             "Logical access controls",
             "Upload evidence",
             "data-label=\"Status\"",
-            "aria-label=\"Download attachment\"",
-            "Archive attachment",
+            "aria-label=\"Download file\"",
+            "Archive file",
+            "Coverage window",
+            "Valid from <strong>2026-04-01</strong> until <strong>2026-06-30</strong>",
         ] {
             assert!(html.contains(expected), "missing {expected}");
         }

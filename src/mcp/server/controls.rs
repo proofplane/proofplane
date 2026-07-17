@@ -11,14 +11,13 @@ use super::{
         argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
         parse_uuid_arg, required_uuid, service_error,
     },
-    evidence_requests::{parse_evidence_request_request, EvidenceRequestRequest},
+    evidence::{parse_evidence_args, EvidenceArgs},
     ProofplaneMcp,
 };
 use crate::domain::{
-    required_text, Control, ControlId, CreateControlPayload,
-    CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, EvidenceRequestId,
-    Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
-    WorkspacePermission,
+    required_text, Control, ControlId, CreateControlPayload, CreateEvidenceControlMappingPayload,
+    EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
+    FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -186,66 +185,60 @@ impl ProofplaneMcp {
     }
 
     #[tool(
-        name = "list_evidence_request_control_mappings",
-        description = "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+        name = "list_evidence_control_mappings",
+        description = "List the controls mapped to a piece of evidence, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
-    async fn list_evidence_request_control_mappings(
+    async fn list_evidence_control_mappings(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<EvidenceRequestRequest>,
-    ) -> Result<Json<ListEvidenceRequestControlMappingsResponse>, rmcp::ErrorData> {
-        let evidence_request_id = parse_evidence_request_request(args)?;
+        Parameters(args): Parameters<EvidenceArgs>,
+    ) -> Result<Json<ListEvidenceControlMappingsResponse>, rmcp::ErrorData> {
+        let evidence_id = parse_evidence_args(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let mappings = self
             .controls
-            .list_evidence_request_control_mappings(
-                context.agent_connection_context(),
-                evidence_request_id,
-            )
+            .list_evidence_control_mappings(context.agent_connection_context(), evidence_id)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
 
-        Ok(Json(ListEvidenceRequestControlMappingsResponse {
+        Ok(Json(ListEvidenceControlMappingsResponse {
             mappings: mappings.into_iter().map(Into::into).collect(),
         }))
     }
 
     #[tool(
-        name = "map_evidence_request_to_control",
-        description = "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+        name = "map_evidence_to_control",
+        description = "Map a piece of evidence to a control with a rationale explaining how its proof supports the control; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
-    async fn map_evidence_request_to_control(
+    async fn map_evidence_to_control(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<MapEvidenceRequestToControlRequest>,
-    ) -> Result<Json<EvidenceRequestControlMappingResponseDTO>, rmcp::ErrorData> {
-        let payload = parse_map_evidence_request_to_control_request(args)?;
+        Parameters(args): Parameters<MapEvidenceToControlRequest>,
+    ) -> Result<Json<EvidenceControlMappingResponseDTO>, rmcp::ErrorData> {
+        let payload = parse_map_evidence_to_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
         let mapping = self
             .controls
-            .create_evidence_request_control_mapping(context.agent_connection_context(), payload)
+            .create_evidence_control_mapping(context.agent_connection_context(), payload)
             .await
             .map_err(service_error)?
             .ok_or_else(not_found)?;
 
         AuditEvent::new(
-            "evidence_request_control_mapping.created",
+            "evidence_control_mapping.created",
             AuditOutcome::Success,
             context.audit_actor(),
             AuditClientType::Mcp,
-            "map_evidence_request_to_control",
+            "map_evidence_to_control",
         )
         .workspace_id(workspace_id.into())
         .request_id(context.request_id.0)
-        .metadata(
-            "evidence_request_id",
-            Uuid::from(mapping.evidence_request_id),
-        )
+        .metadata("evidence_id", Uuid::from(mapping.evidence_id))
         .metadata("control_id", Uuid::from(mapping.control.id))
         .object(AuditObject::new(
-            "evidence_request_control_mapping",
+            "evidence_control_mapping",
             Uuid::from(mapping.control.id),
         ))
         .emit();
@@ -254,23 +247,22 @@ impl ProofplaneMcp {
     }
 
     #[tool(
-        name = "remove_evidence_request_control_mapping",
-        description = "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+        name = "remove_evidence_control_mapping",
+        description = "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
-    async fn remove_evidence_request_control_mapping(
+    async fn remove_evidence_control_mapping(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<RemoveEvidenceRequestControlMappingRequest>,
-    ) -> Result<Json<RemoveEvidenceRequestControlMappingResponse>, rmcp::ErrorData> {
-        let (evidence_request_id, control_id) =
-            parse_remove_evidence_request_control_mapping_request(args)?;
+        Parameters(args): Parameters<RemoveEvidenceControlMappingRequest>,
+    ) -> Result<Json<RemoveEvidenceControlMappingResponse>, rmcp::ErrorData> {
+        let (evidence_id, control_id) = parse_remove_evidence_control_mapping_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
         let deleted = self
             .controls
-            .delete_evidence_request_control_mapping(
+            .delete_evidence_control_mapping(
                 context.agent_connection_context(),
-                evidence_request_id,
+                evidence_id,
                 control_id,
             )
             .await
@@ -281,25 +273,25 @@ impl ProofplaneMcp {
         }
 
         AuditEvent::new(
-            "evidence_request_control_mapping.deleted",
+            "evidence_control_mapping.deleted",
             AuditOutcome::Success,
             context.audit_actor(),
             AuditClientType::Mcp,
-            "remove_evidence_request_control_mapping",
+            "remove_evidence_control_mapping",
         )
         .workspace_id(workspace_id.into())
         .request_id(context.request_id.0)
-        .metadata("evidence_request_id", Uuid::from(evidence_request_id))
+        .metadata("evidence_id", Uuid::from(evidence_id))
         .metadata("control_id", Uuid::from(control_id))
         .object(AuditObject::new(
-            "evidence_request_control_mapping",
+            "evidence_control_mapping",
             Uuid::from(control_id),
         ))
         .emit();
 
-        Ok(Json(RemoveEvidenceRequestControlMappingResponse {
+        Ok(Json(RemoveEvidenceControlMappingResponse {
             removed: true,
-            evidence_request_id: evidence_request_id.to_string(),
+            evidence_id: evidence_id.to_string(),
             control_id: control_id.to_string(),
         }))
     }
@@ -335,15 +327,15 @@ struct ReplaceControlRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct MapEvidenceRequestToControlRequest {
-    evidence_request_id: Option<String>,
+struct MapEvidenceToControlRequest {
+    evidence_id: Option<String>,
     control_id: Option<String>,
     rationale: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct RemoveEvidenceRequestControlMappingRequest {
-    evidence_request_id: Option<String>,
+struct RemoveEvidenceControlMappingRequest {
+    evidence_id: Option<String>,
     control_id: Option<String>,
 }
 
@@ -434,22 +426,22 @@ impl From<FrameworkRequirement> for FrameworkRequirementResponseDTO {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct ListEvidenceRequestControlMappingsResponse {
-    mappings: Vec<EvidenceRequestControlMappingResponseDTO>,
+struct ListEvidenceControlMappingsResponse {
+    mappings: Vec<EvidenceControlMappingResponseDTO>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct EvidenceRequestControlMappingResponseDTO {
-    evidence_request_id: String,
+struct EvidenceControlMappingResponseDTO {
+    evidence_id: String,
     control: ControlSummaryResponseDTO,
     rationale: String,
     created_at: String,
 }
 
-impl From<EvidenceRequestControlMapping> for EvidenceRequestControlMappingResponseDTO {
-    fn from(mapping: EvidenceRequestControlMapping) -> Self {
+impl From<EvidenceControlMapping> for EvidenceControlMappingResponseDTO {
+    fn from(mapping: EvidenceControlMapping) -> Self {
         Self {
-            evidence_request_id: mapping.evidence_request_id.to_string(),
+            evidence_id: mapping.evidence_id.to_string(),
             control: ControlSummaryResponseDTO {
                 id: mapping.control.id.to_string(),
                 code: mapping.control.code,
@@ -471,20 +463,20 @@ struct ControlSummaryResponseDTO {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct RemoveEvidenceRequestControlMappingResponse {
+struct RemoveEvidenceControlMappingResponse {
     removed: bool,
-    evidence_request_id: String,
+    evidence_id: String,
     control_id: String,
 }
 
-fn parse_map_evidence_request_to_control_request(
-    args: MapEvidenceRequestToControlRequest,
-) -> Result<CreateEvidenceRequestControlMappingPayload, rmcp::ErrorData> {
-    let (evidence_request_id, control_id) = validate! {
-        evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
-            .map(EvidenceRequestId::from),
+fn parse_map_evidence_to_control_request(
+    args: MapEvidenceToControlRequest,
+) -> Result<CreateEvidenceControlMappingPayload, rmcp::ErrorData> {
+    let (evidence_id, control_id) = validate! {
+        evidence_id <- required_uuid("evidence_id", args.evidence_id)
+            .map(EvidenceId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => (evidence_request_id, control_id),
+        => (evidence_id, control_id),
     }
     .into_result()
     .map_err(argument_errors)?;
@@ -493,8 +485,8 @@ fn parse_map_evidence_request_to_control_request(
         .into_result()
         .map_err(domain_errors)?;
 
-    Ok(CreateEvidenceRequestControlMappingPayload {
-        evidence_request_id,
+    Ok(CreateEvidenceControlMappingPayload {
+        evidence_id,
         control_id,
         rationale,
     })
@@ -597,14 +589,14 @@ fn required_uuid_array(
     Validation::invalid_many(errors)
 }
 
-fn parse_remove_evidence_request_control_mapping_request(
-    args: RemoveEvidenceRequestControlMappingRequest,
-) -> Result<(EvidenceRequestId, ControlId), rmcp::ErrorData> {
+fn parse_remove_evidence_control_mapping_request(
+    args: RemoveEvidenceControlMappingRequest,
+) -> Result<(EvidenceId, ControlId), rmcp::ErrorData> {
     validate! {
-        evidence_request_id <- required_uuid("evidence_request_id", args.evidence_request_id)
-            .map(EvidenceRequestId::from),
+        evidence_id <- required_uuid("evidence_id", args.evidence_id)
+            .map(EvidenceId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => (evidence_request_id, control_id),
+        => (evidence_id, control_id),
     }
     .into_result()
     .map_err(argument_errors)

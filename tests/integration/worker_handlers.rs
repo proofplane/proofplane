@@ -2,27 +2,28 @@ use std::{sync::Arc, time::Duration as StdDuration};
 
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use futures_util::StreamExt;
 use proofplane::{
+    domain::CoverageWindow,
     handlers::{
-        attachment_finalization::AttachmentFinalizationHandler,
-        attachment_scan::AttachmentScanHandler,
+        submission_finalization::SubmissionFinalizationHandler,
+        submission_scan::SubmissionScanHandler,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     repository::OutboxMessage,
     scanner::ClamAvMalwareScanner,
-    worker::{WorkerMessage, ATTACHMENT_FINALIZATION_REQUESTED, ATTACHMENT_SCAN_REQUESTED},
+    worker::{WorkerMessage, SUBMISSION_FINALIZATION_REQUESTED, SUBMISSION_SCAN_REQUESTED},
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::{upload_attachment as upload_attachment_request, TestApp};
+use super::support::{upload_evidence_file, TestApp};
 
 const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
 #[tokio::test]
-async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
+async fn submission_worker_handlers_are_idempotent_for_duplicate_deliveries() {
     let app = TestApp::builder()
         .with_clamav()
         .workspace("workspace", "Worker idempotency workspace")
@@ -30,28 +31,27 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let attachment = upload_attachment_request(
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let submission = upload_submission_with_content(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
         "artifact.txt",
-        b"clean attachment",
+        b"clean evidence",
     )
     .await;
-    let attachment_id = attachment["id"]
-        .as_str()
-        .expect("attachment ID is a string");
-    let attachment_uuid = Uuid::parse_str(attachment_id).expect("attachment ID is a UUID");
-    let quarantine_key = attachment_object_key(&app, attachment_uuid).await;
+    let submission_uuid = submission.id;
+    let submission_id = submission_uuid.to_string();
+    let submission_id = submission_id.as_str();
+    let quarantine_key = submission.object_key.clone();
 
     let worker = app.worker_server().await;
-    let scan_message = outbox_message(&app, ATTACHMENT_SCAN_REQUESTED, attachment_id).await;
+    let scan_message = outbox_message(&app, SUBMISSION_SCAN_REQUESTED, submission_id).await;
 
     deliver_twice(&worker, &scan_message).await;
 
     let finalization_messages =
-        outbox_messages(&app, ATTACHMENT_FINALIZATION_REQUESTED, attachment_id).await;
+        outbox_messages(&app, SUBMISSION_FINALIZATION_REQUESTED, submission_id).await;
     assert_eq!(
         finalization_messages.len(),
         1,
@@ -60,13 +60,13 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
 
     deliver_twice(&worker, &finalization_messages[0]).await;
 
-    assert_eq!(attachment_status(&app, attachment_uuid).await, "uploaded");
+    assert_eq!(submission_status(&app, submission_uuid).await, "uploaded");
 
-    let final_key = attachment_object_key(&app, attachment_uuid).await;
+    let final_key = submission_object_key(&app, submission_uuid).await;
     assert_eq!(
         final_key,
         format!(
-            "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{attachment_id}/artifact.txt"
+            "workspaces/{workspace_id}/evidence/{evidence_id}/submissions/{submission_id}/artifact.txt"
         )
     );
     assert!(app
@@ -81,7 +81,7 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
         .exists());
 
     assert_eq!(
-        outbox_messages(&app, ATTACHMENT_FINALIZATION_REQUESTED, attachment_id)
+        outbox_messages(&app, SUBMISSION_FINALIZATION_REQUESTED, submission_id)
             .await
             .len(),
         1,
@@ -90,20 +90,20 @@ async fn attachment_worker_handlers_are_idempotent_for_duplicate_deliveries() {
 }
 
 #[tokio::test]
-async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retries() {
+async fn submission_scan_handler_coordinates_concrete_postgres_outcomes_and_retries() {
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_evidence(&app, workspace_id).await;
 
-    let clean = upload_attachment(&app, workspace_id, submission_id, "clean.txt").await;
+    let clean = upload_submission(&app, workspace_id, evidence_id, "clean.txt").await;
     let request_id = Uuid::new_v4();
-    let clean_handler = AttachmentScanHandler::new(
+    let clean_handler = SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_for(&app).await,
         5,
     );
-    let clean_message = scan_worker_message(&clean, submission_id, Some(request_id), Some(1));
+    let clean_message = scan_worker_message(&clean, Some(request_id), Some(1));
     clean_handler
         .handle_scan_requested(clean_message.clone())
         .await
@@ -113,10 +113,10 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
         .await
         .expect("duplicate clean scan is acknowledged");
 
-    assert_eq!(attachment_status(&app, clean.id).await, "finalizing");
+    assert_eq!(submission_status(&app, clean.id).await, "finalizing");
     let finalization_messages = outbox_messages(
         &app,
-        ATTACHMENT_FINALIZATION_REQUESTED,
+        SUBMISSION_FINALIZATION_REQUESTED,
         &clean.id.to_string(),
     )
     .await;
@@ -124,41 +124,36 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     assert_eq!(finalization_messages[0].request_id, Some(request_id));
 
     let malicious =
-        upload_attachment_with_content(&app, workspace_id, submission_id, "malicious.txt", EICAR)
+        upload_submission_with_content(&app, workspace_id, evidence_id, "malicious.txt", EICAR)
             .await;
-    AttachmentScanHandler::new(
+    SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_for(&app).await,
         5,
     )
-    .handle_scan_requested(scan_worker_message(
-        &malicious,
-        submission_id,
-        None,
-        Some(1),
-    ))
+    .handle_scan_requested(scan_worker_message(&malicious, None, Some(1)))
     .await
     .expect("malicious scan succeeds");
     assert_eq!(
-        attachment_status(&app, malicious.id).await,
+        submission_status(&app, malicious.id).await,
         "contains_virus"
     );
 
-    let failed = upload_attachment(&app, workspace_id, submission_id, "failed.txt").await;
-    AttachmentScanHandler::new(
+    let failed = upload_submission(&app, workspace_id, evidence_id, "failed.txt").await;
+    SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_with_address(&app, clamd_error_address().await, StdDuration::from_secs(1)).await,
         5,
     )
-    .handle_scan_requested(scan_worker_message(&failed, submission_id, None, Some(1)))
+    .handle_scan_requested(scan_worker_message(&failed, None, Some(1)))
     .await
     .expect("failed scan outcome is persisted");
-    assert_eq!(attachment_status(&app, failed.id).await, "failed");
+    assert_eq!(submission_status(&app, failed.id).await, "failed");
 
-    let retry = upload_attachment(&app, workspace_id, submission_id, "retry.txt").await;
-    let retry_handler = AttachmentScanHandler::new(
+    let retry = upload_submission(&app, workspace_id, evidence_id, "retry.txt").await;
+    let retry_handler = SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_with_address(
@@ -170,18 +165,18 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
         5,
     );
     assert!(retry_handler
-        .handle_scan_requested(scan_worker_message(&retry, submission_id, None, Some(4)))
+        .handle_scan_requested(scan_worker_message(&retry, None, Some(4)))
         .await
         .is_err());
-    assert_eq!(attachment_status(&app, retry.id).await, "pending");
+    assert_eq!(submission_status(&app, retry.id).await, "pending");
     retry_handler
-        .handle_scan_requested(scan_worker_message(&retry, submission_id, None, Some(5)))
+        .handle_scan_requested(scan_worker_message(&retry, None, Some(5)))
         .await
         .expect("final delivery persists failure");
-    assert_eq!(attachment_status(&app, retry.id).await, "failed");
+    assert_eq!(submission_status(&app, retry.id).await, "failed");
 
-    let timed_out = upload_attachment(&app, workspace_id, submission_id, "timeout.txt").await;
-    let timeout_handler = AttachmentScanHandler::new(
+    let timed_out = upload_submission(&app, workspace_id, evidence_id, "timeout.txt").await;
+    let timeout_handler = SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_with_address(
@@ -193,35 +188,30 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
         5,
     );
     assert!(timeout_handler
-        .handle_scan_requested(scan_worker_message(
-            &timed_out,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&timed_out, None, Some(1),))
         .await
         .is_err());
-    assert_eq!(attachment_status(&app, timed_out.id).await, "pending");
+    assert_eq!(submission_status(&app, timed_out.id).await, "pending");
 
-    let missing = upload_attachment(&app, workspace_id, submission_id, "missing.txt").await;
+    let missing = upload_submission(&app, workspace_id, evidence_id, "missing.txt").await;
     let store = filesystem_object_store(&app).await;
     store
         .delete_object(&object_key(&missing.object_key))
         .await
         .expect("quarantined object is deleted");
-    AttachmentScanHandler::new(
+    SubmissionScanHandler::new(
         app.postgres.clone(),
         store.clone(),
         scanner_for(&app).await,
         5,
     )
-    .handle_scan_requested(scan_worker_message(&missing, submission_id, None, Some(1)))
+    .handle_scan_requested(scan_worker_message(&missing, None, Some(1)))
     .await
     .expect("missing object is a terminal outcome");
-    assert_eq!(attachment_status(&app, missing.id).await, "failed");
+    assert_eq!(submission_status(&app, missing.id).await, "failed");
 
     let mismatched =
-        upload_attachment(&app, workspace_id, submission_id, "metadata-mismatch.txt").await;
+        upload_submission(&app, workspace_id, evidence_id, "metadata-mismatch.txt").await;
     let sidecar = metadata_path(app.object_storage_root(), &mismatched.object_key);
     let mut metadata: Value = serde_json::from_slice(
         &tokio::fs::read(&sidecar)
@@ -237,35 +227,25 @@ async fn attachment_scan_handler_coordinates_concrete_postgres_outcomes_and_retr
     .await
     .expect("mismatched object metadata writes");
     let mismatch_handler =
-        AttachmentScanHandler::new(app.postgres.clone(), store, scanner_for(&app).await, 5);
+        SubmissionScanHandler::new(app.postgres.clone(), store, scanner_for(&app).await, 5);
     assert!(mismatch_handler
-        .handle_scan_requested(scan_worker_message(
-            &mismatched,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&mismatched, None, Some(1),))
         .await
         .is_err());
-    assert_eq!(attachment_status(&app, mismatched.id).await, "pending");
+    assert_eq!(submission_status(&app, mismatched.id).await, "pending");
     mismatch_handler
-        .handle_scan_requested(scan_worker_message(
-            &mismatched,
-            submission_id,
-            None,
-            Some(5),
-        ))
+        .handle_scan_requested(scan_worker_message(&mismatched, None, Some(5)))
         .await
         .expect("final metadata mismatch is persisted");
-    assert_eq!(attachment_status(&app, mismatched.id).await, "failed");
+    assert_eq!(submission_status(&app, mismatched.id).await, "failed");
 }
 
 #[tokio::test]
-async fn attachment_scan_handler_rolls_back_update_and_outbox_failures() {
+async fn submission_scan_handler_rolls_back_update_and_outbox_failures() {
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let handler = AttachmentScanHandler::new(
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let handler = SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_for(&app).await,
@@ -273,84 +253,69 @@ async fn attachment_scan_handler_rolls_back_update_and_outbox_failures() {
     );
 
     let update_failure =
-        upload_attachment(&app, workspace_id, submission_id, "update-failure.txt").await;
+        upload_submission(&app, workspace_id, evidence_id, "update-failure.txt").await;
     install_failure_trigger(
         &app,
-        "evidence_attachments",
-        "attachment_update_failure",
+        "evidence_submissions",
+        "submission_update_failure",
         "BEFORE UPDATE",
         "NEW.upload_status = 'finalizing'",
     )
     .await;
     assert!(handler
-        .handle_scan_requested(scan_worker_message(
-            &update_failure,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&update_failure, None, Some(1),))
         .await
         .is_err());
-    assert_eq!(attachment_status(&app, update_failure.id).await, "pending");
-    remove_failure_trigger(&app, "evidence_attachments", "attachment_update_failure").await;
+    assert_eq!(submission_status(&app, update_failure.id).await, "pending");
+    remove_failure_trigger(&app, "evidence_submissions", "submission_update_failure").await;
 
     let outbox_failure =
-        upload_attachment(&app, workspace_id, submission_id, "outbox-failure.txt").await;
+        upload_submission(&app, workspace_id, evidence_id, "outbox-failure.txt").await;
     install_failure_trigger(
         &app,
         "outbox_messages",
-        "attachment_outbox_failure",
+        "submission_outbox_failure",
         "BEFORE INSERT",
-        "NEW.event_type = 'attachment.finalization_requested'",
+        "NEW.event_type = 'submission.finalization_requested'",
     )
     .await;
     assert!(handler
-        .handle_scan_requested(scan_worker_message(
-            &outbox_failure,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&outbox_failure, None, Some(1),))
         .await
         .is_err());
-    assert_eq!(attachment_status(&app, outbox_failure.id).await, "pending");
+    assert_eq!(submission_status(&app, outbox_failure.id).await, "pending");
     assert!(outbox_messages(
         &app,
-        ATTACHMENT_FINALIZATION_REQUESTED,
+        SUBMISSION_FINALIZATION_REQUESTED,
         &outbox_failure.id.to_string()
     )
     .await
     .is_empty());
-    remove_failure_trigger(&app, "outbox_messages", "attachment_outbox_failure").await;
+    remove_failure_trigger(&app, "outbox_messages", "submission_outbox_failure").await;
 }
 
 #[tokio::test]
-async fn attachment_finalization_handler_uses_concrete_postgres_and_external_store_failures() {
+async fn submission_finalization_handler_uses_concrete_postgres_and_external_store_failures() {
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let scanner = AttachmentScanHandler::new(
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let scanner = SubmissionScanHandler::new(
         app.postgres.clone(),
         filesystem_object_store(&app).await,
         scanner_for(&app).await,
         5,
     );
 
-    let successful = upload_attachment(&app, workspace_id, submission_id, "successful.txt").await;
+    let successful = upload_submission(&app, workspace_id, evidence_id, "successful.txt").await;
     scanner
-        .handle_scan_requested(scan_worker_message(
-            &successful,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&successful, None, Some(1)))
         .await
         .expect("scan prepares finalization");
     let store = filesystem_object_store(&app).await;
     let successful_quarantine = stored_object(&store, &successful.object_key).await;
-    let successful_final_key = final_object_key(workspace_id, submission_id, &successful);
-    AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
-        .handle_finalization_requested(finalization_worker_message(&successful, submission_id))
+    let successful_final_key = final_object_key(workspace_id, evidence_id, &successful);
+    SubmissionFinalizationHandler::new(app.postgres.clone(), store.clone())
+        .handle_finalization_requested(finalization_worker_message(&successful))
         .await
         .expect("finalization succeeds");
     assert_stored_object_matches(
@@ -360,11 +325,11 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
     );
     assert_object_missing(&store, &successful.object_key).await;
 
-    AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
-        .handle_finalization_requested(finalization_worker_message(&successful, submission_id))
+    SubmissionFinalizationHandler::new(app.postgres.clone(), store.clone())
+        .handle_finalization_requested(finalization_worker_message(&successful))
         .await
         .expect("duplicate finalization is acknowledged");
-    assert_eq!(attachment_status(&app, successful.id).await, "uploaded");
+    assert_eq!(submission_status(&app, successful.id).await, "uploaded");
     assert_stored_object_matches(
         stored_object(&store, successful_final_key.as_str()).await,
         &successful_quarantine,
@@ -375,30 +340,21 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
     #[cfg(unix)]
     {
         let delete_failure =
-            upload_attachment(&app, workspace_id, submission_id, "delete-failure.txt").await;
+            upload_submission(&app, workspace_id, evidence_id, "delete-failure.txt").await;
         scanner
-            .handle_scan_requested(scan_worker_message(
-                &delete_failure,
-                submission_id,
-                None,
-                Some(1),
-            ))
+            .handle_scan_requested(scan_worker_message(&delete_failure, None, Some(1)))
             .await
             .expect("scan prepares delete failure");
         let delete_failure_quarantine = stored_object(&store, &delete_failure.object_key).await;
-        let delete_failure_final_key =
-            final_object_key(workspace_id, submission_id, &delete_failure);
+        let delete_failure_final_key = final_object_key(workspace_id, evidence_id, &delete_failure);
         let quarantine_parent = object_path(app.object_storage_root(), &delete_failure.object_key)
             .parent()
             .expect("quarantine object has a parent")
             .to_path_buf();
         let permission_guard = ReadOnlyDirectoryGuard::new(quarantine_parent);
 
-        AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
-            .handle_finalization_requested(finalization_worker_message(
-                &delete_failure,
-                submission_id,
-            ))
+        SubmissionFinalizationHandler::new(app.postgres.clone(), store.clone())
+            .handle_finalization_requested(finalization_worker_message(&delete_failure))
             .await
             .expect("delete failure is best effort");
         assert_stored_object_matches(
@@ -407,19 +363,13 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
             &delete_failure_final_key,
         );
         assert!(object_path(app.object_storage_root(), &delete_failure.object_key).exists());
-        assert_eq!(attachment_status(&app, delete_failure.id).await, "uploaded");
+        assert_eq!(submission_status(&app, delete_failure.id).await, "uploaded");
         permission_guard.restore();
     }
 
-    let copy_failure =
-        upload_attachment(&app, workspace_id, submission_id, "copy-failure.txt").await;
+    let copy_failure = upload_submission(&app, workspace_id, evidence_id, "copy-failure.txt").await;
     scanner
-        .handle_scan_requested(scan_worker_message(
-            &copy_failure,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&copy_failure, None, Some(1)))
         .await
         .expect("scan prepares copy failure");
     store
@@ -427,54 +377,42 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         .await
         .expect("quarantined object is removed to inject copy failure");
     assert!(
-        AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
-            .handle_finalization_requested(finalization_worker_message(
-                &copy_failure,
-                submission_id,
-            ))
+        SubmissionFinalizationHandler::new(app.postgres.clone(), store.clone())
+            .handle_finalization_requested(finalization_worker_message(&copy_failure))
             .await
             .is_err()
     );
-    assert_eq!(attachment_status(&app, copy_failure.id).await, "finalizing");
+    assert_eq!(submission_status(&app, copy_failure.id).await, "finalizing");
     assert_object_missing(
         &store,
-        final_object_key(workspace_id, submission_id, &copy_failure).as_str(),
+        final_object_key(workspace_id, evidence_id, &copy_failure).as_str(),
     )
     .await;
 
     let database_failure =
-        upload_attachment(&app, workspace_id, submission_id, "database-failure.txt").await;
+        upload_submission(&app, workspace_id, evidence_id, "database-failure.txt").await;
     scanner
-        .handle_scan_requested(scan_worker_message(
-            &database_failure,
-            submission_id,
-            None,
-            Some(1),
-        ))
+        .handle_scan_requested(scan_worker_message(&database_failure, None, Some(1)))
         .await
         .expect("scan prepares database failure");
     install_failure_trigger(
         &app,
-        "evidence_attachments",
-        "attachment_uploaded_failure",
+        "evidence_submissions",
+        "submission_uploaded_failure",
         "BEFORE UPDATE",
         "NEW.upload_status = 'uploaded'",
     )
     .await;
     let database_failure_quarantine = stored_object(&store, &database_failure.object_key).await;
-    let database_failure_final_key =
-        final_object_key(workspace_id, submission_id, &database_failure);
+    let database_failure_final_key = final_object_key(workspace_id, evidence_id, &database_failure);
     assert!(
-        AttachmentFinalizationHandler::new(app.postgres.clone(), store.clone())
-            .handle_finalization_requested(finalization_worker_message(
-                &database_failure,
-                submission_id,
-            ))
+        SubmissionFinalizationHandler::new(app.postgres.clone(), store.clone())
+            .handle_finalization_requested(finalization_worker_message(&database_failure))
             .await
             .is_err()
     );
     assert_eq!(
-        attachment_status(&app, database_failure.id).await,
+        submission_status(&app, database_failure.id).await,
         "finalizing"
     );
     assert_stored_object_matches(
@@ -487,7 +425,7 @@ async fn attachment_finalization_handler_uses_concrete_postgres_and_external_sto
         &database_failure_quarantine,
         &object_key(&database_failure.object_key),
     );
-    remove_failure_trigger(&app, "evidence_attachments", "attachment_uploaded_failure").await;
+    remove_failure_trigger(&app, "evidence_submissions", "submission_uploaded_failure").await;
 }
 
 async fn deliver_twice(worker: &axum_test::TestServer, message: &OutboxMessage) {
@@ -540,37 +478,29 @@ fn pubsub_envelope(message: &OutboxMessage) -> Value {
     })
 }
 
-async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
-    let request = app
-        .create_evidence_request(
+async fn create_evidence(app: &TestApp, workspace_id: Uuid) -> Uuid {
+    let evidence = app
+        .create_evidence(
             workspace_id,
             &json!({
                 "title": "Worker handler target",
                 "description": "Integration fixture",
                 "collection_instructions": "Upload the worker integration fixture.",
-                "cadence": "quarterly",
-                "due_at": (Utc::now() + Duration::days(7))
-                    .to_rfc3339_opts(SecondsFormat::Secs, true),
-                "schedule_anchor_at": "2026-01-01T00:00:00Z",
-                "freshness_window_days": 30,
                 "status": "active",
             }),
         )
         .await;
-    let evidence_request_id = uuid_field(&request, "id");
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            evidence_request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-01-31T23:59:59Z",
-            "source_system": "integration",
-            "collection_method": "worker test",
-            }),
-        )
-        .await;
-    uuid_field(&submission, "id")
+    uuid_field(&evidence, "id")
+}
+
+fn worker_coverage() -> CoverageWindow {
+    CoverageWindow::new(
+        "2026-01-01T00:00:00Z"
+            .parse()
+            .expect("coverage start parses"),
+        "2026-01-31T23:59:59Z".parse().expect("coverage end parses"),
+    )
+    .expect("coverage window is ordered")
 }
 
 fn uuid_field(value: &Value, field: &str) -> Uuid {
@@ -591,124 +521,108 @@ async fn worker_test_app() -> TestApp {
         .await
 }
 
-struct UploadedAttachment {
+/// One uploaded file, which in this model is one submission.
+struct UploadedSubmission {
     id: Uuid,
     object_key: String,
     filename: String,
 }
 
-async fn upload_attachment(
+async fn upload_submission(
     app: &TestApp,
     workspace_id: Uuid,
-    submission_id: Uuid,
+    evidence_id: Uuid,
     filename: &str,
-) -> UploadedAttachment {
-    upload_attachment_with_content(
+) -> UploadedSubmission {
+    upload_submission_with_content(
         app,
         workspace_id,
-        submission_id,
+        evidence_id,
         filename,
-        b"handler integration attachment",
+        b"handler integration evidence",
     )
     .await
 }
 
-async fn upload_attachment_with_content(
+async fn upload_submission_with_content(
     app: &TestApp,
     workspace_id: Uuid,
-    submission_id: Uuid,
+    evidence_id: Uuid,
     filename: &str,
     content: &[u8],
-) -> UploadedAttachment {
-    let attachment =
-        upload_attachment_request(app, workspace_id, submission_id, filename, content).await;
+) -> UploadedSubmission {
+    let submission = upload_evidence_file(
+        app,
+        workspace_id,
+        evidence_id,
+        worker_coverage(),
+        filename,
+        content,
+    )
+    .await;
+    let id = uuid_field(&submission, "id");
 
-    UploadedAttachment {
-        id: Uuid::parse_str(
-            attachment["id"]
-                .as_str()
-                .expect("attachment ID is a string"),
-        )
-        .expect("attachment ID is a UUID"),
-        object_key: attachment_object_key(
-            app,
-            Uuid::parse_str(
-                attachment["id"]
-                    .as_str()
-                    .expect("attachment ID is a string"),
-            )
-            .expect("attachment ID is a UUID"),
-        )
-        .await,
+    UploadedSubmission {
+        id,
+        object_key: submission_object_key(app, id).await,
         filename: filename.to_owned(),
     }
 }
 
-async fn attachment_object_key(app: &TestApp, attachment_id: Uuid) -> String {
+async fn submission_object_key(app: &TestApp, submission_id: Uuid) -> String {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .query_one(
-            "SELECT object_key FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
+            "SELECT object_key FROM evidence_submissions WHERE id = $1",
+            &[&submission_id],
         )
         .await
-        .expect("attachment object key loads")
+        .expect("submission object key loads")
         .get("object_key")
 }
 
 fn scan_worker_message(
-    attachment: &UploadedAttachment,
-    submission_id: Uuid,
+    submission: &UploadedSubmission,
     request_id: Option<Uuid>,
     delivery_attempt: Option<u32>,
 ) -> WorkerMessage {
     WorkerMessage {
         message_id: Uuid::new_v4().to_string(),
-        event_type: ATTACHMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "evidence_attachment".to_owned(),
-        aggregate_id: attachment.id.to_string(),
+        event_type: SUBMISSION_SCAN_REQUESTED.to_owned(),
+        aggregate_type: "evidence_submission".to_owned(),
+        aggregate_id: submission.id.to_string(),
         request_id,
-        payload: json!({
-            "evidence_submission_id": submission_id.to_string(),
-            "object_key": attachment.object_key,
-        }),
+        payload: json!({ "object_key": submission.object_key }),
         delivery_attempt,
     }
 }
 
-fn finalization_worker_message(
-    attachment: &UploadedAttachment,
-    submission_id: Uuid,
-) -> WorkerMessage {
+fn finalization_worker_message(submission: &UploadedSubmission) -> WorkerMessage {
     WorkerMessage {
         message_id: Uuid::new_v4().to_string(),
-        event_type: ATTACHMENT_FINALIZATION_REQUESTED.to_owned(),
-        aggregate_type: "evidence_attachment".to_owned(),
-        aggregate_id: attachment.id.to_string(),
+        event_type: SUBMISSION_FINALIZATION_REQUESTED.to_owned(),
+        aggregate_type: "evidence_submission".to_owned(),
+        aggregate_id: submission.id.to_string(),
         request_id: None,
-        payload: json!({
-            "evidence_submission_id": submission_id.to_string(),
-            "object_key": attachment.object_key,
-        }),
+        payload: json!({ "object_key": submission.object_key }),
         delivery_attempt: Some(1),
     }
 }
 
-async fn attachment_status(app: &TestApp, attachment_id: Uuid) -> String {
+async fn submission_status(app: &TestApp, submission_id: Uuid) -> String {
     let client = app.postgres().get().await.expect("connection opens");
     client
         .query_one(
-            "SELECT upload_status FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
+            "SELECT upload_status FROM evidence_submissions WHERE id = $1",
+            &[&submission_id],
         )
         .await
-        .expect("attachment status loads")
+        .expect("submission status loads")
         .get("upload_status")
 }
 
-// Each TestApp owns a dedicated Postgres container, so these triggers are test-local.
 async fn install_failure_trigger(
     app: &TestApp,
     table: &str,
@@ -836,12 +750,12 @@ fn object_key(value: &str) -> ObjectKey {
 
 fn final_object_key(
     workspace_id: Uuid,
-    submission_id: Uuid,
-    attachment: &UploadedAttachment,
+    evidence_id: Uuid,
+    submission: &UploadedSubmission,
 ) -> ObjectKey {
     ObjectKey::parse(format!(
-        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments/{}/{}",
-        attachment.id, attachment.filename
+        "workspaces/{workspace_id}/evidence/{evidence_id}/submissions/{}/{}",
+        submission.id, submission.filename
     ))
     .expect("final object key is valid")
 }

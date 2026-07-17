@@ -2,17 +2,16 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
-        EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
+        CoverageWindow, CreateEvidenceSubmissionPayload, EvidenceId, EvidenceSubmission,
         EvidenceSubmissionId,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{ArchiveAttachmentResult, NewOutboxMessage, Postgres},
+    repository::{ArchiveSubmissionResult, NewOutboxMessage, Postgres},
     services::Error,
-    worker::ATTACHMENT_SCAN_REQUESTED,
+    worker::SUBMISSION_SCAN_REQUESTED,
 };
 
 use super::agent_connections::AgentConnectionContext;
@@ -34,17 +33,6 @@ impl Clone for EvidenceSubmissionService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadEvidenceAttachmentPayload {
-    pub evidence_submission_id: EvidenceSubmissionId,
-    pub filename: String,
-    pub content_type: String,
-    pub content_length: i64,
-    pub object_key: String,
-    pub checksum_sha256: String,
-    pub checksum_crc32c: String,
-}
-
 impl EvidenceSubmissionService {
     pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
         Self {
@@ -53,30 +41,11 @@ impl EvidenceSubmissionService {
         }
     }
 
-    pub async fn create(
-        &self,
-        connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
-        mut payload: CreateEvidenceSubmissionPayload,
-    ) -> Result<Option<EvidenceSubmission>, Error> {
-        payload.evidence_request_id = evidence_request_id;
-
-        Ok(self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| context.create_evidence_submission(&payload).await,
-            )
-            .await?)
-    }
-
     pub async fn get(
         &self,
         connection: AgentConnectionContext,
         id: EvidenceSubmissionId,
-    ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
+    ) -> Result<Option<EvidenceSubmission>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
@@ -85,48 +54,70 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn latest_for_request(
+    pub async fn list_for_evidence(
         &self,
         connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
-    ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
+        evidence_id: EvidenceId,
+    ) -> Result<Option<Vec<EvidenceSubmission>>, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
+                if !context.evidence_exists(evidence_id).await? {
+                    return Ok(None);
+                }
+
+                context
+                    .list_evidence_submissions(evidence_id)
+                    .await
+                    .map(Some)
+            })
+            .await?)
+    }
+
+    pub async fn list_for_coverage(
+        &self,
+        connection: &AgentConnectionContext,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
+    ) -> Result<Vec<EvidenceSubmission>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context
-                    .latest_evidence_submission_for_request(evidence_request_id)
+                    .list_evidence_submissions_for_coverage(evidence_id, coverage)
                     .await
             })
             .await?)
     }
 
-    pub async fn evidence_submission_exists(
+    pub async fn evidence_exists(
         &self,
         connection: &AgentConnectionContext,
-        id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
     ) -> Result<bool, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.evidence_submission_exists(id).await
+                context.evidence_exists(evidence_id).await
             })
             .await?)
     }
 
-    pub async fn upload_attachment<S>(
+    /// Streams the uploaded bytes into quarantine. The submission row does not
+    /// exist yet, so the key is namespaced by a fresh upload id.
+    pub async fn upload_file<S>(
         &self,
         connection: &AgentConnectionContext,
-        submission_id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
         filename: String,
         content_type: String,
         chunks: S,
-    ) -> Result<UploadEvidenceAttachmentPayload, Error>
+    ) -> Result<CreateEvidenceSubmissionPayload, Error>
     where
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let upload_id = Uuid::new_v4();
-        let stable_prefix =
-            format!("quarantine/evidence-submissions/{submission_id}/attachments/{upload_id}");
+        let stable_prefix = format!("quarantine/evidence/{evidence_id}/submissions/{upload_id}");
         let key = ObjectKey::new(connection.workspace_id, stable_prefix, &filename)?;
 
         let metadata = self
@@ -145,44 +136,37 @@ impl EvidenceSubmissionService {
             })
         })?;
 
-        let object_key = metadata.key.to_string();
-        Ok(UploadEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
+        Ok(CreateEvidenceSubmissionPayload {
             filename,
             content_type: metadata.content_type,
             content_length,
-            object_key,
+            object_key: metadata.key.to_string(),
             checksum_sha256: metadata.sha256,
+            // The object store computes only sha256; the caller streaming the
+            // body fills this in from its own running crc32c.
             checksum_crc32c: String::new(),
         })
     }
 
-    pub async fn delete_uploaded_attachment_object(&self, object_key: &str) -> Result<(), Error> {
+    pub async fn delete_uploaded_object(&self, object_key: &str) -> Result<(), Error> {
         self.object_store
             .delete_object(&ObjectKey::parse(object_key.to_owned())?)
             .await?;
         Ok(())
     }
 
-    pub async fn create_attachment(
+    /// Records one uploaded file as a submission and enqueues its scan in the
+    /// same transaction. If either fails the quarantined object is removed, so
+    /// no object outlives the row that owns it.
+    pub async fn create_submission(
         &self,
         connection: &AgentConnectionContext,
         request_id: Uuid,
-        submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceAttachmentPayload,
-    ) -> Result<EvidenceAttachment, Error> {
-        payload.evidence_submission_id = submission_id;
-
-        let create_payload = CreateEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
-            filename: payload.filename,
-            content_type: payload.content_type,
-            content_length: payload.content_length,
-            object_key: payload.object_key.clone(),
-            checksum_sha256: payload.checksum_sha256,
-            checksum_crc32c: payload.checksum_crc32c,
-        };
-
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
+        payload: CreateEvidenceSubmissionPayload,
+    ) -> Result<Option<EvidenceSubmission>, Error> {
+        let object_key = payload.object_key.clone();
         let result = self
             .repository
             .in_agent_connection_workspace_context(
@@ -190,125 +174,66 @@ impl EvidenceSubmissionService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    let attachment = context.create_evidence_attachment(&create_payload).await?;
-                    context
-                        .append_outbox_message(&attachment_scan_requested_message(
-                            &attachment,
-                            request_id,
-                        ))
-                        .await?;
-
-                    Ok(attachment)
-                },
-            )
-            .await;
-
-        match result {
-            Ok(attachment) => Ok(attachment),
-            Err(error) => {
-                let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
-                    .await;
-                Err(error.into())
-            }
-        }
-    }
-
-    pub async fn create_first_attachment(
-        &self,
-        connection: &AgentConnectionContext,
-        request_id: Uuid,
-        submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceAttachmentPayload,
-    ) -> Result<Option<EvidenceAttachment>, Error> {
-        payload.evidence_submission_id = submission_id;
-
-        let create_payload = CreateEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
-            filename: payload.filename,
-            content_type: payload.content_type,
-            content_length: payload.content_length,
-            object_key: payload.object_key.clone(),
-            checksum_sha256: payload.checksum_sha256,
-            checksum_crc32c: payload.checksum_crc32c,
-        };
-
-        let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let Some(attachment) = context
-                        .create_first_evidence_attachment(&create_payload)
+                    let Some(submission) = context
+                        .create_evidence_submission(evidence_id, coverage, &payload)
                         .await?
                     else {
                         return Ok(None);
                     };
                     context
-                        .append_outbox_message(&attachment_scan_requested_message(
-                            &attachment,
+                        .append_outbox_message(&submission_scan_requested_message(
+                            &submission,
                             request_id,
                         ))
                         .await?;
 
-                    Ok(Some(attachment))
+                    Ok(Some(submission))
                 },
             )
             .await;
 
         match result {
-            Ok(Some(attachment)) => Ok(Some(attachment)),
+            Ok(Some(submission)) => Ok(Some(submission)),
             Ok(None) => {
-                let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
-                    .await;
+                let _ = self.delete_uploaded_object(&object_key).await;
                 Ok(None)
             }
             Err(error) => {
-                let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
-                    .await;
+                let _ = self.delete_uploaded_object(&object_key).await;
                 Err(error.into())
             }
         }
     }
 
-    pub async fn archive_attachment(
+    pub async fn archive_submission(
         &self,
         connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
-        attachment_id: EvidenceAttachmentId,
-    ) -> Result<ArchiveAttachmentResult, Error> {
+    ) -> Result<ArchiveSubmissionResult, Error> {
         Ok(self
             .repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
                 connection.connection_id,
-                async move |context| {
-                    context
-                        .archive_evidence_attachment(submission_id, attachment_id)
-                        .await
-                },
+                async move |context| context.archive_evidence_submission(submission_id).await,
             )
             .await?)
     }
 }
 
-fn attachment_scan_requested_message(
-    attachment: &EvidenceAttachment,
+fn submission_scan_requested_message(
+    submission: &EvidenceSubmission,
     request_id: Uuid,
 ) -> NewOutboxMessage {
     NewOutboxMessage {
         topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: ATTACHMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "evidence_attachment".to_owned(),
-        aggregate_id: Uuid::from(attachment.id).to_string(),
+        event_type: SUBMISSION_SCAN_REQUESTED.to_owned(),
+        aggregate_type: "evidence_submission".to_owned(),
+        aggregate_id: Uuid::from(submission.id).to_string(),
         payload: serde_json::json!({
-            "evidence_submission_id": Uuid::from(attachment.evidence_submission_id).to_string(),
-            "object_key": attachment.object_key,
+            "evidence_id": Uuid::from(submission.evidence_id).to_string(),
+            "object_key": submission.object_key,
         }),
         request_id: Some(request_id),
     }

@@ -18,9 +18,9 @@ use crate::config::{PasetoDownloadConfig, PasetoMcpOAuthConfig, PasetoUploadGran
 // used for the right purpose. For example, for API keys, we want to make sure
 // that the tokens we're verifying were issued with the intention of them
 // being API keys and not something else.
-const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-download:v1";
-const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-grant:v1";
-const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:attachment-upload-session:v1";
+const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:submission-download:v1";
+const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:evidence-upload-grant:v1";
+const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:evidence-upload-session:v1";
 const MCP_OAUTH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
@@ -614,8 +614,8 @@ mod tests {
     use super::*;
     use crate::config::{PasetoDownloadKey, PasetoUploadGrantConfig, PasetoUploadGrantKey};
 
-    const DOWNLOAD_AUDIENCE: &str = "proofplane-attachment-download";
-    const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-attachment-upload-grant";
+    const DOWNLOAD_AUDIENCE: &str = "proofplane-submission-download";
+    const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-evidence-upload-grant";
     const DOWNLOAD_SECRET: &str = "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs";
     const UPLOAD_GRANT_SECRET: &str = "k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY";
     const OTHER_DOWNLOAD_SECRET: &str = UPLOAD_GRANT_SECRET;
