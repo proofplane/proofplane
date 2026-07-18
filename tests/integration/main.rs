@@ -8,6 +8,7 @@ mod me;
 mod migrations;
 mod oauth;
 mod policies;
+mod policy_document_upload_sessions;
 mod policy_documents;
 mod repository;
 mod support;

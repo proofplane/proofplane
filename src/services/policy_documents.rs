@@ -189,7 +189,7 @@ impl PolicyDocumentService {
         Ok(result)
     }
 
-    async fn delete_staged_object(&self, object_key: &str) -> Result<(), Error> {
+    pub async fn delete_staged_object(&self, object_key: &str) -> Result<(), Error> {
         delete_staged_document(&self.object_store, object_key).await
     }
 }

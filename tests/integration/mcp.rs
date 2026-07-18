@@ -2356,7 +2356,7 @@ WHERE policy_id = $1
         .get("/policy-document-uploads")
         .add_header("cookie", cookie.clone())
         .await
-        .assert_status(StatusCode::NO_CONTENT);
+        .assert_status_ok();
     app.server()
         .get("/evidence-document-uploads")
         .add_header("cookie", cookie.clone())

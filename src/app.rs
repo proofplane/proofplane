@@ -45,6 +45,7 @@ use crate::{
         policy_document_upload_grants::{
             PolicyDocumentUploadGrantService, POLICY_UPLOAD_GRANT_AUDIENCE,
         },
+        policy_documents::PolicyDocumentService,
         policy_upload_sessions::{PolicyUploadSessionTokenService, POLICY_UPLOAD_SESSION_AUDIENCE},
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
@@ -163,6 +164,10 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         policy_upload_session_encryptor,
         policy_upload_session_decryptor,
     );
+    let policy_document_service = PolicyDocumentService::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store.clone(),
+    );
     let control_service = ControlService::new(dependencies.postgres.clone());
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
@@ -232,9 +237,12 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .merge(policy_document_upload_sessions::router(
             PolicyDocumentUploadSessionState {
                 grants: policy_document_upload_grant_service,
+                downloads: document_download_service.clone(),
                 sessions: policy_upload_session_service,
                 policies: PolicyService::new(dependencies.postgres.clone()),
+                documents: policy_document_service,
                 secure_cookie: secure_upload_cookie,
+                max_document_bytes: dependencies.config.uploads.max_document_bytes,
             },
         ))
         .merge(auditor_access::router(AuditorAccessState {

@@ -13,7 +13,10 @@ use crate::{
     projections::policy_projection::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
     },
-    repository::{ArchiveDocumentResult, WorkspaceReadContext, WorkspaceTransactionContext},
+    repository::{
+        ArchiveDocumentResult, DocumentDownloadCandidate, WorkspaceReadContext,
+        WorkspaceTransactionContext,
+    },
 };
 
 use super::{constraints::classify_db_error, documents::document_from_row, Error};
@@ -456,6 +459,41 @@ WHERE m.policy_id = $1
 }
 
 impl WorkspaceReadContext {
+    pub async fn get_policy_document_for_download(
+        &self,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> Result<Option<DocumentDownloadCandidate>, Error> {
+        self.client
+            .query_opt(
+                r#"
+SELECT a.*, a.owner_id AS policy_id
+FROM documents a
+JOIN policies p ON p.id = a.owner_id
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND p.archived_at IS NULL
+  AND a.owner_type = 'policy'
+  AND a.workspace_id = $2
+  AND a.id = $3
+  AND a.archived = false
+"#,
+                &[
+                    &Uuid::from(policy_id),
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(document_id),
+                ],
+            )
+            .await?
+            .map(|row| {
+                Ok(DocumentDownloadCandidate {
+                    workspace_id: self.workspace_id,
+                    document: policy_document_from_row(&row)?,
+                })
+            })
+            .transpose()
+    }
+
     pub async fn get_current_policy_document(
         &self,
         policy_id: PolicyId,
