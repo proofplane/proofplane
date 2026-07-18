@@ -221,7 +221,7 @@ async fn archive_file(
             };
             Ok(conflict_response(
                 &page,
-                "Archive failed: document is still processing",
+                "Archive failed: this document is not ready to archive",
             ))
         }
     }
@@ -495,7 +495,7 @@ fn render_upload_page(page: &PolicyUploadPage, message: Option<&str>) -> String 
     let message = message
         .map(|message| {
             format!(
-                r#"<section class="notice" role="alert"><strong>{}</strong><p>Return to your MCP client if you need a new document-management session.</p></section>"#,
+                r#"<section class="notice" role="alert"><strong>{}</strong><p>Review the message above, then try again.</p></section>"#,
                 escape_html(message)
             )
         })
@@ -505,12 +505,12 @@ fn render_upload_page(page: &PolicyUploadPage, message: Option<&str>) -> String 
         .as_ref()
         .map(document_row)
         .unwrap_or_else(|| {
-            r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No policy document yet</strong><p>Choose one file to start the document lifecycle.</p></div></div>"#.to_owned()
+            r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No policy document yet</strong><p>Add the document for this policy.</p></div></div>"#.to_owned()
         });
     let upload = if page.document.is_none() {
         r#"<aside class="upload-panel" aria-labelledby="upload-file">
 <h2 id="upload-file">Add policy document</h2>
-<p>One file only. Uploads are scanned before they become available.</p>
+<p>Add the current document for this policy.</p>
 <form class="upload-form" method="post" action="/policy-document-uploads/files" enctype="multipart/form-data">
 <label for="file">Choose file</label>
 <input id="file" name="file" type="file" required>
@@ -608,7 +608,7 @@ fn document_row(document: &PolicyUploadDocumentResponse) -> String {
         r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody><tr><td class="filename" data-label="File">{}</td><td data-label="Size">{}</td><td data-label="Status"><span class="status">{}</span></td><td data-label="Actions">{}</td></tr></tbody></table>"#,
         escape_html(&document.filename),
         format_bytes(document.content_length),
-        escape_html(document.upload_status.as_str()),
+        escape_html(document_status_label(document.upload_status)),
         document_actions(document),
     )
 }
@@ -637,6 +637,16 @@ fn document_actions(document: &PolicyUploadDocumentResponse) -> String {
         String::new()
     } else {
         format!(r#"<div class="actions">{}</div>"#, actions.join(""))
+    }
+}
+
+fn document_status_label(status: DocumentUploadStatus) -> &'static str {
+    match status {
+        DocumentUploadStatus::PendingUpload => "Uploading",
+        DocumentUploadStatus::Finalizing => "Scanning",
+        DocumentUploadStatus::Uploaded => "Uploaded",
+        DocumentUploadStatus::ContainsVirus => "Upload failed",
+        DocumentUploadStatus::FailedUpload => "Upload failed",
     }
 }
 
@@ -684,7 +694,7 @@ fn unavailable_response() -> Response {
 }
 
 fn unavailable_page() -> String {
-    r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Policy document link unavailable</title><style>:root{color-scheme:dark;--canvas:oklch(17% .012 170);--line:oklch(39% .018 170);--ink:oklch(94% .01 150);--muted:oklch(76% .015 155);--accent:oklch(78% .09 174)}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--canvas);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}header{border-bottom:1px solid var(--line);padding:14px max(16px,calc((100vw - 1080px)/2));font-size:.78rem;font-weight:750;letter-spacing:.08em}header span{color:var(--muted);font-weight:550}main{width:min(690px,calc(100% - 32px));min-height:calc(100vh - 49px);margin:0 auto;display:grid;align-content:center;padding:40px 0}.eyebrow{margin:0 0 10px;color:var(--accent);font-size:.78rem;font-weight:700}h1{max-width:20ch;margin:0 0 12px;font-size:clamp(1.8rem,4vw,2.5rem);line-height:1.05}p{max-width:58ch;margin:0;color:var(--muted);line-height:1.55}</style></head><body><header>PROOFPLANE <span>/ POLICY DOCUMENTS</span></header><main><p class="eyebrow">SESSION ENDED</p><h1>This policy document link is no longer available</h1><p>Return to your MCP client and request a new policy document link.</p></main></body></html>"#.to_owned()
+    r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Policy document link unavailable</title><style>:root{color-scheme:dark;--canvas:oklch(17% .012 170);--line:oklch(39% .018 170);--ink:oklch(94% .01 150);--muted:oklch(76% .015 155);--accent:oklch(78% .09 174)}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--canvas);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}header{border-bottom:1px solid var(--line);padding:14px max(16px,calc((100vw - 1080px)/2));font-size:.78rem;font-weight:750;letter-spacing:.08em}header span{color:var(--muted);font-weight:550}main{width:min(690px,calc(100% - 32px));min-height:calc(100vh - 49px);margin:0 auto;display:grid;align-content:center;padding:40px 0}.eyebrow{margin:0 0 10px;color:var(--accent);font-size:.78rem;font-weight:700}h1{max-width:20ch;margin:0 0 12px;font-size:clamp(1.8rem,4vw,2.5rem);line-height:1.05}p{max-width:58ch;margin:0;color:var(--muted);line-height:1.55}</style></head><body><header>PROOFPLANE <span>/ POLICY DOCUMENTS</span></header><main><p class="eyebrow">LINK UNAVAILABLE</p><h1>This policy document link is no longer available</h1><p>Return to your MCP client and request a new policy document link.</p></main></body></html>"#.to_owned()
 }
 
 fn policy_upload_session_cookie(headers: &HeaderMap) -> Option<&str> {
@@ -756,7 +766,8 @@ impl From<PolicyDetail> for PolicyUploadPage {
 #[cfg(test)]
 mod tests {
     use super::{
-        document_actions, render_upload_page, PolicyUploadDocumentResponse, PolicyUploadPage,
+        document_actions, document_status_label, render_upload_page, PolicyUploadDocumentResponse,
+        PolicyUploadPage,
     };
     use crate::domain::DocumentUploadStatus;
 
@@ -831,5 +842,29 @@ mod tests {
                 "archive eligibility for {status:?}"
             );
         }
+    }
+
+    #[test]
+    fn policy_page_uses_user_facing_status_labels() {
+        assert_eq!(
+            document_status_label(DocumentUploadStatus::PendingUpload),
+            "Uploading"
+        );
+        assert_eq!(
+            document_status_label(DocumentUploadStatus::Finalizing),
+            "Scanning"
+        );
+        assert_eq!(
+            document_status_label(DocumentUploadStatus::Uploaded),
+            "Uploaded"
+        );
+        assert_eq!(
+            document_status_label(DocumentUploadStatus::ContainsVirus),
+            "Upload failed"
+        );
+        assert_eq!(
+            document_status_label(DocumentUploadStatus::FailedUpload),
+            "Upload failed"
+        );
     }
 }

@@ -76,7 +76,8 @@ GROUP BY d.id
     current.assert_status_ok();
     let body = current.text();
     assert!(body.contains("security-final.txt"));
-    assert!(body.contains("pending"));
+    assert!(body.contains("Uploading"));
+    assert!(!body.contains("pending"));
     assert!(!body.contains("name=\"file\""));
     assert!(!body.contains("Download policy document"));
     assert!(!body.contains("Archive policy document"));
