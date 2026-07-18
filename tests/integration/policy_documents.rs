@@ -83,6 +83,7 @@ async fn policy_document_create_race_cleans_loser_and_terminal_archive_allows_re
         .await
         .expect("current document reads")
         .expect("current document exists");
+    assert_eq!(document.created_by_user_id, connection.user_id);
     assert_eq!(
         service
             .archive(&connection, Uuid::new_v4(), policy_id, document.id(),)

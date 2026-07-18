@@ -183,6 +183,13 @@ create payloads of their own. Their HTTP, MCP, and auditor projections may keep
 the product-facing “document” terminology, but those projections are derived
 from `Document` at the boundary.
 
+Every document has a required `created_by_user_id` foreign key. Creation
+derives it from the authenticated workspace transaction context rather than a
+caller-supplied payload, so clients cannot forge uploader attribution. MCP and
+auditor document metadata expose the user ID. For delegated browser uploads,
+this identifies the user whose agent connection issued the session; the bearer
+flow does not prove which human physically operated a shared link.
+
 Policy document object keys use policy-specific quarantine and finalized
 namespaces. Scanner and finalizer retries remain idempotent. Stale, duplicate,
 wrong-owner, wrong-aggregate, and metadata-mismatched messages cannot advance a
@@ -309,6 +316,8 @@ comments, and a compliance-officer policy SPA are deferred.
 
 ## Revisions
 
+- 2026-07-17: Added required, repository-derived `created_by_user_id`
+  attribution to shared documents and their safe metadata projections.
 - 2026-07-17: Standardized the complete upload lifecycle on `document`
   terminology, including database identifiers, object keys,
   routes, MCP contracts, worker events, configuration, audit events, and docs.

@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{ids::uuid_id, DomainError, EvidenceSubmissionId, PolicyId};
+use super::{ids::uuid_id, DomainError, EvidenceSubmissionId, PolicyId, UserId};
 
 uuid_id!(DocumentId);
 
@@ -114,6 +114,7 @@ impl DocumentIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     pub identity: DocumentIdentity,
+    pub created_by_user_id: UserId,
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,

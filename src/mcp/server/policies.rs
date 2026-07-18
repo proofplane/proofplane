@@ -353,6 +353,7 @@ struct PolicyControlSummaryResponse {
 #[derive(Debug, Serialize, JsonSchema)]
 struct PolicyDocumentResponse {
     id: String,
+    created_by_user_id: String,
     filename: String,
     content_type: String,
     content_length: i64,
@@ -366,6 +367,7 @@ impl From<PolicyDocumentDetail> for PolicyDocumentResponse {
     fn from(document: PolicyDocumentDetail) -> Self {
         Self {
             id: document.id.to_string(),
+            created_by_user_id: document.created_by_user_id.to_string(),
             filename: document.filename,
             content_type: document.content_type,
             content_length: document.content_length,

@@ -1663,6 +1663,7 @@ impl From<crate::domain::EvidenceSubmitter> for EvidenceSubmitterResponse {
 struct AuditorPortalDocumentResponse {
     id: Uuid,
     evidence_submission_id: Uuid,
+    created_by_user_id: Uuid,
     filename: String,
     content_type: String,
     content_length: i64,
@@ -1677,6 +1678,7 @@ impl From<AuditorPortalDocument> for AuditorPortalDocumentResponse {
         Self {
             id: Uuid::from(document.id),
             evidence_submission_id: Uuid::from(document.evidence_submission_id),
+            created_by_user_id: Uuid::from(document.created_by_user_id),
             filename: document.filename,
             content_type: document.content_type,
             content_length: document.content_length,

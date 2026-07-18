@@ -122,6 +122,7 @@ SELECT
     a.content_length,
     a.checksum_sha256,
     a.checksum_crc32c,
+    a.created_by_user_id,
     a.upload_status
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
@@ -277,6 +278,7 @@ fn auditor_portal_document_from_row(row: &Row) -> Result<AuditorPortalDocument, 
     Ok(AuditorPortalDocument {
         id: row.try_get::<_, Uuid>("document_id")?.into(),
         evidence_submission_id: row.try_get::<_, Uuid>("document_submission_id")?.into(),
+        created_by_user_id: row.try_get::<_, Uuid>("created_by_user_id")?.into(),
         filename: row.try_get("filename")?,
         content_type: row.try_get("content_type")?,
         content_length: row.try_get("content_length")?,

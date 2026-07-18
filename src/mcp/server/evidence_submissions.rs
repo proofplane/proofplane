@@ -232,6 +232,7 @@ impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
 struct EvidenceDocumentResponseDTO {
     id: String,
     evidence_submission_id: String,
+    created_by_user_id: String,
     filename: String,
     content_type: String,
     content_length: i64,
@@ -245,6 +246,7 @@ impl From<Document> for EvidenceDocumentResponseDTO {
         Self {
             id: document.id().to_string(),
             evidence_submission_id: document.owner().owner_uuid().to_string(),
+            created_by_user_id: document.created_by_user_id.to_string(),
             filename: document.filename,
             content_type: document.content_type,
             content_length: document.content_length,

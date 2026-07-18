@@ -77,9 +77,10 @@ INSERT INTO documents (
     object_key,
     checksum_sha256,
     checksum_crc32c,
+    created_by_user_id,
     upload_status
 )
-SELECT $8, 'policy', $1, $2, $3, $4, $5, $6, $7, 'pending'
+SELECT $8, 'policy', $1, $2, $3, $4, $5, $6, $7, $9, 'pending'
 WHERE NOT EXISTS (
     SELECT 1
     FROM documents
@@ -98,6 +99,7 @@ RETURNING *, owner_id AS policy_id
                     &payload.checksum_sha256,
                     &payload.checksum_crc32c,
                     &Uuid::from(self.workspace_id),
+                    &Uuid::from(self.user_id),
                 ],
             )
             .await?;
@@ -550,6 +552,7 @@ SELECT
     p.updated_at,
     p.archived_at,
     a.id AS document_id,
+    a.created_by_user_id AS document_created_by_user_id,
     a.filename AS document_filename,
     a.content_type AS document_content_type,
     a.content_length AS document_content_length,
@@ -649,6 +652,9 @@ fn policy_document_detail_from_row(row: &Row) -> Result<Option<PolicyDocumentDet
 
     Ok(Some(PolicyDocumentDetail {
         id: DocumentId::from(id),
+        created_by_user_id: row
+            .try_get::<_, Uuid>("document_created_by_user_id")?
+            .into(),
         filename: row.try_get("document_filename")?,
         content_type: row.try_get("document_content_type")?,
         content_length: row.try_get("document_content_length")?,

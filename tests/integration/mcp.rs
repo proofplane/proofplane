@@ -2034,6 +2034,10 @@ async fn mcp_policy_tools_cover_catalog_lifecycle_safe_documents_and_success_aud
 
     assert_eq!(got["controls"][0]["id"], control_b.to_string());
     assert_eq!(got["document"]["filename"], "policy.pdf");
+    assert_eq!(
+        got["document"]["created_by_user_id"],
+        app.user_id().to_string()
+    );
     assert_eq!(got["document"]["upload_status"], "uploaded");
     assert!(!got.to_string().contains("policy-test/"));
     assert!(got.get("workspace_id").is_none());
@@ -2770,14 +2774,20 @@ async fn insert_policy_document_row(app: &TestApp, policy_id: Uuid, status: &str
             r#"
 INSERT INTO documents (
     id, workspace_id, owner_type, owner_id, filename, content_type, content_length, object_key,
-    checksum_sha256, checksum_crc32c, upload_status
+    checksum_sha256, checksum_crc32c, created_by_user_id, upload_status
 )
 SELECT $1, p.workspace_id, 'policy', p.id, 'policy.pdf', 'application/pdf', 10,
-       $3, 'sha256', 'crc32c', $4
+       $3, 'sha256', 'crc32c', $5, $4
 FROM policies p
 WHERE p.id = $2
 "#,
-            &[&document_id, &policy_id, &object_key, &status],
+            &[
+                &document_id,
+                &policy_id,
+                &object_key,
+                &status,
+                &app.user_id(),
+            ],
         )
         .await
         .expect("policy document fixture inserts");

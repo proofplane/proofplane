@@ -1,7 +1,7 @@
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{Document, DocumentIdentity, DocumentUploadStatus, WorkspaceId};
+use crate::domain::{Document, DocumentIdentity, DocumentUploadStatus, UserId, WorkspaceId};
 
 use super::{Error, Postgres, TransactionContext};
 
@@ -225,6 +225,7 @@ fn typed_document_upload_work_from_row(
 pub(crate) fn document_from_row(row: &Row, identity: DocumentIdentity) -> Result<Document, Error> {
     Ok(Document {
         identity,
+        created_by_user_id: UserId::from(row.try_get::<_, Uuid>("created_by_user_id")?),
         filename: row.try_get("filename")?,
         content_type: row.try_get("content_type")?,
         content_length: row.try_get("content_length")?,

@@ -325,6 +325,7 @@ SELECT
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
+    a.created_by_user_id,
     a.upload_status,
     a.created_at
 FROM documents a
@@ -399,6 +400,7 @@ SELECT
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
+    a.created_by_user_id,
     a.upload_status,
     a.created_at
 	FROM evidence_submissions s
@@ -456,6 +458,7 @@ SELECT
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
+    a.created_by_user_id,
     a.upload_status,
     a.created_at
 	FROM latest_submission latest
@@ -502,9 +505,10 @@ INSERT INTO documents (
     object_key,
     checksum_sha256,
     checksum_crc32c,
+    created_by_user_id,
     upload_status
 )
-SELECT $8, 'evidence_submission', s.id, $2, $3, $4, $5, $6, $7, 'pending'
+SELECT $8, 'evidence_submission', s.id, $2, $3, $4, $5, $6, $7, $9, 'pending'
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE s.id = $1
@@ -518,6 +522,7 @@ RETURNING
     object_key,
     checksum_sha256,
     checksum_crc32c,
+    created_by_user_id,
     upload_status,
     created_at
 "#,
@@ -530,6 +535,7 @@ RETURNING
                     &payload.checksum_sha256,
                     &payload.checksum_crc32c,
                     &Uuid::from(self.workspace_id),
+                    &Uuid::from(self.user_id),
                 ],
             )
             .await?;
@@ -589,9 +595,10 @@ INSERT INTO documents (
     object_key,
     checksum_sha256,
     checksum_crc32c,
+    created_by_user_id,
     upload_status
 )
-SELECT $8, 'evidence_submission', $1, $2, $3, $4, $5, $6, $7, 'pending'
+SELECT $8, 'evidence_submission', $1, $2, $3, $4, $5, $6, $7, $9, 'pending'
 WHERE NOT EXISTS (
     SELECT 1
     FROM documents
@@ -607,6 +614,7 @@ RETURNING
     object_key,
     checksum_sha256,
     checksum_crc32c,
+    created_by_user_id,
     upload_status,
     created_at
 "#,
@@ -619,6 +627,7 @@ RETURNING
                     &payload.checksum_sha256,
                     &payload.checksum_crc32c,
                     &Uuid::from(self.workspace_id),
+                    &Uuid::from(self.user_id),
                 ],
             )
             .await?;

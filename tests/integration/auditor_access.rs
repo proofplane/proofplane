@@ -324,6 +324,10 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
         .as_array()
         .expect("documents is array");
     assert_eq!(documents[0]["filename"], "eligible.txt");
+    assert_eq!(
+        documents[0]["created_by_user_id"],
+        app.user_id().to_string()
+    );
     assert_eq!(documents[0]["upload_status"], "uploaded");
     assert_eq!(documents[0]["download_eligible"], true);
     assert_eq!(documents[1]["filename"], "pending.txt");

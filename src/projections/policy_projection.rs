@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::{DocumentId, DocumentUploadStatus, Policy, PolicyId};
+use crate::domain::{DocumentId, DocumentUploadStatus, Policy, PolicyId, UserId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyCatalogEntry {
@@ -25,6 +25,7 @@ pub struct PolicyDetail {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyDocumentDetail {
     pub id: DocumentId,
+    pub created_by_user_id: UserId,
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,

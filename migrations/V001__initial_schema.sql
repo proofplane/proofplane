@@ -148,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_submissions_request_received
 CREATE TABLE IF NOT EXISTS evidence_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     evidence_submission_id UUID NOT NULL REFERENCES evidence_submissions(id),
+    created_by_user_id UUID NOT NULL REFERENCES users(id),
     filename TEXT NOT NULL,
     content_type TEXT NOT NULL,
     content_length BIGINT NOT NULL CHECK (content_length >= 0),

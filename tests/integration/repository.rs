@@ -132,6 +132,7 @@ async fn document_scan_work_loads_pending_rows_by_document_and_quarantine_key() 
     let request = create_repository_evidence_request(postgres, context).await;
     let submission = create_repository_submission(postgres, context, request.id).await;
     let document = create_repository_document(postgres, context, submission.id).await;
+    assert_eq!(document.created_by_user_id, context.user_id);
 
     let work = postgres
         .load_pending_document_upload_work(document.id(), &document.object_key)

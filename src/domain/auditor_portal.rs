@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use super::{
     ControlId, DocumentId, DocumentUploadStatus, EvidenceRequest, EvidenceSubmission,
-    EvidenceSubmissionId, FrameworkRequirement, WorkspaceId,
+    EvidenceSubmissionId, FrameworkRequirement, UserId, WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +42,7 @@ pub struct AuditorPortalSubmission {
 pub struct AuditorPortalDocument {
     pub id: DocumentId,
     pub evidence_submission_id: EvidenceSubmissionId,
+    pub created_by_user_id: UserId,
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,

@@ -35,6 +35,7 @@ CREATE INDEX idx_policy_control_mappings_control
 CREATE TABLE policy_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     policy_id UUID NOT NULL REFERENCES policies(id),
+    created_by_user_id UUID NOT NULL REFERENCES users(id),
     filename TEXT NOT NULL,
     content_type TEXT NOT NULL,
     content_length BIGINT NOT NULL CHECK (content_length >= 0),

@@ -63,11 +63,12 @@ INSERT INTO evidence_submissions (
     now(), now(), 'system', 'manual', '00000000-0000-4000-8000-000000000708'
 );
 INSERT INTO evidence_documents (
-    id, evidence_submission_id, filename, content_type, content_length, object_key,
+    id, evidence_submission_id, created_by_user_id, filename, content_type, content_length, object_key,
     checksum_sha256, checksum_crc32c, archived, upload_status
 ) VALUES (
     '00000000-0000-4000-8000-000000000704',
     '00000000-0000-4000-8000-000000000703',
+    '00000000-0000-4000-8000-000000000707',
     'evidence.txt', 'text/plain', 8, 'legacy/evidence', 'e-sha', 'e-crc', true, 'failed'
 );
 INSERT INTO policies (id, workspace_id, name)
@@ -77,11 +78,12 @@ VALUES (
     'Policy'
 );
 INSERT INTO policy_documents (
-    id, policy_id, filename, content_type, content_length, object_key,
+    id, policy_id, created_by_user_id, filename, content_type, content_length, object_key,
     checksum_sha256, checksum_crc32c, upload_status, created_at
 ) VALUES (
     '00000000-0000-4000-8000-000000000706',
     '00000000-0000-4000-8000-000000000705',
+    '00000000-0000-4000-8000-000000000707',
     'policy.pdf', 'application/pdf', 10, 'legacy/policy', 'p-sha', 'p-crc',
     'uploaded', '2026-07-17T12:00:00Z'
 );
@@ -99,7 +101,7 @@ INSERT INTO policy_documents (
         .query(
             r#"
 SELECT id, workspace_id, owner_type, owner_id, filename, object_key, archived,
-       upload_status, created_at
+       created_by_user_id, upload_status, created_at
 FROM documents
 ORDER BY owner_type
 "#,
@@ -117,6 +119,10 @@ ORDER BY owner_type
         "evidence_submission"
     );
     assert_eq!(evidence.get::<_, Uuid>("owner_id"), submission_id);
+    assert_eq!(
+        evidence.get::<_, Uuid>("created_by_user_id"),
+        Uuid::parse_str("00000000-0000-4000-8000-000000000707").unwrap()
+    );
     assert_eq!(evidence.get::<_, String>("filename"), "evidence.txt");
     assert_eq!(evidence.get::<_, String>("object_key"), "legacy/evidence");
     assert!(evidence.get::<_, bool>("archived"));
@@ -126,6 +132,10 @@ ORDER BY owner_type
     assert_eq!(policy.get::<_, Uuid>("id"), policy_document_id);
     assert_eq!(policy.get::<_, String>("owner_type"), "policy");
     assert_eq!(policy.get::<_, Uuid>("owner_id"), policy_id);
+    assert_eq!(
+        policy.get::<_, Uuid>("created_by_user_id"),
+        Uuid::parse_str("00000000-0000-4000-8000-000000000707").unwrap()
+    );
     assert_eq!(policy.get::<_, String>("upload_status"), "uploaded");
     assert_eq!(
         policy.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),

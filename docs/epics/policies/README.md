@@ -15,7 +15,7 @@ Full schema, lifecycle, MCP, document, and auditor decisions live in
 | --- | --- | --- |
 | 001. [Policy Domain And Persistence](./tickets/001-policy-domain-and-persistence.md) | Done | Added active policy lifecycle and control mappings. |
 | 002. [MCP Policy Catalog Tools](./tickets/002-mcp-policy-catalog-tools.md) | Done | Added policy MCP tools with catalog types in the dedicated projections layer. |
-| 003. [Policy Document Lifecycle](./tickets/003-policy-document-lifecycle.md) | Done | Consolidated uploads and renamed the complete lifecycle and contracts to document terminology. |
+| 003. [Policy Document Lifecycle](./tickets/003-policy-document-lifecycle.md) | Done | Added required, context-derived creator attribution to shared document metadata. |
 | 004. [MCP Policy Document Grants](./tickets/004-mcp-policy-document-grants.md) | Todo | Issue and redeem scoped human-browser document sessions. |
 | 005. [Policy Document Management Page](./tickets/005-policy-document-management-page.md) | Todo | Add the evidence-like upload, status, archive, and download UI. |
 | 006. [Auditor Policy Read Model And Downloads](./tickets/006-auditor-policy-read-model-and-downloads.md) | Todo | Expose safe policy data and session-bound document downloads. |

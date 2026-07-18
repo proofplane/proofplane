@@ -93,7 +93,8 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let connection = seed_agent_connection(&postgres, owner_id).await?;
     seed_evidence_requests(&postgres, connection).await?;
     seed_frameworks_and_controls(&postgres).await?;
-    let demo_document = seed_demo_evidence_submission(&postgres, &config.object_storage).await?;
+    let demo_document =
+        seed_demo_evidence_submission(&postgres, &config.object_storage, owner_id).await?;
     debug!("done seeding local data");
 
     Ok(SeedSummary { demo_document })
@@ -365,6 +366,7 @@ ON CONFLICT DO NOTHING
 async fn seed_demo_evidence_submission(
     repository: &Postgres,
     object_storage: &ObjectStorageConfig,
+    created_by_user_id: UserId,
 ) -> Result<DemoDocumentSeedStatus, Error> {
     let ObjectStorageConfig::Filesystem { root } = object_storage else {
         seed_demo_submission_row(repository).await?;
@@ -381,7 +383,7 @@ async fn seed_demo_evidence_submission(
         })
         .await?;
 
-    upsert_demo_submission_and_document(repository, &metadata.sha256).await?;
+    upsert_demo_submission_and_document(repository, &metadata.sha256, created_by_user_id).await?;
 
     Ok(DemoDocumentSeedStatus::Seeded)
 }
@@ -399,6 +401,7 @@ async fn seed_demo_submission_row(repository: &Postgres) -> Result<(), Error> {
 async fn upsert_demo_submission_and_document(
     repository: &Postgres,
     checksum_sha256: &str,
+    created_by_user_id: UserId,
 ) -> Result<(), Error> {
     let mut client = repository.get().await?;
     let transaction = client.transaction().await?;
@@ -418,6 +421,7 @@ INSERT INTO documents (
     workspace_id,
     owner_type,
     owner_id,
+    created_by_user_id,
     filename,
     content_type,
     content_length,
@@ -426,11 +430,12 @@ INSERT INTO documents (
     checksum_crc32c,
     upload_status
 )
-VALUES ($1, $2, 'evidence_submission', $3, $4, $5, $6, $7, $8, $9, 'uploaded')
+VALUES ($1, $2, 'evidence_submission', $3, $4, $5, $6, $7, $8, $9, $10, 'uploaded')
 ON CONFLICT (id) DO UPDATE
 SET workspace_id = EXCLUDED.workspace_id,
     owner_type = EXCLUDED.owner_type,
     owner_id = EXCLUDED.owner_id,
+    created_by_user_id = EXCLUDED.created_by_user_id,
     filename = EXCLUDED.filename,
     content_type = EXCLUDED.content_type,
     content_length = EXCLUDED.content_length,
@@ -443,6 +448,7 @@ SET workspace_id = EXCLUDED.workspace_id,
                 &document_id,
                 &Uuid::from(local_authorized_workspace_id()),
                 &demo_submission_id(),
+                &Uuid::from(created_by_user_id),
                 &DEMO_SUBMISSION_FILENAME,
                 &DEMO_SUBMISSION_CONTENT_TYPE,
                 &content_length,

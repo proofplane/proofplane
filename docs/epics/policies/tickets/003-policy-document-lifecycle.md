@@ -22,6 +22,9 @@ the shared owned-document quarantine, malware-scan, and finalization pipeline.
 - [x] Given existing evidence document behavior, when typed-owner worker
   support ships, then all contracts use document terminology while lifecycle
   statuses, security rules, and outcomes remain unchanged.
+- [x] Given an authenticated document creation, when the row is persisted and
+  read, then `created_by_user_id` is derived from that transaction's user and
+  returned as document metadata rather than accepted from the caller.
 
 **Tasks**
 
@@ -37,6 +40,7 @@ the shared owned-document quarantine, malware-scan, and finalization pipeline.
   lifecycle rules.
 - [x] Add unit and Docker-backed integration tests for migration, success, malicious and
   failed files, retries, concurrency, archival, and evidence regressions.
+- [x] Persist, project, and test required document creator attribution.
 
 **Notes**
 
@@ -48,3 +52,5 @@ the shared owned-document quarantine, malware-scan, and finalization pipeline.
   identity used by worker and repository work records.
 - 2026-07-17: Document terminology now applies consistently across domain,
   persistence, routes, worker events, MCP contracts, configuration, and docs.
+- 2026-07-17: The spec now records required, context-derived document creator
+  attribution and the delegated browser-session limitation.
