@@ -11,7 +11,7 @@
   stable identity, correlation, operation, outcome, and object fields are
   present where applicable.
 - [x] Given credentials, bearer grant tokens or URLs, internal object keys,
-  attachment or packet bytes, submission summaries or descriptions, or
+  document or packet bytes, submission summaries or descriptions, or
   unbounded errors, when an audit log is emitted, then those values are absent.
 - [x] Given a mutation caller, when the emission contract is followed, then a
   success event is emitted only after its service transaction returns

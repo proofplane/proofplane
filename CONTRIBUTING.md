@@ -54,7 +54,7 @@ make seed
   token via Authorization Code + PKCE, brokered by the Proofplane OAuth facade,
   with Auth0 as the upstream human login.
 - The control-plane REST routes (`/me`, `/workspaces`, the OAuth endpoints, and
-  browser attachment flows) authenticate with Auth0 user JWTs.
+  browser document flows) authenticate with Auth0 user JWTs.
 
 Because there is no static token, exercising MCP locally means completing the
 OAuth flow with a real agent (or the MCP Inspector's OAuth mode). The setup

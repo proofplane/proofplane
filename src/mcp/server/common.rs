@@ -164,6 +164,10 @@ impl From<DomainError> for FieldIssue {
                 field,
                 message: format!("{field} must not be blank when provided"),
             },
+            DomainError::RequiredTextTooLong { field, maximum } => Self {
+                field,
+                message: format!("{field} must be at most {maximum} characters"),
+            },
             DomainError::OptionalTextTooLong { field, maximum } => Self {
                 field,
                 message: format!("{field} must be at most {maximum} characters"),
@@ -181,25 +185,29 @@ impl From<DomainError> for FieldIssue {
                 field: "permissions",
                 message: format!("permissions contains duplicate value {permission}"),
             },
+            DomainError::DuplicatePolicyControlId => Self {
+                field: "control_ids",
+                message: "control_ids contains a duplicate value".to_owned(),
+            },
             DomainError::InvalidEnumValue { field, value } => Self {
                 field,
                 message: format!("{field} has invalid value {value}"),
             },
-            DomainError::EmptyAttachmentFilename => Self {
+            DomainError::EmptyDocumentFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be empty".to_owned(),
+                message: "document filename must not be empty".to_owned(),
             },
-            DomainError::AttachmentFilenameTooLong => Self {
+            DomainError::DocumentFilenameTooLong => Self {
                 field: "filename",
-                message: "attachment filename must be at most 255 bytes".to_owned(),
+                message: "document filename must be at most 255 bytes".to_owned(),
             },
-            DomainError::InvalidAttachmentFilenameCharacters => Self {
+            DomainError::InvalidDocumentFilenameCharacters => Self {
                 field: "filename",
-                message: "attachment filename contains unsupported characters".to_owned(),
+                message: "document filename contains unsupported characters".to_owned(),
             },
-            DomainError::ReservedAttachmentFilename => Self {
+            DomainError::ReservedDocumentFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be . or ..".to_owned(),
+                message: "document filename must not be . or ..".to_owned(),
             },
         }
     }

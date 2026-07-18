@@ -10,6 +10,7 @@ pub mod mcp;
 pub mod migrations;
 pub mod object_storage;
 pub mod observability;
+pub mod projections;
 pub mod pubsub;
 pub mod repository;
 pub mod routes;

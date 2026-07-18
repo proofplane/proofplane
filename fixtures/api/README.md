@@ -222,43 +222,43 @@ ATTACH_JSON=$(curl --fail-with-body \
   --header "x-request-id: $(uuidgen)" \
   --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
   --form "file=@fixtures/api/evidence-submissions/vuln-scanner-results.txt;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
-  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments")
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/documents")
 
-export ATTACHMENT_ID=$(jq -r '.attachment.id' <<< "$ATTACH_JSON")
+export DOCUMENT_ID=$(jq -r '.document.id' <<< "$ATTACH_JSON")
 
 echo "$ATTACH_JSON" | jq .
 ```
 
 After the dequeuer and worker process the scan and finalization requests,
-confirm the attachment reports `upload_status` as `uploaded`:
+confirm the document reports `upload_status` as `uploaded`:
 
 ```bash
 curl --fail-with-body \
   --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
   "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID" |
-  jq --arg attachment_id "$ATTACHMENT_ID" \
-    '.attachments[] | select(.id == $attachment_id)'
+  jq --arg document_id "$DOCUMENT_ID" \
+    '.documents[] | select(.id == $document_id)'
 ```
 
-Issue a five-minute download grant for the uploaded attachment:
+Issue a five-minute download grant for the uploaded document:
 
 ```bash
 GRANT_JSON=$(curl --fail-with-body \
   --request POST \
   --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
-  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments/$ATTACHMENT_ID/download-grants")
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/documents/$DOCUMENT_ID/download-grants")
 
 echo "$GRANT_JSON" | jq .
-export ATTACHMENT_DOWNLOAD_URL=$(jq -r .url <<< "$GRANT_JSON")
+export DOCUMENT_DOWNLOAD_URL=$(jq -r .url <<< "$GRANT_JSON")
 ```
 
-Redeem the grant without API credentials and save the attachment:
+Redeem the grant without API credentials and save the document:
 
 ```bash
 curl --fail-with-body \
   --remote-header-name \
   --remote-name \
-  "$ATTACHMENT_DOWNLOAD_URL"
+  "$DOCUMENT_DOWNLOAD_URL"
 ```
 
 The URL is reusable until its five-minute expiry. Treat its `token` query
@@ -271,7 +271,7 @@ anti-malware test signature. It is harmless text, not executable malware, but
 ClamAV and other antivirus products intentionally detect it as malicious. Host
 antivirus software may quarantine the fixture.
 
-With `SUBMISSION_ID` set as above, upload it using the same attachment flow:
+With `SUBMISSION_ID` set as above, upload it using the same document flow:
 
 ```bash
 EICAR_FIXTURE=fixtures/api/evidence-submissions/eicar.com.txt
@@ -283,12 +283,12 @@ curl --fail-with-body \
   --header "x-request-id: $(uuidgen)" \
   --header "authorization: Bearer $PROOFPLANE_API_TOKEN" \
   --form "file=@$EICAR_FIXTURE;type=text/plain;headers=@/tmp/proofplane-part-headers.txt" \
-  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/attachments" |
+  "$BASE_URL/workspaces/$WORKSPACE_ID/evidence-submissions/$SUBMISSION_ID/documents" |
   jq .
 ```
 
 After the dequeuer and worker process the scan request, submission details
-should report the attachment's `upload_status` as `contains_virus`.
+should report the document's `upload_status` as `contains_virus`.
 
 ## Authorization Checks
 

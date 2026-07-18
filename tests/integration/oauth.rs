@@ -221,7 +221,7 @@ async fn seeded_request(
     app.postgres()
         .attach_oauth_authorization_subject(request_id, subject, user_id.into())
         .await
-        .expect("OAuth subject attachment resolves")
+        .expect("OAuth subject document resolves")
         .expect("OAuth request attaches");
     request_id
 }

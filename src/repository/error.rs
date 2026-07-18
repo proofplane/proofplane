@@ -18,6 +18,9 @@ pub enum Error {
     #[error("invalid persisted data")]
     InvalidData(#[from] DomainError),
 
+    #[error("policy control references are invalid")]
+    InvalidPolicyControlReferences,
+
     #[error("repository invariant violation: {0}")]
     InvariantViolation(&'static str),
 }

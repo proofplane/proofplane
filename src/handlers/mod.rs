@@ -1,2 +1,2 @@
-pub mod attachment_finalization;
-pub mod attachment_scan;
+pub mod document_finalization;
+pub mod document_scan;

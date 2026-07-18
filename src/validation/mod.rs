@@ -68,13 +68,11 @@ macro_rules! validate {
             }
         )+
 
-        if __validation_errors.is_empty() {
-            $(
-                let $name = $name.expect("valid validation binding should be present");
-            )+
-            $crate::validation::Validation::valid($value)
-        } else {
-            $crate::validation::Validation::Invalid(__validation_errors)
+        match ($($name,)+) {
+            ($(Some($name),)+) if __validation_errors.is_empty() => {
+                $crate::validation::Validation::valid($value)
+            }
+            _ => $crate::validation::Validation::Invalid(__validation_errors),
         }
     }};
 }

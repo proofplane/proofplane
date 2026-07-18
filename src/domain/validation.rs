@@ -37,22 +37,22 @@ pub fn validate_freshness_window_days(value: Option<i32>) -> Validation<Option<i
     }
 }
 
-pub fn validate_attachment_filename(value: String) -> Validation<String, DomainError> {
+pub fn validate_document_filename(value: String) -> Validation<String, DomainError> {
     let mut errors = Vec::new();
 
     if value.trim().is_empty() {
-        errors.push(DomainError::EmptyAttachmentFilename);
+        errors.push(DomainError::EmptyDocumentFilename);
     }
     if value.len() > 255 {
-        errors.push(DomainError::AttachmentFilenameTooLong);
+        errors.push(DomainError::DocumentFilenameTooLong);
     }
     if !value.bytes().all(|byte| {
         byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'_' | b'-' | b'(' | b')')
     }) {
-        errors.push(DomainError::InvalidAttachmentFilenameCharacters);
+        errors.push(DomainError::InvalidDocumentFilenameCharacters);
     }
     if matches!(value.as_str(), "." | "..") {
-        errors.push(DomainError::ReservedAttachmentFilename);
+        errors.push(DomainError::ReservedDocumentFilename);
     }
 
     if errors.is_empty() {
@@ -65,7 +65,7 @@ pub fn validate_attachment_filename(value: String) -> Validation<String, DomainE
 #[cfg(test)]
 mod tests {
     use super::{
-        optional_text, required_text, validate_attachment_filename, validate_freshness_window_days,
+        optional_text, required_text, validate_document_filename, validate_freshness_window_days,
     };
     use crate::domain::DomainError;
 
@@ -139,38 +139,38 @@ mod tests {
     }
 
     #[test]
-    fn attachment_filename_accepts_portable_ascii_and_preserves_it() {
+    fn document_filename_accepts_portable_ascii_and_preserves_it() {
         let filename = "  Quarterly evidence (final).csv  ".to_owned();
         let maximum_length_filename = "a".repeat(255);
 
         assert_eq!(
-            validate_attachment_filename(filename.clone()).into_result(),
+            validate_document_filename(filename.clone()).into_result(),
             Ok(filename)
         );
         assert_eq!(
-            validate_attachment_filename(maximum_length_filename.clone()).into_result(),
+            validate_document_filename(maximum_length_filename.clone()).into_result(),
             Ok(maximum_length_filename)
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_blank_values() {
+    fn document_filename_rejects_blank_values() {
         assert_eq!(
-            validate_attachment_filename("   ".to_owned()).into_result(),
-            Err(vec![DomainError::EmptyAttachmentFilename])
+            validate_document_filename("   ".to_owned()).into_result(),
+            Err(vec![DomainError::EmptyDocumentFilename])
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_names_over_255_bytes() {
+    fn document_filename_rejects_names_over_255_bytes() {
         assert_eq!(
-            validate_attachment_filename("a".repeat(256)).into_result(),
-            Err(vec![DomainError::AttachmentFilenameTooLong])
+            validate_document_filename("a".repeat(256)).into_result(),
+            Err(vec![DomainError::DocumentFilenameTooLong])
         );
     }
 
     #[test]
-    fn attachment_filename_rejects_separators_quotes_unicode_and_controls() {
+    fn document_filename_rejects_separators_quotes_unicode_and_controls() {
         for filename in [
             "path/file.txt",
             r"path\file.txt",
@@ -179,32 +179,32 @@ mod tests {
             "file\tname.txt",
         ] {
             assert_eq!(
-                validate_attachment_filename(filename.to_owned()).into_result(),
-                Err(vec![DomainError::InvalidAttachmentFilenameCharacters]),
+                validate_document_filename(filename.to_owned()).into_result(),
+                Err(vec![DomainError::InvalidDocumentFilenameCharacters]),
                 "{filename}"
             );
         }
     }
 
     #[test]
-    fn attachment_filename_rejects_dot_and_dot_dot() {
+    fn document_filename_rejects_dot_and_dot_dot() {
         for filename in [".", ".."] {
             assert_eq!(
-                validate_attachment_filename(filename.to_owned()).into_result(),
-                Err(vec![DomainError::ReservedAttachmentFilename]),
+                validate_document_filename(filename.to_owned()).into_result(),
+                Err(vec![DomainError::ReservedDocumentFilename]),
                 "{filename}"
             );
         }
     }
 
     #[test]
-    fn attachment_filename_accumulates_independent_errors() {
+    fn document_filename_accumulates_independent_errors() {
         assert_eq!(
-            validate_attachment_filename("\t".repeat(256)).into_result(),
+            validate_document_filename("\t".repeat(256)).into_result(),
             Err(vec![
-                DomainError::EmptyAttachmentFilename,
-                DomainError::AttachmentFilenameTooLong,
-                DomainError::InvalidAttachmentFilenameCharacters,
+                DomainError::EmptyDocumentFilename,
+                DomainError::DocumentFilenameTooLong,
+                DomainError::InvalidDocumentFilenameCharacters,
             ])
         );
     }

@@ -1,57 +1,9 @@
-use std::{fmt, str::FromStr};
-
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, AgentConnectionId, DomainError, EvidenceRequestId, UserId};
+use super::{ids::uuid_id, AgentConnectionId, Document, EvidenceRequestId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
-uuid_id!(EvidenceAttachmentId);
-uuid_id!(AttachmentUploadGrantId);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttachmentUploadStatus {
-    PendingUpload,
-    Finalizing,
-    Uploaded,
-    ContainsVirus,
-    FailedUpload,
-}
-
-impl AttachmentUploadStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::PendingUpload => "pending",
-            Self::Finalizing => "finalizing",
-            Self::Uploaded => "uploaded",
-            Self::ContainsVirus => "contains_virus",
-            Self::FailedUpload => "failed",
-        }
-    }
-}
-
-impl fmt::Display for AttachmentUploadStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for AttachmentUploadStatus {
-    type Err = DomainError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "pending" => Ok(Self::PendingUpload),
-            "finalizing" => Ok(Self::Finalizing),
-            "uploaded" => Ok(Self::Uploaded),
-            "contains_virus" => Ok(Self::ContainsVirus),
-            "failed" => Ok(Self::FailedUpload),
-            _ => Err(DomainError::InvalidEnumValue {
-                field: "upload_status",
-                value: value.to_owned(),
-            }),
-        }
-    }
-}
+uuid_id!(DocumentUploadGrantId);
 
 /**
  * An EvidenceSubmission represents a particular piece of evidence that
@@ -107,39 +59,10 @@ pub struct CreateEvidenceSubmissionPayload {
     pub description: Option<String>,
 }
 
-/**
- * The EvidenceAttachment is the actual thing that's being presented as
- * evidence. It can be a screenshot of config, a JSON response from a
- * configuration management API, or anything else.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceAttachment {
-    pub id: EvidenceAttachmentId,
-    pub evidence_submission_id: EvidenceSubmissionId,
-    pub filename: String,
-    pub content_type: String,
-    pub content_length: i64,
-    pub object_key: String,
-    pub checksum_sha256: String,
-    pub checksum_crc32c: String,
-    pub upload_status: AttachmentUploadStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateEvidenceAttachmentPayload {
-    pub evidence_submission_id: EvidenceSubmissionId,
-    pub filename: String,
-    pub content_type: String,
-    pub content_length: i64,
-    pub object_key: String,
-    pub checksum_sha256: String,
-    pub checksum_crc32c: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceSubmissionDetail {
     pub submission: EvidenceSubmission,
-    pub attachments: Vec<EvidenceAttachment>,
+    pub documents: Vec<Document>,
 }
 
 #[cfg(test)]
@@ -148,8 +71,9 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{AttachmentUploadStatus, EvidenceAttachmentId, EvidenceSubmissionId};
+    use super::EvidenceSubmissionId;
     use crate::domain::DomainError;
+    use crate::domain::{DocumentId, DocumentUploadStatus};
 
     #[test]
     fn evidence_submission_id_wraps_uuid() {
@@ -160,9 +84,9 @@ mod tests {
     }
 
     #[test]
-    fn evidence_attachment_id_wraps_uuid() {
+    fn document_id_wraps_uuid() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440004").unwrap();
-        let id = EvidenceAttachmentId::from(uuid);
+        let id = DocumentId::from(uuid);
 
         assert_eq!(Uuid::from(id), uuid);
     }
@@ -170,31 +94,31 @@ mod tests {
     #[test]
     fn upload_status_parses_allowed_values() {
         assert_eq!(
-            AttachmentUploadStatus::from_str("pending").unwrap(),
-            AttachmentUploadStatus::PendingUpload
+            DocumentUploadStatus::from_str("pending").unwrap(),
+            DocumentUploadStatus::PendingUpload
         );
         assert_eq!(
-            AttachmentUploadStatus::from_str("finalizing").unwrap(),
-            AttachmentUploadStatus::Finalizing
+            DocumentUploadStatus::from_str("finalizing").unwrap(),
+            DocumentUploadStatus::Finalizing
         );
         assert_eq!(
-            AttachmentUploadStatus::from_str("uploaded").unwrap(),
-            AttachmentUploadStatus::Uploaded
+            DocumentUploadStatus::from_str("uploaded").unwrap(),
+            DocumentUploadStatus::Uploaded
         );
         assert_eq!(
-            AttachmentUploadStatus::from_str("contains_virus").unwrap(),
-            AttachmentUploadStatus::ContainsVirus
+            DocumentUploadStatus::from_str("contains_virus").unwrap(),
+            DocumentUploadStatus::ContainsVirus
         );
         assert_eq!(
-            AttachmentUploadStatus::from_str("failed").unwrap(),
-            AttachmentUploadStatus::FailedUpload
+            DocumentUploadStatus::from_str("failed").unwrap(),
+            DocumentUploadStatus::FailedUpload
         );
     }
 
     #[test]
     fn upload_status_rejects_invalid_values() {
         assert_eq!(
-            AttachmentUploadStatus::from_str("skipped").unwrap_err(),
+            DocumentUploadStatus::from_str("skipped").unwrap_err(),
             DomainError::InvalidEnumValue {
                 field: "upload_status",
                 value: "skipped".to_owned()

@@ -26,10 +26,10 @@ GCS configuration defines the bucket and object-key prefix. GCS always uses
 Google application default credentials; the existing endpoint-override and
 anonymous-credential fields are removed because Proofplane does not run a GCS
 emulator. The configured prefix is prepended outside the logical
-workspace-scoped `ObjectKey` and is never persisted in attachment rows.
+workspace-scoped `ObjectKey` and is never persisted in document rows.
 
 Uploads and reads stream. Copy may use GCS server-side copy/rewrite, but must
-verify destination metadata before finalization marks an attachment uploaded.
+verify destination metadata before finalization marks an document uploaded.
 
 ## Pub/Sub Runtime
 

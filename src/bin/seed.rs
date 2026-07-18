@@ -15,12 +15,12 @@ async fn main() {
     println!(
         "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence requests, SOC 2 controls, and demo evidence submission"
     );
-    match summary.demo_attachment {
-        seed::DemoAttachmentSeedStatus::Seeded => {
-            println!("demo evidence attachment/object: seeded for filesystem storage");
+    match summary.demo_document {
+        seed::DemoDocumentSeedStatus::Seeded => {
+            println!("demo evidence document/object: seeded for filesystem storage");
         }
-        seed::DemoAttachmentSeedStatus::SkippedNonFilesystemStorage => {
-            println!("demo evidence attachment/object: skipped for non-filesystem storage");
+        seed::DemoDocumentSeedStatus::SkippedNonFilesystemStorage => {
+            println!("demo evidence document/object: skipped for non-filesystem storage");
         }
     }
     println!(

@@ -1,10 +1,11 @@
-mod attachment_grants;
 mod auditor_access_grants;
 mod common;
 mod controls;
+mod document_grants;
 mod evidence_requests;
 mod evidence_submissions;
 mod guide;
+mod policies;
 mod resources;
 
 use rmcp::{
@@ -20,9 +21,10 @@ use rmcp::{
 use crate::{
     mcp::server::common::authorize_connection,
     services::{
-        attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
+        document_upload_grants::DocumentUploadGrantService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
+        policies::PolicyService,
     },
     VERSION,
 };
@@ -34,18 +36,18 @@ const SERVER_INSTRUCTION_LEAD: &str = concat!(
     "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
     "requests with list_evidence_requests or list_due_evidence_requests and read ",
     "collection_instructions; second, create an evidence submission for the request with ",
-    "create_evidence_submission; third, use manage_evidence_submission_attachment to get a ",
-    "short-lived human browser flow for attachments. A human uploads files there; file bytes ",
+    "create_evidence_submission; third, use manage_evidence_submission_document to get a ",
+    "short-lived human browser flow for documents. A human uploads files there; file bytes ",
     "never pass through MCP or the model. "
 );
 
 const SERVER_INSTRUCTION_DETAIL: &str = concat!(
     "Frameworks contain requirements, requirements are ",
     "satisfied by controls, and control mappings link controls to evidence requests. Each ",
-    "evidence request can have submissions, and each submission can have attachments. Controls ",
+    "evidence request can have submissions, and each submission can have documents. Controls ",
     "define what must be proven, so review their mappings when deciding which proof satisfies a ",
     "request. Submissions record the connected agent's provenance. Treat the browser URL as a ",
-    "bearer secret and share it only with the human managing the attachment before it expires. ",
+    "bearer secret and share it only with the human managing the document before it expires. ",
     "Call get_proofplane_guide without a topic to see its topic index. Clients that surface MCP ",
     "resources can also browse these guides at proofplane://docs/{topic}."
 );
@@ -62,9 +64,10 @@ fn server_instructions() -> String {
 pub struct ProofplaneMcp {
     evidence_requests: EvidenceRequestService,
     evidence_submissions: EvidenceSubmissionService,
-    attachment_upload_grants: AttachmentUploadGrantService,
+    document_upload_grants: DocumentUploadGrantService,
     auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
+    policies: PolicyService,
     public_api_base_url: Url,
     tool_router: ToolRouter<Self>,
 }
@@ -73,17 +76,19 @@ impl ProofplaneMcp {
     pub fn new(
         evidence_requests: EvidenceRequestService,
         evidence_submissions: EvidenceSubmissionService,
-        attachment_upload_grants: AttachmentUploadGrantService,
+        document_upload_grants: DocumentUploadGrantService,
         auditor_access_grants: AuditorAccessGrantService,
         controls: ControlService,
+        policies: PolicyService,
         public_api_base_url: Url,
     ) -> Self {
         Self {
             evidence_requests,
             evidence_submissions,
-            attachment_upload_grants,
+            document_upload_grants,
             auditor_access_grants,
             controls,
+            policies,
             public_api_base_url,
             tool_router: Self::tool_router(),
         }
@@ -93,9 +98,10 @@ impl ProofplaneMcp {
         ToolRouter::new()
             + Self::evidence_requests_tool_router()
             + Self::evidence_submissions_tool_router()
-            + Self::attachment_grants_tool_router()
+            + Self::document_grants_tool_router()
             + Self::auditor_access_grants_tool_router()
             + Self::controls_tool_router()
+            + Self::policies_tool_router()
             + Self::guide_tool_router()
     }
 }
@@ -145,6 +151,14 @@ mod tests {
     fn expected_tool_descriptions() -> BTreeMap<&'static str, &'static str> {
         BTreeMap::from([
             (
+                "archive_policy",
+                "Archive an active policy when its current document is not being processed.",
+            ),
+            (
+                "attach_policy_to_control",
+                "Attach an active policy to a control without changing the control or its other mappings.",
+            ),
+            (
                 "create_auditor_access_link",
                 "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
             ),
@@ -158,7 +172,15 @@ mod tests {
             ),
             (
                 "create_evidence_submission",
-                "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Create a submission that records proof for an evidence request; call manage_evidence_submission_document afterward to obtain a human-browser document flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            ),
+            (
+                "create_policy",
+                "Create a policy with optional control mappings and return its complete active metadata.",
+            ),
+            (
+                "detach_policy_from_control",
+                "Detach an active policy from a control without changing the control or its other mappings.",
             ),
             (
                 "get_control",
@@ -170,11 +192,15 @@ mod tests {
             ),
             (
                 "get_evidence_submission",
-                "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Get one evidence submission with detailed provenance, coverage, collection, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_latest_evidence_submission",
-                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            ),
+            (
+                "get_policy",
+                "Get one active policy with its mapped controls and safe current document metadata by policy ID.",
             ),
             (
                 "get_proofplane_guide",
@@ -209,8 +235,12 @@ mod tests {
                 "List the supported compliance frameworks that organize requirements used by controls; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "manage_evidence_submission_attachment",
-                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic attachments.",
+                "list_policies",
+                "List active policies with their mapped-control counts and current document status.",
+            ),
+            (
+                "manage_evidence_submission_document",
+                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
             ),
             (
                 "map_evidence_request_to_control",
@@ -227,6 +257,10 @@ mod tests {
             (
                 "revoke_auditor_access_link",
                 "Revoke an auditor access grant by grant ID and return its updated metadata.",
+            ),
+            (
+                "update_policy",
+                "Update an active policy’s name and optional description without changing mappings or document state.",
             ),
         ])
     }
@@ -248,8 +282,8 @@ mod tests {
                 "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
                 "requests with list_evidence_requests or list_due_evidence_requests and read ",
                 "collection_instructions; second, create an evidence submission for the request with ",
-                "create_evidence_submission; third, use manage_evidence_submission_attachment to get a ",
-                "short-lived human browser flow for attachments. A human uploads files there; file bytes ",
+                "create_evidence_submission; third, use manage_evidence_submission_document to get a ",
+                "short-lived human browser flow for documents. A human uploads files there; file bytes ",
                 "never pass through MCP or the model. "
             ),
             "the protected instruction lead remains byte-for-byte stable"
@@ -289,7 +323,7 @@ mod tests {
             "requirements are satisfied by controls",
             "control mappings link controls to evidence requests",
             "Each evidence request can have submissions",
-            "each submission can have attachments",
+            "each submission can have documents",
             "Controls define what must be proven",
             "connected agent's provenance",
             "browser URL as a bearer secret",
@@ -394,7 +428,7 @@ mod tests {
                 | "create_evidence_submission"
                 | "get_evidence_submission"
                 | "get_latest_evidence_submission" => Some("submitting-evidence"),
-                "manage_evidence_submission_attachment" => Some("attachments"),
+                "manage_evidence_submission_document" => Some("documents"),
                 "list_frameworks"
                 | "list_framework_requirements"
                 | "list_controls"
@@ -404,6 +438,13 @@ mod tests {
                 | "list_evidence_request_control_mappings"
                 | "map_evidence_request_to_control"
                 | "remove_evidence_request_control_mapping" => Some("controls-and-mappings"),
+                "list_policies"
+                | "get_policy"
+                | "create_policy"
+                | "update_policy"
+                | "archive_policy"
+                | "attach_policy_to_control"
+                | "detach_policy_from_control" => None,
                 "create_auditor_access_link"
                 | "list_auditor_access_links"
                 | "revoke_auditor_access_link"

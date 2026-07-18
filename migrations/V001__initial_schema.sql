@@ -145,9 +145,10 @@ CREATE TABLE IF NOT EXISTS evidence_submissions (
 CREATE INDEX IF NOT EXISTS idx_evidence_submissions_request_received
     ON evidence_submissions (evidence_request_id, received_at DESC, id DESC);
 
-CREATE TABLE IF NOT EXISTS evidence_attachments (
+CREATE TABLE IF NOT EXISTS evidence_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     evidence_submission_id UUID NOT NULL REFERENCES evidence_submissions(id),
+    created_by_user_id UUID NOT NULL REFERENCES users(id),
     filename TEXT NOT NULL,
     content_type TEXT NOT NULL,
     content_length BIGINT NOT NULL CHECK (content_length >= 0),
@@ -159,17 +160,17 @@ CREATE TABLE IF NOT EXISTS evidence_attachments (
         CHECK (upload_status IN ('pending', 'finalizing', 'uploaded', 'contains_virus', 'failed'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_evidence_attachments_submission
-    ON evidence_attachments (evidence_submission_id, filename, id);
+CREATE INDEX IF NOT EXISTS idx_evidence_documents_submission
+    ON evidence_documents (evidence_submission_id, filename, id);
 
-CREATE INDEX IF NOT EXISTS idx_evidence_attachments_upload_status
-    ON evidence_attachments (upload_status, id);
+CREATE INDEX IF NOT EXISTS idx_evidence_documents_upload_status
+    ON evidence_documents (upload_status, id);
 
-CREATE INDEX IF NOT EXISTS idx_evidence_attachments_submission_active
-    ON evidence_attachments (evidence_submission_id, filename, id)
+CREATE INDEX IF NOT EXISTS idx_evidence_documents_submission_active
+    ON evidence_documents (evidence_submission_id, filename, id)
     WHERE archived = false;
 
-CREATE TABLE IF NOT EXISTS attachment_upload_grants (
+CREATE TABLE IF NOT EXISTS document_upload_grants (
     id UUID PRIMARY KEY,
     workspace_id UUID NOT NULL REFERENCES workspaces(id),
     evidence_submission_id UUID NOT NULL REFERENCES evidence_submissions(id),
@@ -181,11 +182,11 @@ CREATE TABLE IF NOT EXISTS attachment_upload_grants (
     CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
 );
 
-CREATE INDEX IF NOT EXISTS idx_attachment_upload_grants_redemption
-    ON attachment_upload_grants (id, workspace_id, evidence_submission_id);
+CREATE INDEX IF NOT EXISTS idx_document_upload_grants_redemption
+    ON document_upload_grants (id, workspace_id, evidence_submission_id);
 
-CREATE INDEX IF NOT EXISTS idx_attachment_upload_grants_expiry
-    ON attachment_upload_grants (expires_at, redeemed_at);
+CREATE INDEX IF NOT EXISTS idx_document_upload_grants_expiry
+    ON document_upload_grants (expires_at, redeemed_at);
 
 CREATE TABLE IF NOT EXISTS workspace_permissions (
     permission TEXT PRIMARY KEY
@@ -269,7 +270,7 @@ CREATE TABLE IF NOT EXISTS agent_authorization_transactions (
 ALTER TABLE evidence_submissions
     ADD COLUMN submitted_by_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
 
-ALTER TABLE attachment_upload_grants
+ALTER TABLE document_upload_grants
     ADD COLUMN issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
 
 CREATE TABLE IF NOT EXISTS oauth_authorization_requests (

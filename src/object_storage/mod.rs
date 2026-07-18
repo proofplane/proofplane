@@ -186,18 +186,14 @@ impl FilesystemObjectStore {
     }
 
     fn metadata_path(&self, key: &ObjectKey) -> PathBuf {
-        let mut path = key
+        let path = key
             .segments()
             .fold(self.root.join("metadata"), |path, segment| {
                 path.join(segment)
             });
-        let file_name = path
-            .file_name()
-            .expect("validated object keys always have a file name")
-            .to_string_lossy()
-            .into_owned();
-        path.set_file_name(format!("{file_name}.json"));
-        path
+        let mut metadata_path = path.into_os_string();
+        metadata_path.push(".json");
+        PathBuf::from(metadata_path)
     }
 }
 

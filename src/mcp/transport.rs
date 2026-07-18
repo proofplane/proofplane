@@ -38,9 +38,10 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
+        document_upload_grants::DocumentUploadGrantService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
+        policies::PolicyService,
     },
 };
 use url::Url;
@@ -102,7 +103,7 @@ where
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let attachment_upload_grants = AttachmentUploadGrantService::new(
+    let document_upload_grants = DocumentUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
         dependencies.upload_grant_encryptor,
@@ -110,6 +111,7 @@ where
     );
     let auditor_access_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
     let controls = ControlService::new(dependencies.postgres.clone());
+    let policies = PolicyService::new(dependencies.postgres.clone());
     let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
     let protocol = protocol_router(
         dependencies.oauth_verifier,
@@ -118,9 +120,10 @@ where
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
-            attachment_upload_grants,
+            document_upload_grants,
             auditor_access_grants,
             controls,
+            policies,
             dependencies.public_api_base_url,
         ),
         dependencies.allowed_hosts,

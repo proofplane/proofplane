@@ -7,6 +7,8 @@ pub enum ConflictKind {
     AgentConnectionExists,
     WorkspaceSlugTaken,
     ControlCodeTaken,
+    PolicyNameTaken,
+    PolicyControlMappingExists,
     WorkspaceMembershipExists,
     EvidenceRequestControlMappingExists,
 }
@@ -17,6 +19,8 @@ impl ConflictKind {
             Self::AgentConnectionExists => "agent_connection_exists",
             Self::WorkspaceSlugTaken => "slug_taken",
             Self::ControlCodeTaken => "control_code_taken",
+            Self::PolicyNameTaken => "policy_name_taken",
+            Self::PolicyControlMappingExists => "policy_control_mapping_exists",
             Self::WorkspaceMembershipExists => "user_already_has_workspace",
             Self::EvidenceRequestControlMappingExists => "evidence_request_control_mapping_exists",
         }
@@ -29,6 +33,10 @@ impl ConflictKind {
             }
             Self::WorkspaceSlugTaken => "a workspace with this slug already exists",
             Self::ControlCodeTaken => "a control with this code already exists in the workspace",
+            Self::PolicyNameTaken => {
+                "an active policy with this name already exists in the workspace"
+            }
+            Self::PolicyControlMappingExists => "this control is already mapped to the policy",
             Self::WorkspaceMembershipExists => "the user already belongs to a workspace",
             Self::EvidenceRequestControlMappingExists => {
                 "this control is already mapped to the evidence request"
@@ -42,6 +50,8 @@ fn conflict_kind_for_constraint(constraint: &str) -> Option<ConflictKind> {
         "agent_connections_live_tuple_key" => Some(ConflictKind::AgentConnectionExists),
         "workspaces_slug_key" => Some(ConflictKind::WorkspaceSlugTaken),
         "controls_workspace_id_code_key" => Some(ConflictKind::ControlCodeTaken),
+        "policies_workspace_lower_name_active_key" => Some(ConflictKind::PolicyNameTaken),
+        "policy_control_mappings_pkey" => Some(ConflictKind::PolicyControlMappingExists),
         "workspace_memberships_pkey" => Some(ConflictKind::WorkspaceMembershipExists),
         "evidence_request_control_mappings_pkey" => {
             Some(ConflictKind::EvidenceRequestControlMappingExists)
@@ -83,6 +93,14 @@ mod tests {
         assert_eq!(
             conflict_kind_for_constraint("evidence_request_control_mappings_pkey"),
             Some(ConflictKind::EvidenceRequestControlMappingExists)
+        );
+        assert_eq!(
+            conflict_kind_for_constraint("policies_workspace_lower_name_active_key"),
+            Some(ConflictKind::PolicyNameTaken)
+        );
+        assert_eq!(
+            conflict_kind_for_constraint("policy_control_mappings_pkey"),
+            Some(ConflictKind::PolicyControlMappingExists)
         );
     }
 

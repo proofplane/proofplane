@@ -15,7 +15,7 @@ for the API, dequeuer, worker, storage, and MCP runtimes.
   banner.) Authorization is local policy over that context; there is no separate
   authorization service or synchronization path.
 - Outbox publish retry and worker delivery behavior have integration coverage.
-- Attachment scan/finalization tests already cover concrete Postgres rollback,
+- Document scan/finalization tests already cover concrete Postgres rollback,
   scanner failure, and object-store failure.
 - `/metrics` exists, but application-specific `proof_` metrics do not.
 
@@ -32,24 +32,24 @@ rules against concrete Postgres where those rules are implemented.
 Cover externally visible behavior for:
 
 - Pub/Sub publish failure and later outbox recovery;
-- initial quarantine-write failure in the attachment upload API: return a stable
-  error and commit no attachment row or scan-request outbox event;
+- initial quarantine-write failure in the document upload API: return a stable
+  error and commit no document row or scan-request outbox event;
 - final-object read failure in the human download route: return a stable error
-  without changing the persisted attachment lifecycle;
+  without changing the persisted document lifecycle;
 - worker finalization copy failure: return a retryable delivery error and leave
-  the attachment `finalizing`;
+  the document `finalizing`;
 - database failure after a successful finalization copy: retry
-  `mark_attachment_uploaded` within the handler using the shared `Retryable`
+  `mark_document_uploaded` within the handler using the shared `Retryable`
   trait and configured `worker.retry_attempts`; after local retries are
   exhausted, return a retryable delivery error so Pub/Sub redelivers;
-- worker quarantine-delete failure after a successful copy: keep the attachment
+- worker quarantine-delete failure after a successful copy: keep the document
   `uploaded` and treat deletion as best-effort cleanup;
 - ClamAV unavailable/timeout through worker retry and final delivery;
 - GCS and production Pub/Sub adapter failures after those adapters land.
 
 Stable API errors must not expose dependency internals. Logs include request,
 user/API-token or system identity, operation, and dependency context without
-credentials or attachment bytes.
+credentials or document bytes.
 
 Existing authentication and authorization integration tests are baseline. They
 already cover invalid credentials, workspace mismatch, missing permissions, and
@@ -57,25 +57,25 @@ not-found concealment. Do not create an artificial authorization-dependency
 failure fixture now that authorization is Postgres-sourced application policy.
 
 The API owns the initial stream into quarantine storage before creating the
-attachment row. The worker later owns the copy from quarantine to the final
-object key. Attachment lifecycle state, exposed to agents through the normal
+document row. The worker later owns the copy from quarantine to the final
+object key. Document lifecycle state, exposed to agents through the normal
 read tools, is the asynchronous status contract; the MVP browser app does not
 poll or render document-processing status.
 
 Finalization copy is idempotent. If the copy succeeds but the database update
 fails, the handler retries only the database update in-process rather than
 repeating the copy for every local attempt. Exhausting those bounded retries
-does not mark the attachment `failed`, because finalized bytes may already
+does not mark the document `failed`, because finalized bytes may already
 exist. The handler returns a retryable error, and a later Pub/Sub delivery may
 repeat the idempotent copy before trying the database transition again. If all
 Pub/Sub deliveries are exhausted, the message is dead-lettered and the
-attachment remains `finalizing` for operational recovery.
+document remains `finalizing` for operational recovery.
 
 ## Metrics Contract
 
 Use the `proof_` prefix. Allowed labels are matched route, method, status class,
 operation, dependency, permission, event type, and coarse result.
-Never label with workspace, actor, request, object, submission, attachment,
+Never label with workspace, actor, request, object, submission, document,
 credential, error string, or raw path.
 
 Initial families:
@@ -111,7 +111,7 @@ error field. Every audit record includes:
 - affected object type and ID where applicable.
 
 Audit records never include credentials, authorization headers, credential
-hashes, bearer grant tokens or URLs, internal object keys, attachment or packet
+hashes, bearer grant tokens or URLs, internal object keys, document or packet
 bytes, submission summaries or descriptions, or unbounded error strings.
 Domain tickets define their stable event names and allowed fields.
 
@@ -138,25 +138,25 @@ Evidence lifecycle audit events use the shared structured audit-log contract.
 Stable event names are:
 
 - `evidence_submission.created`;
-- `evidence_attachment.accepted`;
-- `evidence_attachment_download_grant.issued`;
-- `evidence_attachment_download_grant.redeemed`;
-- `evidence_attachment_scan.completed`;
-- `evidence_attachment_finalization.completed`.
+- `evidence_document.accepted`;
+- `evidence_document_download_grant.issued`;
+- `evidence_document_download_grant.redeemed`;
+- `evidence_document_scan.completed`;
+- `evidence_document_finalization.completed`.
 
 Allowed fields include workspace ID, user ID, agent connection ID, system
 client, request correlation ID, event name, outcome, evidence request ID,
-submission ID, attachment ID, grant ID, and coarse lifecycle status where
+submission ID, document ID, grant ID, and coarse lifecycle status where
 applicable. (The actor identifier is the agent connection ID, not an API token
 ID — `ppat_` was removed in PR #42.) Audit records must not include raw grant
-tokens, access tokens, authorization headers, attachment bytes, storage object
+tokens, access tokens, authorization headers, document bytes, storage object
 keys treated as internals, scanner raw error strings, credentials, or unbounded
 dependency error strings.
 
-Submission creation, attachment acceptance, and download-grant issuance success
+Submission creation, document acceptance, and download-grant issuance success
 records are emitted only after the database transaction commits. Download-grant
 redemption records are emitted only after a grant is validated and the
-attachment remains eligible for streaming. Scan and finalization terminal
+document remains eligible for streaming. Scan and finalization terminal
 outcomes are attributable to the worker system client and must avoid false
 success records for retryable failures, duplicate delivery, stale delivery, or
 rolled-back mutations; duplicate or stale deliveries may be omitted or logged
@@ -181,7 +181,7 @@ deterministic alone and in the full integration target.
 - 2026-06-11: Defined bounded in-handler database retries after a successful
   finalization copy using `Retryable` and `worker.retry_attempts`; exhausted
   local retries defer to Pub/Sub redelivery without falsely marking the
-  attachment failed.
+  document failed.
 - 2026-06-11: Standardized application metrics on the `proof_` prefix.
 - 2026-06-11: Removed live Postgres interruption/recovery tests from scope;
   concrete-Postgres tests remain for application-owned transaction behavior.

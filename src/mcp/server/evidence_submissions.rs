@@ -14,9 +14,9 @@ use super::{
 };
 use crate::{
     domain::{
-        optional_text, required_text, CreateEvidenceSubmissionPayload, DomainError,
-        EvidenceAttachment, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId, WorkspacePermission,
+        optional_text, required_text, CreateEvidenceSubmissionPayload, Document, DomainError,
+        EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceSubmitter, WorkspaceId, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     validate,
@@ -29,7 +29,7 @@ use uuid::Uuid;
 impl ProofplaneMcp {
     #[tool(
         name = "create_evidence_submission",
-        description = "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Create a submission that records proof for an evidence request; call manage_evidence_submission_document afterward to obtain a human-browser document flow; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn create_evidence_submission(
         &self,
@@ -76,7 +76,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_evidence_submission",
-        description = "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Get one evidence submission with detailed provenance, coverage, collection, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_evidence_submission(
         &self,
@@ -101,7 +101,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_latest_evidence_submission",
-        description = "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Get the latest submission for an evidence request with compact provenance, coverage, summary, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn get_latest_evidence_submission(
         &self,
@@ -159,7 +159,7 @@ impl CreateEvidenceSubmissionResponse {
 #[derive(Debug, Serialize, JsonSchema)]
 struct GetEvidenceSubmissionResponse {
     submission: EvidenceSubmissionResponseDTO,
-    attachments: Vec<EvidenceAttachmentResponseDTO>,
+    documents: Vec<EvidenceDocumentResponseDTO>,
 }
 
 enum SubmissionDetailMode {
@@ -171,7 +171,7 @@ impl GetEvidenceSubmissionResponse {
     fn from_detail(detail: EvidenceSubmissionDetail, mode: SubmissionDetailMode) -> Self {
         Self {
             submission: EvidenceSubmissionResponseDTO::from_submission(detail.submission, mode),
-            attachments: detail.attachments.into_iter().map(Into::into).collect(),
+            documents: detail.documents.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -229,9 +229,10 @@ impl From<EvidenceSubmitter> for EvidenceSubmitterResponseDTO {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct EvidenceAttachmentResponseDTO {
+struct EvidenceDocumentResponseDTO {
     id: String,
     evidence_submission_id: String,
+    created_by_user_id: String,
     filename: String,
     content_type: String,
     content_length: i64,
@@ -240,17 +241,18 @@ struct EvidenceAttachmentResponseDTO {
     upload_status: &'static str,
 }
 
-impl From<EvidenceAttachment> for EvidenceAttachmentResponseDTO {
-    fn from(attachment: EvidenceAttachment) -> Self {
+impl From<Document> for EvidenceDocumentResponseDTO {
+    fn from(document: Document) -> Self {
         Self {
-            id: attachment.id.to_string(),
-            evidence_submission_id: attachment.evidence_submission_id.to_string(),
-            filename: attachment.filename,
-            content_type: attachment.content_type,
-            content_length: attachment.content_length,
-            checksum_sha256: attachment.checksum_sha256,
-            checksum_crc32c: attachment.checksum_crc32c,
-            upload_status: attachment.upload_status.as_str(),
+            id: document.id().to_string(),
+            evidence_submission_id: document.owner().owner_uuid().to_string(),
+            created_by_user_id: document.created_by_user_id.to_string(),
+            filename: document.filename,
+            content_type: document.content_type,
+            content_length: document.content_length,
+            checksum_sha256: document.checksum_sha256,
+            checksum_crc32c: document.checksum_crc32c,
+            upload_status: document.upload_status.as_str(),
         }
     }
 }

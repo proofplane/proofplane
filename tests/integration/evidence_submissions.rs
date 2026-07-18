@@ -2,14 +2,14 @@ use axum::http::StatusCode;
 use axum_test::multipart::{MultipartForm, Part};
 use bytes::Bytes;
 use chrono::{Duration, SecondsFormat, Utc};
-use proofplane::{pubsub::MESSAGE_BUS_TOPIC, worker::ATTACHMENT_SCAN_REQUESTED};
+use proofplane::{pubsub::MESSAGE_BUS_TOPIC, worker::DOCUMENT_SCAN_REQUESTED};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::support::{
-    attachment_form, attachment_form_with_digest, content_digest_header, crc32c_base64, file_part,
-    set_submission_received_at, upload_attachment, TestApp,
+    document_form, document_form_with_digest, content_digest_header, crc32c_base64, file_part,
+    set_submission_received_at, upload_document, TestApp,
 };
 
 #[tokio::test]
@@ -225,7 +225,7 @@ async fn invalid_submission_context_is_rejected_without_persistence() {
 }
 
 #[tokio::test]
-async fn get_returns_submission_detail_with_empty_attachments() {
+async fn get_returns_submission_detail_with_empty_documents() {
     let app = TestApp::builder()
         .workspace("workspace", "Submission detail workspace")
         .with_default_membership()
@@ -280,11 +280,11 @@ async fn get_returns_submission_detail_with_empty_attachments() {
             "collection_method",
         ],
     );
-    assert_eq!(detail["attachments"], json!([]));
+    assert_eq!(detail["documents"], json!([]));
 }
 
 #[tokio::test]
-async fn latest_returns_newest_submission_with_attachments() {
+async fn latest_returns_newest_submission_with_documents() {
     let app = TestApp::builder()
         .workspace("workspace", "Latest submission workspace")
         .with_default_membership()
@@ -316,10 +316,10 @@ async fn latest_returns_newest_submission_with_attachments() {
     set_submission_received_at(app.postgres(), first_id, Utc::now() - Duration::days(1)).await;
     set_submission_received_at(app.postgres(), latest_id, Utc::now()).await;
 
-    let z_attachment =
-        upload_attachment(&app, workspace_id, latest_id, "z-last.txt", b"z-last.txt").await;
-    let a_attachment =
-        upload_attachment(&app, workspace_id, latest_id, "a-first.txt", b"a-first.txt").await;
+    let z_document =
+        upload_document(&app, workspace_id, latest_id, "z-last.txt", b"z-last.txt").await;
+    let a_document =
+        upload_document(&app, workspace_id, latest_id, "a-first.txt", b"a-first.txt").await;
 
     let response = app
         .get(&latest_path(workspace_id, evidence_request_id))
@@ -342,7 +342,7 @@ async fn latest_returns_newest_submission_with_attachments() {
             "summary": "Quarterly repository evidence",
         })
     );
-    assert_eq!(detail["attachments"], json!([a_attachment, z_attachment]));
+    assert_eq!(detail["documents"], json!([a_document, z_document]));
 }
 
 #[tokio::test]
@@ -380,9 +380,9 @@ async fn latest_returns_not_found_for_inaccessible_or_never_submitted_requests()
 }
 
 #[tokio::test]
-async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
+async fn upload_document_returns_accepted_and_get_includes_document() {
     let app = TestApp::builder()
-        .workspace("workspace", "Attachment upload workspace")
+        .workspace("workspace", "Document upload workspace")
         .with_default_membership()
         .build()
         .await;
@@ -392,9 +392,9 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
     let request_id = Uuid::new_v4();
 
     let response = app
-        .post(&attachment_collection_path(workspace_id, submission_id))
+        .post(&document_collection_path(workspace_id, submission_id))
         .add_header("x-request-id", request_id.to_string())
-        .multipart(attachment_form(
+        .multipart(document_form(
             bytes,
             "Quarterly evidence (final).json",
             "application/json",
@@ -404,40 +404,40 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
 
     assert_eq!(response.status_code(), StatusCode::ACCEPTED);
     let body = response.json::<Value>();
-    assert_uuid(&body["attachment"]["id"]);
+    assert_uuid(&body["document"]["id"]);
     assert_eq!(
-        body["attachment"]["evidence_submission_id"],
+        body["document"]["evidence_submission_id"],
         submission_id.to_string()
     );
     assert_eq!(
-        body["attachment"]["filename"],
+        body["document"]["filename"],
         "Quarterly evidence (final).json"
     );
-    assert_eq!(body["attachment"]["content_type"], "application/json");
-    assert_eq!(body["attachment"]["content_length"], bytes.len() as i64);
+    assert_eq!(body["document"]["content_type"], "application/json");
+    assert_eq!(body["document"]["content_length"], bytes.len() as i64);
     assert_eq!(
-        body["attachment"]["checksum_sha256"],
+        body["document"]["checksum_sha256"],
         hex::encode(Sha256::digest(bytes))
     );
-    assert_eq!(body["attachment"]["checksum_crc32c"], crc32c_base64(bytes));
-    assert_eq!(body["attachment"]["upload_status"], "pending");
-    let attachment_id = Uuid::parse_str(
-        body["attachment"]["id"]
+    assert_eq!(body["document"]["checksum_crc32c"], crc32c_base64(bytes));
+    assert_eq!(body["document"]["upload_status"], "pending");
+    let document_id = Uuid::parse_str(
+        body["document"]["id"]
             .as_str()
-            .expect("attachment ID is a string"),
+            .expect("document ID is a string"),
     )
-    .expect("attachment ID is a UUID");
+    .expect("document ID is a UUID");
     let client = app.postgres().get().await.expect("connection opens");
     let object_key: String = client
         .query_one(
-            "SELECT object_key FROM evidence_attachments WHERE id = $1",
-            &[&attachment_id],
+            "SELECT object_key FROM documents WHERE id = $1",
+            &[&document_id],
         )
         .await
-        .expect("attachment object key loads")
+        .expect("document object key loads")
         .get("object_key");
     assert!(object_key.starts_with(&format!(
-        "workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/attachments/"
+        "workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/documents/"
     )));
     let object_path = app.object_storage_root().join("objects").join(&object_key);
     assert_eq!(
@@ -449,7 +449,7 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
         .get(&item_path(workspace_id, submission_id))
         .await
         .json::<Value>();
-    assert_eq!(detail["attachments"], json!([body["attachment"]]));
+    assert_eq!(detail["documents"], json!([body["document"]]));
 
     let outbox_messages = app
         .postgres()
@@ -459,11 +459,11 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
     assert_eq!(outbox_messages.len(), 1);
     let scan_request = &outbox_messages[0];
     assert_eq!(scan_request.topic.as_str(), MESSAGE_BUS_TOPIC);
-    assert_eq!(scan_request.event_type, ATTACHMENT_SCAN_REQUESTED);
-    assert_eq!(scan_request.aggregate_type, "evidence_attachment");
+    assert_eq!(scan_request.event_type, DOCUMENT_SCAN_REQUESTED);
+    assert_eq!(scan_request.aggregate_type, "evidence_document");
     assert_eq!(
         scan_request.aggregate_id,
-        body["attachment"]["id"].as_str().expect("id is a string")
+        body["document"]["id"].as_str().expect("id is a string")
     );
     assert_eq!(
         scan_request.payload,
@@ -476,9 +476,9 @@ async fn upload_attachment_returns_accepted_and_get_includes_attachment() {
 }
 
 #[tokio::test]
-async fn submission_reads_omit_archived_attachments() {
+async fn submission_reads_omit_archived_documents() {
     let app = TestApp::builder()
-        .workspace("workspace", "Archived attachment workspace")
+        .workspace("workspace", "Archived document workspace")
         .with_default_membership()
         .build()
         .await;
@@ -493,8 +493,8 @@ async fn submission_reads_omit_archived_attachments() {
         .await
         .json::<Value>();
     let submission_id = created_id(&created);
-    let kept = upload_attachment(&app, workspace_id, submission_id, "kept.txt", b"kept").await;
-    let archived = upload_attachment(
+    let kept = upload_document(&app, workspace_id, submission_id, "kept.txt", b"kept").await;
+    let archived = upload_document(
         &app,
         workspace_id,
         submission_id,
@@ -502,7 +502,7 @@ async fn submission_reads_omit_archived_attachments() {
         b"archived",
     )
     .await;
-    archive_attachment(&app, created_id(&archived)).await;
+    archive_document(&app, created_id(&archived)).await;
 
     let direct = app
         .get(&item_path(workspace_id, submission_id))
@@ -513,20 +513,20 @@ async fn submission_reads_omit_archived_attachments() {
         .await
         .json::<Value>();
 
-    assert_eq!(direct["attachments"], json!([kept]));
-    assert_eq!(latest["attachments"], json!([kept]));
+    assert_eq!(direct["documents"], json!([kept]));
+    assert_eq!(latest["documents"], json!([kept]));
 }
 
 #[tokio::test]
-async fn submission_reads_still_return_submission_when_all_attachments_archived() {
+async fn submission_reads_still_return_submission_when_all_documents_archived() {
     let app = TestApp::builder()
-        .workspace("workspace", "All archived attachment workspace")
+        .workspace("workspace", "All archived document workspace")
         .with_default_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let attachment = upload_attachment(
+    let document = upload_document(
         &app,
         workspace_id,
         submission_id,
@@ -534,7 +534,7 @@ async fn submission_reads_still_return_submission_when_all_attachments_archived(
         b"archived",
     )
     .await;
-    archive_attachment(&app, created_id(&attachment)).await;
+    archive_document(&app, created_id(&document)).await;
 
     let direct = app
         .get(&item_path(workspace_id, submission_id))
@@ -542,17 +542,17 @@ async fn submission_reads_still_return_submission_when_all_attachments_archived(
         .json::<Value>();
 
     assert_eq!(direct["submission"]["id"], submission_id.to_string());
-    assert_eq!(direct["attachments"], json!([]));
+    assert_eq!(direct["documents"], json!([]));
 }
 
 #[tokio::test]
-async fn upload_attachment_returns_not_found_for_missing_cross_workspace_or_ungranted_submission() {
+async fn upload_document_returns_not_found_for_missing_cross_workspace_or_ungranted_submission() {
     let app = TestApp::builder()
-        .workspace("workspace", "Attachment owner workspace")
+        .workspace("workspace", "Document owner workspace")
         .with_default_membership()
-        .workspace("other_workspace", "Attachment other workspace")
+        .workspace("other_workspace", "Document other workspace")
         .with_default_membership()
-        .workspace("ungranted_workspace", "Attachment ungranted workspace")
+        .workspace("ungranted_workspace", "Document ungranted workspace")
         .without_membership()
         .build()
         .await;
@@ -560,25 +560,25 @@ async fn upload_attachment_returns_not_found_for_missing_cross_workspace_or_ungr
     let other_workspace_id = app.workspace_id("other_workspace");
     let ungranted_workspace_id = app.workspace_id("ungranted_workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let bytes = b"attachment";
+    let bytes = b"document";
 
-    app.post(&attachment_collection_path(workspace_id, Uuid::new_v4()))
-        .multipart(attachment_form(bytes, "artifact.txt", "text/plain", None))
+    app.post(&document_collection_path(workspace_id, Uuid::new_v4()))
+        .multipart(document_form(bytes, "artifact.txt", "text/plain", None))
         .await
         .assert_status_not_found();
-    app.post(&attachment_collection_path(
+    app.post(&document_collection_path(
         other_workspace_id,
         submission_id,
     ))
-    .multipart(attachment_form(bytes, "artifact.txt", "text/plain", None))
+    .multipart(document_form(bytes, "artifact.txt", "text/plain", None))
     .await
     .assert_status_not_found();
     app.server()
-        .post(&attachment_collection_path(
+        .post(&document_collection_path(
             ungranted_workspace_id,
             submission_id,
         ))
-        .multipart(attachment_form(bytes, "artifact.txt", "text/plain", None))
+        .multipart(document_form(bytes, "artifact.txt", "text/plain", None))
         .await
         .assert_status_not_found();
 
@@ -586,16 +586,16 @@ async fn upload_attachment_returns_not_found_for_missing_cross_workspace_or_ungr
 }
 
 #[tokio::test]
-async fn upload_attachment_maps_invalid_multipart_to_bad_request() {
+async fn upload_document_maps_invalid_multipart_to_bad_request() {
     let app = TestApp::builder()
-        .workspace("workspace", "Attachment validation workspace")
+        .workspace("workspace", "Document validation workspace")
         .with_default_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let path = attachment_collection_path(workspace_id, submission_id);
-    let bytes = b"attachment";
+    let path = document_collection_path(workspace_id, submission_id);
+    let bytes = b"document";
 
     for form in [
         MultipartForm::new().add_part("checksum_crc32c", Part::text(crc32c_base64(bytes))),
@@ -605,9 +605,9 @@ async fn upload_attachment_maps_invalid_multipart_to_bad_request() {
                 .file_name("artifact.txt")
                 .mime_type("text/plain"),
         ),
-        attachment_form_with_digest(bytes, "artifact.txt", "text/plain", "crc32c=:not base64:"),
-        attachment_form_with_digest(bytes, "artifact.txt", "text/plain", "sha-256=:abcd:"),
-        attachment_form_with_digest(
+        document_form_with_digest(bytes, "artifact.txt", "text/plain", "crc32c=:not base64:"),
+        document_form_with_digest(bytes, "artifact.txt", "text/plain", "sha-256=:abcd:"),
+        document_form_with_digest(
             bytes,
             "artifact.txt",
             "text/plain",
@@ -623,15 +623,15 @@ async fn upload_attachment_maps_invalid_multipart_to_bad_request() {
 }
 
 #[tokio::test]
-async fn upload_attachment_rejects_duplicate_file_and_cleans_staged_object() {
+async fn upload_document_rejects_duplicate_file_and_cleans_staged_object() {
     let app = TestApp::builder()
-        .workspace("workspace", "Attachment duplicate workspace")
+        .workspace("workspace", "Document duplicate workspace")
         .with_default_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let uploaded_bytes = b"this was an uploaded attachment";
+    let uploaded_bytes = b"this was an uploaded document";
     let skipped_bytes = b"this should be skipped";
     let form = MultipartForm::new()
         .add_part(
@@ -654,7 +654,7 @@ async fn upload_attachment_rejects_duplicate_file_and_cleans_staged_object() {
         );
 
     let response = app
-        .post(&attachment_collection_path(workspace_id, submission_id))
+        .post(&document_collection_path(workspace_id, submission_id))
         .multipart(form)
         .await;
 
@@ -673,16 +673,16 @@ async fn upload_attachment_rejects_duplicate_file_and_cleans_staged_object() {
 }
 
 #[tokio::test]
-async fn upload_attachment_rejects_unsafe_filenames() {
+async fn upload_document_rejects_unsafe_filenames() {
     let app = TestApp::builder()
-        .workspace("workspace", "Attachment filename workspace")
+        .workspace("workspace", "Document filename workspace")
         .with_default_membership()
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
     let submission_id = create_submission(&app, workspace_id).await;
-    let path = attachment_collection_path(workspace_id, submission_id);
-    let bytes = b"attachment";
+    let path = document_collection_path(workspace_id, submission_id);
+    let bytes = b"document";
 
     let missing = app
         .post(&path)
@@ -698,25 +698,25 @@ async fn upload_attachment_rejects_unsafe_filenames() {
     assert_eq!(missing.status_code(), StatusCode::BAD_REQUEST);
 
     for (filename, expected_detail) in [
-        (" ", "attachment filename must not be empty"),
+        (" ", "document filename must not be empty"),
         (
             "path/file.txt",
-            "attachment filename contains unsupported characters",
+            "document filename contains unsupported characters",
         ),
         (
             r"path\file.txt",
-            "attachment filename contains unsupported characters",
+            "document filename contains unsupported characters",
         ),
         (
             "résumé.txt",
-            "attachment filename contains unsupported characters",
+            "document filename contains unsupported characters",
         ),
-        (".", "attachment filename must not be . or .."),
-        ("..", "attachment filename must not be . or .."),
+        (".", "document filename must not be . or .."),
+        ("..", "document filename must not be . or .."),
     ] {
         let response = app
             .post(&path)
-            .multipart(attachment_form(bytes, filename, "text/plain", None))
+            .multipart(document_form(bytes, filename, "text/plain", None))
             .await;
         assert_eq!(
             response.status_code(),
@@ -743,7 +743,7 @@ async fn upload_attachment_rejects_unsafe_filenames() {
              Content-Type: text/plain\r\n\
              Content-Digest: {}\r\n\
              \r\n\
-             attachment\r\n\
+             document\r\n\
              --{boundary}--\r\n",
             content_digest_header(bytes)
         );
@@ -764,28 +764,28 @@ async fn upload_attachment_rejects_unsafe_filenames() {
             .as_array()
             .expect("details is an array")
             .iter()
-            .any(|detail| detail == "attachment filename contains unsupported characters"));
+            .any(|detail| detail == "document filename contains unsupported characters"));
     }
 
     let overlong = app
         .post(&path)
-        .multipart(attachment_form(bytes, &"a".repeat(256), "text/plain", None))
+        .multipart(document_form(bytes, &"a".repeat(256), "text/plain", None))
         .await;
     assert_eq!(overlong.status_code(), StatusCode::BAD_REQUEST);
     assert!(overlong.json::<Value>()["error"]["details"]
         .as_array()
         .expect("details is an array")
         .iter()
-        .any(|detail| detail == "attachment filename must be at most 255 bytes"));
+        .any(|detail| detail == "document filename must be at most 255 bytes"));
 
     assert!(object_files(app.object_storage_root().join("objects")).is_empty());
 }
 
 #[tokio::test]
-async fn upload_attachment_over_limit_returns_payload_too_large() {
+async fn upload_document_over_limit_returns_payload_too_large() {
     let app = TestApp::builder()
-        .with_max_attachment_bytes(128)
-        .workspace("workspace", "Attachment limit workspace")
+        .with_max_document_bytes(128)
+        .workspace("workspace", "Document limit workspace")
         .with_default_membership()
         .build()
         .await;
@@ -794,8 +794,8 @@ async fn upload_attachment_over_limit_returns_payload_too_large() {
     let bytes = vec![b'a'; 256];
 
     let response = app
-        .post(&attachment_collection_path(workspace_id, submission_id))
-        .multipart(attachment_form(&bytes, "artifact.txt", "text/plain", None))
+        .post(&document_collection_path(workspace_id, submission_id))
+        .multipart(document_form(&bytes, "artifact.txt", "text/plain", None))
         .await;
 
     assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -959,7 +959,7 @@ async fn unsupported_submission_methods_return_method_not_allowed() {
 
     let upload_response = app
         .server()
-        .get(&attachment_collection_path(workspace_id, submission_id))
+        .get(&document_collection_path(workspace_id, submission_id))
         .await;
     assert_eq!(
         upload_response.status_code(),
@@ -969,7 +969,7 @@ async fn unsupported_submission_methods_return_method_not_allowed() {
 
 async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
     let request = app
-        .create_evidence_request(workspace_id, &evidence_request("Attachment target"))
+        .create_evidence_request(workspace_id, &evidence_request("Document target"))
         .await;
     let evidence_request_id = created_id(&request);
     let created = app
@@ -1036,17 +1036,17 @@ fn created_id(created: &Value) -> Uuid {
         .expect("created response id is a UUID")
 }
 
-async fn archive_attachment(app: &TestApp, attachment_id: Uuid) {
+async fn archive_document(app: &TestApp, document_id: Uuid) {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .execute(
-            "UPDATE evidence_attachments SET archived = true WHERE id = $1",
-            &[&attachment_id],
+            "UPDATE documents SET archived = true WHERE id = $1",
+            &[&document_id],
         )
         .await
-        .expect("attachment archives");
+        .expect("document archives");
 }
 
 fn collection_path(workspace_id: Uuid, evidence_request_id: Uuid) -> String {
@@ -1061,8 +1061,8 @@ fn item_path(workspace_id: Uuid, submission_id: Uuid) -> String {
     format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}")
 }
 
-fn attachment_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String {
-    format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/attachments")
+fn document_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String {
+    format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents")
 }
 
 fn object_files(path: std::path::PathBuf) -> Vec<std::path::PathBuf> {

@@ -22,9 +22,9 @@ pub(crate) const TOPICS: [GuideTopic; 5] = [
         markdown: include_str!("controls-and-mappings.md"),
     },
     GuideTopic {
-        topic: "attachments",
-        title: "Attachments",
-        markdown: include_str!("attachments.md"),
+        topic: "documents",
+        title: "Documents",
+        markdown: include_str!("documents.md"),
     },
     GuideTopic {
         topic: "errors-and-not-found",
@@ -56,7 +56,7 @@ mod tests {
                 ("glossary", "Proofplane Glossary"),
                 ("submitting-evidence", "Submitting Evidence"),
                 ("controls-and-mappings", "Controls and Mappings"),
-                ("attachments", "Attachments"),
+                ("documents", "Documents"),
                 ("errors-and-not-found", "Errors and Not Found"),
             ]
         );
