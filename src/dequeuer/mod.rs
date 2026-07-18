@@ -217,9 +217,9 @@ mod tests {
                 .expect("message data is JSON"),
             json!({
                 "outbox_message_id": "42",
-                "event_type": "attachment.scan_requested",
-                "aggregate_type": "evidence_attachment",
-                "aggregate_id": "attachment-1",
+                "event_type": "document.scan_requested",
+                "aggregate_type": "evidence_document",
+                "aggregate_id": "document-1",
                 "request_id": "00000000-0000-4000-8000-000000000042",
                 "payload": { "scan_id": "scan-1" },
             })
@@ -344,9 +344,9 @@ mod tests {
         OutboxMessage {
             id,
             topic: TopicName::new(MESSAGE_BUS_TOPIC),
-            event_type: "attachment.scan_requested".to_owned(),
-            aggregate_type: "evidence_attachment".to_owned(),
-            aggregate_id: "attachment-1".to_owned(),
+            event_type: "document.scan_requested".to_owned(),
+            aggregate_type: "evidence_document".to_owned(),
+            aggregate_id: "document-1".to_owned(),
             payload: json!({ "scan_id": "scan-1" }),
             request_id: Some(
                 "00000000-0000-4000-8000-000000000042"

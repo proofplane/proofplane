@@ -11,7 +11,7 @@ per-control policy visibility inside the existing read-only portal.
   all active policies appear with description, mapping count, document state,
   deterministic ordering, and an intentional empty state when applicable.
 - [ ] Given a policy row, when its detail opens, then full description, mapped
-  controls, attachment state, and an eligible document download are shown.
+  controls, document state, and an eligible document download are shown.
 - [ ] Given a control detail page, when it opens, then attached active policies
   are listed and linked, or an explicit empty state is shown.
 - [ ] Given unavailable documents or untrusted policy content, when rendered,

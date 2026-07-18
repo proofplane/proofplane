@@ -193,21 +193,21 @@ impl From<DomainError> for FieldIssue {
                 field,
                 message: format!("{field} has invalid value {value}"),
             },
-            DomainError::EmptyAttachmentFilename => Self {
+            DomainError::EmptyDocumentFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be empty".to_owned(),
+                message: "document filename must not be empty".to_owned(),
             },
-            DomainError::AttachmentFilenameTooLong => Self {
+            DomainError::DocumentFilenameTooLong => Self {
                 field: "filename",
-                message: "attachment filename must be at most 255 bytes".to_owned(),
+                message: "document filename must be at most 255 bytes".to_owned(),
             },
-            DomainError::InvalidAttachmentFilenameCharacters => Self {
+            DomainError::InvalidDocumentFilenameCharacters => Self {
                 field: "filename",
-                message: "attachment filename contains unsupported characters".to_owned(),
+                message: "document filename contains unsupported characters".to_owned(),
             },
-            DomainError::ReservedAttachmentFilename => Self {
+            DomainError::ReservedDocumentFilename => Self {
                 field: "filename",
-                message: "attachment filename must not be . or ..".to_owned(),
+                message: "document filename must not be . or ..".to_owned(),
             },
         }
     }

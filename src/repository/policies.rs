@@ -6,16 +6,17 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AttachmentUploadStatus, ControlId, ControlSummary, CreatePolicyPayload, Policy,
-        PolicyAttachmentId, PolicyControlMapping, PolicyId, UpdatePolicyPayload, WorkspaceId,
+        ControlId, ControlSummary, CreateDocumentPayload, CreatePolicyPayload, Document,
+        DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy,
+        PolicyControlMapping, PolicyId, UpdatePolicyPayload, WorkspaceId,
     },
     projections::policy_projection::{
-        PolicyAttachmentDetail, PolicyAttachmentStatus, PolicyCatalogEntry, PolicyDetail,
+        PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
     },
-    repository::{WorkspaceReadContext, WorkspaceTransactionContext},
+    repository::{ArchiveDocumentResult, WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
-use super::{constraints::classify_db_error, Error};
+use super::{constraints::classify_db_error, documents::document_from_row, Error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivePolicyResult {
@@ -24,10 +25,141 @@ pub enum ArchivePolicyResult {
         archived_at: DateTime<Utc>,
     },
     NotFound,
-    AttachmentInProgress,
+    DocumentInProgress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreatePolicyDocumentResult {
+    Created(Document),
+    PolicyNotFound,
+    DocumentExists,
 }
 
 impl WorkspaceTransactionContext<'_> {
+    pub async fn create_policy_document(
+        &self,
+        payload: &CreateDocumentPayload,
+    ) -> Result<CreatePolicyDocumentResult, Error> {
+        let DocumentOwner::Policy(policy_id) = payload.owner else {
+            return Err(Error::InvariantViolation(
+                "policy document creation requires a policy owner",
+            ));
+        };
+        let policy = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT id
+FROM policies
+WHERE id = $1
+  AND workspace_id = $2
+  AND archived_at IS NULL
+FOR UPDATE
+"#,
+                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+        if policy.is_none() {
+            return Ok(CreatePolicyDocumentResult::PolicyNotFound);
+        }
+
+        let row = self
+            .transaction
+            .query_opt(
+                r#"
+INSERT INTO documents (
+    workspace_id,
+    owner_type,
+    owner_id,
+    filename,
+    content_type,
+    content_length,
+    object_key,
+    checksum_sha256,
+    checksum_crc32c,
+    upload_status
+)
+SELECT $8, 'policy', $1, $2, $3, $4, $5, $6, $7, 'pending'
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM documents
+    WHERE owner_type = 'policy'
+      AND owner_id = $1
+      AND archived = false
+)
+RETURNING *, owner_id AS policy_id
+"#,
+                &[
+                    &Uuid::from(policy_id),
+                    &payload.filename,
+                    &payload.content_type,
+                    &payload.content_length,
+                    &payload.object_key,
+                    &payload.checksum_sha256,
+                    &payload.checksum_crc32c,
+                    &Uuid::from(self.workspace_id),
+                ],
+            )
+            .await?;
+
+        match row {
+            Some(row) => Ok(CreatePolicyDocumentResult::Created(
+                policy_document_from_row(&row)?,
+            )),
+            None => Ok(CreatePolicyDocumentResult::DocumentExists),
+        }
+    }
+
+    pub async fn archive_policy_document(
+        &self,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> Result<ArchiveDocumentResult, Error> {
+        let row = self
+            .transaction
+            .query_one(
+                r#"
+WITH scoped AS (
+    SELECT a.id, a.upload_status
+    FROM documents a
+    JOIN policies p ON p.id = a.owner_id
+    WHERE a.workspace_id = $1
+      AND p.archived_at IS NULL
+      AND a.owner_type = 'policy'
+      AND a.owner_id = $2
+      AND a.id = $3
+      AND a.archived = false
+),
+updated AS (
+    UPDATE documents a
+    SET archived = true
+    FROM scoped
+    WHERE a.id = scoped.id
+      AND scoped.upload_status IN ('uploaded', 'contains_virus', 'failed')
+    RETURNING a.id
+)
+SELECT
+    EXISTS (SELECT 1 FROM scoped) AS found,
+    EXISTS (SELECT 1 FROM updated) AS archived
+"#,
+                &[
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(policy_id),
+                    &Uuid::from(document_id),
+                ],
+            )
+            .await?;
+
+        match (
+            row.try_get::<_, bool>("found")?,
+            row.try_get::<_, bool>("archived")?,
+        ) {
+            (false, _) => Ok(ArchiveDocumentResult::NotFound),
+            (true, true) => Ok(ArchiveDocumentResult::Archived),
+            (true, false) => Ok(ArchiveDocumentResult::NotTerminal),
+        }
+    }
+
     pub async fn create_policy(&self, payload: &CreatePolicyPayload) -> Result<Policy, Error> {
         let row = self
             .transaction
@@ -175,11 +307,12 @@ WITH scoped AS (
         p.id,
         EXISTS (
             SELECT 1
-            FROM policy_attachments a
-            WHERE a.policy_id = p.id
+            FROM documents a
+            WHERE a.owner_type = 'policy'
+              AND a.owner_id = p.id
               AND a.archived = false
               AND a.upload_status IN ('pending', 'finalizing')
-        ) AS attachment_in_progress
+        ) AS document_in_progress
     FROM policies p
     WHERE p.id = $1
       AND p.workspace_id = $2
@@ -192,12 +325,12 @@ updated AS (
         updated_at = now()
     FROM scoped
     WHERE p.id = scoped.id
-      AND scoped.attachment_in_progress = false
+      AND scoped.document_in_progress = false
     RETURNING p.archived_at
 )
 SELECT
     EXISTS (SELECT 1 FROM scoped) AS found,
-    COALESCE((SELECT attachment_in_progress FROM scoped), false) AS attachment_in_progress,
+    COALESCE((SELECT document_in_progress FROM scoped), false) AS document_in_progress,
     (SELECT archived_at FROM updated) AS archived_at
 "#,
                 &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
@@ -205,12 +338,12 @@ SELECT
             .await?;
 
         let found = row.try_get::<_, bool>("found")?;
-        let attachment_in_progress = row.try_get::<_, bool>("attachment_in_progress")?;
+        let document_in_progress = row.try_get::<_, bool>("document_in_progress")?;
         let archived_at = row.try_get::<_, Option<DateTime<Utc>>>("archived_at")?;
 
-        match (found, attachment_in_progress, archived_at) {
+        match (found, document_in_progress, archived_at) {
             (false, _, _) => Ok(ArchivePolicyResult::NotFound),
-            (true, true, _) => Ok(ArchivePolicyResult::AttachmentInProgress),
+            (true, true, _) => Ok(ArchivePolicyResult::DocumentInProgress),
             (true, false, Some(archived_at)) => Ok(ArchivePolicyResult::Archived {
                 policy_id,
                 archived_at,
@@ -321,6 +454,30 @@ WHERE m.policy_id = $1
 }
 
 impl WorkspaceReadContext {
+    pub async fn get_current_policy_document(
+        &self,
+        policy_id: PolicyId,
+    ) -> Result<Option<Document>, Error> {
+        self.client
+            .query_opt(
+                r#"
+SELECT a.*, a.owner_id AS policy_id
+FROM documents a
+JOIN policies p ON p.id = a.owner_id
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND p.archived_at IS NULL
+  AND a.owner_type = 'policy'
+  AND a.workspace_id = $2
+  AND a.archived = false
+"#,
+                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?
+            .map(|row| policy_document_from_row(&row))
+            .transpose()
+    }
+
     pub async fn list_policy_catalog(&self) -> Result<Vec<PolicyCatalogEntry>, Error> {
         let rows = self
             .client
@@ -344,6 +501,18 @@ impl WorkspaceReadContext {
             .await?;
         policy_detail_from_joined_rows(rows)
     }
+}
+
+fn policy_document_from_row(row: &Row) -> Result<Document, Error> {
+    let policy_id = PolicyId::from(row.try_get::<_, Uuid>("policy_id")?);
+    let document_id = DocumentId::from(row.try_get::<_, Uuid>("id")?);
+    document_from_row(
+        row,
+        DocumentIdentity::Policy {
+            policy_id,
+            document_id,
+        },
+    )
 }
 
 const POLICY_ENTITY_DETAIL_QUERY: &str = r#"
@@ -380,21 +549,24 @@ SELECT
     p.created_at,
     p.updated_at,
     p.archived_at,
-    a.id AS attachment_id,
-    a.filename AS attachment_filename,
-    a.content_type AS attachment_content_type,
-    a.content_length AS attachment_content_length,
-    a.checksum_sha256 AS attachment_checksum_sha256,
-    a.checksum_crc32c AS attachment_checksum_crc32c,
-    a.upload_status AS attachment_upload_status,
-    a.created_at AS attachment_created_at,
+    a.id AS document_id,
+    a.filename AS document_filename,
+    a.content_type AS document_content_type,
+    a.content_length AS document_content_length,
+    a.checksum_sha256 AS document_checksum_sha256,
+    a.checksum_crc32c AS document_checksum_crc32c,
+    a.upload_status AS document_upload_status,
+    a.created_at AS document_created_at,
     c.id AS control_id,
     c.code AS control_code,
     c.title AS control_title,
     c.description AS control_description,
     m.created_at AS mapping_created_at
 FROM policies p
-LEFT JOIN policy_attachments a ON a.policy_id = p.id AND a.archived = false
+LEFT JOIN documents a ON a.owner_id = p.id
+    AND a.owner_type = 'policy'
+    AND a.workspace_id = p.workspace_id
+    AND a.archived = false
 LEFT JOIN policy_control_mappings m ON m.policy_id = p.id
 LEFT JOIN controls c ON c.id = m.control_id AND c.workspace_id = p.workspace_id
 WHERE p.id = $1
@@ -409,10 +581,13 @@ SELECT
     p.name,
     p.description,
     count(m.control_id) AS mapped_control_count,
-    a.upload_status AS attachment_upload_status
+    a.upload_status AS document_upload_status
 FROM policies p
 LEFT JOIN policy_control_mappings m ON m.policy_id = p.id
-LEFT JOIN policy_attachments a ON a.policy_id = p.id AND a.archived = false
+LEFT JOIN documents a ON a.owner_id = p.id
+    AND a.owner_type = 'policy'
+    AND a.workspace_id = p.workspace_id
+    AND a.archived = false
 WHERE p.workspace_id = $1
   AND p.archived_at IS NULL
 GROUP BY p.id, a.upload_status
@@ -456,40 +631,40 @@ fn policy_from_row(row: &Row) -> Result<Policy, Error> {
 }
 
 fn policy_detail_from_joined_rows(rows: Vec<Row>) -> Result<Option<PolicyDetail>, Error> {
-    let attachment = rows
+    let document = rows
         .first()
-        .map(policy_attachment_detail_from_row)
+        .map(policy_document_detail_from_row)
         .transpose()?
         .flatten();
     let policy = policies_from_joined_rows(rows)?.into_iter().next();
 
-    Ok(policy.map(|policy| PolicyDetail { policy, attachment }))
+    Ok(policy.map(|policy| PolicyDetail { policy, document }))
 }
 
-fn policy_attachment_detail_from_row(row: &Row) -> Result<Option<PolicyAttachmentDetail>, Error> {
-    let Some(id) = row.try_get::<_, Option<Uuid>>("attachment_id")? else {
+fn policy_document_detail_from_row(row: &Row) -> Result<Option<PolicyDocumentDetail>, Error> {
+    let Some(id) = row.try_get::<_, Option<Uuid>>("document_id")? else {
         return Ok(None);
     };
-    let upload_status = row.try_get::<_, String>("attachment_upload_status")?;
+    let upload_status = row.try_get::<_, String>("document_upload_status")?;
 
-    Ok(Some(PolicyAttachmentDetail {
-        id: PolicyAttachmentId::from(id),
-        filename: row.try_get("attachment_filename")?,
-        content_type: row.try_get("attachment_content_type")?,
-        content_length: row.try_get("attachment_content_length")?,
-        checksum_sha256: row.try_get("attachment_checksum_sha256")?,
-        checksum_crc32c: row.try_get("attachment_checksum_crc32c")?,
-        upload_status: AttachmentUploadStatus::from_str(&upload_status)?,
-        created_at: row.try_get("attachment_created_at")?,
+    Ok(Some(PolicyDocumentDetail {
+        id: DocumentId::from(id),
+        filename: row.try_get("document_filename")?,
+        content_type: row.try_get("document_content_type")?,
+        content_length: row.try_get("document_content_length")?,
+        checksum_sha256: row.try_get("document_checksum_sha256")?,
+        checksum_crc32c: row.try_get("document_checksum_crc32c")?,
+        upload_status: DocumentUploadStatus::from_str(&upload_status)?,
+        created_at: row.try_get("document_created_at")?,
     }))
 }
 
 fn policy_catalog_entry_from_row(row: Row) -> Result<PolicyCatalogEntry, Error> {
-    let attachment = row
-        .try_get::<_, Option<String>>("attachment_upload_status")?
+    let document = row
+        .try_get::<_, Option<String>>("document_upload_status")?
         .map(|status| {
-            AttachmentUploadStatus::from_str(&status)
-                .map(|upload_status| PolicyAttachmentStatus { upload_status })
+            DocumentUploadStatus::from_str(&status)
+                .map(|upload_status| PolicyDocumentStatus { upload_status })
         })
         .transpose()?;
 
@@ -498,7 +673,7 @@ fn policy_catalog_entry_from_row(row: Row) -> Result<PolicyCatalogEntry, Error> 
         name: row.try_get("name")?,
         description: row.try_get("description")?,
         mapped_control_count: row.try_get("mapped_control_count")?,
-        attachment,
+        document,
     })
 }
 

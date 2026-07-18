@@ -96,7 +96,7 @@ async fn policy_lifecycle_normalizes_metadata_and_preserves_independent_state() 
     assert_eq!(after_mapping.policy.updated_at, updated_at);
     assert_eq!(mapping_codes(&after_mapping), ["PP-A", "PP-B"]);
 
-    insert_policy_attachment(&app, created.policy.id, "uploaded").await;
+    insert_policy_document(&app, created.policy.id, "uploaded").await;
     let updated = service
         .update(
             context,
@@ -112,7 +112,7 @@ async fn policy_lifecycle_normalizes_metadata_and_preserves_independent_state() 
     assert_eq!(updated.policy.name, "Renamed policy");
     assert_eq!(updated.policy.description, None);
     assert_eq!(mapping_codes(&updated), ["PP-A", "PP-B"]);
-    assert_eq!(active_attachment_count(&app, created.policy.id).await, 1);
+    assert_eq!(active_document_count(&app, created.policy.id).await, 1);
 }
 
 #[tokio::test]
@@ -220,7 +220,7 @@ async fn policy_creation_rolls_back_invalid_references_and_enforces_active_names
 }
 
 #[tokio::test]
-async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows() {
+async fn policy_archive_blocks_in_progress_documents_and_hides_retained_rows() {
     let app = TestApp::builder()
         .workspace("workspace", "Policy archival workspace")
         .with_control("PP-A", "First control", vec![])
@@ -245,24 +245,24 @@ async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows()
         )
         .await
         .expect("policy creates");
-    let attachment_id = insert_policy_attachment(&app, policy.policy.id, "pending").await;
+    let document_id = insert_policy_document(&app, policy.policy.id, "pending").await;
 
     assert_eq!(
         service
             .archive(context, policy.policy.id)
             .await
             .expect("archive resolves"),
-        ArchivePolicyResult::AttachmentInProgress
+        ArchivePolicyResult::DocumentInProgress
     );
-    set_attachment_status(&app, attachment_id, "finalizing").await;
+    set_document_status(&app, document_id, "finalizing").await;
     assert_eq!(
         service
             .archive(context, policy.policy.id)
             .await
             .expect("archive resolves"),
-        ArchivePolicyResult::AttachmentInProgress
+        ArchivePolicyResult::DocumentInProgress
     );
-    set_attachment_status(&app, attachment_id, "contains_virus").await;
+    set_document_status(&app, document_id, "contains_virus").await;
     assert!(matches!(
         service.archive(context, policy.policy.id).await,
         Ok(ArchivePolicyResult::Archived { policy_id, .. }) if policy_id == policy.policy.id
@@ -307,7 +307,7 @@ async fn policy_archive_blocks_in_progress_attachments_and_hides_retained_rows()
         ArchivePolicyResult::NotFound
     );
     assert_eq!(retained_mapping_count(&app, policy.policy.id).await, 1);
-    assert_eq!(active_attachment_count(&app, policy.policy.id).await, 1);
+    assert_eq!(active_document_count(&app, policy.policy.id).await, 1);
 }
 
 fn mapping_codes(detail: &proofplane::projections::policy_projection::PolicyDetail) -> Vec<&str> {
@@ -319,37 +319,40 @@ fn mapping_codes(detail: &proofplane::projections::policy_projection::PolicyDeta
         .collect()
 }
 
-async fn insert_policy_attachment(app: &TestApp, policy_id: PolicyId, status: &str) -> Uuid {
+async fn insert_policy_document(app: &TestApp, policy_id: PolicyId, status: &str) -> Uuid {
     let client = app.postgres().get().await.expect("connection opens");
     let id = Uuid::new_v4();
     let object_key = format!("policy-test/{id}");
     client
         .execute(
             r#"
-INSERT INTO policy_attachments (
-    id, policy_id, filename, content_type, content_length, object_key,
+INSERT INTO documents (
+    id, workspace_id, owner_type, owner_id, filename, content_type, content_length, object_key,
     checksum_sha256, checksum_crc32c, upload_status
 )
-VALUES ($1, $2, 'policy.pdf', 'application/pdf', 10, $3, 'sha256', 'crc32c', $4)
+SELECT $1, p.workspace_id, 'policy', p.id, 'policy.pdf', 'application/pdf', 10,
+       $3, 'sha256', 'crc32c', $4
+FROM policies p
+WHERE p.id = $2
 "#,
             &[&id, &Uuid::from(policy_id), &object_key, &status],
         )
         .await
-        .expect("policy attachment inserts");
+        .expect("policy document inserts");
     id
 }
 
-async fn set_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+async fn set_document_status(app: &TestApp, document_id: Uuid, status: &str) {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .execute(
-            "UPDATE policy_attachments SET upload_status = $2 WHERE id = $1",
-            &[&attachment_id, &status],
+            "UPDATE documents SET upload_status = $2 WHERE id = $1",
+            &[&document_id, &status],
         )
         .await
-        .expect("attachment status updates");
+        .expect("document status updates");
 }
 
 async fn policy_count(app: &TestApp, workspace_id: Uuid) -> i64 {
@@ -380,16 +383,16 @@ async fn retained_mapping_count(app: &TestApp, policy_id: PolicyId) -> i64 {
         .get("count")
 }
 
-async fn active_attachment_count(app: &TestApp, policy_id: PolicyId) -> i64 {
+async fn active_document_count(app: &TestApp, policy_id: PolicyId) -> i64 {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .query_one(
-            "SELECT count(*) AS count FROM policy_attachments WHERE policy_id = $1 AND archived = false",
+            "SELECT count(*) AS count FROM documents WHERE owner_type = 'policy' AND owner_id = $1 AND archived = false",
             &[&Uuid::from(policy_id)],
         )
         .await
-        .expect("attachment count reads")
+        .expect("document count reads")
         .get("count")
 }

@@ -4,7 +4,7 @@
 
 Policy UI work extends the two existing server-rendered browser surfaces. The
 auditor portal should make policies easy to discover and trace to controls; the
-delegated attachment page should feel like the existing evidence attachment
+delegated document page should feel like the existing evidence document
 manager. Neither surface becomes a general policy administration app.
 
 ## Auditor Navigation
@@ -36,9 +36,9 @@ rather than an empty table.
 
 ## Policy Detail
 
-The detail page shows the full name and description, an attachment panel, and
-the mapped controls. The attachment panel presents filename, size, and coarse
-status when an attachment exists. It shows a download action only when the
+The detail page shows the full name and description, an document panel, and
+the mapped controls. The document panel presents filename, size, and coarse
+status when an document exists. It shows a download action only when the
 document is eligible; all other states explain that no download is available
 without exposing internal processing details.
 
@@ -55,22 +55,22 @@ history. It lists policy names, abbreviated descriptions, and document status,
 with each item linking to its policy detail. An empty state explicitly says
 that no policies are attached.
 
-## Policy Attachment Management
+## Policy Document Management
 
-Mirror the evidence attachment management page's shell, typography, spacing,
+Mirror the evidence document management page's shell, typography, spacing,
 status treatment, form behavior, download affordance, error presentation, and
 responsive layout. Change only the resource-specific language and rules:
 
 - identify the policy by name;
-- allow one file selection and upload only when no active attachment exists;
-- show the current attachment and lifecycle status;
+- allow one file selection and upload only when no active document exists;
+- show the current document and lifecycle status;
 - allow archive only for `uploaded`, `contains_virus`, or `failed`;
 - allow download only for `uploaded`;
 - explain that changing the document requires deleting it and uploading again.
 
 After a successful upload or archive, redirect back to the management page so
 refresh does not repeat the mutation. Expired or invalid delegated sessions use
-the same generic unavailable treatment as evidence attachment management.
+the same generic unavailable treatment as evidence document management.
 
 ## Accessibility And Safety
 

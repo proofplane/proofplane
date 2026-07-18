@@ -44,7 +44,7 @@ boundaries.
 Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,
 transaction, HTTP, worker coordination, and dependency-boundary behavior in
 `tests/integration/`. Name tests after observable outcomes, such as
-`malicious_scan_marks_attachment_contains_virus`. There is no numeric coverage
+`malicious_scan_marks_document_contains_virus`. There is no numeric coverage
 threshold; changes should cover success, failure, and rollback paths appropriate
 to their risk.
 

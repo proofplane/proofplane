@@ -16,7 +16,7 @@ use super::{
 use crate::{
     domain::{ControlId, CreatePolicyPayload, PolicyId, UpdatePolicyPayload, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::policy_projection::{PolicyAttachmentDetail, PolicyCatalogEntry, PolicyDetail},
+    projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
     repository::ArchivePolicyResult,
     services::{policies::PolicyMutationError, Error as ServiceError},
     validate,
@@ -154,7 +154,7 @@ impl ProofplaneMcp {
         else {
             return Err(match result {
                 ArchivePolicyResult::NotFound => not_found(),
-                ArchivePolicyResult::AttachmentInProgress => policy_attachment_in_progress(),
+                ArchivePolicyResult::DocumentInProgress => policy_document_in_progress(),
                 ArchivePolicyResult::Archived { .. } => rmcp::ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
@@ -283,7 +283,7 @@ struct PolicySummaryResponse {
     name: String,
     description: Option<String>,
     mapped_control_count: i64,
-    attachment: Option<PolicyAttachmentStatusResponse>,
+    document: Option<PolicyDocumentStatusResponse>,
 }
 
 impl From<PolicyCatalogEntry> for PolicySummaryResponse {
@@ -293,17 +293,17 @@ impl From<PolicyCatalogEntry> for PolicySummaryResponse {
             name: policy.name,
             description: policy.description,
             mapped_control_count: policy.mapped_control_count,
-            attachment: policy
-                .attachment
-                .map(|attachment| PolicyAttachmentStatusResponse {
-                    upload_status: attachment.upload_status.as_str(),
+            document: policy
+                .document
+                .map(|document| PolicyDocumentStatusResponse {
+                    upload_status: document.upload_status.as_str(),
                 }),
         }
     }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct PolicyAttachmentStatusResponse {
+struct PolicyDocumentStatusResponse {
     upload_status: &'static str,
 }
 
@@ -313,7 +313,7 @@ struct PolicyDetailResponse {
     name: String,
     description: Option<String>,
     controls: Vec<PolicyControlSummaryResponse>,
-    attachment: Option<PolicyAttachmentResponse>,
+    document: Option<PolicyDocumentResponse>,
     created_at: String,
     updated_at: String,
 }
@@ -335,7 +335,7 @@ impl From<PolicyDetail> for PolicyDetailResponse {
                     description: mapping.control.description,
                 })
                 .collect(),
-            attachment: detail.attachment.map(Into::into),
+            document: detail.document.map(Into::into),
             created_at: format_datetime(policy.created_at),
             updated_at: format_datetime(policy.updated_at),
         }
@@ -351,7 +351,7 @@ struct PolicyControlSummaryResponse {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct PolicyAttachmentResponse {
+struct PolicyDocumentResponse {
     id: String,
     filename: String,
     content_type: String,
@@ -362,17 +362,17 @@ struct PolicyAttachmentResponse {
     created_at: String,
 }
 
-impl From<PolicyAttachmentDetail> for PolicyAttachmentResponse {
-    fn from(attachment: PolicyAttachmentDetail) -> Self {
+impl From<PolicyDocumentDetail> for PolicyDocumentResponse {
+    fn from(document: PolicyDocumentDetail) -> Self {
         Self {
-            id: attachment.id.to_string(),
-            filename: attachment.filename,
-            content_type: attachment.content_type,
-            content_length: attachment.content_length,
-            checksum_sha256: attachment.checksum_sha256,
-            checksum_crc32c: attachment.checksum_crc32c,
-            upload_status: attachment.upload_status.as_str(),
-            created_at: format_datetime(attachment.created_at),
+            id: document.id.to_string(),
+            filename: document.filename,
+            content_type: document.content_type,
+            content_length: document.content_length,
+            checksum_sha256: document.checksum_sha256,
+            checksum_crc32c: document.checksum_crc32c,
+            upload_status: document.upload_status.as_str(),
+            created_at: format_datetime(document.created_at),
         }
     }
 }
@@ -498,9 +498,9 @@ fn conflict(code: &'static str, message: &'static str) -> rmcp::ErrorData {
     )
 }
 
-fn policy_attachment_in_progress() -> rmcp::ErrorData {
+fn policy_document_in_progress() -> rmcp::ErrorData {
     conflict(
-        "policy_attachment_in_progress",
+        "policy_document_in_progress",
         "policy cannot be archived while its document is being processed",
     )
 }

@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AttachmentUploadStatus, AuditorPortalAttachment, AuditorPortalControl,
-        AuditorPortalEvidenceRequest, AuditorPortalSubmission, Control, ControlId, EvidenceRequest,
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
+        AuditorPortalSubmission, Control, ControlId, DocumentUploadStatus, EvidenceRequest,
         EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus, EvidenceSubmission,
         EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
     },
@@ -115,8 +115,8 @@ SELECT
     s.collection_method,
     s.summary,
     s.description,
-    a.id AS attachment_id,
-    a.evidence_submission_id AS attachment_submission_id,
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
     a.filename,
     a.content_type,
     a.content_length,
@@ -126,7 +126,9 @@ SELECT
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
-LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
+LEFT JOIN documents a ON a.owner_id = s.id
+    AND a.owner_type = 'evidence_submission'
+    AND a.workspace_id = er.workspace_id
     AND a.archived = false
 WHERE er.workspace_id = $1
 ORDER BY s.evidence_request_id, s.received_at DESC, s.id DESC, a.filename, a.id
@@ -150,13 +152,13 @@ ORDER BY s.evidence_request_id, s.received_at DESC, s.id DESC, a.filename, a.id
                     .or_insert_with(Vec::new)
                     .push(AuditorPortalSubmission {
                         submission: evidence_submission_from_row(&row)?,
-                        attachments: Vec::new(),
+                        documents: Vec::new(),
                     });
                 current_submission_id = Some(submission_id);
                 current_request_id = Some(request_id);
             }
 
-            let Some(attachment) = auditor_portal_attachment_from_optional_row(&row) else {
+            let Some(document) = auditor_portal_document_from_optional_row(&row) else {
                 continue;
             };
             let Some(request_submissions) =
@@ -165,7 +167,7 @@ ORDER BY s.evidence_request_id, s.received_at DESC, s.id DESC, a.filename, a.id
                 continue;
             };
             if let Some(submission) = request_submissions.last_mut() {
-                submission.attachments.push(attachment?);
+                submission.documents.push(document?);
             }
         }
 
@@ -255,32 +257,32 @@ fn evidence_submitter_from_row(row: &Row) -> Result<EvidenceSubmitter, Error> {
     }
 }
 
-fn auditor_portal_attachment_from_optional_row(
+fn auditor_portal_document_from_optional_row(
     row: &Row,
-) -> Option<Result<AuditorPortalAttachment, Error>> {
-    match row.try_get::<_, Option<Uuid>>("attachment_id") {
+) -> Option<Result<AuditorPortalDocument, Error>> {
+    match row.try_get::<_, Option<Uuid>>("document_id") {
         Ok(Some(_)) => {}
         Ok(None) => return None,
         Err(error) => return Some(Err(Error::Database(error))),
     }
 
-    Some(auditor_portal_attachment_from_row(row))
+    Some(auditor_portal_document_from_row(row))
 }
 
-fn auditor_portal_attachment_from_row(row: &Row) -> Result<AuditorPortalAttachment, Error> {
+fn auditor_portal_document_from_row(row: &Row) -> Result<AuditorPortalDocument, Error> {
     let upload_status = row
         .try_get::<_, String>("upload_status")?
-        .parse::<AttachmentUploadStatus>()?;
+        .parse::<DocumentUploadStatus>()?;
 
-    Ok(AuditorPortalAttachment {
-        id: row.try_get::<_, Uuid>("attachment_id")?.into(),
-        evidence_submission_id: row.try_get::<_, Uuid>("attachment_submission_id")?.into(),
+    Ok(AuditorPortalDocument {
+        id: row.try_get::<_, Uuid>("document_id")?.into(),
+        evidence_submission_id: row.try_get::<_, Uuid>("document_submission_id")?.into(),
         filename: row.try_get("filename")?,
         content_type: row.try_get("content_type")?,
         content_length: row.try_get("content_length")?,
         checksum_sha256: row.try_get("checksum_sha256")?,
         checksum_crc32c: row.try_get("checksum_crc32c")?,
         upload_status,
-        download_eligible: upload_status == AttachmentUploadStatus::Uploaded,
+        download_eligible: upload_status == DocumentUploadStatus::Uploaded,
     })
 }

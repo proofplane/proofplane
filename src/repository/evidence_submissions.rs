@@ -4,110 +4,109 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AttachmentUploadStatus, CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload,
-        EvidenceAttachment, EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
+        CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document, DocumentId,
+        DocumentIdentity, DocumentOwner, DocumentUploadStatus, EvidenceRequestId,
+        EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
+        WorkspaceId,
     },
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
-use super::{Error, Postgres, TransactionContext};
+use super::{documents::document_from_row, Error, Postgres, TransactionContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingAttachmentUploadWork {
+pub struct PendingDocumentUploadWork {
     pub workspace_id: WorkspaceId,
     pub evidence_submission_id: EvidenceSubmissionId,
-    pub evidence_attachment_id: EvidenceAttachmentId,
+    pub evidence_document_id: DocumentId,
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,
     pub object_key: String,
     pub checksum_sha256: String,
-    pub upload_status: AttachmentUploadStatus,
+    pub upload_status: DocumentUploadStatus,
 }
 
-pub type FinalizingAttachmentUploadWork = PendingAttachmentUploadWork;
+pub type FinalizingDocumentUploadWork = PendingDocumentUploadWork;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachmentDownloadCandidate {
+pub struct DocumentDownloadCandidate {
     pub workspace_id: WorkspaceId,
-    pub attachment: EvidenceAttachment,
+    pub document: Document,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveAttachmentResult {
+pub enum ArchiveDocumentResult {
     Archived,
     NotFound,
     NotTerminal,
 }
 
 impl Postgres {
-    pub async fn load_pending_attachment_upload_work(
+    pub async fn load_pending_document_upload_work(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         quarantine_object_key: &str,
-    ) -> Result<Option<PendingAttachmentUploadWork>, Error> {
+    ) -> Result<Option<PendingDocumentUploadWork>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
                 r#"
 SELECT
-    er.workspace_id,
-    a.evidence_submission_id,
-    a.id AS attachment_id,
+    a.workspace_id,
+    a.owner_id AS evidence_submission_id,
+    a.id AS document_id,
     a.filename,
     a.content_type,
     a.content_length,
     a.object_key,
     a.checksum_sha256,
     a.upload_status
-FROM evidence_attachments a
-JOIN evidence_submissions s ON s.id = a.evidence_submission_id
-JOIN evidence_requests er ON er.id = s.evidence_request_id
+FROM documents a
 WHERE a.id = $1
+  AND a.owner_type = 'evidence_submission'
   AND a.object_key = $2
   AND a.upload_status = 'pending'
 "#,
-                &[&Uuid::from(evidence_attachment_id), &quarantine_object_key],
+                &[&Uuid::from(evidence_document_id), &quarantine_object_key],
             )
             .await?;
 
         rows.into_iter()
             .next()
-            .map(|row| pending_attachment_upload_work_from_row(&row))
+            .map(|row| pending_document_upload_work_from_row(&row))
             .transpose()
     }
 
-    pub async fn load_finalizing_attachment_upload_work(
+    pub async fn load_finalizing_document_upload_work(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         evidence_submission_id: EvidenceSubmissionId,
         quarantine_object_key: &str,
-    ) -> Result<Option<FinalizingAttachmentUploadWork>, Error> {
+    ) -> Result<Option<FinalizingDocumentUploadWork>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
                 r#"
 SELECT
-    er.workspace_id,
-    a.evidence_submission_id,
-    a.id AS attachment_id,
+    a.workspace_id,
+    a.owner_id AS evidence_submission_id,
+    a.id AS document_id,
     a.filename,
     a.content_type,
     a.content_length,
     a.object_key,
     a.checksum_sha256,
     a.upload_status
-FROM evidence_attachments a
-JOIN evidence_submissions s ON s.id = a.evidence_submission_id
-JOIN evidence_requests er ON er.id = s.evidence_request_id
+FROM documents a
 WHERE a.id = $1
-  AND a.evidence_submission_id = $2
+  AND a.owner_type = 'evidence_submission'
+  AND a.owner_id = $2
   AND a.object_key = $3
   AND a.upload_status = 'finalizing'
 "#,
                 &[
-                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_document_id),
                     &Uuid::from(evidence_submission_id),
                     &quarantine_object_key,
                 ],
@@ -116,13 +115,13 @@ WHERE a.id = $1
 
         rows.into_iter()
             .next()
-            .map(|row| pending_attachment_upload_work_from_row(&row))
+            .map(|row| pending_document_upload_work_from_row(&row))
             .transpose()
     }
 
-    pub async fn mark_attachment_uploaded(
+    pub async fn mark_document_uploaded(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         quarantine_object_key: &str,
         final_object_key: &str,
     ) -> Result<bool, Error> {
@@ -130,15 +129,16 @@ WHERE a.id = $1
         let rows = client
             .execute(
                 r#"
-UPDATE evidence_attachments a
+UPDATE documents a
 SET object_key = $3,
     upload_status = 'uploaded'
 WHERE a.id = $1
+  AND a.owner_type = 'evidence_submission'
   AND a.object_key = $2
   AND a.upload_status = 'finalizing'
 "#,
                 &[
-                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_document_id),
                     &quarantine_object_key,
                     &final_object_key,
                 ],
@@ -148,50 +148,51 @@ WHERE a.id = $1
         Ok(rows > 0)
     }
 
-    pub async fn mark_attachment_contains_virus(
+    pub async fn mark_document_contains_virus(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         quarantine_object_key: &str,
     ) -> Result<bool, Error> {
-        self.mark_attachment_terminal_upload_status(
-            evidence_attachment_id,
+        self.mark_document_terminal_upload_status(
+            evidence_document_id,
             quarantine_object_key,
-            AttachmentUploadStatus::ContainsVirus,
+            DocumentUploadStatus::ContainsVirus,
         )
         .await
     }
 
-    pub async fn mark_attachment_upload_failed(
+    pub async fn mark_document_upload_failed(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         quarantine_object_key: &str,
     ) -> Result<bool, Error> {
-        self.mark_attachment_terminal_upload_status(
-            evidence_attachment_id,
+        self.mark_document_terminal_upload_status(
+            evidence_document_id,
             quarantine_object_key,
-            AttachmentUploadStatus::FailedUpload,
+            DocumentUploadStatus::FailedUpload,
         )
         .await
     }
 
-    async fn mark_attachment_terminal_upload_status(
+    async fn mark_document_terminal_upload_status(
         &self,
-        evidence_attachment_id: EvidenceAttachmentId,
+        evidence_document_id: DocumentId,
         quarantine_object_key: &str,
-        status: AttachmentUploadStatus,
+        status: DocumentUploadStatus,
     ) -> Result<bool, Error> {
         let client = self.get().await?;
         let rows = client
             .execute(
                 r#"
-UPDATE evidence_attachments a
+UPDATE documents a
 SET upload_status = $3
 WHERE a.id = $1
+  AND a.owner_type = 'evidence_submission'
   AND a.object_key = $2
   AND a.upload_status = 'pending'
 "#,
                 &[
-                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_document_id),
                     &quarantine_object_key,
                     &status.as_str(),
                 ],
@@ -203,23 +204,24 @@ WHERE a.id = $1
 }
 
 impl TransactionContext<'_> {
-    pub async fn request_attachment_finalization(
+    pub async fn request_document_finalization(
         &self,
-        work: &PendingAttachmentUploadWork,
+        work: &PendingDocumentUploadWork,
     ) -> Result<bool, Error> {
         let updated = self
             .transaction
             .execute(
                 r#"
-UPDATE evidence_attachments
+UPDATE documents
 SET upload_status = 'finalizing'
 WHERE id = $1
-  AND evidence_submission_id = $2
+  AND owner_type = 'evidence_submission'
+  AND owner_id = $2
   AND object_key = $3
   AND upload_status = 'pending'
 "#,
                 &[
-                    &Uuid::from(work.evidence_attachment_id),
+                    &Uuid::from(work.evidence_document_id),
                     &Uuid::from(work.evidence_submission_id),
                     &work.object_key,
                 ],
@@ -304,30 +306,31 @@ SELECT
 }
 
 impl WorkspaceReadContext {
-    pub async fn get_attachment_for_download_grant(
+    pub async fn get_document_for_download_grant(
         &self,
         evidence_submission_id: EvidenceSubmissionId,
-        evidence_attachment_id: EvidenceAttachmentId,
-    ) -> Result<Option<AttachmentDownloadCandidate>, Error> {
+        evidence_document_id: DocumentId,
+    ) -> Result<Option<DocumentDownloadCandidate>, Error> {
         let rows = &self
             .client
             .query(
                 r#"
 SELECT
-    er.workspace_id,
-    a.id AS attachment_id,
-    a.evidence_submission_id AS attachment_submission_id,
+    a.workspace_id,
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
     a.filename,
     a.content_type,
     a.content_length,
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
-    a.upload_status
-FROM evidence_attachments a
-JOIN evidence_submissions s ON s.id = a.evidence_submission_id
-JOIN evidence_requests er ON er.id = s.evidence_request_id
-WHERE er.workspace_id = $1
+    a.upload_status,
+    a.created_at
+FROM documents a
+JOIN evidence_submissions s ON s.id = a.owner_id
+WHERE a.workspace_id = $1
+  AND a.owner_type = 'evidence_submission'
   AND s.id = $2
   AND a.id = $3
   AND a.archived = false
@@ -335,14 +338,14 @@ WHERE er.workspace_id = $1
                 &[
                     &Uuid::from(self.workspace_id),
                     &Uuid::from(evidence_submission_id),
-                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_document_id),
                 ],
             )
             .await?;
 
         rows.iter()
             .next()
-            .map(attachment_download_candidate_from_row)
+            .map(document_download_candidate_from_row)
             .transpose()
     }
 
@@ -388,19 +391,22 @@ SELECT
     s.collection_method,
     s.summary,
     s.description,
-    a.id AS attachment_id,
-    a.evidence_submission_id AS attachment_submission_id,
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
     a.filename,
     a.content_type,
     a.content_length,
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
-    a.upload_status
+    a.upload_status,
+    a.created_at
 	FROM evidence_submissions s
 	JOIN evidence_requests er ON er.id = s.evidence_request_id
 	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
-LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
+LEFT JOIN documents a ON a.owner_id = s.id
+    AND a.owner_type = 'evidence_submission'
+    AND a.workspace_id = er.workspace_id
     AND a.archived = false
 WHERE s.id = $1
   AND er.workspace_id = $2
@@ -442,19 +448,22 @@ SELECT
     s.collection_method,
     s.summary,
     s.description,
-    a.id AS attachment_id,
-    a.evidence_submission_id AS attachment_submission_id,
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
     a.filename,
     a.content_type,
     a.content_length,
     a.object_key,
     a.checksum_sha256,
     a.checksum_crc32c,
-    a.upload_status
+    a.upload_status,
+    a.created_at
 	FROM latest_submission latest
 	JOIN evidence_submissions s ON s.id = latest.id
 	LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
-LEFT JOIN evidence_attachments a ON a.evidence_submission_id = s.id
+LEFT JOIN documents a ON a.owner_id = s.id
+    AND a.owner_type = 'evidence_submission'
+    AND a.workspace_id = $2
     AND a.archived = false
 ORDER BY a.filename, a.id
 "#,
@@ -470,16 +479,23 @@ ORDER BY a.filename, a.id
 }
 
 impl WorkspaceTransactionContext<'_> {
-    pub async fn create_evidence_attachment(
+    pub async fn create_evidence_document(
         &self,
-        payload: &CreateEvidenceAttachmentPayload,
-    ) -> Result<EvidenceAttachment, Error> {
+        payload: &CreateDocumentPayload,
+    ) -> Result<Document, Error> {
+        let DocumentOwner::EvidenceSubmission(evidence_submission_id) = payload.owner else {
+            return Err(Error::InvariantViolation(
+                "evidence document creation requires an evidence submission owner",
+            ));
+        };
         let rows = self
             .transaction
             .query(
                 r#"
-INSERT INTO evidence_attachments (
-    evidence_submission_id,
+INSERT INTO documents (
+    workspace_id,
+    owner_type,
+    owner_id,
     filename,
     content_type,
     content_length,
@@ -488,24 +504,25 @@ INSERT INTO evidence_attachments (
     checksum_crc32c,
     upload_status
 )
-SELECT s.id, $2, $3, $4, $5, $6, $7, 'pending'
+SELECT $8, 'evidence_submission', s.id, $2, $3, $4, $5, $6, $7, 'pending'
 FROM evidence_submissions s
 JOIN evidence_requests er ON er.id = s.evidence_request_id
 WHERE s.id = $1
   AND er.workspace_id = $8
 RETURNING
     id,
-    evidence_submission_id,
+    owner_id AS evidence_submission_id,
     filename,
     content_type,
     content_length,
     object_key,
     checksum_sha256,
     checksum_crc32c,
-    upload_status
+    upload_status,
+    created_at
 "#,
                 &[
-                    &Uuid::from(payload.evidence_submission_id),
+                    &Uuid::from(evidence_submission_id),
                     &payload.filename,
                     &payload.content_type,
                     &payload.content_length,
@@ -519,16 +536,21 @@ RETURNING
 
         let Some(row) = rows.into_iter().next() else {
             return Err(Error::InvariantViolation(
-                "attachment insert requires an existing workspace-scoped submission",
+                "document insert requires an existing workspace-scoped submission",
             ));
         };
-        evidence_attachment_from_row(&row)
+        evidence_document_from_row(&row)
     }
 
-    pub async fn create_first_evidence_attachment(
+    pub async fn create_first_evidence_document(
         &self,
-        payload: &CreateEvidenceAttachmentPayload,
-    ) -> Result<Option<EvidenceAttachment>, Error> {
+        payload: &CreateDocumentPayload,
+    ) -> Result<Option<Document>, Error> {
+        let DocumentOwner::EvidenceSubmission(evidence_submission_id) = payload.owner else {
+            return Err(Error::InvariantViolation(
+                "evidence document creation requires an evidence submission owner",
+            ));
+        };
         let locked_submission = self
             .transaction
             .query_opt(
@@ -541,7 +563,7 @@ WHERE s.id = $1
 FOR UPDATE OF s
 "#,
                 &[
-                    &Uuid::from(payload.evidence_submission_id),
+                    &Uuid::from(evidence_submission_id),
                     &Uuid::from(self.workspace_id),
                 ],
             )
@@ -549,7 +571,7 @@ FOR UPDATE OF s
 
         if locked_submission.is_none() {
             return Err(Error::InvariantViolation(
-                "attachment insert requires an existing workspace-scoped submission",
+                "document insert requires an existing workspace-scoped submission",
             ));
         }
 
@@ -557,8 +579,10 @@ FOR UPDATE OF s
             .transaction
             .query_opt(
                 r#"
-INSERT INTO evidence_attachments (
-    evidence_submission_id,
+INSERT INTO documents (
+    workspace_id,
+    owner_type,
+    owner_id,
     filename,
     content_type,
     content_length,
@@ -567,59 +591,60 @@ INSERT INTO evidence_attachments (
     checksum_crc32c,
     upload_status
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, 'pending'
+SELECT $8, 'evidence_submission', $1, $2, $3, $4, $5, $6, $7, 'pending'
 WHERE NOT EXISTS (
     SELECT 1
-    FROM evidence_attachments
-    WHERE evidence_submission_id = $1
+    FROM documents
+    WHERE owner_type = 'evidence_submission'
+      AND owner_id = $1
 )
 RETURNING
     id,
-    evidence_submission_id,
+    owner_id AS evidence_submission_id,
     filename,
     content_type,
     content_length,
     object_key,
     checksum_sha256,
     checksum_crc32c,
-    upload_status
+    upload_status,
+    created_at
 "#,
                 &[
-                    &Uuid::from(payload.evidence_submission_id),
+                    &Uuid::from(evidence_submission_id),
                     &payload.filename,
                     &payload.content_type,
                     &payload.content_length,
                     &payload.object_key,
                     &payload.checksum_sha256,
                     &payload.checksum_crc32c,
+                    &Uuid::from(self.workspace_id),
                 ],
             )
             .await?;
 
-        row.map(|row| evidence_attachment_from_row(&row))
-            .transpose()
+        row.map(|row| evidence_document_from_row(&row)).transpose()
     }
 
-    pub async fn archive_evidence_attachment(
+    pub async fn archive_evidence_document(
         &self,
         evidence_submission_id: EvidenceSubmissionId,
-        evidence_attachment_id: EvidenceAttachmentId,
-    ) -> Result<ArchiveAttachmentResult, Error> {
+        evidence_document_id: DocumentId,
+    ) -> Result<ArchiveDocumentResult, Error> {
         let row = self
             .transaction
             .query_opt(
                 r#"
 WITH scoped AS (
     SELECT a.id, a.upload_status, a.archived
-    FROM evidence_attachments a
-    JOIN evidence_submissions s ON s.id = a.evidence_submission_id
-    JOIN evidence_requests er ON er.id = s.evidence_request_id
-    WHERE er.workspace_id = $1
-      AND s.id = $2
+    FROM documents a
+    WHERE a.workspace_id = $1
+      AND a.owner_type = 'evidence_submission'
+      AND a.owner_id = $2
       AND a.id = $3
 ),
 updated AS (
-    UPDATE evidence_attachments a
+    UPDATE documents a
     SET archived = true
     FROM scoped
     WHERE a.id = scoped.id
@@ -633,7 +658,7 @@ SELECT
                 &[
                     &Uuid::from(self.workspace_id),
                     &Uuid::from(evidence_submission_id),
-                    &Uuid::from(evidence_attachment_id),
+                    &Uuid::from(evidence_document_id),
                 ],
             )
             .await?
@@ -643,9 +668,9 @@ SELECT
             row.try_get::<_, bool>("found")?,
             row.try_get::<_, bool>("archived")?,
         ) {
-            (false, _) => Ok(ArchiveAttachmentResult::NotFound),
-            (true, true) => Ok(ArchiveAttachmentResult::Archived),
-            (true, false) => Ok(ArchiveAttachmentResult::NotTerminal),
+            (false, _) => Ok(ArchiveDocumentResult::NotFound),
+            (true, true) => Ok(ArchiveDocumentResult::Archived),
+            (true, false) => Ok(ArchiveDocumentResult::NotTerminal),
         }
     }
 }
@@ -658,25 +683,25 @@ fn evidence_submission_detail_from_rows(
     };
 
     let submission = evidence_submission_from_row(first_row)?;
-    let attachments = rows
+    let documents = rows
         .iter()
-        .filter_map(evidence_attachment_from_optional_row)
+        .filter_map(evidence_document_from_optional_row)
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Some(EvidenceSubmissionDetail {
         submission,
-        attachments,
+        documents,
     }))
 }
 
-fn evidence_attachment_from_optional_row(row: &Row) -> Option<Result<EvidenceAttachment, Error>> {
-    match row.try_get::<_, Option<Uuid>>("attachment_id") {
+fn evidence_document_from_optional_row(row: &Row) -> Option<Result<Document, Error>> {
+    match row.try_get::<_, Option<Uuid>>("document_id") {
         Ok(Some(_)) => {}
         Ok(None) => return None,
         Err(error) => return Some(Err(Error::Database(error))),
     }
 
-    Some(evidence_attachment_from_row(row))
+    Some(evidence_document_from_row(row))
 }
 
 fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> {
@@ -711,43 +736,35 @@ fn evidence_submitter_from_row(row: &Row) -> Result<EvidenceSubmitter, Error> {
     }
 }
 
-fn evidence_attachment_from_row(row: &Row) -> Result<EvidenceAttachment, Error> {
-    Ok(EvidenceAttachment {
-        id: EvidenceAttachmentId::from(
-            row.try_get::<_, Uuid>("attachment_id")
-                .or_else(|_| row.try_get::<_, Uuid>("id"))?,
-        ),
-        evidence_submission_id: EvidenceSubmissionId::from(
-            row.try_get::<_, Uuid>("attachment_submission_id")
-                .or_else(|_| row.try_get::<_, Uuid>("evidence_submission_id"))?,
-        ),
-        filename: row.try_get("filename")?,
-        content_type: row.try_get("content_type")?,
-        content_length: row.try_get("content_length")?,
-        object_key: row.try_get("object_key")?,
-        checksum_sha256: row.try_get("checksum_sha256")?,
-        checksum_crc32c: row.try_get("checksum_crc32c")?,
-        upload_status: row
-            .try_get::<_, String>("upload_status")?
-            .parse::<AttachmentUploadStatus>()?,
-    })
+fn evidence_document_from_row(row: &Row) -> Result<Document, Error> {
+    let document_id = DocumentId::from(
+        row.try_get::<_, Uuid>("document_id")
+            .or_else(|_| row.try_get::<_, Uuid>("id"))?,
+    );
+    let evidence_submission_id = EvidenceSubmissionId::from(
+        row.try_get::<_, Uuid>("document_submission_id")
+            .or_else(|_| row.try_get::<_, Uuid>("evidence_submission_id"))?,
+    );
+    document_from_row(
+        row,
+        DocumentIdentity::Evidence {
+            evidence_submission_id,
+            document_id,
+        },
+    )
 }
 
-fn pending_attachment_upload_work_from_row(
-    row: &Row,
-) -> Result<PendingAttachmentUploadWork, Error> {
+fn pending_document_upload_work_from_row(row: &Row) -> Result<PendingDocumentUploadWork, Error> {
     let upload_status = row
         .try_get::<_, String>("upload_status")?
-        .parse::<AttachmentUploadStatus>()?;
+        .parse::<DocumentUploadStatus>()?;
 
-    Ok(PendingAttachmentUploadWork {
+    Ok(PendingDocumentUploadWork {
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         evidence_submission_id: EvidenceSubmissionId::from(
             row.try_get::<_, Uuid>("evidence_submission_id")?,
         ),
-        evidence_attachment_id: EvidenceAttachmentId::from(
-            row.try_get::<_, Uuid>("attachment_id")?,
-        ),
+        evidence_document_id: DocumentId::from(row.try_get::<_, Uuid>("document_id")?),
         filename: row.try_get("filename")?,
         content_type: row.try_get("content_type")?,
         content_length: row.try_get("content_length")?,
@@ -757,9 +774,9 @@ fn pending_attachment_upload_work_from_row(
     })
 }
 
-fn attachment_download_candidate_from_row(row: &Row) -> Result<AttachmentDownloadCandidate, Error> {
-    Ok(AttachmentDownloadCandidate {
+fn document_download_candidate_from_row(row: &Row) -> Result<DocumentDownloadCandidate, Error> {
+    Ok(DocumentDownloadCandidate {
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
-        attachment: evidence_attachment_from_row(row)?,
+        document: evidence_document_from_row(row)?,
     })
 }

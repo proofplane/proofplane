@@ -36,6 +36,9 @@ enum Error {
 
     #[error("object storage initialization error")]
     ObjectStorage(#[from] object_storage::StorageError),
+
+    #[error("worker server I/O error")]
+    Server(#[from] std::io::Error),
 }
 
 async fn run() -> Result<(), Error> {
@@ -69,9 +72,7 @@ async fn run() -> Result<(), Error> {
     ));
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
-    let listener = TcpListener::bind(config.server.worker_bind)
-        .await
-        .expect("worker bind address is available");
+    let listener = TcpListener::bind(config.server.worker_bind).await?;
     info!(
         binary = "worker",
         version = VERSION,
@@ -92,14 +93,13 @@ async fn run() -> Result<(), Error> {
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to listen for ctrl-c");
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                error!(%error, "failed to listen for ctrl-c; shutting down");
+            }
 
             info!("received shutdown signal")
         })
-        .await
-        .expect("worker server exits cleanly");
+        .await?;
 
     info!(binary = "worker", "server shutdown complete");
 

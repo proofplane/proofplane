@@ -73,7 +73,7 @@ pub const INTEGRATION_API_TOKEN_ID: &str = "00000000-0000-4000-8000-000000000201
 static CLAMAV: OnceCell<Mutex<Weak<TestClamAv>>> = OnceCell::const_new();
 static AUDIT_LOG_SINK: OnceLock<Arc<StdMutex<Vec<u8>>>> = OnceLock::new();
 
-pub async fn upload_attachment(
+pub async fn upload_document(
     app: &TestApp,
     workspace_id: Uuid,
     submission_id: Uuid,
@@ -84,7 +84,7 @@ pub async fn upload_attachment(
     let connection = app.agent_connection_context(workspace_id);
     let bytes = Bytes::copy_from_slice(content);
     let mut payload = service
-        .upload_attachment(
+        .upload_document(
             &connection,
             submission_id.into(),
             filename.to_owned(),
@@ -92,22 +92,22 @@ pub async fn upload_attachment(
             stream::once(async move { Ok(bytes) }),
         )
         .await
-        .expect("attachment object uploads");
+        .expect("document object uploads");
     payload.checksum_crc32c = crc32c_base64(content);
-    let attachment = service
-        .create_attachment(&connection, Uuid::new_v4(), submission_id.into(), payload)
+    let document = service
+        .create_document(&connection, Uuid::new_v4(), submission_id.into(), payload)
         .await
-        .expect("attachment row creates");
+        .expect("document row creates");
 
     serde_json::json!({
-        "id": Uuid::from(attachment.id),
-        "evidence_submission_id": Uuid::from(attachment.evidence_submission_id),
-        "filename": attachment.filename,
-        "content_type": attachment.content_type,
-        "content_length": attachment.content_length,
-        "checksum_sha256": attachment.checksum_sha256,
-        "checksum_crc32c": attachment.checksum_crc32c,
-        "upload_status": attachment.upload_status.as_str(),
+        "id": Uuid::from(document.id()),
+        "evidence_submission_id": document.owner().owner_uuid(),
+        "filename": document.filename,
+        "content_type": document.content_type,
+        "content_length": document.content_length,
+        "checksum_sha256": document.checksum_sha256,
+        "checksum_crc32c": document.checksum_crc32c,
+        "upload_status": document.upload_status.as_str(),
     })
 }
 
@@ -304,7 +304,7 @@ impl TestApp {
 
         let app_config = config(
             database_url.clone(),
-            builder.max_attachment_bytes,
+            builder.max_document_bytes,
             builder.public_api_base_url,
         );
 
@@ -635,25 +635,25 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
     {
         let download_grant_encryptor = DownloadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-download",
+            "proofplane-document-download",
             &self.app_config.paseto.download,
         )
         .expect("download grant encryptor initializes");
         let download_grant_decryptor = DownloadGrantDecryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-download",
+            "proofplane-document-download",
             &self.app_config.paseto.download,
         )
         .expect("download grant decryptor initializes");
         let upload_grant_encryptor = UploadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-upload-grant",
+            "proofplane-document-upload-grant",
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant encryptor initializes");
         let upload_grant_decryptor = UploadGrantDecryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
-            "proofplane-attachment-upload-grant",
+            "proofplane-document-upload-grant",
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes");
@@ -718,7 +718,7 @@ pub struct TestAppBuilder {
     clamav: bool,
     soc2_reference_data: bool,
     workspaces: Vec<WorkspaceSpec>,
-    max_attachment_bytes: usize,
+    max_document_bytes: usize,
     public_api_base_url: url::Url,
 }
 
@@ -762,7 +762,7 @@ impl Default for TestAppBuilder {
             clamav: false,
             soc2_reference_data: false,
             workspaces: Vec::new(),
-            max_attachment_bytes: 25 * 1024 * 1024,
+            max_document_bytes: 25 * 1024 * 1024,
             public_api_base_url: url::Url::parse("https://api.proofplane.test/")
                 .expect("public API base URL parses"),
         }
@@ -1093,7 +1093,7 @@ async fn shared_clamav() -> Arc<TestClamAv> {
 
 fn config(
     database_url: String,
-    max_attachment_bytes: usize,
+    max_document_bytes: usize,
     public_api_base_url: url::Url,
 ) -> AppConfig {
     let storage_root =
@@ -1165,9 +1165,7 @@ fn config(
             connection_timeout_ms: 1000,
             scan_timeout_ms: 30000,
         },
-        uploads: UploadsConfig {
-            max_attachment_bytes,
-        },
+        uploads: UploadsConfig { max_document_bytes },
         mail: MailConfig {
             adapter: MailAdapterConfig::Disabled,
         },

@@ -32,7 +32,7 @@ CREATE TABLE policy_control_mappings (
 CREATE INDEX idx_policy_control_mappings_control
     ON policy_control_mappings (control_id, policy_id);
 
-CREATE TABLE policy_attachments (
+CREATE TABLE policy_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     policy_id UUID NOT NULL REFERENCES policies(id),
     filename TEXT NOT NULL,
@@ -47,10 +47,10 @@ CREATE TABLE policy_attachments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX policy_attachments_policy_active_key
-    ON policy_attachments (policy_id)
+CREATE UNIQUE INDEX policy_documents_policy_active_key
+    ON policy_documents (policy_id)
     WHERE archived = false;
 
-CREATE INDEX idx_policy_attachments_upload_status
-    ON policy_attachments (upload_status, id)
+CREATE INDEX idx_policy_documents_upload_status
+    ON policy_documents (upload_status, id)
     WHERE archived = false;

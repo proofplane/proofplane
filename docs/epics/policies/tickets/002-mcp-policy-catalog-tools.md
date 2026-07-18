@@ -37,7 +37,7 @@ data-plane.
 
 - The spec revision dated 2026-07-15 names the mutation `update_policy` because
   it changes name and description without replacing the policy or related state.
-- The 2026-07-16 spec revision records the shipped nested attachment response
+- The 2026-07-16 spec revision records the shipped nested document response
   and stable MCP policy audit event names, plus the entity/read-projection
   separation and dedicated `projections::policy_projection` module applied
   during review.

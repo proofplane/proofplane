@@ -2,20 +2,21 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CreateEvidenceAttachmentPayload, CreateEvidenceSubmissionPayload, EvidenceAttachment,
-        EvidenceAttachmentId, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
+        CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document, DocumentId,
+        DocumentOwner, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
         EvidenceSubmissionId,
     },
-    object_storage::{
-        FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
-    },
+    object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{ArchiveAttachmentResult, NewOutboxMessage, Postgres},
+    repository::{ArchiveDocumentResult, NewOutboxMessage, Postgres},
     services::Error,
-    worker::ATTACHMENT_SCAN_REQUESTED,
+    worker::DOCUMENT_SCAN_REQUESTED,
 };
 
-use super::agent_connections::AgentConnectionContext;
+use super::{
+    agent_connections::AgentConnectionContext,
+    documents::{delete_staged_document, stage_document},
+};
 use bytes::Bytes;
 use futures_core::Stream;
 use uuid::Uuid;
@@ -35,7 +36,7 @@ impl Clone for EvidenceSubmissionService {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadEvidenceAttachmentPayload {
+pub struct UploadEvidenceDocumentPayload {
     pub evidence_submission_id: EvidenceSubmissionId,
     pub filename: String,
     pub content_type: String,
@@ -113,68 +114,53 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn upload_attachment<S>(
+    pub async fn upload_document<S>(
         &self,
         connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
         filename: String,
         content_type: String,
         chunks: S,
-    ) -> Result<UploadEvidenceAttachmentPayload, Error>
+    ) -> Result<UploadEvidenceDocumentPayload, Error>
     where
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
-        let upload_id = Uuid::new_v4();
-        let stable_prefix =
-            format!("quarantine/evidence-submissions/{submission_id}/attachments/{upload_id}");
-        let key = ObjectKey::new(connection.workspace_id, stable_prefix, &filename)?;
-
-        let metadata = self
-            .object_store
-            .put_object(PutObjectRequest {
-                key,
-                content_type,
-                chunks,
-            })
-            .await?;
-
-        let content_length = i64::try_from(metadata.content_length).map_err(|_| {
-            Error::Storage(crate::object_storage::StorageError::StreamRead {
-                message: "file is too large".to_owned(),
-                payload_too_large: true,
-            })
-        })?;
-
-        let object_key = metadata.key.to_string();
-        Ok(UploadEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
+        let staged = stage_document(
+            &self.object_store,
+            connection.workspace_id,
+            DocumentOwner::EvidenceSubmission(submission_id),
+            Uuid::new_v4(),
             filename,
-            content_type: metadata.content_type,
-            content_length,
-            object_key,
-            checksum_sha256: metadata.sha256,
-            checksum_crc32c: String::new(),
+            content_type,
+            chunks,
+        )
+        .await?;
+        Ok(UploadEvidenceDocumentPayload {
+            evidence_submission_id: submission_id,
+            filename: staged.filename,
+            content_type: staged.content_type,
+            content_length: staged.content_length,
+            object_key: staged.object_key,
+            checksum_sha256: staged.checksum_sha256,
+            checksum_crc32c: staged.checksum_crc32c,
         })
     }
 
-    pub async fn delete_uploaded_attachment_object(&self, object_key: &str) -> Result<(), Error> {
-        self.object_store
-            .delete_object(&ObjectKey::parse(object_key.to_owned())?)
-            .await?;
-        Ok(())
+    pub async fn delete_uploaded_document_object(&self, object_key: &str) -> Result<(), Error> {
+        delete_staged_document(&self.object_store, object_key).await
     }
 
-    pub async fn create_attachment(
+    pub async fn create_document(
         &self,
         connection: &AgentConnectionContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceAttachmentPayload,
-    ) -> Result<EvidenceAttachment, Error> {
+        mut payload: UploadEvidenceDocumentPayload,
+    ) -> Result<Document, Error> {
         payload.evidence_submission_id = submission_id;
 
-        let create_payload = CreateEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
+        let create_payload = CreateDocumentPayload {
+            owner: DocumentOwner::EvidenceSubmission(submission_id),
             filename: payload.filename,
             content_type: payload.content_type,
             content_length: payload.content_length,
@@ -190,41 +176,40 @@ impl EvidenceSubmissionService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    let attachment = context.create_evidence_attachment(&create_payload).await?;
+                    let document = context.create_evidence_document(&create_payload).await?;
                     context
-                        .append_outbox_message(&attachment_scan_requested_message(
-                            &attachment,
-                            request_id,
+                        .append_outbox_message(&document_scan_requested_message(
+                            &document, request_id,
                         ))
                         .await?;
 
-                    Ok(attachment)
+                    Ok(document)
                 },
             )
             .await;
 
         match result {
-            Ok(attachment) => Ok(attachment),
+            Ok(document) => Ok(document),
             Err(error) => {
                 let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
+                    .delete_uploaded_document_object(&payload.object_key)
                     .await;
                 Err(error.into())
             }
         }
     }
 
-    pub async fn create_first_attachment(
+    pub async fn create_first_document(
         &self,
         connection: &AgentConnectionContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceAttachmentPayload,
-    ) -> Result<Option<EvidenceAttachment>, Error> {
+        mut payload: UploadEvidenceDocumentPayload,
+    ) -> Result<Option<Document>, Error> {
         payload.evidence_submission_id = submission_id;
 
-        let create_payload = CreateEvidenceAttachmentPayload {
-            evidence_submission_id: submission_id,
+        let create_payload = CreateDocumentPayload {
+            owner: DocumentOwner::EvidenceSubmission(submission_id),
             filename: payload.filename,
             content_type: payload.content_type,
             content_length: payload.content_length,
@@ -240,47 +225,46 @@ impl EvidenceSubmissionService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    let Some(attachment) = context
-                        .create_first_evidence_attachment(&create_payload)
+                    let Some(document) = context
+                        .create_first_evidence_document(&create_payload)
                         .await?
                     else {
                         return Ok(None);
                     };
                     context
-                        .append_outbox_message(&attachment_scan_requested_message(
-                            &attachment,
-                            request_id,
+                        .append_outbox_message(&document_scan_requested_message(
+                            &document, request_id,
                         ))
                         .await?;
 
-                    Ok(Some(attachment))
+                    Ok(Some(document))
                 },
             )
             .await;
 
         match result {
-            Ok(Some(attachment)) => Ok(Some(attachment)),
+            Ok(Some(document)) => Ok(Some(document)),
             Ok(None) => {
                 let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
+                    .delete_uploaded_document_object(&payload.object_key)
                     .await;
                 Ok(None)
             }
             Err(error) => {
                 let _ = self
-                    .delete_uploaded_attachment_object(&payload.object_key)
+                    .delete_uploaded_document_object(&payload.object_key)
                     .await;
                 Err(error.into())
             }
         }
     }
 
-    pub async fn archive_attachment(
+    pub async fn archive_document(
         &self,
         connection: &AgentConnectionContext,
         submission_id: EvidenceSubmissionId,
-        attachment_id: EvidenceAttachmentId,
-    ) -> Result<ArchiveAttachmentResult, Error> {
+        document_id: DocumentId,
+    ) -> Result<ArchiveDocumentResult, Error> {
         Ok(self
             .repository
             .in_agent_connection_workspace_context(
@@ -289,7 +273,7 @@ impl EvidenceSubmissionService {
                 connection.connection_id,
                 async move |context| {
                     context
-                        .archive_evidence_attachment(submission_id, attachment_id)
+                        .archive_evidence_document(submission_id, document_id)
                         .await
                 },
             )
@@ -297,18 +281,15 @@ impl EvidenceSubmissionService {
     }
 }
 
-fn attachment_scan_requested_message(
-    attachment: &EvidenceAttachment,
-    request_id: Uuid,
-) -> NewOutboxMessage {
+fn document_scan_requested_message(document: &Document, request_id: Uuid) -> NewOutboxMessage {
     NewOutboxMessage {
         topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: ATTACHMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "evidence_attachment".to_owned(),
-        aggregate_id: Uuid::from(attachment.id).to_string(),
+        event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),
+        aggregate_type: "evidence_document".to_owned(),
+        aggregate_id: Uuid::from(document.id()).to_string(),
         payload: serde_json::json!({
-            "evidence_submission_id": Uuid::from(attachment.evidence_submission_id).to_string(),
-            "object_key": attachment.object_key,
+            "evidence_submission_id": document.owner().owner_uuid().to_string(),
+            "object_key": document.object_key,
         }),
         request_id: Some(request_id),
     }

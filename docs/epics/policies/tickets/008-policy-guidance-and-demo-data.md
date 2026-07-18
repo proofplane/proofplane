@@ -1,6 +1,6 @@
 # 008 - Policy Guidance And Demo Data
 
-**Status:** Todo · **Depends on:** [002](./002-mcp-policy-catalog-tools.md), [004](./004-mcp-policy-attachment-grants.md), [007](./007-auditor-policy-portal-ui.md) · **Spec:** [spec.md](../spec.md#agreed-scope)
+**Status:** Todo · **Depends on:** [002](./002-mcp-policy-catalog-tools.md), [004](./004-mcp-policy-document-grants.md), [007](./007-auditor-policy-portal-ui.md) · **Spec:** [spec.md](../spec.md#agreed-scope)
 
 **Summary** - Make the completed policy workflow discoverable to connected
 agents and visible in local/demo workspaces without inflating initialization

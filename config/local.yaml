@@ -51,7 +51,7 @@ scanner:
   scan_timeout_ms: 30000
 
 uploads:
-  max_attachment_bytes: 26214400
+  max_document_bytes: 26214400
 
 mail:
   adapter: "local_stdout"

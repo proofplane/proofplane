@@ -3,7 +3,7 @@
 **Status:** Todo · **Depends on:** 001 · **Spec:** [spec.md](../spec.md#object-store-runtime)
 
 **Summary** - Implement GCS upload, read, metadata, copy, and delete behavior so
-production attachments use the same logical object contract as local storage.
+production documents use the same logical object contract as local storage.
 
 **Acceptance criteria**
 

@@ -1,8 +1,8 @@
 pub mod agent_connections;
-pub mod attachment_downloads;
-pub mod attachment_upload_sessions;
 pub mod auditor_access;
 pub mod authentication;
+pub mod document_downloads;
+pub mod document_upload_sessions;
 pub mod error;
 pub mod health;
 pub mod me;

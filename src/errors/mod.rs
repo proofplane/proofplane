@@ -18,17 +18,19 @@ pub trait Retryable: Sized {
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, Self>>,
     {
-        let max_attempts = retry_attempts + 1;
-        let mut last_error = None;
+        let mut last_error = match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
 
-        for _ in 0..max_attempts {
+        for _ in 0..retry_attempts {
             match operation().await {
                 Ok(value) => return Ok(value),
-                Err(error) => last_error = Some(error),
+                Err(error) => last_error = error,
             }
         }
 
-        Err(last_error.expect("operation is always attempted at least once"))
+        Err(last_error)
     }
 }
 

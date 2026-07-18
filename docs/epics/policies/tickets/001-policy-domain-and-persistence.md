@@ -3,7 +3,7 @@
 **Status:** Done · **Depends on:** none · **Spec:** [spec.md](../spec.md#persistence-model)
 
 **Summary** - Add the workspace-scoped policy lifecycle and many-to-many
-control relationships that every MCP, attachment, and auditor surface builds
+control relationships that every MCP, document, and auditor surface builds
 on.
 
 **Acceptance criteria**
@@ -15,10 +15,10 @@ on.
   cross-workspace control reference, when creation or mapping is attempted,
   then the operation is rejected without partial state or existence leakage.
 - [x] Given an active policy, when its name and description are updated or
-  mappings are attached and detached, then unrelated mappings and attachment
+  mappings are attached and detached, then unrelated mappings and document
   state remain unchanged.
-- [x] Given a terminal or missing attachment, when the policy is archived, then
-  normal reads hide it while retaining its rows; an in-progress attachment
+- [x] Given a terminal or missing document, when the policy is archived, then
+  normal reads hide it while retaining its rows; an in-progress document
   blocks archival.
 - [x] Given existing control and evidence mappings, when policy persistence
   ships, then their schemas and behavior are unchanged.
@@ -27,7 +27,7 @@ on.
 
 - [x] Add policy, mapping, ID, payload, validation, and error domain types.
 - [x] Add migrations for policies, policy-control mappings, and the policy
-  attachment schema prerequisite, including uniqueness and query indexes.
+  document schema prerequisite, including uniqueness and query indexes.
 - [x] Add workspace-scoped repository reads and transactional create, update,
   archive, attach, and detach operations.
 - [x] Add policy service orchestration and conflict/reference classification.
@@ -36,5 +36,5 @@ on.
 
 **Notes**
 
-- Policy attachment persistence lands here so archival can enforce the
-  in-progress guard; ticket 003 retains attachment lifecycle and worker work.
+- Policy document persistence lands here so archival can enforce the
+  in-progress guard; ticket 003 retains document lifecycle and worker work.

@@ -38,8 +38,8 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        attachment_upload_grants::AttachmentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
+        document_upload_grants::DocumentUploadGrantService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
         policies::PolicyService,
     },
@@ -103,7 +103,7 @@ where
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let attachment_upload_grants = AttachmentUploadGrantService::new(
+    let document_upload_grants = DocumentUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
         dependencies.upload_grant_encryptor,
@@ -120,7 +120,7 @@ where
         ProofplaneMcp::new(
             evidence_requests,
             evidence_submissions,
-            attachment_upload_grants,
+            document_upload_grants,
             auditor_access_grants,
             controls,
             policies,

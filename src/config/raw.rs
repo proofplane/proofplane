@@ -581,16 +581,14 @@ impl RawObjectStorageConfig {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawUploadsConfig {
-    max_attachment_bytes: usize,
+    max_document_bytes: usize,
 }
 
 impl RawUploadsConfig {
     pub(super) fn validate(self) -> Validation<UploadsConfig, ConfigFieldError> {
-        nonzero_usize(self.max_attachment_bytes)
-            .at("uploads.max_attachment_bytes")
-            .map(|max_attachment_bytes| UploadsConfig {
-                max_attachment_bytes,
-            })
+        nonzero_usize(self.max_document_bytes)
+            .at("uploads.max_document_bytes")
+            .map(|max_document_bytes| UploadsConfig { max_document_bytes })
     }
 }
 

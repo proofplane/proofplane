@@ -5,12 +5,13 @@ use uuid::Uuid;
 use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
-mod attachment_upload_grants;
 mod auditor_access_grants;
 mod auditor_access_sessions;
 mod auditor_portal;
 pub mod constraints;
 mod controls;
+mod document_upload_grants;
+mod documents;
 pub mod error;
 mod evidence_requests;
 mod evidence_submissions;
@@ -21,16 +22,17 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
-pub use attachment_upload_grants::{AttachmentUploadGrant, NewAttachmentUploadGrant};
 pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
 pub use constraints::ConflictKind;
+pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
+pub use documents::TypedDocumentUploadWork;
 pub use error::Error;
 pub use evidence_submissions::{
-    ArchiveAttachmentResult, AttachmentDownloadCandidate, FinalizingAttachmentUploadWork,
-    PendingAttachmentUploadWork,
+    ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
+    PendingDocumentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
-pub use policies::ArchivePolicyResult;
+pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
 pub use workspace_memberships::NewWorkspaceMembership;
 
 pub struct Postgres {

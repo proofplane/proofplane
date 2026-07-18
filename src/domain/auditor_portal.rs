@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use super::{
-    AttachmentUploadStatus, ControlId, EvidenceAttachmentId, EvidenceRequest, EvidenceSubmission,
+    ControlId, DocumentId, DocumentUploadStatus, EvidenceRequest, EvidenceSubmission,
     EvidenceSubmissionId, FrameworkRequirement, WorkspaceId,
 };
 
@@ -35,18 +35,18 @@ pub struct AuditorPortalEvidenceRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalSubmission {
     pub submission: EvidenceSubmission,
-    pub attachments: Vec<AuditorPortalAttachment>,
+    pub documents: Vec<AuditorPortalDocument>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditorPortalAttachment {
-    pub id: EvidenceAttachmentId,
+pub struct AuditorPortalDocument {
+    pub id: DocumentId,
     pub evidence_submission_id: EvidenceSubmissionId,
     pub filename: String,
     pub content_type: String,
     pub content_length: i64,
     pub checksum_sha256: String,
     pub checksum_crc32c: String,
-    pub upload_status: AttachmentUploadStatus,
+    pub upload_status: DocumentUploadStatus,
     pub download_eligible: bool,
 }

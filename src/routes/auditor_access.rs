@@ -17,17 +17,17 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuditorPortalAttachment, AuditorPortalControl, AuditorPortalEvidenceRequest,
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
         AuditorPortalReadModel, AuditorPortalSubmission, EvidenceRequest, EvidenceSubmission,
         FrameworkRequirement,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{error::ApiError, request_context::RequestId},
     services::{
-        attachment_downloads::{AttachmentDownloadService, DownloadError},
         auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
         auditor_portal::AuditorPortalReadModelService,
+        document_downloads::{DocumentDownloadService, DownloadError},
     },
 };
 use chrono::{DateTime, Utc};
@@ -40,7 +40,7 @@ pub struct AuditorAccessState {
     pub grants: AuditorAccessGrantService,
     pub sessions: AuditorAccessSessionService,
     pub portal: AuditorPortalReadModelService,
-    pub downloads: AttachmentDownloadService,
+    pub downloads: DocumentDownloadService,
     pub secure_cookie: bool,
 }
 
@@ -90,7 +90,7 @@ pub fn router(state: AuditorAccessState) -> Router {
         )
         .route(
             "/auditor-access/portal/{*download_path}",
-            get(download_attachment),
+            get(download_document),
         )
         .route("/auditor-access/{workspace_id}", get(open_invite))
         .route(
@@ -481,13 +481,13 @@ async fn portal_data(
     Ok(Json(model.into()))
 }
 
-async fn download_attachment(
+async fn download_document(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
     Path(download_path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (submission_id, attachment_id) = parse_download_path(&download_path)?;
+    let (submission_id, document_id) = parse_download_path(&download_path)?;
     let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
     let session = state
         .sessions
@@ -499,19 +499,19 @@ async fn download_attachment(
         .download_for_workspace(
             session.workspace_id,
             submission_id.into(),
-            attachment_id.into(),
+            document_id.into(),
         )
         .await
         .map_err(download_error)?;
 
     AuditEvent::new(
-        "auditor_attachment.downloaded",
+        "auditor_document.downloaded",
         AuditOutcome::Success,
         AuditActor::System {
             name: "auditor_browser",
         },
         AuditClientType::Rest,
-        "download_auditor_attachment",
+        "download_auditor_document",
     )
     .workspace_id(Uuid::from(downloaded.audit.workspace_id))
     .request_id(request_id.0)
@@ -521,28 +521,27 @@ async fn download_attachment(
         Uuid::from(downloaded.audit.submission_id),
     )
     .metadata(
-        "evidence_attachment_id",
-        Uuid::from(downloaded.audit.attachment_id),
+        "evidence_document_id",
+        Uuid::from(downloaded.audit.document_id),
     )
     .object(AuditObject::new(
-        "evidence_attachment",
-        downloaded.audit.attachment_id.into(),
+        "evidence_document",
+        downloaded.audit.document_id.into(),
     ))
     .emit();
 
     let disposition =
-        crate::routes::attachment_downloads::content_disposition(&downloaded.attachment.filename);
+        crate::routes::document_downloads::content_disposition(&downloaded.document.filename);
     let mut response = Body::from_stream(downloaded.object.chunks).into_response();
     *response.status_mut() = StatusCode::OK;
     let headers = response.headers_mut();
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_str(&downloaded.attachment.content_type)
-            .map_err(|_| ApiError::Internal)?,
+        HeaderValue::from_str(&downloaded.document.content_type).map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
         CONTENT_LENGTH,
-        HeaderValue::from_str(&downloaded.attachment.content_length.to_string())
+        HeaderValue::from_str(&downloaded.document.content_length.to_string())
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
@@ -558,10 +557,10 @@ async fn download_attachment(
 fn parse_download_path(path: &str) -> Result<(Uuid, Uuid), ApiError> {
     let segments = path.split('/').collect::<Vec<_>>();
     match segments.as_slice() {
-        ["evidence-submissions", submission_id, "attachments", attachment_id, "download"] => {
+        ["evidence-submissions", submission_id, "documents", document_id, "download"] => {
             let submission_id = Uuid::parse_str(submission_id).map_err(|_| ApiError::NotFound)?;
-            let attachment_id = Uuid::parse_str(attachment_id).map_err(|_| ApiError::NotFound)?;
-            Ok((submission_id, attachment_id))
+            let document_id = Uuid::parse_str(document_id).map_err(|_| ApiError::NotFound)?;
+            Ok((submission_id, document_id))
         }
         _ => Err(ApiError::NotFound),
     }
@@ -949,16 +948,15 @@ fn render_portal_bar(model: &AuditorPortalReadModel) -> String {
 }
 
 fn render_submission(submission: &AuditorPortalSubmission) -> String {
-    let attachments = if submission.attachments.is_empty() {
-        r#"<p class="empty compact">No attachments are available for this submission.</p>"#
-            .to_owned()
+    let documents = if submission.documents.is_empty() {
+        r#"<p class="empty compact">No documents are available for this submission.</p>"#.to_owned()
     } else {
         format!(
-            r#"<table class="attachment-table"><caption>Evidence attachments</caption><thead><tr><th>Attachment</th><th>Size</th><th>Status</th><th>Checksum (SHA-256)</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
+            r#"<table class="document-table"><caption>Evidence documents</caption><thead><tr><th>Document</th><th>Size</th><th>Status</th><th>Checksum (SHA-256)</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
             submission
-                .attachments
+                .documents
                 .iter()
-                .map(render_attachment)
+                .map(render_document)
                 .collect::<Vec<_>>()
                 .join("")
         )
@@ -998,28 +996,28 @@ fn render_submission(submission: &AuditorPortalSubmission) -> String {
         escape_html(&submission.submission.collection_method),
         summary,
         description,
-        attachments,
+        documents,
     )
 }
 
-fn render_attachment(attachment: &AuditorPortalAttachment) -> String {
-    let action = if attachment.download_eligible {
+fn render_document(document: &AuditorPortalDocument) -> String {
+    let action = if document.download_eligible {
         format!(
-            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/attachments/{}/download">Download evidence</a>"#,
-            Uuid::from(attachment.evidence_submission_id),
-            Uuid::from(attachment.id),
+            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/documents/{}/download">Download evidence</a>"#,
+            Uuid::from(document.evidence_submission_id),
+            Uuid::from(document.id),
         )
     } else {
         "Unavailable".to_owned()
     };
 
     format!(
-        r#"<tr><td data-label="Attachment">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td class="checksum" data-label="Checksum (SHA-256)" title="{}">{}</td><td data-label="Action">{}</td></tr>"#,
-        escape_html(&attachment.filename),
-        format_bytes(attachment.content_length),
-        escape_html(attachment.upload_status.as_str()),
-        escape_html(&attachment.checksum_sha256),
-        compact_checksum(&attachment.checksum_sha256),
+        r#"<tr><td data-label="Document">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td class="checksum" data-label="Checksum (SHA-256)" title="{}">{}</td><td data-label="Action">{}</td></tr>"#,
+        escape_html(&document.filename),
+        format_bytes(document.content_length),
+        escape_html(document.upload_status.as_str()),
+        escape_html(&document.checksum_sha256),
+        compact_checksum(&document.checksum_sha256),
         action,
     )
 }
@@ -1236,10 +1234,10 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .submission {{ padding: 24px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }}
 .submission h4 {{ font-size: 1rem; }}
 .submission .details {{ margin-top: 14px; }}
-.attachment-table {{ margin-top: 20px; }}
-.attachment-table th {{ background: oklch(19% 0.013 170); }}
+.document-table {{ margin-top: 20px; }}
+.document-table th {{ background: oklch(19% 0.013 170); }}
 .checksum {{ font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: 0.8125rem; font-variant-ligatures: none; }}
-.attachment-table .button {{ min-height: 40px; white-space: nowrap; }}
+.document-table .button {{ min-height: 40px; white-space: nowrap; }}
 .empty-state {{ padding: 40px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
 .empty-state h2 {{ font-size: 1.25rem; }}
 
@@ -1281,7 +1279,7 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
   .context-panel dl {{ grid-template-columns: 1fr; }}
   .request-disclosure summary {{ padding-left: 28px; }}
   .request-body {{ padding-left: 12px; padding-right: 12px; }}
-  .attachment-table tr {{ display: block; padding: 16px 0; }}
+  .document-table tr {{ display: block; padding: 16px 0; }}
 }}
 
 @media (prefers-reduced-motion: reduce) {{
@@ -1457,11 +1455,11 @@ fn download_error(error: DownloadError) -> ApiError {
     match error {
         DownloadError::NotFound | DownloadError::NotReady => ApiError::NotFound,
         DownloadError::MetadataMismatch | DownloadError::Internal => {
-            tracing::error!(%error, "auditor attachment download failed");
+            tracing::error!(%error, "auditor document download failed");
             ApiError::Internal
         }
         DownloadError::Repository(repository_error) => {
-            tracing::error!(error = %repository_error, "auditor attachment download repository failure");
+            tracing::error!(error = %repository_error, "auditor document download repository failure");
             ApiError::Internal
         }
     }
@@ -1601,14 +1599,14 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 #[derive(Debug, Serialize)]
 struct AuditorPortalSubmissionResponse {
     submission: EvidenceSubmissionResponse,
-    attachments: Vec<AuditorPortalAttachmentResponse>,
+    documents: Vec<AuditorPortalDocumentResponse>,
 }
 
 impl From<AuditorPortalSubmission> for AuditorPortalSubmissionResponse {
     fn from(submission: AuditorPortalSubmission) -> Self {
         Self {
             submission: submission.submission.into(),
-            attachments: submission.attachments.into_iter().map(Into::into).collect(),
+            documents: submission.documents.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1662,7 +1660,7 @@ impl From<crate::domain::EvidenceSubmitter> for EvidenceSubmitterResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct AuditorPortalAttachmentResponse {
+struct AuditorPortalDocumentResponse {
     id: Uuid,
     evidence_submission_id: Uuid,
     filename: String,
@@ -1674,18 +1672,18 @@ struct AuditorPortalAttachmentResponse {
     download_eligible: bool,
 }
 
-impl From<AuditorPortalAttachment> for AuditorPortalAttachmentResponse {
-    fn from(attachment: AuditorPortalAttachment) -> Self {
+impl From<AuditorPortalDocument> for AuditorPortalDocumentResponse {
+    fn from(document: AuditorPortalDocument) -> Self {
         Self {
-            id: Uuid::from(attachment.id),
-            evidence_submission_id: Uuid::from(attachment.evidence_submission_id),
-            filename: attachment.filename,
-            content_type: attachment.content_type,
-            content_length: attachment.content_length,
-            checksum_sha256: attachment.checksum_sha256,
-            checksum_crc32c: attachment.checksum_crc32c,
-            upload_status: attachment.upload_status.as_str(),
-            download_eligible: attachment.download_eligible,
+            id: Uuid::from(document.id),
+            evidence_submission_id: Uuid::from(document.evidence_submission_id),
+            filename: document.filename,
+            content_type: document.content_type,
+            content_length: document.content_length,
+            checksum_sha256: document.checksum_sha256,
+            checksum_crc32c: document.checksum_crc32c,
+            upload_status: document.upload_status.as_str(),
+            download_eligible: document.download_eligible,
         }
     }
 }

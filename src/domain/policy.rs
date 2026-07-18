@@ -7,7 +7,6 @@ use crate::validation::Validation;
 use super::{ids::uuid_id, ControlId, ControlSummary, DomainError, WorkspaceId};
 
 uuid_id!(PolicyId);
-uuid_id!(PolicyAttachmentId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {

@@ -13,7 +13,7 @@ use crate::{
 
 const UPLOAD_SESSION_TOKEN_VERSION: u8 = 1;
 pub const UPLOAD_SESSION_TTL: Duration = Duration::from_secs(15 * 60);
-pub const UPLOAD_SESSION_AUDIENCE: &str = "proofplane-attachment-upload-session";
+pub const UPLOAD_SESSION_AUDIENCE: &str = "proofplane-document-upload-session";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UploadSessionClaims {
@@ -152,9 +152,9 @@ struct InvalidUploadSessionClaims;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadSessionError {
-    #[error("attachment upload session is unavailable")]
+    #[error("document upload session is unavailable")]
     Unavailable,
-    #[error("internal attachment upload session error")]
+    #[error("internal document upload session error")]
     Internal,
 }
 

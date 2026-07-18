@@ -29,15 +29,15 @@ pub enum DomainError {
     #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
     InvalidCoverageWindow,
 
-    #[error("attachment filename must not be empty")]
-    EmptyAttachmentFilename,
+    #[error("document filename must not be empty")]
+    EmptyDocumentFilename,
 
-    #[error("attachment filename must be at most 255 bytes")]
-    AttachmentFilenameTooLong,
+    #[error("document filename must be at most 255 bytes")]
+    DocumentFilenameTooLong,
 
-    #[error("attachment filename contains unsupported characters")]
-    InvalidAttachmentFilenameCharacters,
+    #[error("document filename contains unsupported characters")]
+    InvalidDocumentFilenameCharacters,
 
-    #[error("attachment filename must not be . or ..")]
-    ReservedAttachmentFilename,
+    #[error("document filename must not be . or ..")]
+    ReservedDocumentFilename,
 }

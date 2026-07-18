@@ -210,7 +210,7 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
             {"topic": "glossary", "title": "Proofplane Glossary"},
             {"topic": "submitting-evidence", "title": "Submitting Evidence"},
             {"topic": "controls-and-mappings", "title": "Controls and Mappings"},
-            {"topic": "attachments", "title": "Attachments"},
+            {"topic": "documents", "title": "Documents"},
             {"topic": "errors-and-not-found", "title": "Errors and Not Found"}
         ])
     );
@@ -222,7 +222,7 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
                 {"uri": "proofplane://docs/glossary", "name": "glossary", "title": "Proofplane Glossary", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/submitting-evidence", "name": "submitting-evidence", "title": "Submitting Evidence", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/controls-and-mappings", "name": "controls-and-mappings", "title": "Controls and Mappings", "mimeType": "text/markdown"},
-                {"uri": "proofplane://docs/attachments", "name": "attachments", "title": "Attachments", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/documents", "name": "documents", "title": "Documents", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/errors-and-not-found", "name": "errors-and-not-found", "title": "Errors and Not Found", "mimeType": "text/markdown"}
             ]
         })
@@ -343,7 +343,7 @@ WHERE id = $1
 
     let grant = client
         .call_tool(
-            "manage_evidence_submission_attachment",
+            "manage_evidence_submission_document",
             json!({ "submission_id": submission_id }),
         )
         .await;
@@ -357,7 +357,7 @@ WHERE id = $1
         .query_one(
             r#"
 SELECT issued_via_agent_connection_id
-FROM attachment_upload_grants
+FROM document_upload_grants
 WHERE evidence_submission_id = $1
 "#,
             &[&submission_id],
@@ -470,7 +470,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_evidence_submission",
         "get_latest_evidence_submission",
         "create_evidence_submission",
-        "manage_evidence_submission_attachment",
+        "manage_evidence_submission_document",
         "create_auditor_access_link",
         "list_auditor_access_links",
         "revoke_auditor_access_link",
@@ -514,19 +514,19 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "create_evidence_submission",
-            "Create a submission that records proof for an evidence request; call manage_evidence_submission_attachment afterward to obtain a human-browser attachment flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Create a submission that records proof for an evidence request; call manage_evidence_submission_document afterward to obtain a human-browser document flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_evidence_submission",
-            "Get one evidence submission with detailed provenance, coverage, collection, and attachment metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Get one evidence submission with detailed provenance, coverage, collection, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_latest_evidence_submission",
-            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and attachment metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
-            "manage_evidence_submission_attachment",
-            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s attachments; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic attachments.",
+            "manage_evidence_submission_document",
+            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
         ),
         (
             "create_auditor_access_link",
@@ -619,8 +619,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     let submission_description = find_tool(&tool_list, "create_evidence_submission")["description"]
         .as_str()
         .expect("submission tool has a description");
-    assert!(submission_description.contains("manage_evidence_submission_attachment afterward"));
-    assert!(submission_description.contains("human-browser attachment flow"));
+    assert!(submission_description.contains("manage_evidence_submission_document afterward"));
+    assert!(submission_description.contains("human-browser document flow"));
     assert_schema_has_property(
         &find_tool(&tool_list, "get_proofplane_guide")["inputSchema"],
         "topic",
@@ -662,7 +662,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "source_system",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_attachment")["inputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submission_document")["inputSchema"],
         "submission_id",
     );
     assert_schema_has_property(
@@ -739,7 +739,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
-        "attachments",
+        "documents",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "list_controls")["outputSchema"],
@@ -784,7 +784,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_policy")["outputSchema"],
-        "attachment",
+        "document",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "archive_policy")["outputSchema"],
@@ -795,15 +795,15 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "policy_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_attachment")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
         "url_secret_type",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_attachment")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
         "expires_at",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_attachment")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
         "intended_use",
     );
     assert_schema_has_property(
@@ -1346,7 +1346,7 @@ async fn mcp_create_evidence_submission_reports_structured_validation_errors() {
 }
 
 #[tokio::test]
-async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_only() {
+async fn mcp_document_management_issues_bearer_secret_urls_and_audit_success_only() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP upload grant workspace")
         .with_default_membership()
@@ -1366,7 +1366,7 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
             let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
             mcp_client
                 .call_tool(
-                    "manage_evidence_submission_attachment",
+                    "manage_evidence_submission_document",
                     json!({ "submission_id": submission_id }),
                 )
                 .await
@@ -1375,10 +1375,10 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
     .await;
 
     let url = grant["url"].as_str().expect("upload grant URL");
-    assert!(url.starts_with("https://api.proofplane.test/evidence-attachment-uploads?token="));
+    assert!(url.starts_with("https://api.proofplane.test/evidence-document-uploads?token="));
     assert_eq!(grant["submission_id"], submission_id.to_string());
     assert_eq!(grant["url_secret_type"], "bearer_secret");
-    assert_eq!(grant["intended_use"], "human_browser_attachment_management");
+    assert_eq!(grant["intended_use"], "human_browser_document_management");
     assert!(grant["expires_at"].as_str().is_some());
     assert!(grant.get("token").is_none());
     assert!(grant.get("api_token").is_none());
@@ -1390,8 +1390,8 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
     assert_audit_event(
         &logs[0],
         ExpectedAuditEvent {
-            event_name: "evidence_attachment_upload_grant.issued",
-            operation: "manage_evidence_submission_attachment",
+            event_name: "evidence_document_upload_grant.issued",
+            operation: "manage_evidence_submission_document",
             client_type: "mcp",
             workspace_id,
             user_id: app.user_id(),
@@ -1411,7 +1411,7 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let invalid = mcp_client
         .call_tool_error(
-            "manage_evidence_submission_attachment",
+            "manage_evidence_submission_document",
             json!({ "submission_id": "not-a-uuid" }),
         )
         .await;
@@ -1420,7 +1420,7 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
 
     let missing = mcp_client
         .call_tool_error(
-            "manage_evidence_submission_attachment",
+            "manage_evidence_submission_document",
             json!({ "submission_id": Uuid::new_v4() }),
         )
         .await;
@@ -1434,7 +1434,7 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
     .await;
     let cross_workspace = mcp_client
         .call_tool_error(
-            "manage_evidence_submission_attachment",
+            "manage_evidence_submission_document",
             json!({ "submission_id": other_submission_id }),
         )
         .await;
@@ -1454,7 +1454,7 @@ async fn mcp_attachment_management_issues_bearer_secret_urls_and_audit_success_o
                 McpClient::connect_with_request_id(server, &token, request_id).await;
             read_only_client
                 .call_tool_error(
-                    "manage_evidence_submission_attachment",
+                    "manage_evidence_submission_document",
                     json!({ "submission_id": submission_id }),
                 )
                 .await
@@ -1954,7 +1954,7 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
 }
 
 #[tokio::test]
-async fn mcp_policy_tools_cover_catalog_lifecycle_safe_attachments_and_success_audits() {
+async fn mcp_policy_tools_cover_catalog_lifecycle_safe_documents_and_success_audits() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP policy lifecycle workspace")
         .with_control("PP-B", "Second policy control", vec![])
@@ -1986,7 +1986,7 @@ async fn mcp_policy_tools_cover_catalog_lifecycle_safe_attachments_and_success_a
                     )
                     .await;
                 let policy_id = uuid_from(&created["id"]);
-                insert_policy_attachment_row(app, policy_id, "uploaded").await;
+                insert_policy_document_row(app, policy_id, "uploaded").await;
                 let listed = client.call_tool("list_policies", json!({})).await;
                 let got = client
                     .call_tool("get_policy", json!({ "policy_id": policy_id }))
@@ -2020,28 +2020,28 @@ async fn mcp_policy_tools_cover_catalog_lifecycle_safe_attachments_and_success_a
     let policy_id = uuid_from(&created["id"]);
     assert_eq!(created["name"], "Zulu policy");
     assert_eq!(created["controls"][0]["id"], control_b.to_string());
-    assert_eq!(created["attachment"], Value::Null);
+    assert_eq!(created["document"], Value::Null);
     assert!(created.get("workspace_id").is_none());
 
     assert_eq!(listed["policies"][0]["id"], policy_id.to_string());
     assert_eq!(listed["policies"][0]["mapped_control_count"], 1);
     assert_eq!(
-        listed["policies"][0]["attachment"],
+        listed["policies"][0]["document"],
         json!({ "upload_status": "uploaded" })
     );
     assert!(!listed.to_string().contains("policy.pdf"));
     assert!(!listed.to_string().contains("object_key"));
 
     assert_eq!(got["controls"][0]["id"], control_b.to_string());
-    assert_eq!(got["attachment"]["filename"], "policy.pdf");
-    assert_eq!(got["attachment"]["upload_status"], "uploaded");
+    assert_eq!(got["document"]["filename"], "policy.pdf");
+    assert_eq!(got["document"]["upload_status"], "uploaded");
     assert!(!got.to_string().contains("policy-test/"));
     assert!(got.get("workspace_id").is_none());
 
     assert_eq!(updated["name"], "Alpha policy");
     assert_eq!(updated["description"], Value::Null);
     assert_eq!(updated["controls"][0]["id"], control_b.to_string());
-    assert_eq!(updated["attachment"]["filename"], "policy.pdf");
+    assert_eq!(updated["document"]["filename"], "policy.pdf");
     assert_eq!(
         attached,
         json!({ "policy_id": policy_id, "control_id": control_a })
@@ -2167,21 +2167,21 @@ async fn mcp_policy_tools_conceal_tenants_reject_invalid_state_and_enforce_permi
     assert!(failed_logs.is_empty());
     assert_eq!(policy_count_for_workspace(&app, workspace_id).await, 1);
 
-    let attachment_id = insert_policy_attachment_row(&app, policy_id, "pending").await;
+    let document_id = insert_policy_document_row(&app, policy_id, "pending").await;
     let blocked = client
         .call_tool_error("archive_policy", json!({ "policy_id": policy_id }))
         .await;
     assert_eq!(
         blocked.data["problem"]["code"],
-        "policy_attachment_in_progress"
+        "policy_document_in_progress"
     );
-    set_policy_attachment_status(&app, attachment_id, "finalizing").await;
+    set_policy_document_status(&app, document_id, "finalizing").await;
     let blocked = client
         .call_tool_error("archive_policy", json!({ "policy_id": policy_id }))
         .await;
     assert_eq!(
         blocked.data["problem"]["code"],
-        "policy_attachment_in_progress"
+        "policy_document_in_progress"
     );
 
     let read_only = app
@@ -2759,39 +2759,42 @@ VALUES ($1, $2, $3)
         .expect("control mapping fixture inserts");
 }
 
-async fn insert_policy_attachment_row(app: &TestApp, policy_id: Uuid, status: &str) -> Uuid {
-    let attachment_id = Uuid::new_v4();
-    let object_key = format!("policy-test/{attachment_id}");
+async fn insert_policy_document_row(app: &TestApp, policy_id: Uuid, status: &str) -> Uuid {
+    let document_id = Uuid::new_v4();
+    let object_key = format!("policy-test/{document_id}");
     app.postgres()
         .get()
         .await
-        .expect("policy attachment fixture connection opens")
+        .expect("policy document fixture connection opens")
         .execute(
             r#"
-INSERT INTO policy_attachments (
-    id, policy_id, filename, content_type, content_length, object_key,
+INSERT INTO documents (
+    id, workspace_id, owner_type, owner_id, filename, content_type, content_length, object_key,
     checksum_sha256, checksum_crc32c, upload_status
 )
-VALUES ($1, $2, 'policy.pdf', 'application/pdf', 10, $3, 'sha256', 'crc32c', $4)
+SELECT $1, p.workspace_id, 'policy', p.id, 'policy.pdf', 'application/pdf', 10,
+       $3, 'sha256', 'crc32c', $4
+FROM policies p
+WHERE p.id = $2
 "#,
-            &[&attachment_id, &policy_id, &object_key, &status],
+            &[&document_id, &policy_id, &object_key, &status],
         )
         .await
-        .expect("policy attachment fixture inserts");
-    attachment_id
+        .expect("policy document fixture inserts");
+    document_id
 }
 
-async fn set_policy_attachment_status(app: &TestApp, attachment_id: Uuid, status: &str) {
+async fn set_policy_document_status(app: &TestApp, document_id: Uuid, status: &str) {
     app.postgres()
         .get()
         .await
-        .expect("policy attachment fixture connection opens")
+        .expect("policy document fixture connection opens")
         .execute(
-            "UPDATE policy_attachments SET upload_status = $2 WHERE id = $1",
-            &[&attachment_id, &status],
+            "UPDATE documents SET upload_status = $2 WHERE id = $1",
+            &[&document_id, &status],
         )
         .await
-        .expect("policy attachment fixture status updates");
+        .expect("policy document fixture status updates");
 }
 
 async fn policy_count_for_workspace(app: &TestApp, workspace_id: Uuid) -> i64 {
