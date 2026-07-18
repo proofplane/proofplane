@@ -16,8 +16,8 @@ Full schema, lifecycle, MCP, document, and auditor decisions live in
 | 001. [Policy Domain And Persistence](./tickets/001-policy-domain-and-persistence.md) | Done | Added active policy lifecycle and control mappings. |
 | 002. [MCP Policy Catalog Tools](./tickets/002-mcp-policy-catalog-tools.md) | Done | Added policy MCP tools with catalog types in the dedicated projections layer. |
 | 003. [Policy Document Lifecycle](./tickets/003-policy-document-lifecycle.md) | Done | Added required, context-derived creator attribution to shared document metadata. |
-| 004. [MCP Policy Document Grants](./tickets/004-mcp-policy-document-grants.md) | Todo | Issue and redeem scoped human-browser document sessions. |
-| 005. [Policy Document Management Page](./tickets/005-policy-document-management-page.md) | Todo | Add the evidence-like upload, status, archive, and download UI. |
+| 004. [MCP Policy Document Grants](./tickets/004-mcp-policy-document-grants.md) | Done | Added purpose-separated policy grants and browser sessions. |
+| 005. [Policy Document Management Page](./tickets/005-policy-document-management-page.md) | Done | Added the evidence-like upload, status, archive, and download UI. |
 | 006. [Auditor Policy Read Model And Downloads](./tickets/006-auditor-policy-read-model-and-downloads.md) | Todo | Expose safe policy data and session-bound document downloads. |
 | 007. [Auditor Policy Portal UI](./tickets/007-auditor-policy-portal-ui.md) | Todo | Add policy navigation, catalog/detail pages, and control sections. |
 | 008. [Policy Guidance And Demo Data](./tickets/008-policy-guidance-and-demo-data.md) | Todo | Teach agents the workflow and seed a representative policy catalog. |

@@ -5,7 +5,8 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::paseto::{
         DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-        UploadGrantDecryptor, UploadGrantEncryptor,
+        PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
+        UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},
@@ -87,6 +88,16 @@ async fn run() -> Result<(), Error> {
         "proofplane-document-upload-grant",
         &config.paseto.upload_grant,
     )?;
+    let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        &config.paseto.upload_grant,
+    )?;
+    let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        &config.paseto.upload_grant,
+    )?;
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         config.server.public_api_base_url.clone(),
         config.mcp.resource.to_string(),
@@ -120,6 +131,8 @@ async fn run() -> Result<(), Error> {
         download_grant_decryptor,
         upload_grant_encryptor,
         upload_grant_decryptor,
+        policy_upload_grant_encryptor,
+        policy_upload_grant_decryptor,
         health: config.health.clone(),
         allowed_hosts: config.mcp.allowed_hosts.clone(),
         cancellation_token: sessions.clone(),

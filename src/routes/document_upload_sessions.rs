@@ -284,7 +284,7 @@ async fn archive_file(
                 StatusCode::CONFLICT,
                 Html(render_upload_page(
                     &page,
-                    Some("Archive failed: document is still processing"),
+                    Some("Archive failed: this document is not ready to archive"),
                 )),
             )
                 .into_response())
@@ -415,13 +415,13 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
     let message = message
         .map(|message| {
             format!(
-                r#"<section class="notice" role="alert"><strong>{}</strong><p>Choose another file or ask the MCP client to check document processing status.</p></section>"#,
+                r#"<section class="notice" role="alert"><strong>{}</strong><p>Review the message above, then try again.</p></section>"#,
                 escape_html(message)
             )
         })
         .unwrap_or_default();
     let rows = if page.documents.is_empty() {
-        r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No evidence files yet</strong><p>Choose a file to start this submission.</p></div></div>"#.to_owned()
+        r#"<div class="empty"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7.5V6a5 5 0 0 1 10 0v9a7 7 0 0 1-14 0V7a3 3 0 0 1 6 0v8a1 1 0 0 1-2 0V8.5"/></svg><div><strong>No evidence files yet</strong><p>Add the evidence file for this submission.</p></div></div>"#.to_owned()
     } else {
         format!(
             r#"<table><thead><tr><th>Filename</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody>{}</tbody></table>"#,
@@ -457,7 +457,7 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
     };
     let upload = r#"<aside class="upload-panel" aria-labelledby="upload-file">
 <h2 id="upload-file">Add evidence</h2>
-<p>One file at a time. Uploads are scanned before they become available.</p>
+<p>Add one file at a time.</p>
 <form class="upload-form" method="post" action="/evidence-document-uploads/files" enctype="multipart/form-data">
 <label for="file">Choose file</label>
 <input id="file" name="file" type="file" required>
@@ -783,7 +783,7 @@ h1 { max-width: 20ch; margin: 0 0 12px; font-size: clamp(1.8rem, 4vw, 2.5rem); l
 p { max-width: 58ch; margin: 0; color: var(--muted); line-height: 1.55; }
 </style>
 </head>
-<body><header>PROOFPLANE <span>/ EVIDENCE INTAKE</span></header><main><p class="eyebrow">SESSION ENDED</p><h1>This upload link is no longer available</h1><p>Return to your MCP client and request a new evidence upload link.</p></main></body>
+<body><header>PROOFPLANE <span>/ EVIDENCE INTAKE</span></header><main><p class="eyebrow">LINK UNAVAILABLE</p><h1>This upload link is no longer available</h1><p>Return to your MCP client and request a new evidence upload link.</p></main></body>
 </html>"#
         .to_owned()
 }
@@ -866,7 +866,13 @@ impl From<Document> for UploadSessionDocumentResponse {
 }
 
 fn upload_status(status: DocumentUploadStatus) -> &'static str {
-    status.as_str()
+    match status {
+        DocumentUploadStatus::PendingUpload => "Uploading",
+        DocumentUploadStatus::Finalizing => "Scanning",
+        DocumentUploadStatus::Uploaded => "Uploaded",
+        DocumentUploadStatus::ContainsVirus => "Upload failed",
+        DocumentUploadStatus::FailedUpload => "Upload failed",
+    }
 }
 
 fn document_actions(document: &UploadSessionDocumentResponse) -> String {
@@ -909,9 +915,10 @@ fn upload_session_download_error(error: DownloadError) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_upload_page, UploadSessionControlResponse, UploadSessionDocumentResponse,
-        UploadSessionPage,
+        render_upload_page, upload_status, UploadSessionControlResponse,
+        UploadSessionDocumentResponse, UploadSessionPage,
     };
+    use crate::domain::DocumentUploadStatus;
 
     #[test]
     fn upload_page_keeps_scope_actions_and_mobile_labels_visible() {
@@ -945,5 +952,23 @@ mod tests {
             assert!(html.contains(expected), "missing {expected}");
         }
         assert!(!html.contains("Limited access."));
+    }
+
+    #[test]
+    fn upload_page_uses_user_facing_status_labels() {
+        assert_eq!(
+            upload_status(DocumentUploadStatus::PendingUpload),
+            "Uploading"
+        );
+        assert_eq!(upload_status(DocumentUploadStatus::Finalizing), "Scanning");
+        assert_eq!(upload_status(DocumentUploadStatus::Uploaded), "Uploaded");
+        assert_eq!(
+            upload_status(DocumentUploadStatus::ContainsVirus),
+            "Upload failed"
+        );
+        assert_eq!(
+            upload_status(DocumentUploadStatus::FailedUpload),
+            "Upload failed"
+        );
     }
 }

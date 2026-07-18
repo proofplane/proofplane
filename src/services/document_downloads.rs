@@ -10,8 +10,8 @@ use crate::{
         DownloadGrantDecryptor, DownloadGrantEncryptor, RegisteredClaims, VerifiedPasetoToken,
     },
     domain::{
-        AgentConnectionId, Document, DocumentId, DocumentUploadStatus, EvidenceSubmissionId,
-        UserId, WorkspaceId,
+        AgentConnectionId, Document, DocumentId, DocumentOwner, DocumentUploadStatus,
+        EvidenceSubmissionId, PolicyId, UserId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
     repository::{DocumentDownloadCandidate, Postgres},
@@ -61,6 +61,11 @@ pub struct WorkspaceDownloadedDocument {
     pub document: Document,
     pub object: ObjectStream,
     pub audit: WorkspaceDownloadAuditContext,
+}
+
+pub struct DownloadedPolicyDocument {
+    pub document: Document,
+    pub object: ObjectStream,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +265,40 @@ impl DocumentDownloadService {
         })
     }
 
+    pub async fn download_policy_for_workspace(
+        &self,
+        workspace_id: WorkspaceId,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> Result<DownloadedPolicyDocument, DownloadError> {
+        let candidate = self
+            .repository
+            .in_workspace_context_read(workspace_id, async move |context| {
+                context
+                    .get_policy_document_for_download(policy_id, document_id)
+                    .await
+            })
+            .await?
+            .ok_or(DownloadError::NotFound)?;
+
+        if candidate.document.upload_status != DocumentUploadStatus::Uploaded {
+            return Err(DownloadError::NotFound);
+        }
+
+        let key = finalized_object_key(&candidate)?;
+        let object = self
+            .object_store
+            .get_object(&key)
+            .await
+            .map_err(storage_download_error)?;
+        validate_metadata(&candidate.document, &object.metadata)?;
+
+        Ok(DownloadedPolicyDocument {
+            document: candidate.document,
+            object,
+        })
+    }
+
     async fn validate_metadata(
         &self,
         candidate: &DocumentDownloadCandidate,
@@ -336,13 +375,13 @@ pub enum DownloadError {
 }
 
 fn finalized_object_key(candidate: &DocumentDownloadCandidate) -> Result<ObjectKey, DownloadError> {
+    let owner_path = match candidate.document.owner() {
+        DocumentOwner::EvidenceSubmission(id) => format!("evidence-submissions/{id}"),
+        DocumentOwner::Policy(id) => format!("policies/{id}"),
+    };
     let expected = ObjectKey::new(
         candidate.workspace_id,
-        format!(
-            "evidence-submissions/{}/documents/{}",
-            candidate.document.owner().owner_uuid(),
-            candidate.document.id()
-        ),
+        format!("{owner_path}/documents/{}", candidate.document.id()),
         &candidate.document.filename,
     )
     .map_err(|_| DownloadError::NotFound)?;

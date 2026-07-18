@@ -21,6 +21,9 @@ use crate::config::{PasetoDownloadConfig, PasetoMcpOAuthConfig, PasetoUploadGran
 const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-download:v1";
 const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-upload-grant:v1";
 const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-upload-session:v1";
+const POLICY_UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:policy-document-upload-grant:v1";
+const POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] =
+    b"proofplane:policy-document-upload-session:v1";
 const MCP_OAUTH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 
@@ -444,6 +447,205 @@ impl UploadSessionDecryptor {
     }
 }
 
+#[derive(Clone)]
+pub struct PolicyUploadGrantEncryptor {
+    issuer: Url,
+    audience: String,
+    key_id: String,
+    secret_key: SymmetricKey<V4>,
+}
+
+impl PolicyUploadGrantEncryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let active = config
+            .keys
+            .iter()
+            .find(|key| key.id == config.active_key_id)
+            .ok_or(Error::Keyring)?;
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            key_id: active.id.clone(),
+            secret_key: symmetric_key(active.secret.expose_secret())?,
+        })
+    }
+
+    pub fn encrypt<T: Serialize>(
+        &self,
+        registered: RegisteredClaims,
+        custom_claims: &T,
+    ) -> Result<IssuedPasetoToken, Error> {
+        let payload = payload(
+            self.issuer.as_str(),
+            &self.audience,
+            &registered,
+            custom_claims,
+        )?;
+        let footer = footer(&self.key_id)?;
+        let token = encrypt_local_token(
+            &self.secret_key,
+            payload.as_bytes(),
+            footer.as_bytes(),
+            POLICY_UPLOAD_GRANT_IMPLICIT_ASSERTION,
+        )?;
+
+        Ok(IssuedPasetoToken {
+            token,
+            token_id: registered.token_id,
+            key_id: self.key_id.clone(),
+            expires_at: normalize_datetime(registered.expires_at)?,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct PolicyUploadGrantDecryptor {
+    issuer: Url,
+    audience: String,
+    keys: HashMap<String, SymmetricKey<V4>>,
+}
+
+impl PolicyUploadGrantDecryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let mut keys = HashMap::new();
+        for key in &config.keys {
+            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
+        }
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            keys,
+        })
+    }
+
+    pub fn decrypt<T: DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
+        let footer = parse_footer(untrusted.untrusted_footer())?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+        let trusted = decrypt_local_token(key, &untrusted, POLICY_UPLOAD_GRANT_IMPLICIT_ASSERTION)?;
+
+        verified_payload(
+            trusted.payload(),
+            &footer.kid,
+            self.issuer.as_str(),
+            &self.audience,
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct PolicyUploadSessionEncryptor {
+    issuer: Url,
+    audience: String,
+    key_id: String,
+    secret_key: SymmetricKey<V4>,
+}
+
+impl PolicyUploadSessionEncryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let active = config
+            .keys
+            .iter()
+            .find(|key| key.id == config.active_key_id)
+            .ok_or(Error::Keyring)?;
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            key_id: active.id.clone(),
+            secret_key: symmetric_key(active.secret.expose_secret())?,
+        })
+    }
+
+    pub fn encrypt<T: Serialize>(
+        &self,
+        registered: RegisteredClaims,
+        custom_claims: &T,
+    ) -> Result<IssuedPasetoToken, Error> {
+        let payload = payload(
+            self.issuer.as_str(),
+            &self.audience,
+            &registered,
+            custom_claims,
+        )?;
+        let footer = footer(&self.key_id)?;
+        let token = encrypt_local_token(
+            &self.secret_key,
+            payload.as_bytes(),
+            footer.as_bytes(),
+            POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION,
+        )?;
+
+        Ok(IssuedPasetoToken {
+            token,
+            token_id: registered.token_id,
+            key_id: self.key_id.clone(),
+            expires_at: normalize_datetime(registered.expires_at)?,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct PolicyUploadSessionDecryptor {
+    issuer: Url,
+    audience: String,
+    keys: HashMap<String, SymmetricKey<V4>>,
+}
+
+impl PolicyUploadSessionDecryptor {
+    pub fn from_config(
+        issuer: Url,
+        audience: impl Into<String>,
+        config: &PasetoUploadGrantConfig,
+    ) -> Result<Self, Error> {
+        let mut keys = HashMap::new();
+        for key in &config.keys {
+            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
+        }
+
+        Ok(Self {
+            issuer,
+            audience: audience.into(),
+            keys,
+        })
+    }
+
+    pub fn decrypt<T: DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedPasetoToken<T>, Error> {
+        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
+        let footer = parse_footer(untrusted.untrusted_footer())?;
+        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+        let trusted =
+            decrypt_local_token(key, &untrusted, POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION)?;
+
+        verified_payload(
+            trusted.payload(),
+            &footer.kid,
+            self.issuer.as_str(),
+            &self.audience,
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid PASETO keyring")]
@@ -771,6 +973,24 @@ mod tests {
             .encrypt(registered(), &custom_claims())
             .unwrap()
             .token;
+        let policy_upload_grant_token = PolicyUploadGrantEncryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .encrypt(registered(), &custom_claims())
+        .unwrap()
+        .token;
+        let policy_upload_session_token = PolicyUploadSessionEncryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-session",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .encrypt(registered(), &custom_claims())
+        .unwrap()
+        .token;
         assert!(wrong_audience_decryptor
             .decrypt::<TestClaims>(&download_token)
             .is_err());
@@ -780,6 +1000,33 @@ mod tests {
         assert!(download_decryptor(&download_config)
             .decrypt::<TestClaims>(&upload_grant_token)
             .is_err());
+        assert!(PolicyUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&upload_grant_token)
+        .is_err());
+        assert!(upload_grant_decryptor(&upload_grant_config)
+            .decrypt::<TestClaims>(&policy_upload_grant_token)
+            .is_err());
+        assert!(PolicyUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&policy_upload_session_token)
+        .is_err());
+        assert!(PolicyUploadSessionDecryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-session",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&policy_upload_grant_token)
+        .is_err());
         let download_wrong_implicit =
             local_token_with_implicit(&download_config, b"wrong-implicit");
         assert!(download_decryptor(&download_config)
