@@ -6,8 +6,8 @@ use super::DomainError;
 /// read/write split across the three data-plane resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkspacePermission {
-    ReadEvidenceRequests,
-    WriteEvidenceRequests,
+    ReadEvidence,
+    WriteEvidence,
     ReadEvidenceSubmissions,
     WriteEvidenceSubmissions,
     ReadControls,
@@ -17,8 +17,8 @@ pub enum WorkspacePermission {
 
 impl WorkspacePermission {
     pub const ALL: [WorkspacePermission; 7] = [
-        Self::ReadEvidenceRequests,
-        Self::WriteEvidenceRequests,
+        Self::ReadEvidence,
+        Self::WriteEvidence,
         Self::ReadEvidenceSubmissions,
         Self::WriteEvidenceSubmissions,
         Self::ReadControls,
@@ -28,8 +28,8 @@ impl WorkspacePermission {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::ReadEvidenceRequests => "read_evidence_requests",
-            Self::WriteEvidenceRequests => "write_evidence_requests",
+            Self::ReadEvidence => "read_evidence",
+            Self::WriteEvidence => "write_evidence",
             Self::ReadEvidenceSubmissions => "read_evidence_submissions",
             Self::WriteEvidenceSubmissions => "write_evidence_submissions",
             Self::ReadControls => "read_controls",
@@ -40,8 +40,8 @@ impl WorkspacePermission {
 
     fn bit(self) -> u8 {
         match self {
-            Self::ReadEvidenceRequests => 1 << 0,
-            Self::WriteEvidenceRequests => 1 << 1,
+            Self::ReadEvidence => 1 << 0,
+            Self::WriteEvidence => 1 << 1,
             Self::ReadEvidenceSubmissions => 1 << 2,
             Self::WriteEvidenceSubmissions => 1 << 3,
             Self::ReadControls => 1 << 4,
@@ -56,8 +56,8 @@ impl FromStr for WorkspacePermission {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "read_evidence_requests" => Ok(Self::ReadEvidenceRequests),
-            "write_evidence_requests" => Ok(Self::WriteEvidenceRequests),
+            "read_evidence" => Ok(Self::ReadEvidence),
+            "write_evidence" => Ok(Self::WriteEvidence),
             "read_evidence_submissions" => Ok(Self::ReadEvidenceSubmissions),
             "write_evidence_submissions" => Ok(Self::WriteEvidenceSubmissions),
             "read_controls" => Ok(Self::ReadControls),
@@ -138,8 +138,8 @@ pub fn canonical_permissions(
 
 fn permission_index(permission: WorkspacePermission) -> usize {
     match permission {
-        WorkspacePermission::ReadEvidenceRequests => 0,
-        WorkspacePermission::WriteEvidenceRequests => 1,
+        WorkspacePermission::ReadEvidence => 0,
+        WorkspacePermission::WriteEvidence => 1,
         WorkspacePermission::ReadEvidenceSubmissions => 2,
         WorkspacePermission::WriteEvidenceSubmissions => 3,
         WorkspacePermission::ReadControls => 4,
@@ -172,13 +172,13 @@ mod tests {
     #[test]
     fn set_tracks_only_granted_permissions() {
         let permissions = WorkspacePermissions::from_iter([
-            WorkspacePermission::ReadEvidenceRequests,
+            WorkspacePermission::ReadEvidence,
             WorkspacePermission::ReadControls,
         ]);
 
-        assert!(permissions.has(WorkspacePermission::ReadEvidenceRequests));
+        assert!(permissions.has(WorkspacePermission::ReadEvidence));
         assert!(permissions.has(WorkspacePermission::ReadControls));
-        assert!(!permissions.has(WorkspacePermission::WriteEvidenceRequests));
+        assert!(!permissions.has(WorkspacePermission::WriteEvidence));
         assert!(!permissions.is_empty());
     }
 
@@ -209,12 +209,12 @@ mod tests {
         assert_eq!(
             canonical_permissions(vec![
                 WorkspacePermission::WriteControls,
-                WorkspacePermission::ReadEvidenceRequests,
+                WorkspacePermission::ReadEvidence,
                 WorkspacePermission::ReadControls,
             ])
             .unwrap(),
             vec![
-                WorkspacePermission::ReadEvidenceRequests,
+                WorkspacePermission::ReadEvidence,
                 WorkspacePermission::ReadControls,
                 WorkspacePermission::WriteControls,
             ]

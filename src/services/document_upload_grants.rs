@@ -9,7 +9,9 @@ use crate::{
     authentication::paseto::{
         RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, VerifiedPasetoToken,
     },
-    domain::{AgentConnectionId, DocumentUploadGrantId, EvidenceSubmissionId, UserId, WorkspaceId},
+    domain::{
+        AgentConnectionId, CoverageWindow, DocumentUploadGrantId, EvidenceId, UserId, WorkspaceId,
+    },
     repository::{NewDocumentUploadGrant, Postgres},
 };
 
@@ -23,7 +25,9 @@ struct UploadGrantClaims {
     version: u8,
     grant_id: String,
     workspace_id: String,
-    submission_id: String,
+    evidence_id: String,
+    valid_from: String,
+    valid_until: String,
     issued_by_user_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     issued_via_api_token_id: Option<String>,
@@ -34,7 +38,8 @@ struct UploadGrantClaims {
 struct VerifiedUploadGrant {
     id: DocumentUploadGrantId,
     workspace_id: WorkspaceId,
-    submission_id: EvidenceSubmissionId,
+    evidence_id: EvidenceId,
+    coverage: CoverageWindow,
     issued_by_user_id: UserId,
     issued_via: UploadGrantIssuer,
 }
@@ -43,7 +48,8 @@ struct VerifiedUploadGrant {
 pub struct IssuedUploadGrant {
     pub url: Url,
     pub expires_at: DateTime<Utc>,
-    pub submission_id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub audit: UploadGrantAuditContext,
 }
 
@@ -51,7 +57,8 @@ pub struct IssuedUploadGrant {
 pub struct RedeemedUploadGrant {
     pub id: DocumentUploadGrantId,
     pub workspace_id: WorkspaceId,
-    pub submission_id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub issued_by_user_id: UserId,
     pub issued_via: UploadGrantIssuer,
     pub expires_at: DateTime<Utc>,
@@ -61,7 +68,8 @@ pub struct RedeemedUploadGrant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UploadGrantAuditContext {
     pub workspace_id: WorkspaceId,
-    pub submission_id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
     pub issued_by_user_id: UserId,
     pub issued_via: UploadGrantIssuer,
 }
@@ -105,13 +113,15 @@ impl DocumentUploadGrantService {
     pub async fn issue(
         &self,
         connection: &AgentConnectionContext,
-        submission_id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
     ) -> Result<IssuedUploadGrant, UploadGrantError> {
         self.issue_with_context(
             connection.workspace_id,
             connection.user_id,
             UploadGrantIssuer::AgentConnection(connection.connection_id),
-            submission_id,
+            evidence_id,
+            coverage,
         )
         .await
     }
@@ -121,7 +131,8 @@ impl DocumentUploadGrantService {
         workspace_id: WorkspaceId,
         user_id: UserId,
         issued_via: UploadGrantIssuer,
-        submission_id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
     ) -> Result<IssuedUploadGrant, UploadGrantError> {
         let expires_at = Utc::now()
             + chrono::Duration::from_std(UPLOAD_GRANT_TTL)
@@ -138,7 +149,8 @@ impl DocumentUploadGrantService {
                     context
                         .create_document_upload_grant(NewDocumentUploadGrant {
                             id: grant_id,
-                            evidence_submission_id: submission_id,
+                            evidence_id,
+                            coverage,
                             expires_at,
                         })
                         .await
@@ -159,7 +171,9 @@ impl DocumentUploadGrantService {
                     version: UPLOAD_GRANT_TOKEN_VERSION,
                     grant_id: grant.id.to_string(),
                     workspace_id: grant.workspace_id.to_string(),
-                    submission_id: grant.evidence_submission_id.to_string(),
+                    evidence_id: grant.evidence_id.to_string(),
+                    valid_from: grant.valid_from.to_rfc3339(),
+                    valid_until: grant.valid_until.to_rfc3339(),
                     issued_by_user_id: grant.issued_by_user_id.to_string(),
                     issued_via_api_token_id: None,
                     issued_via_agent_connection_id: grant
@@ -177,10 +191,12 @@ impl DocumentUploadGrantService {
         Ok(IssuedUploadGrant {
             url,
             expires_at: issued.expires_at,
-            submission_id,
+            evidence_id,
+            coverage,
             audit: UploadGrantAuditContext {
                 workspace_id,
-                submission_id,
+                evidence_id,
+                coverage,
                 issued_by_user_id: user_id,
                 issued_via,
             },
@@ -196,15 +212,18 @@ impl DocumentUploadGrantService {
             VerifiedUploadGrant::try_from(verified).map_err(|_| UploadGrantError::Unavailable)?;
         let redeemed = self
             .repository
-            .redeem_document_upload_grant(grant.id, grant.workspace_id, grant.submission_id)
+            .redeem_document_upload_grant(grant.id, grant.workspace_id)
             .await?
             .ok_or(UploadGrantError::Unavailable)?;
         let redeemed_at = redeemed.redeemed_at.ok_or(UploadGrantError::Internal)?;
+        let coverage = CoverageWindow::new(redeemed.valid_from, redeemed.valid_until)
+            .map_err(|_| UploadGrantError::Internal)?;
 
         Ok(RedeemedUploadGrant {
             id: redeemed.id,
             workspace_id: redeemed.workspace_id,
-            submission_id: redeemed.evidence_submission_id,
+            evidence_id: redeemed.evidence_id,
+            coverage,
             issued_by_user_id: redeemed.issued_by_user_id,
             issued_via: upload_grant_issuer_from_record(redeemed.issued_via_agent_connection_id)?,
             expires_at: redeemed.expires_at,
@@ -235,11 +254,17 @@ impl TryFrom<VerifiedPasetoToken<UploadGrantClaims>> for VerifiedUploadGrant {
         if issued_by_user_id != UserId::from(subject) {
             return Err(InvalidUploadGrantClaims);
         }
+        let coverage = CoverageWindow::new(
+            parse_timestamp(&claims.valid_from)?,
+            parse_timestamp(&claims.valid_until)?,
+        )
+        .map_err(|_| InvalidUploadGrantClaims)?;
 
         Ok(Self {
             id,
             workspace_id: WorkspaceId::from(parse_uuid(&claims.workspace_id)?),
-            submission_id: EvidenceSubmissionId::from(parse_uuid(&claims.submission_id)?),
+            evidence_id: EvidenceId::from(parse_uuid(&claims.evidence_id)?),
+            coverage,
             issued_by_user_id,
             issued_via: upload_grant_issuer_from_claims(
                 claims.issued_via_api_token_id.as_deref(),
@@ -286,6 +311,12 @@ fn parse_uuid(value: &str) -> Result<Uuid, InvalidUploadGrantClaims> {
     Uuid::parse_str(value).map_err(|_| InvalidUploadGrantClaims)
 }
 
+fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, InvalidUploadGrantClaims> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| InvalidUploadGrantClaims)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +341,9 @@ mod tests {
             version: UPLOAD_GRANT_TOKEN_VERSION,
             grant_id: grant_id.to_string(),
             workspace_id: Uuid::new_v4().to_string(),
-            submission_id: Uuid::new_v4().to_string(),
+            evidence_id: Uuid::new_v4().to_string(),
+            valid_from: "2026-01-01T00:00:00+00:00".to_owned(),
+            valid_until: "2026-03-31T00:00:00+00:00".to_owned(),
             issued_by_user_id: Uuid::new_v4().to_string(),
             issued_via_api_token_id: None,
             issued_via_agent_connection_id: Some(Uuid::new_v4().to_string()),
@@ -324,7 +357,7 @@ mod tests {
 
         assert_eq!(grant.id.to_string(), claims.grant_id);
         assert_eq!(grant.workspace_id.to_string(), claims.workspace_id);
-        assert_eq!(grant.submission_id.to_string(), claims.submission_id);
+        assert_eq!(grant.evidence_id.to_string(), claims.evidence_id);
         assert_eq!(
             grant.issued_via.agent_connection_id().to_string(),
             claims.issued_via_agent_connection_id.unwrap()
@@ -340,7 +373,8 @@ mod tests {
         for mutate in [
             |claims: &mut UploadGrantClaims| claims.grant_id = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| claims.workspace_id = "bad".to_owned(),
-            |claims: &mut UploadGrantClaims| claims.submission_id = "bad".to_owned(),
+            |claims: &mut UploadGrantClaims| claims.evidence_id = "bad".to_owned(),
+            |claims: &mut UploadGrantClaims| claims.valid_from = "bad".to_owned(),
             |claims: &mut UploadGrantClaims| {
                 claims.issued_via_agent_connection_id = Some("bad".to_owned())
             },

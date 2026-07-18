@@ -101,7 +101,7 @@ smaller type, denser layouts, and direct task surfaces.
 3. Make permissions understandable. Token creation should use job-based
    presets, show the granular grants underneath, and make revocation obvious.
 
-4. Prefer artifacts over explanations. Evidence requests, latest submissions,
+4. Prefer artifacts over explanations. Evidence, latest submissions,
    control mappings, provenance, and packet gaps should carry more weight than
    marketing copy.
 
@@ -123,6 +123,6 @@ token shown once, token not saved, no workspace, no permission, MCP unavailable,
 export pending, and evidence missing should each have clear recovery paths.
 
 Use plain language for compliance and authorization concepts. Technical terms
-such as workspace, actor, token, permission, MCP, evidence request, and auditor
+such as workspace, actor, token, permission, MCP, evidence, and auditor
 packet are acceptable, but each screen should make the next action clear without
 requiring prior product knowledge.

@@ -13,7 +13,7 @@ mod controls;
 mod document_upload_grants;
 mod documents;
 pub mod error;
-mod evidence_requests;
+mod evidence;
 mod evidence_submissions;
 mod oauth;
 mod outbox;

@@ -1,16 +1,16 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE IF NOT EXISTS workspaces (
+CREATE TABLE workspaces (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug TEXT UNIQUE,
     name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspaces_created_id
+CREATE INDEX idx_workspaces_created_id
     ON workspaces (created_at, id);
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     auth0_sub TEXT NOT NULL UNIQUE,
     email TEXT,
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS workspace_memberships (
+CREATE TABLE workspace_memberships (
     user_id UUID NOT NULL REFERENCES users(id),
     workspace_id UUID NOT NULL REFERENCES workspaces(id),
     role TEXT NOT NULL CHECK (role IN ('owner', 'admin')),
@@ -27,13 +27,13 @@ CREATE TABLE IF NOT EXISTS workspace_memberships (
     PRIMARY KEY (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user_id
+CREATE INDEX idx_workspace_memberships_user_id
     ON workspace_memberships (user_id);
 
-CREATE INDEX IF NOT EXISTS idx_workspace_memberships_workspace_role
+CREATE INDEX idx_workspace_memberships_workspace_role
     ON workspace_memberships (workspace_id, role);
 
-CREATE TABLE IF NOT EXISTS outbox_messages (
+CREATE TABLE outbox_messages (
     id BIGSERIAL PRIMARY KEY,
     topic TEXT NOT NULL,
     event_type TEXT NOT NULL,
@@ -46,164 +46,24 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_outbox_messages_due
+CREATE INDEX idx_outbox_messages_due
     ON outbox_messages (next_available_at, id);
 
-CREATE TABLE IF NOT EXISTS evidence_requests (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id),
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    collection_instructions TEXT NOT NULL,
-    cadence TEXT NOT NULL CHECK (cadence IN ('once', 'monthly', 'quarterly', 'annually')),
-    due_at TIMESTAMPTZ NOT NULL,
-    schedule_anchor_at TIMESTAMPTZ NOT NULL,
-    freshness_window_days INTEGER CHECK (freshness_window_days IS NULL OR freshness_window_days > 0),
-    status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'retired')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_requests_workspace_due_title
-    ON evidence_requests (workspace_id, due_at, title);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_requests_active_workspace_due_title
-    ON evidence_requests (workspace_id, due_at, title)
-    WHERE status = 'active';
-
-CREATE TABLE IF NOT EXISTS frameworks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS framework_requirements (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    framework_id UUID NOT NULL REFERENCES frameworks(id),
-    code TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    UNIQUE (framework_id, code)
-);
-
-CREATE INDEX IF NOT EXISTS idx_framework_requirements_framework_code
-    ON framework_requirements (framework_id, code);
-
-CREATE TABLE IF NOT EXISTS controls (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID NOT NULL REFERENCES workspaces(id),
-    code TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (workspace_id, code)
-);
-
-CREATE INDEX IF NOT EXISTS idx_controls_workspace_code
-    ON controls (workspace_id, code);
-
-CREATE TABLE IF NOT EXISTS control_framework_requirement_mappings (
-    control_id UUID NOT NULL REFERENCES controls(id),
-    framework_requirement_id UUID NOT NULL REFERENCES framework_requirements(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (control_id, framework_requirement_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_control_requirement_mappings_requirement
-    ON control_framework_requirement_mappings (framework_requirement_id, control_id);
-
-CREATE TABLE IF NOT EXISTS evidence_request_control_mappings (
-    evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
-    control_id UUID NOT NULL REFERENCES controls(id),
-    rationale TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (evidence_request_id, control_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_request_control_mappings_control
-    ON evidence_request_control_mappings (control_id, evidence_request_id);
-
-CREATE TABLE IF NOT EXISTS evidence_submissions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    evidence_request_id UUID NOT NULL REFERENCES evidence_requests(id),
-    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    coverage_start_at TIMESTAMPTZ NOT NULL,
-    coverage_end_at TIMESTAMPTZ NOT NULL,
-    source_system TEXT NOT NULL,
-    collection_method TEXT NOT NULL,
-    summary TEXT,
-    description TEXT,
-    CHECK (coverage_end_at >= coverage_start_at),
-    CONSTRAINT evidence_submissions_summary_length
-        CHECK (summary IS NULL OR char_length(summary) <= 500),
-    CONSTRAINT evidence_submissions_description_length
-        CHECK (description IS NULL OR char_length(description) <= 4000)
-);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_submissions_request_received
-    ON evidence_submissions (evidence_request_id, received_at DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS evidence_documents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    evidence_submission_id UUID NOT NULL REFERENCES evidence_submissions(id),
-    created_by_user_id UUID NOT NULL REFERENCES users(id),
-    filename TEXT NOT NULL,
-    content_type TEXT NOT NULL,
-    content_length BIGINT NOT NULL CHECK (content_length >= 0),
-    object_key TEXT NOT NULL UNIQUE,
-    checksum_sha256 TEXT NOT NULL,
-    checksum_crc32c TEXT NOT NULL,
-    archived BOOLEAN NOT NULL DEFAULT false,
-    upload_status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (upload_status IN ('pending', 'finalizing', 'uploaded', 'contains_virus', 'failed'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_documents_submission
-    ON evidence_documents (evidence_submission_id, filename, id);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_documents_upload_status
-    ON evidence_documents (upload_status, id);
-
-CREATE INDEX IF NOT EXISTS idx_evidence_documents_submission_active
-    ON evidence_documents (evidence_submission_id, filename, id)
-    WHERE archived = false;
-
-CREATE TABLE IF NOT EXISTS document_upload_grants (
-    id UUID PRIMARY KEY,
-    workspace_id UUID NOT NULL REFERENCES workspaces(id),
-    evidence_submission_id UUID NOT NULL REFERENCES evidence_submissions(id),
-    issued_by_user_id UUID NOT NULL REFERENCES users(id),
-    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    redeemed_at TIMESTAMPTZ,
-    CHECK (expires_at > issued_at),
-    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
-);
-
-CREATE INDEX IF NOT EXISTS idx_document_upload_grants_redemption
-    ON document_upload_grants (id, workspace_id, evidence_submission_id);
-
-CREATE INDEX IF NOT EXISTS idx_document_upload_grants_expiry
-    ON document_upload_grants (expires_at, redeemed_at);
-
-CREATE TABLE IF NOT EXISTS workspace_permissions (
+CREATE TABLE workspace_permissions (
     permission TEXT PRIMARY KEY
 );
 
 INSERT INTO workspace_permissions (permission)
 VALUES
-    ('read_evidence_requests'),
-    ('write_evidence_requests'),
+    ('read_evidence'),
+    ('write_evidence'),
     ('read_evidence_submissions'),
     ('write_evidence_submissions'),
     ('read_controls'),
     ('write_controls'),
-    ('manage_auditor_access')
-ON CONFLICT DO NOTHING;
+    ('manage_auditor_access');
 
-CREATE TABLE IF NOT EXISTS agent_connections (
+CREATE TABLE agent_connections (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id),
     workspace_id UUID NOT NULL REFERENCES workspaces(id),
@@ -239,22 +99,22 @@ CREATE TABLE IF NOT EXISTS agent_connections (
     CHECK (revoked_at IS NULL OR revoked_at >= created_at)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS agent_connections_live_tuple_key
+CREATE UNIQUE INDEX agent_connections_live_tuple_key
     ON agent_connections (user_id, auth0_client_id, resource)
     WHERE status IN ('pending', 'authorized', 'active');
 
-CREATE INDEX IF NOT EXISTS idx_agent_connections_reusable
+CREATE INDEX idx_agent_connections_reusable
     ON agent_connections (auth0_subject, auth0_client_id, resource)
     WHERE status = 'active';
 
-CREATE TABLE IF NOT EXISTS agent_connection_permissions (
+CREATE TABLE agent_connection_permissions (
     agent_connection_id UUID NOT NULL
         REFERENCES agent_connections(id) ON DELETE CASCADE,
     permission TEXT NOT NULL REFERENCES workspace_permissions(permission),
     PRIMARY KEY (agent_connection_id, permission)
 );
 
-CREATE TABLE IF NOT EXISTS agent_authorization_transactions (
+CREATE TABLE agent_authorization_transactions (
     id UUID PRIMARY KEY,
     agent_connection_id UUID NOT NULL UNIQUE
         REFERENCES agent_connections(id) ON DELETE CASCADE,
@@ -267,13 +127,248 @@ CREATE TABLE IF NOT EXISTS agent_authorization_transactions (
     CHECK (consumed_at IS NULL OR consumed_at >= created_at)
 );
 
-ALTER TABLE evidence_submissions
-    ADD COLUMN submitted_by_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
+CREATE TABLE evidence (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    collection_instructions TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'retired')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-ALTER TABLE document_upload_grants
-    ADD COLUMN issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id);
+CREATE INDEX idx_evidence_workspace_title
+    ON evidence (workspace_id, title);
 
-CREATE TABLE IF NOT EXISTS oauth_authorization_requests (
+CREATE INDEX idx_evidence_active_workspace_title
+    ON evidence (workspace_id, title)
+    WHERE status = 'active';
+
+CREATE TABLE frameworks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL
+);
+
+CREATE TABLE framework_requirements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    framework_id UUID NOT NULL REFERENCES frameworks(id),
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    UNIQUE (framework_id, code)
+);
+
+CREATE INDEX idx_framework_requirements_framework_code
+    ON framework_requirements (framework_id, code);
+
+CREATE TABLE controls (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, code)
+);
+
+CREATE INDEX idx_controls_workspace_code
+    ON controls (workspace_id, code);
+
+CREATE TABLE control_framework_requirement_mappings (
+    control_id UUID NOT NULL REFERENCES controls(id),
+    framework_requirement_id UUID NOT NULL REFERENCES framework_requirements(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (control_id, framework_requirement_id)
+);
+
+CREATE INDEX idx_control_requirement_mappings_requirement
+    ON control_framework_requirement_mappings (framework_requirement_id, control_id);
+
+CREATE TABLE evidence_control_mappings (
+    evidence_id UUID NOT NULL REFERENCES evidence(id),
+    control_id UUID NOT NULL REFERENCES controls(id),
+    rationale TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (evidence_id, control_id)
+);
+
+CREATE INDEX idx_evidence_control_mappings_control
+    ON evidence_control_mappings (control_id, evidence_id);
+
+CREATE TABLE evidence_submissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    evidence_id UUID NOT NULL REFERENCES evidence(id),
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    valid_from TIMESTAMPTZ NOT NULL,
+    valid_until TIMESTAMPTZ NOT NULL,
+    submitted_by_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    CHECK (valid_until >= valid_from)
+);
+
+CREATE INDEX idx_evidence_submissions_evidence_received
+    ON evidence_submissions (evidence_id, received_at DESC, id DESC);
+
+CREATE TABLE documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    owner_type TEXT NOT NULL
+        CHECK (owner_type IN ('evidence_submission', 'policy')),
+    owner_id UUID NOT NULL,
+    created_by_user_id UUID NOT NULL REFERENCES users(id),
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    content_length BIGINT NOT NULL CHECK (content_length >= 0),
+    object_key TEXT NOT NULL UNIQUE,
+    checksum_sha256 TEXT NOT NULL,
+    checksum_crc32c TEXT NOT NULL,
+    archived BOOLEAN NOT NULL DEFAULT false,
+    upload_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (upload_status IN ('pending', 'finalizing', 'uploaded', 'contains_virus', 'failed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX documents_owner_active_idx
+    ON documents (workspace_id, owner_type, owner_id, filename, id)
+    WHERE archived = false;
+
+CREATE INDEX documents_upload_status_idx
+    ON documents (upload_status, id)
+    WHERE archived = false;
+
+CREATE UNIQUE INDEX documents_policy_active_key
+    ON documents (owner_id)
+    WHERE owner_type = 'policy' AND archived = false;
+
+CREATE UNIQUE INDEX documents_evidence_submission_key
+    ON documents (owner_id)
+    WHERE owner_type = 'evidence_submission';
+
+CREATE TABLE document_upload_grants (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    evidence_id UUID NOT NULL REFERENCES evidence(id),
+    valid_from TIMESTAMPTZ NOT NULL,
+    valid_until TIMESTAMPTZ NOT NULL,
+    issued_by_user_id UUID NOT NULL REFERENCES users(id),
+    issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    redeemed_at TIMESTAMPTZ,
+    CONSTRAINT document_upload_grants_coverage_window
+        CHECK (valid_until >= valid_from),
+    CHECK (expires_at > issued_at),
+    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+);
+
+CREATE INDEX idx_document_upload_grants_redemption
+    ON document_upload_grants (id, workspace_id, evidence_id);
+
+CREATE INDEX idx_document_upload_grants_expiry
+    ON document_upload_grants (expires_at, redeemed_at);
+
+CREATE TABLE policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at TIMESTAMPTZ,
+    CONSTRAINT policies_name_trimmed CHECK (name = btrim(name)),
+    CONSTRAINT policies_name_length CHECK (char_length(name) BETWEEN 1 AND 200),
+    CONSTRAINT policies_description_valid CHECK (
+        description IS NULL
+        OR (description = btrim(description) AND char_length(description) BETWEEN 1 AND 4000)
+    )
+);
+
+CREATE UNIQUE INDEX policies_workspace_lower_name_active_key
+    ON policies (workspace_id, lower(name))
+    WHERE archived_at IS NULL;
+
+CREATE INDEX idx_policies_workspace_active_name
+    ON policies (workspace_id, lower(name), id)
+    WHERE archived_at IS NULL;
+
+CREATE TABLE policy_control_mappings (
+    policy_id UUID NOT NULL REFERENCES policies(id),
+    control_id UUID NOT NULL REFERENCES controls(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (policy_id, control_id)
+);
+
+CREATE INDEX idx_policy_control_mappings_control
+    ON policy_control_mappings (control_id, policy_id);
+
+CREATE TABLE auditor_access_grants (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    auditor_email TEXT NOT NULL,
+    secret_digest BYTEA NOT NULL UNIQUE,
+    created_by_user_id UUID NOT NULL REFERENCES users(id),
+    created_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    CHECK (auditor_email = lower(trim(auditor_email))),
+    CHECK (position('@' IN auditor_email) > 1),
+    CHECK (expires_at > created_at),
+    CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+
+CREATE INDEX idx_auditor_access_grants_workspace_created
+    ON auditor_access_grants (workspace_id, created_at DESC, id DESC);
+
+CREATE INDEX idx_auditor_access_grants_active_lookup
+    ON auditor_access_grants (workspace_id, secret_digest)
+    WHERE revoked_at IS NULL;
+
+CREATE TABLE auditor_access_otps (
+    id UUID PRIMARY KEY,
+    grant_id UUID NOT NULL REFERENCES auditor_access_grants(id) ON DELETE CASCADE,
+    code_digest BYTEA NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    failed_attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (octet_length(code_digest) = 32),
+    CHECK (failed_attempt_count >= 0),
+    CHECK (expires_at > created_at),
+    CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+);
+
+CREATE INDEX idx_auditor_access_otps_grant_created
+    ON auditor_access_otps (grant_id, created_at DESC);
+
+CREATE TABLE auditor_sessions (
+    id UUID PRIMARY KEY,
+    grant_id UUID NOT NULL REFERENCES auditor_access_grants(id) ON DELETE CASCADE,
+    session_digest BYTEA NOT NULL UNIQUE,
+    auditor_email TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (auditor_email = lower(trim(auditor_email))),
+    CHECK (octet_length(session_digest) = 32),
+    CHECK (expires_at > created_at),
+    CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+
+CREATE INDEX idx_auditor_sessions_active_lookup
+    ON auditor_sessions (session_digest)
+    WHERE revoked_at IS NULL;
+
+CREATE INDEX idx_auditor_sessions_grant
+    ON auditor_sessions (grant_id);
+
+CREATE TABLE oauth_authorization_requests (
     id UUID PRIMARY KEY,
     client_id TEXT NOT NULL,
     client_name TEXT NOT NULL,
@@ -291,7 +386,10 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_requests (
     CHECK (expires_at > created_at)
 );
 
-CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+CREATE INDEX idx_oauth_authorization_requests_client
+    ON oauth_authorization_requests (client_id, created_at DESC);
+
+CREATE TABLE oauth_authorization_codes (
     code_digest BYTEA PRIMARY KEY CHECK (octet_length(code_digest) = 32),
     request_id UUID NOT NULL UNIQUE REFERENCES oauth_authorization_requests(id) ON DELETE CASCADE,
     agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
@@ -307,5 +405,21 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
     CHECK (expires_at > created_at)
 );
 
-CREATE INDEX IF NOT EXISTS idx_oauth_authorization_requests_client
-    ON oauth_authorization_requests (client_id, created_at DESC);
+CREATE TABLE policy_document_upload_grants (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    policy_id UUID NOT NULL REFERENCES policies(id),
+    issued_by_user_id UUID NOT NULL REFERENCES users(id),
+    issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    redeemed_at TIMESTAMPTZ,
+    CHECK (expires_at > issued_at),
+    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+);
+
+CREATE INDEX policy_document_upload_grants_redemption_idx
+    ON policy_document_upload_grants (id, workspace_id, policy_id);
+
+CREATE INDEX policy_document_upload_grants_expiry_idx
+    ON policy_document_upload_grants (expires_at, redeemed_at);

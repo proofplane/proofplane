@@ -23,7 +23,8 @@ in `docs/`.
   ClamAV dependencies.
 - `make seed`: run database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
-  process using `config/local.yaml`.
+  process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
+  setup.
 - `cargo test --test integration worker_handlers`: run a focused integration
   test module.
 

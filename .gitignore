@@ -1,3 +1,6 @@
 target/
 .local/
 *.log
+
+.claude/settings.local.json
+.codex/hooks.json

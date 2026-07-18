@@ -10,7 +10,7 @@ pub mod controls;
 pub mod document_downloads;
 pub mod document_upload_grants;
 mod documents;
-pub mod evidence_requests;
+pub mod evidence;
 pub mod evidence_submissions;
 pub mod oauth;
 pub mod policies;

@@ -30,13 +30,6 @@ pub fn optional_text(
     Validation::valid(Some(value))
 }
 
-pub fn validate_freshness_window_days(value: Option<i32>) -> Validation<Option<i32>, DomainError> {
-    match value {
-        Some(days) if days <= 0 => Validation::invalid(DomainError::InvalidFreshnessWindowDays),
-        _ => Validation::valid(value),
-    }
-}
-
 pub fn validate_document_filename(value: String) -> Validation<String, DomainError> {
     let mut errors = Vec::new();
 
@@ -64,9 +57,7 @@ pub fn validate_document_filename(value: String) -> Validation<String, DomainErr
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        optional_text, required_text, validate_document_filename, validate_freshness_window_days,
-    };
+    use super::{optional_text, required_text, validate_document_filename};
     use crate::domain::DomainError;
 
     #[test]
@@ -87,9 +78,13 @@ mod tests {
 
     #[test]
     fn optional_text_accepts_omitted_and_trims_present_values() {
-        assert_eq!(optional_text("summary", None, 500).into_result(), Ok(None));
         assert_eq!(
-            optional_text("summary", Some("  Quarterly review  ".to_owned()), 500).into_result(),
+            optional_text("description", None, 500).into_result(),
+            Ok(None)
+        );
+        assert_eq!(
+            optional_text("description", Some("  Quarterly review  ".to_owned()), 500)
+                .into_result(),
             Ok(Some("Quarterly review".to_owned()))
         );
     }
@@ -97,44 +92,25 @@ mod tests {
     #[test]
     fn optional_text_rejects_blank_values() {
         assert_eq!(
-            optional_text("summary", Some(" \t\n ".to_owned()), 500).into_result(),
-            Err(vec![DomainError::BlankOptionalText { field: "summary" }])
+            optional_text("description", Some(" \t\n ".to_owned()), 500).into_result(),
+            Err(vec![DomainError::BlankOptionalText {
+                field: "description"
+            }])
         );
     }
 
     #[test]
     fn optional_text_limits_unicode_characters_after_trimming() {
         assert_eq!(
-            optional_text("summary", Some("é".repeat(500)), 500).into_result(),
+            optional_text("description", Some("é".repeat(500)), 500).into_result(),
             Ok(Some("é".repeat(500)))
         );
         assert_eq!(
-            optional_text("summary", Some(format!(" {} ", "é".repeat(501))), 500).into_result(),
+            optional_text("description", Some(format!(" {} ", "é".repeat(501))), 500).into_result(),
             Err(vec![DomainError::OptionalTextTooLong {
-                field: "summary",
+                field: "description",
                 maximum: 500,
             }])
-        );
-    }
-
-    #[test]
-    fn freshness_window_days_must_be_positive_when_present() {
-        assert_eq!(
-            validate_freshness_window_days(Some(0)).into_result(),
-            Err(vec![DomainError::InvalidFreshnessWindowDays])
-        );
-        assert_eq!(
-            validate_freshness_window_days(Some(-1)).into_result(),
-            Err(vec![DomainError::InvalidFreshnessWindowDays])
-        );
-    }
-
-    #[test]
-    fn freshness_window_days_allows_absent_or_positive_values() {
-        assert_eq!(validate_freshness_window_days(None).into_result(), Ok(None));
-        assert_eq!(
-            validate_freshness_window_days(Some(30)).into_result(),
-            Ok(Some(30))
         );
     }
 

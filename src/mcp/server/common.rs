@@ -173,13 +173,8 @@ impl From<DomainError> for FieldIssue {
                 message: format!("{field} must be at most {maximum} characters"),
             },
             DomainError::InvalidCoverageWindow => Self {
-                field: "coverage_end_at",
-                message: "coverage_end_at must be greater than or equal to coverage_start_at"
-                    .to_owned(),
-            },
-            DomainError::InvalidFreshnessWindowDays => Self {
-                field: "freshness_window_days",
-                message: "freshness_window_days must be positive".to_owned(),
+                field: "valid_until",
+                message: "valid_until must be greater than or equal to valid_from".to_owned(),
             },
             DomainError::DuplicatePermission { permission } => Self {
                 field: "permissions",
@@ -350,23 +345,23 @@ mod tests {
 
     #[test]
     fn required_timestamp_maps_missing_and_invalid_values() {
-        let missing = required_timestamp("coverage_start_at", None)
+        let missing = required_timestamp("valid_from", None)
             .into_result()
             .map_err(argument_errors)
             .expect_err("missing timestamp");
         assert_eq!(
             field_issues(&missing),
-            [("coverage_start_at".to_owned(), "is required".to_owned())]
+            [("valid_from".to_owned(), "is required".to_owned())]
         );
 
-        let invalid = required_timestamp("coverage_start_at", Some("nope".to_owned()))
+        let invalid = required_timestamp("valid_from", Some("nope".to_owned()))
             .into_result()
             .map_err(argument_errors)
             .expect_err("invalid timestamp");
         assert_eq!(
             field_issues(&invalid),
             [(
-                "coverage_start_at".to_owned(),
+                "valid_from".to_owned(),
                 "must be an RFC 3339 timestamp".to_owned()
             )]
         );
@@ -375,9 +370,7 @@ mod tests {
     #[test]
     fn domain_errors_map_to_validation_field_issues() {
         let error = domain_errors(vec![
-            DomainError::EmptyRequiredText {
-                field: "source_system",
-            },
+            DomainError::EmptyRequiredText { field: "title" },
             DomainError::OptionalTextTooLong {
                 field: "description",
                 maximum: 4_000,
@@ -389,17 +382,14 @@ mod tests {
         assert_eq!(
             field_issues(&error),
             [
-                (
-                    "source_system".to_owned(),
-                    "source_system must not be empty".to_owned()
-                ),
+                ("title".to_owned(), "title must not be empty".to_owned()),
                 (
                     "description".to_owned(),
                     "description must be at most 4000 characters".to_owned()
                 ),
                 (
-                    "coverage_end_at".to_owned(),
-                    "coverage_end_at must be greater than or equal to coverage_start_at".to_owned()
+                    "valid_until".to_owned(),
+                    "valid_until must be greater than or equal to valid_from".to_owned()
                 ),
             ]
         );

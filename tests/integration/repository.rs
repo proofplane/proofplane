@@ -1,9 +1,8 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
-    AgentConnectionId, CreateDocumentPayload, CreateEvidenceRequestPayload,
+    AgentConnectionId, CoverageWindow, CreateDocumentPayload, CreateEvidencePayload,
     CreateEvidenceSubmissionPayload, CreateWorkspacePayload, DocumentOwner, DocumentUploadStatus,
-    EvidenceRequestCadence, EvidenceRequestStatus, EvidenceSubmissionId, UpdateWorkspacePayload,
-    UserId,
+    EvidenceStatus, EvidenceSubmissionId, UpdateWorkspacePayload, UserId,
 };
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
@@ -20,21 +19,15 @@ struct RepositoryContext {
 }
 
 #[tokio::test]
-async fn evidence_submission_context_round_trips_and_database_limits_length() {
+async fn evidence_submission_coverage_round_trips_with_its_document() {
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let context = repository_workspace_context(&app).await;
-    let request = create_repository_evidence_request(postgres, context).await;
-    let submission = create_repository_submission(postgres, context, request.id).await;
+    let evidence = create_repository_evidence(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, evidence.id).await;
+    let document = create_repository_document(postgres, context, submission.id).await;
 
-    assert_eq!(
-        submission.summary.as_deref(),
-        Some("Repository submission summary")
-    );
-    assert_eq!(
-        submission.description.as_deref(),
-        Some("Repository submission description")
-    );
+    assert!(submission.valid_from <= submission.valid_until);
 
     let detail = postgres
         .in_workspace_context_read(context.workspace_id, async move |read| {
@@ -44,22 +37,7 @@ async fn evidence_submission_context_round_trips_and_database_limits_length() {
         .expect("submission reads")
         .expect("submission exists");
     assert_eq!(detail.submission, submission);
-
-    let client = postgres.get().await.expect("connection opens");
-    assert!(client
-        .execute(
-            "UPDATE evidence_submissions SET summary = $2 WHERE id = $1",
-            &[&Uuid::from(submission.id), &"é".repeat(501)],
-        )
-        .await
-        .is_err());
-    assert!(client
-        .execute(
-            "UPDATE evidence_submissions SET description = $2 WHERE id = $1",
-            &[&Uuid::from(submission.id), &"é".repeat(4_001)],
-        )
-        .await
-        .is_err());
+    assert_eq!(detail.document, document);
 }
 
 #[tokio::test]
@@ -129,8 +107,8 @@ async fn document_scan_work_loads_pending_rows_by_document_and_quarantine_key() 
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let context = repository_workspace_context(&app).await;
-    let request = create_repository_evidence_request(postgres, context).await;
-    let submission = create_repository_submission(postgres, context, request.id).await;
+    let evidence = create_repository_evidence(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, evidence.id).await;
     let document = create_repository_document(postgres, context, submission.id).await;
     assert_eq!(document.created_by_user_id, context.user_id);
 
@@ -140,7 +118,7 @@ async fn document_scan_work_loads_pending_rows_by_document_and_quarantine_key() 
         .expect("pending scan work loads")
         .expect("pending scan work exists");
 
-    assert_eq!(work.workspace_id, request.workspace_id);
+    assert_eq!(work.workspace_id, evidence.workspace_id);
     assert_eq!(work.evidence_submission_id, submission.id);
     assert_eq!(work.evidence_document_id, document.id());
     assert_eq!(work.filename, document.filename);
@@ -161,8 +139,8 @@ async fn document_scan_handoff_is_atomic_idempotent_and_finalization_marks_uploa
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let context = repository_workspace_context(&app).await;
-    let request = create_repository_evidence_request(postgres, context).await;
-    let submission = create_repository_submission(postgres, context, request.id).await;
+    let evidence = create_repository_evidence(postgres, context).await;
+    let submission = create_repository_submission(postgres, context, evidence.id).await;
     let document = create_repository_document(postgres, context, submission.id).await;
     let quarantine_key = document.object_key.clone();
     let work = postgres
@@ -246,7 +224,7 @@ WHERE event_type = 'document.finalization_requested'
 
     let final_key = format!(
         "workspaces/{}/evidence-submissions/{}/documents/{}/{}",
-        request.workspace_id,
+        evidence.workspace_id,
         submission.id,
         document.id(),
         document.filename
@@ -264,11 +242,7 @@ WHERE event_type = 'document.finalization_requested'
         .await
         .expect("submission detail resolves")
         .expect("submission detail exists");
-    let finalized = detail
-        .documents
-        .iter()
-        .find(|candidate| candidate.id() == document.id())
-        .expect("document remains present");
+    let finalized = detail.document;
 
     assert_eq!(finalized.object_key, final_key);
     assert_eq!(finalized.upload_status, DocumentUploadStatus::Uploaded);
@@ -284,22 +258,17 @@ async fn document_scan_malicious_and_failed_updates_leave_object_key_quarantined
     let app = TestApp::start().await;
     let postgres = app.postgres();
     let context = repository_workspace_context(&app).await;
-    let request = create_repository_evidence_request(postgres, context).await;
-    let submission = create_repository_submission(postgres, context, request.id).await;
-    let malicious = create_repository_document(postgres, context, submission.id).await;
-    let failed = postgres
-        .in_agent_connection_workspace_context(
-            context.workspace_id,
-            context.user_id,
-            context.agent_connection_id,
-            async move |context| {
-                context
-                    .create_evidence_document(&document_payload(submission.id, "failed-scan"))
-                    .await
-            },
-        )
-        .await
-        .expect("second document creates");
+    let evidence = create_repository_evidence(postgres, context).await;
+    let malicious_submission = create_repository_submission(postgres, context, evidence.id).await;
+    let failed_submission = create_repository_submission(postgres, context, evidence.id).await;
+    let malicious = create_repository_document(postgres, context, malicious_submission.id).await;
+    let failed = create_repository_document_with_suffix(
+        postgres,
+        context,
+        failed_submission.id,
+        "failed-scan",
+    )
+    .await;
     let malicious_key = malicious.object_key.clone();
     let failed_key = failed.object_key.clone();
 
@@ -312,33 +281,31 @@ async fn document_scan_malicious_and_failed_updates_leave_object_key_quarantined
         .await
         .expect("failed scan marks"));
 
-    let detail = postgres
+    let malicious_detail = postgres
         .in_workspace_context_read(context.workspace_id, async move |context| {
-            context.get_evidence_submission(submission.id).await
+            context
+                .get_evidence_submission(malicious_submission.id)
+                .await
         })
         .await
         .expect("submission detail resolves")
         .expect("submission detail exists");
-
-    let malicious_detail = detail
-        .documents
-        .iter()
-        .find(|candidate| candidate.id() == malicious.id())
-        .expect("malicious document exists");
-    assert_eq!(malicious_detail.object_key, malicious_key);
+    assert_eq!(malicious_detail.document.object_key, malicious_key);
     assert_eq!(
-        malicious_detail.upload_status,
+        malicious_detail.document.upload_status,
         DocumentUploadStatus::ContainsVirus
     );
 
-    let failed_detail = detail
-        .documents
-        .iter()
-        .find(|candidate| candidate.id() == failed.id())
-        .expect("failed document exists");
-    assert_eq!(failed_detail.object_key, failed_key);
+    let failed_detail = postgres
+        .in_workspace_context_read(context.workspace_id, async move |context| {
+            context.get_evidence_submission(failed_submission.id).await
+        })
+        .await
+        .expect("failed submission detail resolves")
+        .expect("failed submission detail exists");
+    assert_eq!(failed_detail.document.object_key, failed_key);
     assert_eq!(
-        failed_detail.upload_status,
+        failed_detail.document.upload_status,
         DocumentUploadStatus::FailedUpload
     );
 
@@ -361,21 +328,17 @@ async fn outbox_append_commits_atomically_with_domain_write() {
             context.agent_connection_id,
             async move |context| {
                 let request = context
-                    .create_evidence_request(&CreateEvidenceRequestPayload {
+                    .create_evidence(&CreateEvidencePayload {
                         title: "Outbox Atomic Request".to_owned(),
                         description: "Collect atomic evidence.".to_owned(),
                         collection_instructions: "Upload atomic evidence.".to_owned(),
-                        cadence: EvidenceRequestCadence::Quarterly,
-                        due_at: Utc::now() + Duration::days(7),
-                        schedule_anchor_at: Utc::now(),
-                        freshness_window_days: Some(90),
-                        status: EvidenceRequestStatus::Active,
+                        status: EvidenceStatus::Active,
                     })
                     .await?;
                 context
                     .append_outbox_message(&outbox_payload(
-                        "evidence_request.created",
-                        "evidence_request",
+                        "evidence.created",
+                        "evidence",
                         Uuid::from(request.id).to_string(),
                     ))
                     .await?;
@@ -391,7 +354,7 @@ async fn outbox_append_commits_atomically_with_domain_write() {
         .await
         .expect("outbox rows list");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].event_type, "evidence_request.created");
+    assert_eq!(rows[0].event_type, "evidence.created");
     assert_eq!(rows[0].aggregate_id, Uuid::from(request.id).to_string());
 }
 
@@ -408,21 +371,17 @@ async fn outbox_append_rolls_back_with_domain_write() {
             context.agent_connection_id,
             async move |context| {
                 context
-                    .create_evidence_request(&CreateEvidenceRequestPayload {
+                    .create_evidence(&CreateEvidencePayload {
                         title: "Rolled Back Outbox Request".to_owned(),
                         description: "Collect rollback evidence.".to_owned(),
                         collection_instructions: "Upload rollback evidence.".to_owned(),
-                        cadence: EvidenceRequestCadence::Quarterly,
-                        due_at: Utc::now() + Duration::days(7),
-                        schedule_anchor_at: Utc::now(),
-                        freshness_window_days: Some(90),
-                        status: EvidenceRequestStatus::Active,
+                        status: EvidenceStatus::Active,
                     })
                     .await?;
                 context
                     .append_outbox_message(&outbox_payload(
-                        "evidence_request.created",
-                        "evidence_request",
+                        "evidence.created",
+                        "evidence",
                         "rolled-back",
                     ))
                     .await?;
@@ -538,10 +497,10 @@ async fn repository_workspace_context(app: &TestApp) -> RepositoryContext {
     }
 }
 
-async fn create_repository_evidence_request(
+async fn create_repository_evidence(
     postgres: &proofplane::repository::Postgres,
     context: RepositoryContext,
-) -> proofplane::domain::EvidenceRequest {
+) -> proofplane::domain::Evidence {
     postgres
         .in_agent_connection_workspace_context(
             context.workspace_id,
@@ -549,27 +508,23 @@ async fn create_repository_evidence_request(
             context.agent_connection_id,
             async move |context| {
                 context
-                    .create_evidence_request(&CreateEvidenceRequestPayload {
-                        title: "Repository Evidence Request".to_owned(),
+                    .create_evidence(&CreateEvidencePayload {
+                        title: "Repository Evidence".to_owned(),
                         description: "Collect repository evidence.".to_owned(),
                         collection_instructions: "Upload the export.".to_owned(),
-                        cadence: EvidenceRequestCadence::Quarterly,
-                        due_at: Utc::now() + Duration::days(7),
-                        schedule_anchor_at: Utc::now(),
-                        freshness_window_days: Some(90),
-                        status: EvidenceRequestStatus::Active,
+                        status: EvidenceStatus::Active,
                     })
                     .await
             },
         )
         .await
-        .expect("evidence request creates")
+        .expect("evidence creates")
 }
 
 async fn create_repository_submission(
     postgres: &proofplane::repository::Postgres,
     context: RepositoryContext,
-    evidence_request_id: proofplane::domain::EvidenceRequestId,
+    evidence_id: proofplane::domain::EvidenceId,
 ) -> proofplane::domain::EvidenceSubmission {
     postgres
         .in_agent_connection_workspace_context(
@@ -578,7 +533,7 @@ async fn create_repository_submission(
             context.agent_connection_id,
             async move |context| {
                 context
-                    .create_evidence_submission(&submission_payload(evidence_request_id))
+                    .create_evidence_submission(&submission_payload(evidence_id))
                     .await
             },
         )
@@ -673,16 +628,13 @@ fn outbox_payload(
 }
 
 fn submission_payload(
-    evidence_request_id: proofplane::domain::EvidenceRequestId,
+    evidence_id: proofplane::domain::EvidenceId,
 ) -> CreateEvidenceSubmissionPayload {
     CreateEvidenceSubmissionPayload {
-        evidence_request_id,
-        coverage_start_at: Utc::now() - Duration::days(90),
-        coverage_end_at: Utc::now(),
-        source_system: "github".to_owned(),
-        collection_method: "api_export".to_owned(),
-        summary: Some("Repository submission summary".to_owned()),
-        description: Some("Repository submission description".to_owned()),
+        id: Uuid::new_v4().into(),
+        evidence_id,
+        coverage: CoverageWindow::new(Utc::now() - Duration::days(90), Utc::now())
+            .expect("repository fixture coverage is valid"),
     }
 }
 

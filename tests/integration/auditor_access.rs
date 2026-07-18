@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::support::{capture_audit_logs, cc61_id, upload_document, TestApp};
+use super::support::{capture_audit_logs, cc61_id, submit_evidence_file, TestApp};
 
 #[tokio::test]
 async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_secrets() {
@@ -191,7 +191,7 @@ async fn logout_and_grant_revocation_invalidate_existing_session() {
 }
 
 #[tokio::test]
-async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
+async fn portal_data_returns_simplified_submissions_and_filters_archived_documents() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-01");
@@ -251,77 +251,88 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
     )
     .await;
 
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Access review evidence", "2026-03-01T00:00:00Z"),
-        )
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Access review evidence"))
         .await;
-    let request_id = uuid_field(&request["id"]);
+    let evidence_id = uuid_field(&evidence["id"]);
     insert_control_mapping(
         &app,
-        request_id,
+        evidence_id,
         control_id,
         "Shows access reviews were performed.",
     )
     .await;
 
     let unmapped = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Unmapped evidence", "2026-02-01T00:00:00Z"),
-        )
+        .create_evidence(workspace_id, &evidence_body("Unmapped evidence"))
         .await;
-    app.create_evidence_submission(
+    submit_evidence_file(
+        &app,
         workspace_id,
         uuid_field(&unmapped["id"]),
-        &submission("unmapped should not appear"),
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
+        "unmapped.txt",
+        b"unmapped should not appear",
     )
     .await;
 
-    let older = app
-        .create_evidence_submission(workspace_id, request_id, &submission("older submission"))
-        .await;
-    let newer = app
-        .create_evidence_submission(workspace_id, request_id, &submission("newer submission"))
-        .await;
-    let older_submission_id = uuid_field(&older["id"]);
-    let newer_submission_id = uuid_field(&newer["id"]);
-    set_received_at(&app, older_submission_id, "2026-04-01T00:00:00Z").await;
-    set_received_at(&app, newer_submission_id, "2026-05-01T00:00:00Z").await;
-
-    let uploaded = upload_document(
+    let eligible = submit_evidence_file(
         &app,
         workspace_id,
-        newer_submission_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
         "eligible.txt",
         b"eligible",
     )
     .await;
-    let uploaded_id = uuid_field(&uploaded["id"]);
-    finalize_document(&app, workspace_id, newer_submission_id, uploaded_id).await;
-
-    let pending = upload_document(
+    let eligible_submission_id = uuid_field(&eligible["submission_id"]);
+    let eligible_document_id = uuid_field(&eligible["document"]["id"]);
+    finalize_document(
         &app,
         workspace_id,
-        newer_submission_id,
+        eligible_submission_id,
+        eligible_document_id,
+    )
+    .await;
+
+    let pending = submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
         "pending.txt",
         b"pending",
     )
     .await;
-    let pending_id = uuid_field(&pending["id"]);
+    let pending_submission_id = uuid_field(&pending["submission_id"]);
+    let pending_document_id = uuid_field(&pending["document"]["id"]);
 
-    let archived = upload_document(
+    let archived = submit_evidence_file(
         &app,
         workspace_id,
-        older_submission_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
         "archived.txt",
         b"archived",
     )
     .await;
-    let archived_id = uuid_field(&archived["id"]);
-    finalize_document(&app, workspace_id, older_submission_id, archived_id).await;
-    archive_document(&app, archived_id).await;
+    let archived_submission_id = uuid_field(&archived["submission_id"]);
+    let archived_document_id = uuid_field(&archived["document"]["id"]);
+    finalize_document(
+        &app,
+        workspace_id,
+        archived_submission_id,
+        archived_document_id,
+    )
+    .await;
+    archive_document(&app, archived_document_id).await;
+
+    set_received_at(&app, eligible_submission_id, "2026-05-01T00:00:00Z").await;
+    set_received_at(&app, pending_submission_id, "2026-04-01T00:00:00Z").await;
 
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
     let request = app.server().get("/auditor-access/portal/data").add_header(
@@ -368,43 +379,51 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
     assert_eq!(control_policies.len(), 1);
     assert_eq!(control_policies[0]["id"], alpha_policy_id.to_string());
     assert_eq!(control_policies[0]["name"], "alpha policy");
-    assert_eq!(control_policies[0]["document"]["upload_status"], "pending");
+    assert_eq!(control_policies[0]["document"]["download_eligible"], false);
     let requirement = &control["framework_requirements"][0];
     assert_eq!(requirement["framework_name"], "SOC 2");
     assert_eq!(requirement["code"], "CC6.1");
     assert_eq!(requirement["title"], "Logical access security");
-    let portal_request = &control["evidence_requests"][0];
+    let portal_evidence = &control["evidence"][0];
     assert_eq!(
-        portal_request["mapping_rationale"],
+        portal_evidence["mapping_rationale"],
         "Shows access reviews were performed."
     );
-    let submissions = portal_request["submissions"]
+    let submissions = portal_evidence["submissions"]
         .as_array()
         .expect("submissions is array");
     assert_eq!(submissions.len(), 2);
     assert_eq!(
         submissions[0]["submission"]["id"],
-        newer_submission_id.to_string()
+        eligible_submission_id.to_string()
     );
     assert_eq!(
         submissions[1]["submission"]["id"],
-        older_submission_id.to_string()
+        pending_submission_id.to_string()
     );
-
-    let documents = submissions[0]["documents"]
-        .as_array()
-        .expect("documents is array");
-    assert_eq!(documents[0]["filename"], "eligible.txt");
+    assert_eq!(submissions[0]["document"]["filename"], "eligible.txt");
     assert_eq!(
-        documents[0]["created_by_user_id"],
-        app.user_id().to_string()
+        submissions[0]["document"]["document_id"],
+        eligible_document_id.to_string()
     );
-    assert_eq!(documents[0]["upload_status"], "uploaded");
-    assert_eq!(documents[0]["download_eligible"], true);
-    assert_eq!(documents[1]["filename"], "pending.txt");
-    assert_eq!(documents[1]["upload_status"], "pending");
-    assert_eq!(documents[1]["download_eligible"], false);
-    assert_eq!(uuid_field(&documents[1]["id"]), pending_id);
+    assert_eq!(submissions[0]["document"]["download_eligible"], true);
+    assert_eq!(submissions[1]["document"]["filename"], "pending.txt");
+    assert_eq!(
+        submissions[1]["document"]["document_id"],
+        pending_document_id.to_string()
+    );
+    assert_eq!(submissions[1]["document"]["download_eligible"], false);
+    for removed in [
+        "created_by_user_id",
+        "content_type",
+        "content_length",
+        "checksum_sha256",
+        "checksum_crc32c",
+        "object_key",
+        "upload_status",
+    ] {
+        assert!(!serialized.contains(removed), "portal omits {removed}");
+    }
 
     let policies = body["policies"].as_array().expect("policies is array");
     assert_eq!(
@@ -426,11 +445,7 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
         alpha_policy["document"]["policy_id"],
         alpha_policy_id.to_string()
     );
-    assert_eq!(
-        alpha_policy["document"]["created_by_user_id"],
-        app.user_id().to_string()
-    );
-    assert_eq!(alpha_policy["document"]["upload_status"], "pending");
+    assert_eq!(alpha_policy["document"]["filename"], "pending-policy.txt");
     assert_eq!(alpha_policy["document"]["download_eligible"], false);
     assert_eq!(policies[1]["document"], Value::Null);
     assert_eq!(policies[2]["id"], zulu_policy_id.to_string());
@@ -484,16 +499,17 @@ async fn auditor_session_downloads_uploaded_document_with_safe_headers_and_audit
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_submission(&app, workspace_id).await;
     let content = b"auditor downloadable bytes";
     let document = upload_document(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
         "Auditor packet.txt",
         content,
     )
     .await;
+    let submission_id = uuid_field(&document["submission_id"]);
     let document_id = uuid_field(&document["id"]);
     let final_key = finalize_document(&app, workspace_id, submission_id, document_id).await;
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
@@ -791,43 +807,42 @@ async fn auditor_download_rejects_ineligible_missing_and_cross_workspace_documen
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_submission(&app, workspace_id).await;
 
-    let pending =
-        upload_document(&app, workspace_id, submission_id, "pending.txt", b"pending").await;
+    let pending = upload_document(&app, workspace_id, evidence_id, "pending.txt", b"pending").await;
+    let pending_submission_id = uuid_field(&pending["submission_id"]);
     let pending_id = uuid_field(&pending["id"]);
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
+    assert_auditor_download_not_found(&app, &raw_session, pending_submission_id, pending_id).await;
 
     for status in ["finalizing", "failed", "contains_virus"] {
         set_document_status(&app, pending_id, status).await;
-        assert_auditor_download_not_found(&app, &raw_session, submission_id, pending_id).await;
+        assert_auditor_download_not_found(&app, &raw_session, pending_submission_id, pending_id)
+            .await;
     }
 
-    let archived = upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "archived.txt",
-        b"archived",
-    )
-    .await;
+    let archived =
+        upload_document(&app, workspace_id, evidence_id, "archived.txt", b"archived").await;
+    let archived_submission_id = uuid_field(&archived["submission_id"]);
     let archived_id = uuid_field(&archived["id"]);
-    finalize_document(&app, workspace_id, submission_id, archived_id).await;
+    finalize_document(&app, workspace_id, archived_submission_id, archived_id).await;
     archive_document(&app, archived_id).await;
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, archived_id).await;
+    assert_auditor_download_not_found(&app, &raw_session, archived_submission_id, archived_id)
+        .await;
 
-    assert_auditor_download_not_found(&app, &raw_session, submission_id, Uuid::new_v4()).await;
+    assert_auditor_download_not_found(&app, &raw_session, pending_submission_id, Uuid::new_v4())
+        .await;
     assert_auditor_download_not_found(&app, &raw_session, Uuid::new_v4(), archived_id).await;
 
-    let other_submission_id = create_submission(&app, other_workspace_id).await;
+    let other_evidence_id = create_submission(&app, other_workspace_id).await;
     let other = upload_document(
         &app,
         other_workspace_id,
-        other_submission_id,
+        other_evidence_id,
         "other.txt",
         b"other",
     )
     .await;
+    let other_submission_id = uuid_field(&other["submission_id"]);
     let other_document_id = uuid_field(&other["id"]);
     finalize_document(
         &app,
@@ -846,9 +861,10 @@ async fn auditor_download_rejects_logged_out_tampered_expired_and_grant_revoked_
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_submission(&app, workspace_id).await;
     let document =
-        upload_document(&app, workspace_id, submission_id, "session.txt", b"session").await;
+        upload_document(&app, workspace_id, evidence_id, "session.txt", b"session").await;
+    let submission_id = uuid_field(&document["submission_id"]);
     let document_id = uuid_field(&document["id"]);
     finalize_document(&app, workspace_id, submission_id, document_id).await;
     let path = auditor_download_path(submission_id, document_id);
@@ -929,10 +945,10 @@ async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_d
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_submission(&app, workspace_id).await;
     let content = b"mismatch bytes";
-    let document =
-        upload_document(&app, workspace_id, submission_id, "mismatch.txt", content).await;
+    let document = upload_document(&app, workspace_id, evidence_id, "mismatch.txt", content).await;
+    let submission_id = uuid_field(&document["submission_id"]);
     let document_id = uuid_field(&document["id"]);
     let final_key = finalize_document(&app, workspace_id, submission_id, document_id).await;
     let metadata_path = app
@@ -1017,46 +1033,37 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     )
     .to_owned();
 
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Access review evidence", "2026-03-01T00:00:00Z"),
-        )
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Access review evidence"))
         .await;
-    let request_id = uuid_field(&request["id"]);
+    let evidence_id = uuid_field(&evidence["id"]);
     insert_control_mapping(
         &app,
-        request_id,
+        evidence_id,
         control_id,
         "Shows access reviews were performed.",
     )
     .await;
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            request_id,
-            &submission("browser portal submission"),
-        )
-        .await;
-    let submission_id = uuid_field(&submission["id"]);
     let uploaded = upload_document(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
         "auditor-evidence.txt",
         b"eligible",
     )
     .await;
+    let submission_id = uuid_field(&uploaded["submission_id"]);
     let uploaded_id = uuid_field(&uploaded["id"]);
     finalize_document(&app, workspace_id, submission_id, uploaded_id).await;
     let pending = upload_document(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
         "pending-evidence.txt",
         b"pending",
     )
     .await;
+    let pending_submission_id = uuid_field(&pending["submission_id"]);
     let pending_id = uuid_field(&pending["id"]);
 
     let portal = app
@@ -1077,11 +1084,10 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     assert!(body.contains("CC6.1"));
     assert!(body.contains("Logical access security"));
     assert!(body.contains("Mapped controls"));
-    assert!(body.contains("Evidence requests"));
+    assert!(body.contains("Evidence"));
     assert!(body.contains("Evidence submissions"));
     assert!(body.contains("auditor@example.com"));
     assert!(body.contains("Read-only"));
-    assert!(!body.contains("browser portal submission"));
     assert!(!body.contains("auditor-evidence.txt"));
 
     let requirement_id = cc61_id();
@@ -1100,7 +1106,6 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     assert!(body.contains("Requirement context"));
     assert!(body.contains("PP-AC-01"));
     assert!(body.contains("Access reviews"));
-    assert!(!body.contains("browser portal submission"));
 
     let control = app
         .server()
@@ -1116,13 +1121,13 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     let body = html_body(&control);
     assert!(body.contains("Submission history"));
     assert!(body.contains("Access review evidence"));
-    assert!(body.contains("browser portal submission"));
-    assert!(body.contains("Evidence documents"));
     assert!(body.contains("No policies attached"));
+    assert!(body.contains("Valid from"));
+    assert!(body.contains("Valid until"));
     assert!(body.contains("auditor-evidence.txt"));
     assert!(body.contains(&auditor_download_path(submission_id, uploaded_id)));
     assert!(body.contains("pending-evidence.txt"));
-    assert!(!body.contains(&auditor_download_path(submission_id, pending_id)));
+    assert!(!body.contains(&auditor_download_path(pending_submission_id, pending_id)));
     assert!(!body.contains(invite_token));
     assert!(!body.contains(&raw_session));
 }
@@ -1209,7 +1214,7 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
     assert!(!body.contains("<script>alert"));
     assert!(body.contains("Uploading"));
     assert!(body.contains("Uploaded"));
-    assert!(body.contains("No document"));
+    assert!(body.contains("Missing"));
     assert!(body.contains("No description"));
     assert!(!body.contains("Archived browser policy"));
     assert!(!body.contains(&workspace_id.to_string()));
@@ -1241,8 +1246,8 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
     alpha.assert_status_ok();
     let body = html_body(&alpha);
     assert!(body.contains("Mapped controls (2)"));
-    assert!(body.contains("pending &lt;policy&gt;.txt"));
-    assert!(body.contains("This document is uploading and is not available for download."));
+    assert!(body.contains("Uploading"));
+    assert!(!body.contains("pending &lt;policy&gt;.txt"));
     assert!(!body.contains(&policy_auditor_download_path(
         alpha_policy_id,
         Uuid::from(pending.id())
@@ -1255,22 +1260,10 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
         "/auditor-access/portal/controls/{standalone_control_id}"
     )));
 
-    for (status, label, message) in [
-        (
-            "finalizing",
-            "Scanning",
-            "This document is being scanned and is not available for download.",
-        ),
-        (
-            "contains_virus",
-            "Upload failed",
-            "This document is unavailable for download.",
-        ),
-        (
-            "failed",
-            "Upload failed",
-            "This document is unavailable for download.",
-        ),
+    for (status, label) in [
+        ("finalizing", "Scanning"),
+        ("contains_virus", "Upload failed"),
+        ("failed", "Upload failed"),
     ] {
         set_policy_document_status(&app, Uuid::from(pending.id()), status).await;
         let response = app
@@ -1286,7 +1279,6 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
         response.assert_status_ok();
         let body = html_body(&response);
         assert!(body.contains(label));
-        assert!(body.contains(message));
         assert!(!body.contains(&policy_auditor_download_path(
             alpha_policy_id,
             Uuid::from(pending.id())
@@ -1355,7 +1347,7 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
     zulu.assert_status_ok();
     let body = html_body(&zulu);
     assert!(body.contains("No controls attached"));
-    assert!(body.contains("No policy document is available"));
+    assert!(body.contains("Missing"));
 }
 
 #[tokio::test]
@@ -1463,36 +1455,22 @@ async fn browser_portal_escapes_untrusted_content() {
     let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
 
     let request = app
-        .create_evidence_request(
+        .create_evidence(
             workspace_id,
-            &evidence_request("<script>alert('request')</script>", "2026-03-01T00:00:00Z"),
+            &evidence_body("<script>alert('evidence')</script>"),
         )
         .await;
-    let request_id = uuid_field(&request["id"]);
-    insert_control_mapping(&app, request_id, control_id, "<b>mapped</b>").await;
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-03-31T23:59:59Z",
-            "source_system": "<source>",
-            "collection_method": "manual",
-            "summary": "<img src=x onerror=alert(1)>",
-            "description": "Description with <strong>markup</strong>."
-            }),
-        )
-        .await;
-    let submission_id = uuid_field(&submission["id"]);
+    let evidence_id = uuid_field(&request["id"]);
+    insert_control_mapping(&app, evidence_id, control_id, "<b>mapped</b>").await;
     let uploaded = upload_document(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
         "portable evidence.txt",
         b"eligible",
     )
     .await;
+    let submission_id = uuid_field(&uploaded["submission_id"]);
     let uploaded_id = uuid_field(&uploaded["id"]);
     finalize_document(&app, workspace_id, submission_id, uploaded_id).await;
 
@@ -1510,11 +1488,7 @@ async fn browser_portal_escapes_untrusted_content() {
     portal.assert_status_ok();
     let body = html_body(&portal);
 
-    assert!(body.contains("&lt;script&gt;alert(&#39;request&#39;)&lt;/script&gt;"));
-    assert!(body.contains("&lt;b&gt;mapped&lt;/b&gt;"));
-    assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;"));
-    assert!(body.contains("&lt;source&gt;"));
-    assert!(body.contains("Description with &lt;strong&gt;markup&lt;/strong&gt;."));
+    assert!(body.contains("&lt;script&gt;alert(&#39;evidence&#39;)&lt;/script&gt;"));
     assert!(!body.contains("<script>alert"));
     assert!(!body.contains("<b>mapped</b>"));
     assert!(!body.contains("<img src=x"));
@@ -1761,46 +1735,44 @@ fn assert_unavailable(result: Result<impl std::fmt::Debug, AuditorAccessSessionE
     ));
 }
 
-fn evidence_request(title: &str, due_at: &str) -> Value {
+fn evidence_body(title: &str) -> Value {
     json!({
         "title": title,
         "description": format!("Description for {title}."),
         "collection_instructions": format!("Collect {title}."),
-        "cadence": "quarterly",
-        "due_at": due_at,
-        "schedule_anchor_at": "2026-01-01T00:00:00Z",
-        "freshness_window_days": 90,
         "status": "active"
     })
 }
 
-fn submission(summary: &str) -> Value {
-    json!({
-        "coverage_start_at": "2026-01-01T00:00:00Z",
-        "coverage_end_at": "2026-03-31T23:59:59Z",
-        "source_system": "test",
-        "collection_method": "manual",
-        "summary": summary,
-        "description": format!("Description for {summary}.")
-    })
+async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Auditor download evidence"))
+        .await;
+    uuid_field(&evidence["id"])
 }
 
-async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Auditor download evidence", "2099-01-01T00:00:00Z"),
-        )
-        .await;
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            uuid_field(&request["id"]),
-            &submission("auditor download submission"),
-        )
-        .await;
+async fn upload_document(
+    app: &TestApp,
+    workspace_id: Uuid,
+    evidence_id: Uuid,
+    filename: &str,
+    content: &[u8],
+) -> Value {
+    let uploaded = submit_evidence_file(
+        app,
+        workspace_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
+        filename,
+        content,
+    )
+    .await;
 
-    uuid_field(&submission["id"])
+    json!({
+        "id": uploaded["document"]["id"],
+        "submission_id": uploaded["submission_id"],
+    })
 }
 
 fn auditor_download_path(submission_id: Uuid, document_id: Uuid) -> String {
@@ -1863,7 +1835,7 @@ fn uuid_field(value: &Value) -> Uuid {
 
 async fn insert_control_mapping(
     app: &TestApp,
-    evidence_request_id: Uuid,
+    evidence_id: Uuid,
     control_id: Uuid,
     rationale: &str,
 ) {
@@ -1873,10 +1845,10 @@ async fn insert_control_mapping(
         .expect("connection opens")
         .execute(
             r#"
-INSERT INTO evidence_request_control_mappings (evidence_request_id, control_id, rationale)
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
 VALUES ($1, $2, $3)
 "#,
-            &[&evidence_request_id, &control_id, &rationale],
+            &[&evidence_id, &control_id, &rationale],
         )
         .await
         .expect("control mapping inserts");

@@ -8,9 +8,8 @@ use uuid::Uuid;
 use crate::{
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        AgentConnectionId, CreateEvidenceRequestPayload, CreateWorkspacePayload,
-        EvidenceRequestCadence, EvidenceRequestStatus, ProvisionUserPayload,
-        UpdateEvidenceRequestPayload, UpdateWorkspacePayload, UserId, WorkspaceId,
+        AgentConnectionId, CreateEvidencePayload, CreateWorkspacePayload, EvidenceStatus,
+        ProvisionUserPayload, UpdateEvidencePayload, UpdateWorkspacePayload, UserId, WorkspaceId,
         WorkspacePermission, WorkspacePermissions, WorkspaceRole,
     },
     object_storage::{
@@ -29,7 +28,7 @@ pub enum Error {
     #[error("postgres connection error")]
     StoreConnection(#[from] store::conn::Error),
 
-    #[error("configuration error")]
+    #[error("configuration error: {0}")]
     Config(#[source] Box<ConfigError>),
 
     #[error("observability initialization error")]
@@ -58,9 +57,6 @@ const LOCAL_OWNER_AUTH0_SUB: &str = "auth0|local-owner";
 const LOCAL_AGENT_CONNECTION_ID: &str = "00000000-0000-4000-8000-000000000302";
 const DEMO_SUBMISSION_FILENAME: &str = "quarterly-access-review.csv";
 const DEMO_SUBMISSION_CONTENT_TYPE: &str = "text/csv";
-const DEMO_SUBMISSION_SUMMARY: &str =
-    "Quarterly production access review completed with all entries approved.";
-const DEMO_SUBMISSION_DESCRIPTION: &str = "Export of the Q2 2026 production console access review, including reviewer decisions for the local owner and deployment service account.";
 const DEMO_SUBMISSION_BYTES: &[u8] = b"user,email,system,reviewer,reviewed_at,decision\nLocal Owner,owner@proofplane.local,Production Console,System,2026-06-14T16:00:00Z,approved\nLocal Service Account,service@proofplane.local,Deployment Pipeline,System,2026-06-14T16:10:00Z,approved\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +98,7 @@ pub async fn seed_local_data(
     seed_workspace(postgres).await?;
     let owner_id = seed_local_owner(postgres).await?;
     let connection = seed_agent_connection(postgres, owner_id).await?;
-    seed_evidence_requests(postgres, connection).await?;
+    seed_evidence(postgres, connection).await?;
     seed_frameworks_and_controls(postgres).await?;
     seed_policies(postgres).await?;
     let demo_document = seed_demo_evidence_submission(postgres, object_storage, owner_id).await?;
@@ -246,16 +242,14 @@ SET user_id = EXCLUDED.user_id,
     })
 }
 
-async fn seed_evidence_requests(
+async fn seed_evidence(
     repository: &Postgres,
     connection: AgentConnectionContext,
 ) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
-    let seeds = demo_evidence_requests()?;
+    let seeds = demo_evidence()?;
     let existing = repository
-        .in_workspace_context_read(workspace_id, async |context| {
-            context.list_evidence_requests().await
-        })
+        .in_workspace_context_read(workspace_id, async |context| context.list_evidence().await)
         .await?;
 
     repository
@@ -265,16 +259,17 @@ async fn seed_evidence_requests(
             connection.connection_id,
             async move |context| {
                 for seed in seeds {
-                    if let Some(existing_request) =
-                        existing.iter().find(|request| request.title == seed.title)
+                    if let Some(existing_evidence) = existing
+                        .iter()
+                        .find(|evidence| evidence.title == seed.title)
                     {
                         let update = seed.into_update();
                         context
-                            .replace_evidence_request(existing_request.id, &update)
+                            .replace_evidence(existing_evidence.id, &update)
                             .await?;
                     } else {
-                        let request = seed.into_new();
-                        context.create_evidence_request(&request).await?;
+                        let payload = seed.into_new();
+                        context.create_evidence(&payload).await?;
                     }
                 }
 
@@ -471,8 +466,8 @@ async fn seed_demo_evidence_submission(
 async fn seed_demo_submission_row(repository: &Postgres) -> Result<(), Error> {
     let mut client = repository.get().await?;
     let transaction = client.transaction().await?;
-    let request_id = demo_evidence_request_id(&transaction).await?;
-    upsert_demo_submission(&transaction, request_id).await?;
+    let evidence_id = demo_evidence_id(&transaction).await?;
+    upsert_demo_submission(&transaction, evidence_id).await?;
     transaction.commit().await?;
 
     Ok(())
@@ -485,8 +480,8 @@ async fn upsert_demo_submission_and_document(
 ) -> Result<(), Error> {
     let mut client = repository.get().await?;
     let transaction = client.transaction().await?;
-    let request_id = demo_evidence_request_id(&transaction).await?;
-    upsert_demo_submission(&transaction, request_id).await?;
+    let evidence_id = demo_evidence_id(&transaction).await?;
+    upsert_demo_submission(&transaction, evidence_id).await?;
 
     let document_id = demo_document_id();
     let document_object_key = demo_document_object_key()?.to_string();
@@ -544,14 +539,12 @@ SET workspace_id = EXCLUDED.workspace_id,
     Ok(())
 }
 
-async fn demo_evidence_request_id(
-    transaction: &tokio_postgres::Transaction<'_>,
-) -> Result<Uuid, Error> {
+async fn demo_evidence_id(transaction: &tokio_postgres::Transaction<'_>) -> Result<Uuid, Error> {
     let row = transaction
         .query_one(
             r#"
 SELECT id
-FROM evidence_requests
+FROM evidence
 WHERE workspace_id = $1
   AND title = 'Quarterly access review'
 "#,
@@ -564,46 +557,34 @@ WHERE workspace_id = $1
 
 async fn upsert_demo_submission(
     transaction: &tokio_postgres::Transaction<'_>,
-    request_id: Uuid,
+    evidence_id: Uuid,
 ) -> Result<(), Error> {
     transaction
         .execute(
             r#"
 INSERT INTO evidence_submissions (
     id,
-    evidence_request_id,
+    evidence_id,
     submitted_by_agent_connection_id,
     received_at,
-    coverage_start_at,
-    coverage_end_at,
-    source_system,
-    collection_method,
-    summary,
-    description
+    valid_from,
+    valid_until
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
-SET evidence_request_id = EXCLUDED.evidence_request_id,
+SET evidence_id = EXCLUDED.evidence_id,
     submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
     received_at = EXCLUDED.received_at,
-    coverage_start_at = EXCLUDED.coverage_start_at,
-    coverage_end_at = EXCLUDED.coverage_end_at,
-    source_system = EXCLUDED.source_system,
-    collection_method = EXCLUDED.collection_method,
-    summary = EXCLUDED.summary,
-    description = EXCLUDED.description
+    valid_from = EXCLUDED.valid_from,
+    valid_until = EXCLUDED.valid_until
 "#,
             &[
                 &demo_submission_id(),
-                &request_id,
+                &evidence_id,
                 &Uuid::from(local_agent_connection_id()),
                 &timestamp("2026-06-14T16:30:00Z")?,
                 &timestamp("2026-04-01T00:00:00Z")?,
                 &timestamp("2026-06-30T23:59:59Z")?,
-                &"local-demo",
-                &"seed",
-                &DEMO_SUBMISSION_SUMMARY,
-                &DEMO_SUBMISSION_DESCRIPTION,
             ],
         )
         .await?;
@@ -611,15 +592,11 @@ SET evidence_request_id = EXCLUDED.evidence_request_id,
     Ok(())
 }
 
-struct SeedEvidenceRequest {
+struct SeedEvidence {
     title: String,
     description: String,
     collection_instructions: String,
-    cadence: EvidenceRequestCadence,
-    due_at: DateTime<Utc>,
-    schedule_anchor_at: DateTime<Utc>,
-    freshness_window_days: Option<i32>,
-    status: EvidenceRequestStatus,
+    status: EvidenceStatus,
 }
 
 struct SeedFrameworkRequirement {
@@ -644,50 +621,38 @@ struct SeedPolicy {
     control_codes: Vec<&'static str>,
 }
 
-impl SeedEvidenceRequest {
-    fn into_new(self) -> CreateEvidenceRequestPayload {
-        CreateEvidenceRequestPayload {
+impl SeedEvidence {
+    fn into_new(self) -> CreateEvidencePayload {
+        CreateEvidencePayload {
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,
-            cadence: self.cadence,
-            due_at: self.due_at,
-            schedule_anchor_at: self.schedule_anchor_at,
-            freshness_window_days: self.freshness_window_days,
             status: self.status,
         }
     }
 
-    fn into_update(self) -> UpdateEvidenceRequestPayload {
-        UpdateEvidenceRequestPayload {
+    fn into_update(self) -> UpdateEvidencePayload {
+        UpdateEvidencePayload {
             title: self.title,
             description: self.description,
             collection_instructions: self.collection_instructions,
-            cadence: self.cadence,
-            due_at: self.due_at,
-            schedule_anchor_at: self.schedule_anchor_at,
-            freshness_window_days: self.freshness_window_days,
             status: self.status,
         }
     }
 }
 
-fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
+fn demo_evidence() -> Result<Vec<SeedEvidence>, Error> {
     Ok(vec![
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Quarterly access review".to_owned(),
             description: "Confirm user access reviews are completed for production systems."
                 .to_owned(),
             collection_instructions:
                 "Export the completed access review report from the identity provider and include reviewer sign-off."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Quarterly,
-            due_at: timestamp("2026-06-30T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-03-31T17:00:00Z")?,
-            freshness_window_days: Some(90),
-            status: EvidenceRequestStatus::Active,
+            status: EvidenceStatus::Active,
         },
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Monthly vulnerability scan".to_owned(),
             description:
                 "Confirm vulnerability scans are performed for the production environment."
@@ -695,24 +660,16 @@ fn demo_evidence_requests() -> Result<Vec<SeedEvidenceRequest>, Error> {
             collection_instructions:
                 "Attach the monthly scanner summary showing scan scope, date, and critical findings."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Monthly,
-            due_at: timestamp("2026-05-31T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-05-01T17:00:00Z")?,
-            freshness_window_days: Some(30),
-            status: EvidenceRequestStatus::Active,
+            status: EvidenceStatus::Active,
         },
-        SeedEvidenceRequest {
+        SeedEvidence {
             title: "Annual incident response tabletop".to_owned(),
             description: "Confirm the incident response tabletop exercise is completed annually."
                 .to_owned(),
             collection_instructions:
                 "Attach the exercise agenda, participant list, findings, and remediation actions."
                     .to_owned(),
-            cadence: EvidenceRequestCadence::Annually,
-            due_at: timestamp("2026-12-15T17:00:00Z")?,
-            schedule_anchor_at: timestamp("2026-01-15T17:00:00Z")?,
-            freshness_window_days: Some(365),
-            status: EvidenceRequestStatus::Paused,
+            status: EvidenceStatus::Paused,
         },
     ])
 }
@@ -879,4 +836,19 @@ fn local_agent_connection_id() -> AgentConnectionId {
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
     DateTime::parse_from_rfc3339(value).map(|datetime| datetime.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigError, Error};
+
+    #[test]
+    fn configuration_error_includes_its_cause() {
+        let error = Error::Config(Box::new(ConfigError::MissingEnv("PROOFPLANE_CONFIG")));
+
+        assert_eq!(
+            error.to_string(),
+            "configuration error: environment variable PROOFPLANE_CONFIG is required"
+        );
+    }
 }

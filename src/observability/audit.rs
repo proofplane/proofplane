@@ -247,7 +247,7 @@ mod tests {
         let workspace_id = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
-        let evidence_request_id = Uuid::new_v4();
+        let evidence_id = Uuid::new_v4();
         let evidence_submission_id = Uuid::new_v4();
         let evidence_document_id = Uuid::new_v4();
         let object_id = Uuid::new_v4();
@@ -266,7 +266,7 @@ mod tests {
             .workspace_id(workspace_id)
             .request_id(request_id)
             .session_id(session_id)
-            .metadata("evidence_request_id", evidence_request_id)
+            .metadata("evidence_id", evidence_id)
             .metadata("evidence_submission_id", evidence_submission_id)
             .metadata("evidence_document_id", evidence_document_id)
             .metadata("lifecycle_status", "uploaded")
@@ -295,16 +295,13 @@ mod tests {
         assert_eq!(
             fields["metadata"],
             format!(
-                r#"{{"evidence_document_id":"{}","evidence_request_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
-                evidence_document_id, evidence_request_id, evidence_submission_id
+                r#"{{"evidence_document_id":"{}","evidence_id":"{}","evidence_submission_id":"{}","lifecycle_status":"uploaded"}}"#,
+                evidence_document_id, evidence_id, evidence_submission_id
             )
         );
         let metadata: serde_json::Value =
             serde_json::from_str(fields["metadata"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            metadata["evidence_request_id"],
-            evidence_request_id.to_string()
-        );
+        assert_eq!(metadata["evidence_id"], evidence_id.to_string());
         assert_eq!(
             metadata["evidence_submission_id"],
             evidence_submission_id.to_string()
@@ -314,7 +311,7 @@ mod tests {
             evidence_document_id.to_string()
         );
         assert_eq!(metadata["lifecycle_status"], "uploaded");
-        assert!(fields.get("evidence_request_id").is_none());
+        assert!(fields.get("evidence_id").is_none());
         assert!(fields.get("evidence_submission_id").is_none());
         assert!(fields.get("evidence_document_id").is_none());
         assert!(fields.get("lifecycle_status").is_none());

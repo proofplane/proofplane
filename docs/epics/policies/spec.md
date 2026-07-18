@@ -206,8 +206,8 @@ hidden from normal reads and cannot be downloaded.
 
 ## Delegated Browser Management
 
-`manage_policy_document(policy_id)` mirrors
-`manage_evidence_submission_document`: it verifies an active policy in the
+`manage_policy_document(policy_id)` follows the same delegated browser model as
+`manage_evidence_submissions`: it verifies an active policy in the
 connection workspace and returns a short-lived, single-use bearer URL for a
 human browser. The result includes the URL, expiry, policy ID, bearer-secret
 classification, and human-browser intended use. The agent must present the URL

@@ -26,8 +26,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        validate_document_filename, Document, DocumentId, DocumentUploadStatus,
-        EvidenceSubmissionDetail, EvidenceSubmissionId,
+        validate_document_filename, CoverageWindow, Document, DocumentId, DocumentUploadStatus,
+        EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     repository::ArchiveDocumentResult,
@@ -75,11 +75,11 @@ pub fn router(state: DocumentUploadSessionState) -> Router {
             post(upload_file).layer(DefaultBodyLimit::max(state.max_document_bytes)),
         )
         .route(
-            "/evidence-document-uploads/files/{document_id}/download",
+            "/evidence-document-uploads/files/{submission_id}/{document_id}/download",
             get(download_file),
         )
         .route(
-            "/evidence-document-uploads/files/{document_id}/archive",
+            "/evidence-document-uploads/files/{submission_id}/{document_id}/archive",
             post(archive_file),
         )
         .with_state(state)
@@ -92,6 +92,7 @@ struct UploadSessionQuery {
 
 #[derive(Debug)]
 struct UploadSessionDocumentResponse {
+    submission_id: Uuid,
     id: Uuid,
     filename: String,
     content_length: i64,
@@ -108,6 +109,7 @@ struct UploadSessionControlResponse {
 
 #[derive(Debug)]
 struct UploadSessionPage {
+    coverage: CoverageWindow,
     documents: Vec<UploadSessionDocumentResponse>,
     controls: Vec<UploadSessionControlResponse>,
 }
@@ -134,7 +136,8 @@ async fn open_upload_session(
         &inventory(
             &state.submissions,
             &state.controls,
-            session.submission_id,
+            session.evidence_id,
+            session.coverage,
             session_context(&session),
         )
         .await?,
@@ -158,15 +161,17 @@ async fn upload_file(
     let before = inventory(
         &state.submissions,
         &state.controls,
-        session.submission_id,
+        session.evidence_id,
+        session.coverage,
         connection,
     )
     .await?;
 
+    let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
     let payload = match document_upload_from_multipart(
         &state.submissions,
         &connection,
-        session.submission_id,
+        submission_id,
         multipart,
         DocumentUploadDigest::ComputeOnly,
     )
@@ -179,10 +184,21 @@ async fn upload_file(
         Err(error) => return Err(error),
     };
 
-    let document = state
+    let document = match state
         .submissions
-        .create_document(&connection, request_id.0, session.submission_id, payload)
-        .await?;
+        .create_submission(
+            &connection,
+            request_id.0,
+            submission_id,
+            session.evidence_id,
+            session.coverage,
+            payload,
+        )
+        .await?
+    {
+        Some(document) => document,
+        None => return Ok(unavailable_response()),
+    };
     emit_upload_audit(&session, request_id.0, &document);
 
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -197,21 +213,31 @@ async fn download_file(
     State(state): State<DocumentUploadSessionState>,
     headers: HeaderMap,
     Extension(request_id): Extension<RequestId>,
-    Path(document_id): Path<Uuid>,
+    Path((submission_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let session = match verify_session(&state, &headers) {
         Ok(session) => session,
         Err(UploadSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
+    if !session_owns_document(
+        &state.submissions,
+        &session,
+        EvidenceSubmissionId::from(submission_id),
+        DocumentId::from(document_id),
+    )
+    .await?
+    {
+        return Ok(unavailable_response());
+    }
     let grant = state
         .downloads
         .issue(
             session.workspace_id,
             session.issued_by_user_id,
             DownloadGrantIssuer::AgentConnection(session.issued_via.agent_connection_id()),
-            session.submission_id,
-            document_id.into(),
+            EvidenceSubmissionId::from(submission_id),
+            DocumentId::from(document_id),
         )
         .await
         .map_err(upload_session_download_error)?;
@@ -246,7 +272,7 @@ async fn download_file(
 async fn archive_file(
     State(state): State<DocumentUploadSessionState>,
     headers: HeaderMap,
-    Path(document_id): Path<Uuid>,
+    Path((submission_id, document_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let session = match verify_session(&state, &headers) {
         Ok(session) => session,
@@ -254,11 +280,21 @@ async fn archive_file(
         Err(UploadSessionError::Internal) => return Err(ApiError::Internal),
     };
     let connection = session_context(&session);
+    if !session_owns_document(
+        &state.submissions,
+        &session,
+        EvidenceSubmissionId::from(submission_id),
+        DocumentId::from(document_id),
+    )
+    .await?
+    {
+        return Ok(unavailable_response());
+    }
     match state
         .submissions
         .archive_document(
             &connection,
-            session.submission_id,
+            EvidenceSubmissionId::from(submission_id),
             DocumentId::from(document_id),
         )
         .await?
@@ -276,7 +312,8 @@ async fn archive_file(
             let page = inventory(
                 &state.submissions,
                 &state.controls,
-                session.submission_id,
+                session.evidence_id,
+                session.coverage,
                 connection,
             )
             .await?;
@@ -290,6 +327,23 @@ async fn archive_file(
                 .into_response())
         }
     }
+}
+
+async fn session_owns_document(
+    submissions: &EvidenceSubmissionService,
+    session: &VerifiedUploadSession,
+    submission_id: EvidenceSubmissionId,
+    document_id: DocumentId,
+) -> Result<bool, ApiError> {
+    let detail = submissions
+        .get(session_context(session), submission_id)
+        .await?;
+    Ok(detail.is_some_and(|detail| {
+        detail.submission.evidence_id == session.evidence_id
+            && detail.submission.valid_from == session.coverage.valid_from
+            && detail.submission.valid_until == session.coverage.valid_until
+            && detail.document.id() == document_id
+    }))
 }
 
 async fn redeem_grant(
@@ -311,7 +365,8 @@ async fn redeem_grant(
         .sessions
         .issue_until(
             grant.workspace_id,
-            grant.submission_id,
+            grant.evidence_id,
+            grant.coverage,
             grant.issued_by_user_id,
             UploadSessionIssuer::AgentConnection(grant.issued_via.agent_connection_id()),
             grant.expires_at,
@@ -337,17 +392,24 @@ async fn redeem_grant(
 async fn inventory(
     submissions: &EvidenceSubmissionService,
     controls: &ControlService,
-    submission_id: EvidenceSubmissionId,
+    evidence_id: EvidenceId,
+    coverage: CoverageWindow,
     connection: AgentConnectionContext,
 ) -> Result<UploadSessionPage, ApiError> {
-    let detail = detail(submissions, submission_id, connection).await?;
+    let details = submissions
+        .list_for_coverage(connection, evidence_id, coverage)
+        .await?;
     let mappings = controls
-        .list_evidence_request_control_mappings(connection, detail.submission.evidence_request_id)
+        .list_evidence_control_mappings(connection, evidence_id)
         .await?
         .ok_or_else(unavailable)?;
 
     Ok(UploadSessionPage {
-        documents: detail.documents.into_iter().map(Into::into).collect(),
+        coverage,
+        documents: details
+            .into_iter()
+            .map(upload_session_document_from_detail)
+            .collect(),
         controls: mappings
             .into_iter()
             .map(|mapping| UploadSessionControlResponse {
@@ -358,16 +420,25 @@ async fn inventory(
     })
 }
 
-async fn detail(
-    submissions: &EvidenceSubmissionService,
-    submission_id: EvidenceSubmissionId,
-    connection: AgentConnectionContext,
-) -> Result<EvidenceSubmissionDetail, ApiError> {
-    submissions
-        .get(connection, submission_id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(unavailable)
+fn upload_session_document_from_detail(
+    detail: EvidenceSubmissionDetail,
+) -> UploadSessionDocumentResponse {
+    let submission_id = Uuid::from(detail.submission.id);
+    let document = detail.document;
+    UploadSessionDocumentResponse {
+        submission_id,
+        id: Uuid::from(document.id()),
+        filename: document.filename,
+        content_length: document.content_length,
+        upload_status: upload_status(document.upload_status).to_owned(),
+        downloadable: document.upload_status == DocumentUploadStatus::Uploaded,
+        archivable: matches!(
+            document.upload_status,
+            DocumentUploadStatus::Uploaded
+                | DocumentUploadStatus::ContainsVirus
+                | DocumentUploadStatus::FailedUpload
+        ),
+    }
 }
 
 fn verify_session(
@@ -388,7 +459,7 @@ fn emit_upload_audit(session: &VerifiedUploadSession, request_id: Uuid, document
     )
     .workspace_id(session.workspace_id.into())
     .request_id(request_id)
-    .metadata("evidence_submission_id", Uuid::from(session.submission_id))
+    .metadata("evidence_submission_id", document.owner().owner_uuid())
     .metadata("evidence_document_id", Uuid::from(document.id()))
     .metadata("lifecycle_status", document.upload_status.as_str())
     .object(AuditObject::new("evidence_document", document.id().into()))
@@ -439,8 +510,7 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
         )
     };
     let controls = if page.controls.is_empty() {
-        r#"<p class="control-empty">No controls are mapped to this evidence request.</p>"#
-            .to_owned()
+        r#"<p class="control-empty">No controls are mapped to this evidence.</p>"#.to_owned()
     } else {
         format!(
             r#"<ul class="control-list">{}</ul>"#,
@@ -465,6 +535,11 @@ fn render_upload_page(page: &UploadSessionPage, message: Option<&str>) -> String
 </form>
 </aside>"#
         .to_owned();
+    let coverage_window = format!(
+        r#"<div class="coverage-window"><span class="coverage-label">Coverage window</span><p>Valid from <strong>{}</strong> until <strong>{}</strong></p></div>"#,
+        format_date(page.coverage.valid_from),
+        format_date(page.coverage.valid_until),
+    );
 
     format!(
         r#"<!doctype html>
@@ -572,6 +647,10 @@ main {{ width: min(1080px, calc(100% - 32px)); padding: 52px 0 72px; }}
 .page-header {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; }}
 .eyebrow {{ margin: 0 0 10px; color: var(--accent); font-size: 0.78rem; font-weight: 700; }}
 h1 {{ max-width: 18ch; font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.05; }}
+.coverage-window {{ margin: 16px 0 0; display: inline-flex; flex-direction: column; gap: 3px; border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; }}
+.coverage-label {{ color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }}
+.coverage-window p {{ margin: 0; color: var(--ink); font-size: 0.9rem; }}
+.coverage-window strong {{ color: var(--ink); font-weight: 700; }}
 h2 {{ margin: 0; font-size: 1.1rem; }}
 .control-context {{ width: min(360px, 38vw); margin: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; }}
 .control-context > p:first-child {{ margin: 0 0 10px; color: var(--muted); font-size: 0.74rem; font-weight: 700; }}
@@ -612,7 +691,7 @@ input[type="file"]::file-selector-button {{ margin-right: 10px; border: 0; borde
 <body>
 <header class="site-header"><div class="wordmark">PROOFPLANE <span>/ EVIDENCE INTAKE</span></div></header>
 <main>
-<header class="page-header"><div><p class="eyebrow">SCOPED EVIDENCE SUBMISSION</p><h1>Evidence documents</h1><p>Add the files that support this submission, then return to your MCP client to continue.</p></div><aside class="control-context" aria-label="Evidence target"><p>PROVIDING EVIDENCE FOR</p>{controls}</aside></header>
+<header class="page-header"><div><p class="eyebrow">SCOPED EVIDENCE SUBMISSION</p><h1>Evidence documents</h1><p>Add the files that cover this period, then return to your MCP client to continue. Each file becomes one submission for the window below.</p>{coverage_window}</div><aside class="control-context" aria-label="Evidence target"><p>PROVIDING EVIDENCE FOR</p>{controls}</aside></header>
 {message}
 <div class="workspace">
 <section class="panel" aria-labelledby="current-documents">
@@ -788,6 +867,10 @@ p { max-width: 58ch; margin: 0; color: var(--muted); line-height: 1.55; }
         .to_owned()
 }
 
+fn format_date(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d").to_string()
+}
+
 fn format_bytes(bytes: i64) -> String {
     const KB: i64 = 1024;
     const MB: i64 = 1024 * KB;
@@ -847,24 +930,6 @@ fn unavailable_response() -> Response {
     (StatusCode::NOT_FOUND, Html(unavailable_page())).into_response()
 }
 
-impl From<Document> for UploadSessionDocumentResponse {
-    fn from(document: Document) -> Self {
-        Self {
-            id: Uuid::from(document.id()),
-            filename: document.filename,
-            content_length: document.content_length,
-            upload_status: upload_status(document.upload_status).to_owned(),
-            downloadable: document.upload_status == DocumentUploadStatus::Uploaded,
-            archivable: matches!(
-                document.upload_status,
-                DocumentUploadStatus::Uploaded
-                    | DocumentUploadStatus::ContainsVirus
-                    | DocumentUploadStatus::FailedUpload
-            ),
-        }
-    }
-}
-
 fn upload_status(status: DocumentUploadStatus) -> &'static str {
     match status {
         DocumentUploadStatus::PendingUpload => "Uploading",
@@ -879,14 +944,14 @@ fn document_actions(document: &UploadSessionDocumentResponse) -> String {
     let mut actions = Vec::new();
     if document.downloadable {
         actions.push(format!(
-            r#"<a class="button icon-button" href="/evidence-document-uploads/files/{}/download" aria-label="Download document"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
-            document.id
+            r#"<a class="button icon-button" href="/evidence-document-uploads/files/{}/{}/download" aria-label="Download document"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
+            document.submission_id, document.id
         ));
     }
     if document.archivable {
         actions.push(format!(
-            r#"<form method="post" action="/evidence-document-uploads/files/{}/archive" onsubmit="return confirm('Archive this document?');"><button class="icon-button danger-button" type="submit" aria-label="Archive document"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg><span class="sr-only">Archive</span></button></form>"#,
-            document.id
+            r#"<form method="post" action="/evidence-document-uploads/files/{}/{}/archive" onsubmit="return confirm('Archive this document?');"><button class="icon-button danger-button" type="submit" aria-label="Archive document"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg><span class="sr-only">Archive</span></button></form>"#,
+            document.submission_id, document.id
         ));
     }
 
@@ -918,13 +983,20 @@ mod tests {
         render_upload_page, upload_status, UploadSessionControlResponse,
         UploadSessionDocumentResponse, UploadSessionPage,
     };
+    use crate::domain::CoverageWindow;
     use crate::domain::DocumentUploadStatus;
 
     #[test]
     fn upload_page_keeps_scope_actions_and_mobile_labels_visible() {
         let html = render_upload_page(
             &UploadSessionPage {
+                coverage: CoverageWindow::new(
+                    "2026-04-01T00:00:00+00:00".parse().unwrap(),
+                    "2026-06-30T00:00:00+00:00".parse().unwrap(),
+                )
+                .unwrap(),
                 documents: vec![UploadSessionDocumentResponse {
+                    submission_id: uuid::Uuid::nil(),
                     id: uuid::Uuid::nil(),
                     filename: "access-review.pdf".to_owned(),
                     content_length: 2048,
@@ -945,6 +1017,8 @@ mod tests {
             "CC6.1",
             "Logical access controls",
             "Upload evidence",
+            "Coverage window",
+            "Valid from <strong>2026-04-01</strong> until <strong>2026-06-30</strong>",
             "data-label=\"Status\"",
             "aria-label=\"Download document\"",
             "Archive document",

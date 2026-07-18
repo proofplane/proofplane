@@ -1,9 +1,0 @@
-{
-  "code": "PP-FIX-01",
-  "title": "Fixture access control",
-  "description": "Fixture control for local API testing.",
-  "framework_requirement_ids": [
-    "c484213e-63da-5f90-8a47-d949dfc074dd",
-    "2911a6cd-fbbb-52a4-b8a7-c019616e577f"
-  ]
-}
