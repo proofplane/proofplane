@@ -6,6 +6,7 @@ mod evidence_requests;
 mod evidence_submissions;
 mod guide;
 mod policies;
+mod policy_document_grants;
 mod resources;
 
 use rmcp::{
@@ -24,7 +25,7 @@ use crate::{
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         document_upload_grants::DocumentUploadGrantService,
         evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
-        policies::PolicyService,
+        policies::PolicyService, policy_document_upload_grants::PolicyDocumentUploadGrantService,
     },
     VERSION,
 };
@@ -65,6 +66,7 @@ pub struct ProofplaneMcp {
     evidence_requests: EvidenceRequestService,
     evidence_submissions: EvidenceSubmissionService,
     document_upload_grants: DocumentUploadGrantService,
+    policy_document_upload_grants: PolicyDocumentUploadGrantService,
     auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
     policies: PolicyService,
@@ -72,11 +74,16 @@ pub struct ProofplaneMcp {
     tool_router: ToolRouter<Self>,
 }
 
+pub(super) struct DocumentGrantServices {
+    pub evidence: DocumentUploadGrantService,
+    pub policy: PolicyDocumentUploadGrantService,
+}
+
 impl ProofplaneMcp {
-    pub fn new(
+    pub(super) fn new(
         evidence_requests: EvidenceRequestService,
         evidence_submissions: EvidenceSubmissionService,
-        document_upload_grants: DocumentUploadGrantService,
+        document_grants: DocumentGrantServices,
         auditor_access_grants: AuditorAccessGrantService,
         controls: ControlService,
         policies: PolicyService,
@@ -85,7 +92,8 @@ impl ProofplaneMcp {
         Self {
             evidence_requests,
             evidence_submissions,
-            document_upload_grants,
+            document_upload_grants: document_grants.evidence,
+            policy_document_upload_grants: document_grants.policy,
             auditor_access_grants,
             controls,
             policies,
@@ -99,6 +107,7 @@ impl ProofplaneMcp {
             + Self::evidence_requests_tool_router()
             + Self::evidence_submissions_tool_router()
             + Self::document_grants_tool_router()
+            + Self::policy_document_grants_tool_router()
             + Self::auditor_access_grants_tool_router()
             + Self::controls_tool_router()
             + Self::policies_tool_router()
@@ -241,6 +250,10 @@ mod tests {
             (
                 "manage_evidence_submission_document",
                 "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
+            ),
+            (
+                "manage_policy_document",
+                "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP.",
             ),
             (
                 "map_evidence_request_to_control",
@@ -444,7 +457,8 @@ mod tests {
                 | "update_policy"
                 | "archive_policy"
                 | "attach_policy_to_control"
-                | "detach_policy_from_control" => None,
+                | "detach_policy_from_control"
+                | "manage_policy_document" => None,
                 "create_auditor_access_link"
                 | "list_auditor_access_links"
                 | "revoke_auditor_access_link"

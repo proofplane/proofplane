@@ -24,6 +24,7 @@ use rmcp::{
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use url::Url;
 use uuid::Uuid;
 
 use super::support::{capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, TestApp};
@@ -471,6 +472,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_latest_evidence_submission",
         "create_evidence_submission",
         "manage_evidence_submission_document",
+        "manage_policy_document",
         "create_auditor_access_link",
         "list_auditor_access_links",
         "revoke_auditor_access_link",
@@ -527,6 +529,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         (
             "manage_evidence_submission_document",
             "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
+        ),
+        (
+            "manage_policy_document",
+            "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP.",
         ),
         (
             "create_auditor_access_link",
@@ -664,6 +670,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submission_document")["inputSchema"],
         "submission_id",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "manage_policy_document")["inputSchema"],
+        "policy_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
@@ -805,6 +815,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
         "intended_use",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "manage_policy_document")["outputSchema"],
+        "url_secret_type",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "manage_policy_document")["outputSchema"],
+        "policy_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
@@ -2223,6 +2241,248 @@ async fn mcp_policy_tools_conceal_tenants_reject_invalid_state_and_enforce_permi
 }
 
 #[tokio::test]
+async fn policy_document_grants_issue_redeem_once_and_isolate_sessions_and_secrets() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Policy document grant workspace")
+        .with_default_membership()
+        .workspace("other", "Hidden policy document grant workspace")
+        .without_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let client = McpClient::connect(&server, app.api_token()).await;
+    let policy = client
+        .call_tool("create_policy", json!({ "name": "Grant policy" }))
+        .await;
+    let policy_id = uuid_from(&policy["id"]);
+
+    let token = app.api_token().to_owned();
+    let (grant, issuance_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            McpClient::connect_with_request_id(server, &token, request_id)
+                .await
+                .call_tool("manage_policy_document", json!({ "policy_id": policy_id }))
+                .await
+        }
+    })
+    .await;
+
+    assert_eq!(grant["policy_id"], policy_id.to_string());
+    assert_eq!(grant["url_secret_type"], "bearer_secret");
+    assert_eq!(grant["intended_use"], "human_browser_document_management");
+    let url =
+        Url::parse(grant["url"].as_str().expect("grant URL parses")).expect("grant URL is valid");
+    assert_eq!(url.path(), "/policy-document-uploads");
+    assert!(url.query().is_some_and(|query| query.starts_with("token=")));
+    assert!(grant.get("token").is_none());
+    assert!(grant.get("cookie").is_none());
+    assert_eq!(issuance_logs.len(), 1);
+    assert_audit_event(
+        &issuance_logs[0],
+        ExpectedAuditEvent {
+            event_name: "policy_document_upload_grant.issued",
+            operation: "manage_policy_document",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "policy",
+            object_id: policy_id,
+        },
+    );
+    assert!(!issuance_logs[0].to_string().contains(url.as_str()));
+
+    let row = app
+        .postgres()
+        .get()
+        .await
+        .expect("policy grant database opens")
+        .query_one(
+            r#"
+SELECT workspace_id, policy_id, issued_by_user_id, issued_via_agent_connection_id,
+       expires_at, redeemed_at
+FROM policy_document_upload_grants
+WHERE policy_id = $1
+"#,
+            &[&policy_id],
+        )
+        .await
+        .expect("policy grant row loads");
+    assert_eq!(row.get::<_, Uuid>("workspace_id"), workspace_id);
+    assert_eq!(row.get::<_, Uuid>("policy_id"), policy_id);
+    assert_eq!(row.get::<_, Uuid>("issued_by_user_id"), app.user_id());
+    assert_eq!(
+        row.get::<_, Uuid>("issued_via_agent_connection_id"),
+        app.api_token_id()
+    );
+    let persisted_expiry = row.get::<_, chrono::DateTime<Utc>>("expires_at");
+    let response_expiry =
+        chrono::DateTime::parse_from_rfc3339(grant["expires_at"].as_str().expect("grant expiry"))
+            .expect("grant expiry parses")
+            .with_timezone(&Utc);
+    assert!(
+        (persisted_expiry - response_expiry)
+            .num_milliseconds()
+            .abs()
+            < 1_000
+    );
+    assert!((1..=300).contains(&(response_expiry - Utc::now()).num_seconds()));
+    assert!(row
+        .get::<_, Option<chrono::DateTime<Utc>>>("redeemed_at")
+        .is_none());
+
+    let path = url_path_and_query(&url);
+    let redeemed = {
+        let path = path.clone();
+        app.server().get(&path).await
+    };
+    redeemed.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(redeemed.header("location"), "/policy-document-uploads");
+    let cookie = redeemed
+        .header("set-cookie")
+        .to_str()
+        .expect("policy session cookie")
+        .to_owned();
+    assert!(cookie.starts_with("proofplane_policy_document_upload_session=v4.local."));
+    assert!(cookie.contains("; HttpOnly"));
+    assert!(cookie.contains("; SameSite=Lax"));
+    assert!(cookie.contains("; Path=/policy-document-uploads"));
+    assert!(cookie.contains("; Secure"));
+    assert!((1..=300).contains(&cookie_max_age(&cookie)));
+    app.server()
+        .get("/policy-document-uploads")
+        .add_header("cookie", cookie.clone())
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    app.server()
+        .get("/evidence-document-uploads")
+        .add_header("cookie", cookie.clone())
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    let second = app.server().get(&path).await;
+    second.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(second.maybe_header("set-cookie"), None);
+
+    client
+        .call_tool("archive_policy", json!({ "policy_id": policy_id }))
+        .await;
+    app.server()
+        .get("/policy-document-uploads")
+        .add_header("cookie", cookie)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let archive_before_redeem = client
+        .call_tool(
+            "create_policy",
+            json!({ "name": "Archive before redemption" }),
+        )
+        .await;
+    let archive_before_redeem_id = uuid_from(&archive_before_redeem["id"]);
+    let archive_before_redeem_grant = client
+        .call_tool(
+            "manage_policy_document",
+            json!({ "policy_id": archive_before_redeem_id }),
+        )
+        .await;
+    client
+        .call_tool(
+            "archive_policy",
+            json!({ "policy_id": archive_before_redeem_id }),
+        )
+        .await;
+    let archived_url = Url::parse(
+        archive_before_redeem_grant["url"]
+            .as_str()
+            .expect("archived grant URL"),
+    )
+    .expect("archived grant URL parses");
+    app.server()
+        .get(&url_path_and_query(&archived_url))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let expires_before_redeem = client
+        .call_tool(
+            "create_policy",
+            json!({ "name": "Expire before redemption" }),
+        )
+        .await;
+    let expires_before_redeem_id = uuid_from(&expires_before_redeem["id"]);
+    let expires_before_redeem_grant = client
+        .call_tool(
+            "manage_policy_document",
+            json!({ "policy_id": expires_before_redeem_id }),
+        )
+        .await;
+    app.postgres()
+        .get()
+        .await
+        .expect("policy grant expiry database opens")
+        .execute(
+            "UPDATE policy_document_upload_grants SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes' WHERE policy_id = $1",
+            &[&expires_before_redeem_id],
+        )
+        .await
+        .expect("policy grant expires");
+    let expired_url = Url::parse(
+        expires_before_redeem_grant["url"]
+            .as_str()
+            .expect("expired grant URL"),
+    )
+    .expect("expired grant URL parses");
+    app.server()
+        .get(&url_path_and_query(&expired_url))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    app.server()
+        .get("/policy-document-uploads?token=not-a-token")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let invalid = client
+        .call_tool_error(
+            "manage_policy_document",
+            json!({ "policy_id": "not-a-uuid" }),
+        )
+        .await;
+    assert_eq!(invalid.data["problem"]["code"], "validation_failed");
+    assert_eq!(field_issue_names(&invalid.data), ["policy_id"]);
+    let missing = client
+        .call_tool_error(
+            "manage_policy_document",
+            json!({ "policy_id": Uuid::new_v4() }),
+        )
+        .await;
+    assert_eq!(missing.data["problem"]["code"], "not_found");
+
+    let hidden_policy_id =
+        insert_policy_row(&app, app.workspace_id("other"), "Hidden grant policy").await;
+    let hidden = client
+        .call_tool_error(
+            "manage_policy_document",
+            json!({ "policy_id": hidden_policy_id }),
+        )
+        .await;
+    assert_eq!(hidden.data["problem"]["code"], "not_found");
+
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let denied = McpClient::connect(&server, &read_only.raw_token)
+        .await
+        .call_tool_error(
+            "manage_policy_document",
+            json!({ "policy_id": expires_before_redeem_id }),
+        )
+        .await;
+    assert_eq!(denied.data["problem"]["code"], "not_found");
+}
+
+#[tokio::test]
 async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP controls workspace")
@@ -2792,6 +3052,40 @@ WHERE p.id = $2
         .await
         .expect("policy document fixture inserts");
     document_id
+}
+
+async fn insert_policy_row(app: &TestApp, workspace_id: Uuid, name: &str) -> Uuid {
+    let policy_id = Uuid::new_v4();
+    app.postgres()
+        .get()
+        .await
+        .expect("policy fixture connection opens")
+        .execute(
+            "INSERT INTO policies (id, workspace_id, name) VALUES ($1, $2, $3)",
+            &[&policy_id, &workspace_id, &name],
+        )
+        .await
+        .expect("policy fixture inserts");
+    policy_id
+}
+
+fn url_path_and_query(url: &Url) -> String {
+    let mut path = url.path().to_owned();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    path
+}
+
+fn cookie_max_age(cookie: &str) -> i64 {
+    cookie
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("Max-Age="))
+        .expect("cookie contains Max-Age")
+        .parse()
+        .expect("Max-Age is an integer")
 }
 
 async fn set_policy_document_status(app: &TestApp, document_id: Uuid, status: &str) {

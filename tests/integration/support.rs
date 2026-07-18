@@ -25,8 +25,8 @@ use proofplane::{
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims, VerifiedMcpClaims, VerifyError},
         paseto::{
-            DownloadGrantDecryptor, DownloadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
+            PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
         },
         UserAuthenticator,
     },
@@ -657,6 +657,18 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes");
+        let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("policy upload grant encryptor initializes");
+        let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("policy upload grant decryptor initializes");
         let recorder = PrometheusBuilder::new().build_recorder();
         create_mcp_app(McpAppDependencies {
             postgres: self.postgres.clone(),
@@ -670,6 +682,8 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'quarterly', now(),
             download_grant_decryptor,
             upload_grant_encryptor,
             upload_grant_decryptor,
+            policy_upload_grant_encryptor,
+            policy_upload_grant_decryptor,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),

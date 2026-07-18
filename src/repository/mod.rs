@@ -18,6 +18,7 @@ mod evidence_submissions;
 mod oauth;
 mod outbox;
 mod policies;
+mod policy_document_upload_grants;
 mod users;
 mod workspace_memberships;
 mod workspaces;
@@ -33,6 +34,7 @@ pub use evidence_submissions::{
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
+pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use workspace_memberships::NewWorkspaceMembership;
 
 pub struct Postgres {

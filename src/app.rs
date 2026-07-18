@@ -5,8 +5,9 @@ use crate::{
         auth0::{TokenVerifier, VerifiedClaims},
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-            UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionDecryptor,
-            UploadSessionEncryptor,
+            PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
+            PolicyUploadSessionEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
+            UploadSessionDecryptor, UploadSessionEncryptor,
         },
         UserAuthenticator,
     },
@@ -24,6 +25,7 @@ use crate::{
         me::{self, MeState, UserRouteAuthState},
         metrics::{self, MetricsState},
         oauth::{self, OAuthState},
+        policy_document_upload_sessions::{self, PolicyDocumentUploadSessionState},
         request_context::attach_request_id,
         version,
         workspaces::{self, WorkspacesState},
@@ -39,6 +41,11 @@ use crate::{
         document_upload_grants::DocumentUploadGrantService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
+        policies::PolicyService,
+        policy_document_upload_grants::{
+            PolicyDocumentUploadGrantService, POLICY_UPLOAD_GRANT_AUDIENCE,
+        },
+        policy_upload_sessions::{PolicyUploadSessionTokenService, POLICY_UPLOAD_SESSION_AUDIENCE},
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
         user::UserService,
         workspaces::WorkspaceService,
@@ -122,6 +129,40 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
+    let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        POLICY_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        POLICY_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let policy_upload_session_encryptor = PolicyUploadSessionEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        POLICY_UPLOAD_SESSION_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let policy_upload_session_decryptor = PolicyUploadSessionDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        POLICY_UPLOAD_SESSION_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let policy_document_upload_grant_service = PolicyDocumentUploadGrantService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.server.public_api_base_url.clone(),
+        policy_upload_grant_encryptor,
+        policy_upload_grant_decryptor,
+    );
+    let policy_upload_session_service = PolicyUploadSessionTokenService::new(
+        policy_upload_session_encryptor,
+        policy_upload_session_decryptor,
+    );
     let control_service = ControlService::new(dependencies.postgres.clone());
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
@@ -186,6 +227,14 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 controls: control_service,
                 secure_cookie: secure_upload_cookie,
                 max_document_bytes: dependencies.config.uploads.max_document_bytes,
+            },
+        ))
+        .merge(policy_document_upload_sessions::router(
+            PolicyDocumentUploadSessionState {
+                grants: policy_document_upload_grant_service,
+                sessions: policy_upload_session_service,
+                policies: PolicyService::new(dependencies.postgres.clone()),
+                secure_cookie: secure_upload_cookie,
             },
         ))
         .merge(auditor_access::router(AuditorAccessState {
