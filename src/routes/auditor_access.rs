@@ -82,6 +82,15 @@ pub fn router(state: AuditorAccessState) -> Router {
     Router::new()
         .route("/auditor-access/portal", get(portal_page))
         .route("/auditor-access/portal/data", get(portal_data))
+        .route("/auditor-access/portal/policies", get(policies_page))
+        .route(
+            "/auditor-access/portal/policies/{policy_id}",
+            get(policy_page),
+        )
+        .route(
+            "/auditor-access/portal/controls/{control_id}",
+            get(standalone_control_page),
+        )
         .route(
             "/auditor-access/portal/framework-requirements/{requirement_id}",
             get(requirement_page),
@@ -388,6 +397,119 @@ async fn portal_page(
     );
 
     Ok(Html(render_portal_page(&model)).into_response())
+}
+
+async fn policies_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+    audit_policy_catalog_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    Ok(Html(render_policies_page(&model)).into_response())
+}
+
+async fn policy_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(policy_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Ok(policy_id) = Uuid::parse_str(&policy_id) else {
+        return Ok(unavailable_response());
+    };
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+    audit_policy_catalog_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    match render_policy_page(&model, policy_id) {
+        Some(page) => Ok(Html(page).into_response()),
+        None => Ok(unavailable_response()),
+    }
+}
+
+async fn standalone_control_page(
+    State(state): State<AuditorAccessState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(control_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let Ok(control_id) = Uuid::parse_str(&control_id) else {
+        return Ok(unavailable_response());
+    };
+    let Some(raw_session) = auditor_session_cookie(&headers) else {
+        return Ok(unavailable_response());
+    };
+    let session = match state.sessions.load_session(raw_session).await {
+        Ok(session) => session,
+        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
+        Err(error) => return Err(session_error(error)),
+    };
+    let model = state
+        .portal
+        .read_model(&session)
+        .await
+        .map_err(portal_error)?;
+
+    audit_portal_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
+
+    match render_standalone_control_page(&model, control_id) {
+        Some(page) => Ok(Html(page).into_response()),
+        None => Ok(unavailable_response()),
+    }
 }
 
 async fn requirement_page(
@@ -780,13 +902,183 @@ fn render_portal_page(model: &AuditorPortalReadModel) -> String {
 {}
 {}
 </main>"#,
-            render_portal_bar(model),
+            render_portal_bar(model, PortalDestination::FrameworkRequirements),
             total,
             model.controls.len(),
             framework_links,
             rows,
         ),
     )
+}
+
+fn render_policies_page(model: &AuditorPortalReadModel) -> String {
+    let rows = if model.policies.is_empty() {
+        r#"<div class="empty-state"><h2>No policies available</h2><p>This workspace does not have any active policies to review.</p></div>"#.to_owned()
+    } else {
+        model
+            .policies
+            .iter()
+            .map(render_policy_row)
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    render_shell(
+        "Policies",
+        &format!(
+            r#"{}<main class="portal" id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><span aria-current="page">Policies</span></nav>
+<header class="page-header">
+<div><p class="eyebrow">Auditor portal</p><h1>Policies</h1><p class="lede">Review policies, their control mappings, and current document availability.</p></div>
+<dl class="page-stats"><div><dt>Policies</dt><dd>{}</dd></div><div><dt>Mapped controls</dt><dd>{}</dd></div></dl>
+</header>
+{}
+</main>"#,
+            render_portal_bar(model, PortalDestination::Policies),
+            model.policies.len(),
+            model
+                .policies
+                .iter()
+                .map(|policy| policy.controls.len())
+                .sum::<usize>(),
+            if model.policies.is_empty() {
+                rows
+            } else {
+                format!(
+                    r#"<table class="ledger policy-ledger"><thead><tr><th>Policy</th><th class="numeric">Mapped controls</th><th>Document</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
+                    rows
+                )
+            },
+        ),
+    )
+}
+
+fn render_policy_row(policy: &AuditorPortalPolicy) -> String {
+    let description = policy.description.as_deref().unwrap_or("No description");
+    format!(
+        r#"<tr class="linked-row"><td data-label="Policy"><a class="row-link policy-row-link" href="/auditor-access/portal/policies/{}"><strong>{}</strong><small class="clamped-description">{}</small></a></td><td class="numeric" data-label="Mapped controls">{}</td><td data-label="Document"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        Uuid::from(policy.id),
+        escape_html(&policy.name),
+        escape_html(description),
+        policy.controls.len(),
+        policy_document_tone(
+            policy
+                .document
+                .as_ref()
+                .map(|document| document.upload_status)
+        ),
+        policy_document_status(
+            policy
+                .document
+                .as_ref()
+                .map(|document| document.upload_status)
+        ),
+    )
+}
+
+fn render_policy_page(model: &AuditorPortalReadModel, policy_id: Uuid) -> Option<String> {
+    let policy = model
+        .policies
+        .iter()
+        .find(|policy| Uuid::from(policy.id) == policy_id)?;
+    let description = policy
+        .description
+        .as_deref()
+        .map(escape_html)
+        .unwrap_or_else(|| "No description".to_owned());
+    let controls = if policy.controls.is_empty() {
+        r#"<div class="empty-state"><h2>No controls attached</h2><p>This policy is not attached to any controls.</p></div>"#.to_owned()
+    } else {
+        format!(
+            r#"<table class="ledger control-ledger"><thead><tr><th>Control</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
+            policy
+                .controls
+                .iter()
+                .map(|control| render_policy_control_row(model, control))
+                .collect::<Vec<_>>()
+                .join("")
+        )
+    };
+
+    Some(render_shell(
+        &policy.name,
+        &format!(
+            r#"{}<main class="portal" id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal/policies">Policies</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
+<header class="control-detail-header"><div><p class="eyebrow">Policy</p><h1>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Mapped controls</dt><dd>{}</dd></div><div><dt>Document</dt><dd class="status-stat">{}</dd></div></dl></header>
+<div class="policy-detail-layout">
+<section class="policy-document-panel" aria-labelledby="policy-document-title"><div class="section-heading"><p class="eyebrow">Current document</p><h2 id="policy-document-title">Document</h2></div>{}</section>
+<section class="detail-ledger" aria-labelledby="policy-controls-title"><div class="section-heading"><p class="eyebrow">Control mappings</p><h2 id="policy-controls-title">Mapped controls ({})</h2></div>{}</section>
+</div>
+</main>"#,
+            render_portal_bar(model, PortalDestination::Policies),
+            escape_html(&policy.name),
+            escape_html(&policy.name),
+            description,
+            policy.controls.len(),
+            policy_document_status(
+                policy
+                    .document
+                    .as_ref()
+                    .map(|document| document.upload_status)
+            ),
+            render_policy_document(policy),
+            policy.controls.len(),
+            controls,
+        ),
+    ))
+}
+
+fn render_policy_control_row(model: &AuditorPortalReadModel, control: &ControlSummary) -> String {
+    format!(
+        r#"<tr class="linked-row"><td data-label="Control"><a class="row-link" href="{}"><strong>{}</strong><span>{}</span></a></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        control_detail_path(model, Uuid::from(control.id)),
+        escape_html(&control.code),
+        escape_html(&control.title),
+    )
+}
+
+fn render_policy_document(policy: &AuditorPortalPolicy) -> String {
+    let Some(document) = &policy.document else {
+        return r#"<div class="empty-state compact-state"><h3>No document</h3><p>No policy document is available.</p></div>"#.to_owned();
+    };
+    let action = if document.download_eligible {
+        format!(
+            r#"<a class="button" href="/auditor-access/portal/policies/{}/documents/{}/download" aria-label="Download policy document {}">Download document</a>"#,
+            Uuid::from(policy.id),
+            Uuid::from(document.id),
+            escape_html(&document.filename),
+        )
+    } else {
+        format!(
+            r#"<p class="document-unavailable">{}</p>"#,
+            policy_document_unavailable_message(document.upload_status)
+        )
+    };
+
+    format!(
+        r#"<dl class="policy-document-details"><div><dt>Filename</dt><dd>{}</dd></div><div><dt>Size</dt><dd>{}</dd></div><div><dt>Status</dt><dd><span class="coverage {}">{}</span></dd></div></dl>{}"#,
+        escape_html(&document.filename),
+        format_bytes(document.content_length),
+        policy_document_tone(Some(document.upload_status)),
+        policy_document_status(Some(document.upload_status)),
+        action,
+    )
+}
+
+fn control_detail_path(model: &AuditorPortalReadModel, control_id: Uuid) -> String {
+    let requirement_id = model
+        .controls
+        .iter()
+        .find(|control| Uuid::from(control.id) == control_id)
+        .and_then(|control| control.framework_requirements.first())
+        .map(|requirement| Uuid::from(requirement.id));
+    match requirement_id {
+        Some(requirement_id) => format!(
+            "/auditor-access/portal/framework-requirements/{requirement_id}/controls/{control_id}"
+        ),
+        None => format!("/auditor-access/portal/controls/{control_id}"),
+    }
 }
 
 fn render_requirement_row(
@@ -853,7 +1145,7 @@ fn render_requirement_page(model: &AuditorPortalReadModel, requirement_id: Uuid)
 <aside class="context-panel" aria-labelledby="context-title"><h2 id="context-title">Requirement context</h2><dl><div><dt>Framework</dt><dd>{}</dd></div><div><dt>Framework code</dt><dd>{}</dd></div><div><dt>Requirement</dt><dd>{}</dd></div></dl></aside>
 <section class="detail-ledger" aria-labelledby="controls-title"><div class="section-heading"><p class="eyebrow">Mapped controls</p><h2 id="controls-title">Controls ({})</h2></div>{}</section>
 </div></main>"#,
-            render_portal_bar(model),
+            render_portal_bar(model, PortalDestination::FrameworkRequirements),
             escape_html(&requirement.framework_name),
             escape_html(&requirement.code),
             escape_html(&requirement.code),
@@ -916,6 +1208,29 @@ fn render_control_page(
     let control = controls_for_requirement(model, requirement_id)
         .into_iter()
         .find(|control| Uuid::from(control.id) == control_id)?;
+    Some(render_control_detail_page(
+        model,
+        Some(requirement),
+        control,
+    ))
+}
+
+fn render_standalone_control_page(
+    model: &AuditorPortalReadModel,
+    control_id: Uuid,
+) -> Option<String> {
+    let control = model
+        .controls
+        .iter()
+        .find(|control| Uuid::from(control.id) == control_id)?;
+    Some(render_control_detail_page(model, None, control))
+}
+
+fn render_control_detail_page(
+    model: &AuditorPortalReadModel,
+    requirement: Option<&FrameworkRequirement>,
+    control: &AuditorPortalControl,
+) -> String {
     let submission_count = control
         .evidence_requests
         .iter()
@@ -933,27 +1248,71 @@ fn render_control_page(
             .collect::<Vec<_>>()
             .join("")
     };
+    let policies = render_attached_policies(control);
+    let breadcrumbs = requirement.map_or_else(
+        || {
+            format!(
+                r#"<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>"#,
+                escape_html(&control.code)
+            )
+        },
+        |requirement| {
+            format!(
+                r#"<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><a href="/auditor-access/portal/framework-requirements/{}">{}</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>"#,
+                Uuid::from(requirement.id),
+                escape_html(&requirement.code),
+                escape_html(&control.code),
+            )
+        },
+    );
 
-    Some(render_shell(
+    render_shell(
         &format!("{} {}", control.code, control.title),
         &format!(
             r#"{}<main class="portal" id="main-content">
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><a href="/auditor-access/portal/framework-requirements/{}">{}</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
+{}
 <header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence requests</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
+<section class="attached-policies" aria-labelledby="attached-policies-title"><div class="section-heading"><p class="eyebrow">Policy mappings</p><h2 id="attached-policies-title">Attached policies ({})</h2></div>{}</section>
 <section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence by request</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
 </main>"#,
-            render_portal_bar(model),
-            requirement_id,
-            escape_html(&requirement.code),
-            escape_html(&control.code),
+            render_portal_bar(model, PortalDestination::FrameworkRequirements),
+            breadcrumbs,
             escape_html(&control.code),
             escape_html(&control.title),
             escape_html(&control.description),
             control.evidence_requests.len(),
             submission_count,
+            control.policies.len(),
+            policies,
             requests,
         ),
-    ))
+    )
+}
+
+fn render_attached_policies(control: &AuditorPortalControl) -> String {
+    if control.policies.is_empty() {
+        return r#"<div class="empty-state"><h3>No policies attached</h3><p>No active policies are attached to this control.</p></div>"#.to_owned();
+    }
+
+    format!(
+        r#"<table class="ledger policy-ledger"><thead><tr><th>Policy</th><th>Document</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
+        control
+            .policies
+            .iter()
+            .map(|policy| {
+                let description = policy.description.as_deref().unwrap_or("No description");
+                format!(
+                    r#"<tr class="linked-row"><td data-label="Policy"><a class="row-link policy-row-link" href="/auditor-access/portal/policies/{}"><strong>{}</strong><small class="clamped-description">{}</small></a></td><td data-label="Document"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+                    Uuid::from(policy.id),
+                    escape_html(&policy.name),
+                    escape_html(description),
+                    policy_document_tone(policy.document.map(|document| document.upload_status)),
+                    policy_document_status(policy.document.map(|document| document.upload_status)),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    )
 }
 
 fn render_evidence_request(request: &AuditorPortalEvidenceRequest, open: bool) -> String {
@@ -1015,12 +1374,70 @@ fn coverage_state(
     }
 }
 
-fn render_portal_bar(model: &AuditorPortalReadModel) -> String {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PortalDestination {
+    FrameworkRequirements,
+    Policies,
+}
+
+fn render_portal_bar(model: &AuditorPortalReadModel, destination: PortalDestination) -> String {
+    let framework_current = if destination == PortalDestination::FrameworkRequirements {
+        r#" class="current" aria-current="page""#
+    } else {
+        ""
+    };
+    let policies_current = if destination == PortalDestination::Policies {
+        r#" class="current" aria-current="page""#
+    } else {
+        ""
+    };
     format!(
-        r##"<a class="skip-link" href="#main-content">Skip to main content</a><header class="portal-bar"><a class="portal-brand" href="/auditor-access/portal" aria-label="Proofplane auditor portal"><span aria-hidden="true">◇</span>Proofplane</a><div class="portal-identity"><span>{}</span><span class="readonly">Read-only</span><span class="auditor-email">{}</span><form method="post" action="/auditor-access/logout"><button class="sign-out" type="submit">Sign out</button></form></div></header>"##,
+        r##"<a class="skip-link" href="#main-content">Skip to main content</a><header class="portal-bar"><a class="portal-brand" href="/auditor-access/portal" aria-label="Proofplane auditor portal"><span aria-hidden="true">◇</span>Proofplane</a><div class="portal-identity"><span>{}</span><span class="readonly">Read-only</span><span class="auditor-email">{}</span><form method="post" action="/auditor-access/logout"><button class="sign-out" type="submit">Sign out</button></form></div></header><nav class="portal-nav" aria-label="Auditor portal"><div><a href="/auditor-access/portal"{}>Framework requirements</a><a href="/auditor-access/portal/policies"{}>Policies</a></div></nav>"##,
         escape_html(&model.workspace_name),
         escape_html(&model.auditor_email),
+        framework_current,
+        policies_current,
     )
+}
+
+fn policy_document_status(status: Option<crate::domain::DocumentUploadStatus>) -> &'static str {
+    use crate::domain::DocumentUploadStatus;
+
+    match status {
+        None => "No document",
+        Some(DocumentUploadStatus::PendingUpload) => "Uploading",
+        Some(DocumentUploadStatus::Finalizing) => "Scanning",
+        Some(DocumentUploadStatus::Uploaded) => "Uploaded",
+        Some(DocumentUploadStatus::ContainsVirus | DocumentUploadStatus::FailedUpload) => {
+            "Upload failed"
+        }
+    }
+}
+
+fn policy_document_tone(status: Option<crate::domain::DocumentUploadStatus>) -> &'static str {
+    match status {
+        Some(crate::domain::DocumentUploadStatus::Uploaded) => "available",
+        _ => "gap",
+    }
+}
+
+fn policy_document_unavailable_message(
+    status: crate::domain::DocumentUploadStatus,
+) -> &'static str {
+    use crate::domain::DocumentUploadStatus;
+
+    match status {
+        DocumentUploadStatus::PendingUpload => {
+            "This document is uploading and is not available for download."
+        }
+        DocumentUploadStatus::Finalizing => {
+            "This document is being scanned and is not available for download."
+        }
+        DocumentUploadStatus::ContainsVirus | DocumentUploadStatus::FailedUpload => {
+            "This document is unavailable for download."
+        }
+        DocumentUploadStatus::Uploaded => "This document is available for download.",
+    }
 }
 
 fn render_submission(submission: &AuditorPortalSubmission) -> String {
@@ -1240,6 +1657,12 @@ body {{ line-height: 1.6; letter-spacing: 0.01em; }}
 .portal-identity form {{ margin: 0; }}
 .sign-out {{ min-height: 44px; background: transparent; color: var(--accent); padding: 8px 4px; }}
 .sign-out:hover {{ background: transparent; color: var(--ink); }}
+.portal-nav {{ border-bottom: 1px solid var(--line); background: oklch(15% 0.012 170); }}
+.portal-nav > div {{ display: flex; width: min(1280px, calc(100% - 48px)); margin: 0 auto; gap: 4px; }}
+.portal-nav a {{ display: inline-flex; min-height: 44px; align-items: center; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--muted); font-size: 0.8125rem; font-weight: 620; text-decoration: none; }}
+.portal-nav a:hover {{ color: var(--ink); background: var(--surface); }}
+.portal-nav a.current {{ border-bottom-color: var(--accent); color: var(--accent); }}
+.portal-nav a:focus-visible, .breadcrumbs a:focus-visible, .row-link:focus-visible {{ outline: 2px solid var(--signal); outline-offset: -2px; }}
 main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .breadcrumbs {{ display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 32px; margin-bottom: 32px; color: var(--muted); font-size: 0.8125rem; }}
 .breadcrumbs a {{ color: var(--accent); text-decoration: none; }}
@@ -1286,7 +1709,21 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .context-panel dd {{ color: var(--ink); }}
 .detail-ledger .ledger {{ margin-top: 20px; }}
 .control-ledger .row-link {{ grid-template-columns: 72px 1fr; }}
+.policy-ledger .policy-row-link {{ grid-template-columns: 1fr; gap: 4px; }}
+.policy-ledger .policy-row-link strong {{ color: var(--ink); font-size: 0.9375rem; }}
+.policy-ledger .policy-row-link small {{ grid-column: 1; max-width: 72ch; }}
+.clamped-description {{ display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }}
 .evidence-dossier {{ max-width: 1180px; }}
+.attached-policies {{ max-width: 1180px; margin-bottom: 48px; }}
+.policy-detail-layout {{ display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 48px; }}
+.policy-document-panel {{ padding-right: 36px; border-inline-end: 1px solid var(--line); }}
+.policy-document-details {{ display: grid; gap: 18px; margin: 24px 0; }}
+.policy-document-details dd {{ overflow-wrap: anywhere; color: var(--ink); }}
+.policy-document-panel .button {{ min-height: 44px; }}
+.document-unavailable {{ max-width: 36ch; margin: 24px 0 0; }}
+.compact-state {{ padding: 24px 0; }}
+.compact-state p {{ margin-bottom: 0; }}
+.status-stat {{ max-width: 160px; font-size: 1rem !important; }}
 .request-disclosure {{ border-top: 1px solid var(--line); }}
 .request-disclosure:last-child {{ border-bottom: 1px solid var(--line); }}
 .request-disclosure summary {{ display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 24px; align-items: center; min-height: 68px; padding: 14px 16px; cursor: pointer; list-style: none; }}
@@ -1322,6 +1759,8 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
   .requirement-layout {{ grid-template-columns: 1fr; gap: 28px; }}
   .context-panel {{ padding: 0 0 24px; border-inline-end: 0; border-bottom: 1px solid var(--line); }}
   .context-panel dl {{ grid-template-columns: repeat(3, 1fr); }}
+  .policy-detail-layout {{ grid-template-columns: 1fr; gap: 32px; }}
+  .policy-document-panel {{ padding: 0 0 28px; border-inline-end: 0; border-bottom: 1px solid var(--line); }}
 }}
 
 @media (max-width: 900px) {{
@@ -1331,6 +1770,8 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 
 @media (max-width: 720px) {{
   .portal-bar {{ min-height: 56px; padding: 0 12px; }}
+  .portal-nav > div {{ width: calc(100% - 24px); overflow-x: auto; }}
+  .portal-nav a {{ flex: 0 0 auto; }}
   .portal-identity {{ gap: 10px; }}
   .portal-identity > span:first-child {{ display: none; }}
   .portal-brand {{ font-size: 1rem; }}
