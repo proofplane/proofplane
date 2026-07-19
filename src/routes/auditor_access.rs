@@ -18,9 +18,11 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
-        AuditorPortalReadModel, AuditorPortalSubmission, EvidenceRequest, EvidenceSubmission,
-        FrameworkRequirement,
+        AuditorPortalPolicy, AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus,
+        AuditorPortalPolicySummary, AuditorPortalReadModel, AuditorPortalSubmission,
+        ControlSummary, Document, EvidenceRequest, EvidenceSubmission, FrameworkRequirement,
     },
+    object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{error::ApiError, request_context::RequestId},
     services::{
@@ -477,6 +479,12 @@ async fn portal_data(
         Uuid::from(session.id),
         &session.auditor_email,
     );
+    audit_policy_catalog_read(
+        request_id.0,
+        Uuid::from(session.workspace_id),
+        Uuid::from(session.id),
+        &session.auditor_email,
+    );
 
     Ok(Json(model.into()))
 }
@@ -487,61 +495,106 @@ async fn download_document(
     Path(download_path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let (submission_id, document_id) = parse_download_path(&download_path)?;
+    let identity = parse_download_path(&download_path)?;
     let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
     let session = state
         .sessions
         .load_session(raw_session)
         .await
         .map_err(session_error)?;
-    let downloaded = state
-        .downloads
-        .download_for_workspace(
-            session.workspace_id,
-            submission_id.into(),
-            document_id.into(),
-        )
-        .await
-        .map_err(download_error)?;
+    let (document, object) = match identity {
+        AuditorDownloadIdentity::Evidence {
+            submission_id,
+            document_id,
+        } => {
+            let downloaded = state
+                .downloads
+                .download_for_workspace(
+                    session.workspace_id,
+                    submission_id.into(),
+                    document_id.into(),
+                )
+                .await
+                .map_err(download_error)?;
 
-    AuditEvent::new(
-        "auditor_document.downloaded",
-        AuditOutcome::Success,
-        AuditActor::System {
-            name: "auditor_browser",
-        },
-        AuditClientType::Rest,
-        "download_auditor_document",
-    )
-    .workspace_id(Uuid::from(downloaded.audit.workspace_id))
-    .request_id(request_id.0)
-    .metadata("auditor_email", &session.auditor_email)
-    .metadata(
-        "evidence_submission_id",
-        Uuid::from(downloaded.audit.submission_id),
-    )
-    .metadata(
-        "evidence_document_id",
-        Uuid::from(downloaded.audit.document_id),
-    )
-    .object(AuditObject::new(
-        "evidence_document",
-        downloaded.audit.document_id.into(),
-    ))
-    .emit();
+            AuditEvent::new(
+                "auditor_document.downloaded",
+                AuditOutcome::Success,
+                AuditActor::System {
+                    name: "auditor_browser",
+                },
+                AuditClientType::Rest,
+                "download_auditor_document",
+            )
+            .workspace_id(Uuid::from(downloaded.audit.workspace_id))
+            .request_id(request_id.0)
+            .metadata("auditor_email", &session.auditor_email)
+            .metadata(
+                "evidence_submission_id",
+                Uuid::from(downloaded.audit.submission_id),
+            )
+            .metadata(
+                "evidence_document_id",
+                Uuid::from(downloaded.audit.document_id),
+            )
+            .object(AuditObject::new(
+                "evidence_document",
+                downloaded.audit.document_id.into(),
+            ))
+            .emit();
 
-    let disposition =
-        crate::routes::document_downloads::content_disposition(&downloaded.document.filename);
-    let mut response = Body::from_stream(downloaded.object.chunks).into_response();
+            (downloaded.document, downloaded.object)
+        }
+        AuditorDownloadIdentity::Policy {
+            policy_id,
+            document_id,
+        } => {
+            let downloaded = state
+                .downloads
+                .download_policy_for_workspace(
+                    session.workspace_id,
+                    policy_id.into(),
+                    document_id.into(),
+                )
+                .await
+                .map_err(download_error)?;
+
+            AuditEvent::new(
+                "auditor_policy_document.downloaded",
+                AuditOutcome::Success,
+                AuditActor::System {
+                    name: "auditor_browser",
+                },
+                AuditClientType::Rest,
+                "download_auditor_policy_document",
+            )
+            .workspace_id(Uuid::from(session.workspace_id))
+            .request_id(request_id.0)
+            .metadata("auditor_email", &session.auditor_email)
+            .metadata("policy_id", policy_id)
+            .metadata("policy_document_id", document_id)
+            .object(AuditObject::new("policy_document", document_id))
+            .emit();
+
+            (downloaded.document, downloaded.object)
+        }
+    };
+
+    stream_download(document, object)
+}
+
+fn stream_download(document: Document, object: ObjectStream) -> Result<Response, ApiError> {
+    let disposition = crate::routes::document_downloads::content_disposition(&document.filename);
+    let mut response = Body::from_stream(object.chunks).into_response();
     *response.status_mut() = StatusCode::OK;
     let headers = response.headers_mut();
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_str(&downloaded.document.content_type).map_err(|_| ApiError::Internal)?,
+        HeaderValue::from_str(&document.content_type).map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
         CONTENT_LENGTH,
-        HeaderValue::from_str(&downloaded.document.content_length.to_string())
+        HeaderValue::from_str(&document.content_length.to_string())
             .map_err(|_| ApiError::Internal)?,
     );
     headers.insert(
@@ -554,13 +607,36 @@ async fn download_document(
     Ok(response)
 }
 
-fn parse_download_path(path: &str) -> Result<(Uuid, Uuid), ApiError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditorDownloadIdentity {
+    Evidence {
+        submission_id: Uuid,
+        document_id: Uuid,
+    },
+    Policy {
+        policy_id: Uuid,
+        document_id: Uuid,
+    },
+}
+
+fn parse_download_path(path: &str) -> Result<AuditorDownloadIdentity, ApiError> {
     let segments = path.split('/').collect::<Vec<_>>();
     match segments.as_slice() {
         ["evidence-submissions", submission_id, "documents", document_id, "download"] => {
             let submission_id = Uuid::parse_str(submission_id).map_err(|_| ApiError::NotFound)?;
             let document_id = Uuid::parse_str(document_id).map_err(|_| ApiError::NotFound)?;
-            Ok((submission_id, document_id))
+            Ok(AuditorDownloadIdentity::Evidence {
+                submission_id,
+                document_id,
+            })
+        }
+        ["policies", policy_id, "documents", document_id, "download"] => {
+            let policy_id = Uuid::parse_str(policy_id).map_err(|_| ApiError::NotFound)?;
+            let document_id = Uuid::parse_str(document_id).map_err(|_| ApiError::NotFound)?;
+            Ok(AuditorDownloadIdentity::Policy {
+                policy_id,
+                document_id,
+            })
         }
         _ => Err(ApiError::NotFound),
     }
@@ -1419,6 +1495,28 @@ fn audit_portal_read(request_id: Uuid, workspace_id: Uuid, session_id: Uuid, aud
     .emit();
 }
 
+fn audit_policy_catalog_read(
+    request_id: Uuid,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    auditor_email: &str,
+) {
+    AuditEvent::new(
+        "auditor_policy_catalog.read",
+        AuditOutcome::Success,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "read_auditor_policy_catalog",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id)
+    .metadata("auditor_email", auditor_email)
+    .object(AuditObject::new("auditor_access_session", session_id))
+    .emit();
+}
+
 fn grant_error(error: AuditorAccessGrantError) -> ApiError {
     match error {
         AuditorAccessGrantError::Unavailable => ApiError::NotFound,
@@ -1471,6 +1569,7 @@ struct AuditorPortalReadModelResponse {
     auditor_email: String,
     framework_requirements: Vec<FrameworkRequirementResponse>,
     controls: Vec<AuditorPortalControlResponse>,
+    policies: Vec<AuditorPortalPolicyResponse>,
 }
 
 impl From<AuditorPortalReadModel> for AuditorPortalReadModelResponse {
@@ -1484,6 +1583,7 @@ impl From<AuditorPortalReadModel> for AuditorPortalReadModelResponse {
                 .map(Into::into)
                 .collect(),
             controls: model.controls.into_iter().map(Into::into).collect(),
+            policies: model.policies.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1496,6 +1596,7 @@ struct AuditorPortalControlResponse {
     description: String,
     framework_requirements: Vec<FrameworkRequirementResponse>,
     evidence_requests: Vec<AuditorPortalEvidenceRequestResponse>,
+    policies: Vec<AuditorPortalPolicySummaryResponse>,
 }
 
 impl From<AuditorPortalControl> for AuditorPortalControlResponse {
@@ -1515,6 +1616,116 @@ impl From<AuditorPortalControl> for AuditorPortalControlResponse {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            policies: control.policies.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AuditorPortalPolicyResponse {
+    id: Uuid,
+    name: String,
+    description: Option<String>,
+    controls: Vec<AuditorPortalPolicyControlResponse>,
+    document: Option<AuditorPortalPolicyDocumentResponse>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<AuditorPortalPolicy> for AuditorPortalPolicyResponse {
+    fn from(policy: AuditorPortalPolicy) -> Self {
+        Self {
+            id: policy.id.into(),
+            name: policy.name,
+            description: policy.description,
+            controls: policy.controls.into_iter().map(Into::into).collect(),
+            document: policy.document.map(Into::into),
+            created_at: policy.created_at,
+            updated_at: policy.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AuditorPortalPolicySummaryResponse {
+    id: Uuid,
+    name: String,
+    description: Option<String>,
+    document: Option<AuditorPortalPolicyDocumentStatusResponse>,
+}
+
+impl From<AuditorPortalPolicySummary> for AuditorPortalPolicySummaryResponse {
+    fn from(policy: AuditorPortalPolicySummary) -> Self {
+        Self {
+            id: policy.id.into(),
+            name: policy.name,
+            description: policy.description,
+            document: policy.document.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AuditorPortalPolicyDocumentStatusResponse {
+    upload_status: &'static str,
+}
+
+impl From<AuditorPortalPolicyDocumentStatus> for AuditorPortalPolicyDocumentStatusResponse {
+    fn from(document: AuditorPortalPolicyDocumentStatus) -> Self {
+        Self {
+            upload_status: document.upload_status.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AuditorPortalPolicyControlResponse {
+    id: Uuid,
+    code: String,
+    title: String,
+    description: String,
+}
+
+impl From<ControlSummary> for AuditorPortalPolicyControlResponse {
+    fn from(control: ControlSummary) -> Self {
+        Self {
+            id: control.id.into(),
+            code: control.code,
+            title: control.title,
+            description: control.description,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AuditorPortalPolicyDocumentResponse {
+    id: Uuid,
+    policy_id: Uuid,
+    created_by_user_id: Uuid,
+    filename: String,
+    content_type: String,
+    content_length: i64,
+    checksum_sha256: String,
+    checksum_crc32c: String,
+    upload_status: &'static str,
+    created_at: DateTime<Utc>,
+    download_eligible: bool,
+}
+
+impl From<AuditorPortalPolicyDocument> for AuditorPortalPolicyDocumentResponse {
+    fn from(document: AuditorPortalPolicyDocument) -> Self {
+        Self {
+            id: document.id.into(),
+            policy_id: document.policy_id.into(),
+            created_by_user_id: document.created_by_user_id.into(),
+            filename: document.filename,
+            content_type: document.content_type,
+            content_length: document.content_length,
+            checksum_sha256: document.checksum_sha256,
+            checksum_crc32c: document.checksum_crc32c,
+            upload_status: document.upload_status.as_str(),
+            created_at: document.created_at,
+            download_eligible: document.download_eligible,
         }
     }
 }

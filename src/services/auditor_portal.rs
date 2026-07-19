@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    domain::{AuditorPortalReadModel, AuditorSession},
+    domain::{
+        AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary, AuditorPortalReadModel,
+        AuditorSession,
+    },
     repository::Postgres,
     services::Error,
 };
@@ -28,12 +31,40 @@ impl AuditorPortalReadModelService {
                     .await?,
             );
         }
-        let controls = self
+        let (mut controls, policies) = self
             .repository
             .in_workspace_context_read(session.workspace_id, async |context| {
-                context.auditor_portal_controls().await
+                let controls = context.auditor_portal_controls().await?;
+                let policies = context.auditor_portal_policies().await?;
+                Ok((controls, policies))
             })
             .await?;
+        let control_indices = controls
+            .iter()
+            .enumerate()
+            .map(|(index, control)| (control.id, index))
+            .collect::<HashMap<_, _>>();
+        for policy in &policies {
+            let summary = AuditorPortalPolicySummary {
+                id: policy.id,
+                name: policy.name.clone(),
+                description: policy.description.clone(),
+                document: policy.document.as_ref().map(|document| {
+                    AuditorPortalPolicyDocumentStatus {
+                        upload_status: document.upload_status,
+                    }
+                }),
+            };
+            for mapped_control in &policy.controls {
+                let Some(control) = control_indices
+                    .get(&mapped_control.id)
+                    .and_then(|index| controls.get_mut(*index))
+                else {
+                    continue;
+                };
+                control.policies.push(summary.clone());
+            }
+        }
         let workspace = self
             .repository
             .get_workspace(session.workspace_id)
@@ -50,6 +81,7 @@ impl AuditorPortalReadModelService {
             auditor_email: session.auditor_email.clone(),
             framework_requirements,
             controls,
+            policies,
         })
     }
 }

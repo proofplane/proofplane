@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
@@ -7,9 +7,10 @@ use uuid::Uuid;
 use crate::{
     domain::{
         AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
-        AuditorPortalSubmission, Control, ControlId, DocumentUploadStatus, EvidenceRequest,
-        EvidenceRequestCadence, EvidenceRequestId, EvidenceRequestStatus, EvidenceSubmission,
-        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
+        AuditorPortalPolicy, AuditorPortalPolicyDocument, AuditorPortalSubmission, Control,
+        ControlId, ControlSummary, DocumentUploadStatus, EvidenceRequest, EvidenceRequestCadence,
+        EvidenceRequestId, EvidenceRequestStatus, EvidenceSubmission, EvidenceSubmissionId,
+        EvidenceSubmitter, PolicyId, WorkspaceId,
     },
     repository::WorkspaceReadContext,
 };
@@ -17,6 +18,49 @@ use crate::{
 use super::Error;
 
 impl WorkspaceReadContext {
+    pub async fn auditor_portal_policies(&self) -> Result<Vec<AuditorPortalPolicy>, Error> {
+        let rows = self
+            .client
+            .query(
+                r#"
+SELECT
+    p.id AS policy_id,
+    p.name AS policy_name,
+    p.description AS policy_description,
+    p.created_at AS policy_created_at,
+    p.updated_at AS policy_updated_at,
+    d.id AS document_id,
+    d.created_by_user_id AS document_created_by_user_id,
+    d.filename AS document_filename,
+    d.content_type AS document_content_type,
+    d.content_length AS document_content_length,
+    d.checksum_sha256 AS document_checksum_sha256,
+    d.checksum_crc32c AS document_checksum_crc32c,
+    d.upload_status AS document_upload_status,
+    d.created_at AS document_created_at,
+    c.id AS control_id,
+    c.code AS control_code,
+    c.title AS control_title,
+    c.description AS control_description
+FROM policies p
+LEFT JOIN documents d ON d.owner_id = p.id
+    AND d.owner_type = 'policy'
+    AND d.workspace_id = p.workspace_id
+    AND d.archived = false
+LEFT JOIN policy_control_mappings m ON m.policy_id = p.id
+LEFT JOIN controls c ON c.id = m.control_id
+    AND c.workspace_id = p.workspace_id
+WHERE p.workspace_id = $1
+  AND p.archived_at IS NULL
+ORDER BY lower(p.name), p.id, lower(c.code), c.id
+"#,
+                &[&Uuid::from(self.workspace_id)],
+            )
+            .await?;
+
+        auditor_portal_policies_from_rows(rows)
+    }
+
     pub async fn auditor_portal_controls(&self) -> Result<Vec<AuditorPortalControl>, Error> {
         let mut controls = self
             .list_controls()
@@ -192,8 +236,71 @@ impl From<Control> for AuditorPortalControl {
             description: control.description,
             framework_requirements: control.framework_requirements,
             evidence_requests: Vec::new(),
+            policies: Vec::new(),
         }
     }
+}
+
+fn auditor_portal_policies_from_rows(rows: Vec<Row>) -> Result<Vec<AuditorPortalPolicy>, Error> {
+    let mut policies = Vec::new();
+    let mut current_policy_id = None;
+
+    for row in rows {
+        let policy_id = PolicyId::from(row.try_get::<_, Uuid>("policy_id")?);
+        if current_policy_id != Some(policy_id) {
+            policies.push(AuditorPortalPolicy {
+                id: policy_id,
+                name: row.try_get("policy_name")?,
+                description: row.try_get("policy_description")?,
+                controls: Vec::new(),
+                document: auditor_portal_policy_document_from_row(&row, policy_id)?,
+                created_at: row.try_get("policy_created_at")?,
+                updated_at: row.try_get("policy_updated_at")?,
+            });
+            current_policy_id = Some(policy_id);
+        }
+
+        let Some(control_id) = row.try_get::<_, Option<Uuid>>("control_id")? else {
+            continue;
+        };
+        if let Some(policy) = policies.last_mut() {
+            policy.controls.push(ControlSummary {
+                id: control_id.into(),
+                code: row.try_get("control_code")?,
+                title: row.try_get("control_title")?,
+                description: row.try_get("control_description")?,
+            });
+        }
+    }
+
+    Ok(policies)
+}
+
+fn auditor_portal_policy_document_from_row(
+    row: &Row,
+    policy_id: PolicyId,
+) -> Result<Option<AuditorPortalPolicyDocument>, Error> {
+    let Some(document_id) = row.try_get::<_, Option<Uuid>>("document_id")? else {
+        return Ok(None);
+    };
+    let upload_status =
+        DocumentUploadStatus::from_str(&row.try_get::<_, String>("document_upload_status")?)?;
+
+    Ok(Some(AuditorPortalPolicyDocument {
+        id: document_id.into(),
+        policy_id,
+        created_by_user_id: row
+            .try_get::<_, Uuid>("document_created_by_user_id")?
+            .into(),
+        filename: row.try_get("document_filename")?,
+        content_type: row.try_get("document_content_type")?,
+        content_length: row.try_get("document_content_length")?,
+        checksum_sha256: row.try_get("document_checksum_sha256")?,
+        checksum_crc32c: row.try_get("document_checksum_crc32c")?,
+        upload_status,
+        created_at: row.try_get("document_created_at")?,
+        download_eligible: upload_status == DocumentUploadStatus::Uploaded,
+    }))
 }
 
 fn auditor_portal_request_mapping_from_row(row: Row) -> Result<AuditorPortalRequestMapping, Error> {
