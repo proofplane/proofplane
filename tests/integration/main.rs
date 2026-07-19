@@ -11,6 +11,7 @@ mod policies;
 mod policy_document_upload_sessions;
 mod policy_documents;
 mod repository;
+mod seed;
 mod support;
 mod worker_handlers;
 mod workspaces;

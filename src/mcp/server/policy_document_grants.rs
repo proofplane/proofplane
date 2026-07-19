@@ -23,7 +23,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "manage_policy_document",
-        description = "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP."
+        description = "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn manage_policy_document(
         &self,

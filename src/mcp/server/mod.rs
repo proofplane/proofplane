@@ -161,11 +161,11 @@ mod tests {
         BTreeMap::from([
             (
                 "archive_policy",
-                "Archive an active policy when its current document is not being processed.",
+                "Archive an active policy when its current document is not being processed; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "attach_policy_to_control",
-                "Attach an active policy to a control without changing the control or its other mappings.",
+                "Attach an active policy to a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "create_auditor_access_link",
@@ -185,11 +185,11 @@ mod tests {
             ),
             (
                 "create_policy",
-                "Create a policy with optional control mappings and return its complete active metadata.",
+                "Create a policy with optional control mappings and return its complete active metadata; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "detach_policy_from_control",
-                "Detach an active policy from a control without changing the control or its other mappings.",
+                "Detach an active policy from a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "get_control",
@@ -209,7 +209,7 @@ mod tests {
             ),
             (
                 "get_policy",
-                "Get one active policy with its mapped controls and safe current document metadata by policy ID.",
+                "Get one active policy with its mapped controls and safe current document metadata by policy ID; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "get_proofplane_guide",
@@ -245,7 +245,7 @@ mod tests {
             ),
             (
                 "list_policies",
-                "List active policies with their mapped-control counts and current document status.",
+                "List active policies with their mapped-control counts and current document status; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "manage_evidence_submission_document",
@@ -253,7 +253,7 @@ mod tests {
             ),
             (
                 "manage_policy_document",
-                "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP.",
+                "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "map_evidence_request_to_control",
@@ -273,7 +273,7 @@ mod tests {
             ),
             (
                 "update_policy",
-                "Update an active policy’s name and optional description without changing mappings or document state.",
+                "Update an active policy’s name and optional description without changing mappings or document state; for guidance, call get_proofplane_guide with topic policies.",
             ),
         ])
     }
@@ -458,7 +458,7 @@ mod tests {
                 | "archive_policy"
                 | "attach_policy_to_control"
                 | "detach_policy_from_control"
-                | "manage_policy_document" => None,
+                | "manage_policy_document" => Some("policies"),
                 "create_auditor_access_link"
                 | "list_auditor_access_links"
                 | "revoke_auditor_access_link"

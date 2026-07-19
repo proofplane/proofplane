@@ -87,14 +87,25 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let pool = store::conn_pool(config.postgres.expose_secret(), 4).await?;
     let postgres = Postgres::new(pool);
 
+    seed_local_data(&postgres, &config.object_storage).await
+}
+
+/// Seeds the deterministic local/demo records into an initialized repository.
+///
+/// This entry point accepts dependencies directly so the complete seed can be
+/// exercised repeatedly by integration tests without process-global config.
+pub async fn seed_local_data(
+    postgres: &Postgres,
+    object_storage: &ObjectStorageConfig,
+) -> Result<SeedSummary, Error> {
     debug!("seeding local data");
-    seed_workspace(&postgres).await?;
-    let owner_id = seed_local_owner(&postgres).await?;
-    let connection = seed_agent_connection(&postgres, owner_id).await?;
-    seed_evidence_requests(&postgres, connection).await?;
-    seed_frameworks_and_controls(&postgres).await?;
-    let demo_document =
-        seed_demo_evidence_submission(&postgres, &config.object_storage, owner_id).await?;
+    seed_workspace(postgres).await?;
+    let owner_id = seed_local_owner(postgres).await?;
+    let connection = seed_agent_connection(postgres, owner_id).await?;
+    seed_evidence_requests(postgres, connection).await?;
+    seed_frameworks_and_controls(postgres).await?;
+    seed_policies(postgres).await?;
+    let demo_document = seed_demo_evidence_submission(postgres, object_storage, owner_id).await?;
     debug!("done seeding local data");
 
     Ok(SeedSummary { demo_document })
@@ -363,6 +374,75 @@ ON CONFLICT DO NOTHING
     Ok(())
 }
 
+async fn seed_policies(repository: &Postgres) -> Result<(), Error> {
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
+    let workspace_id = local_authorized_workspace_id();
+
+    for policy in demo_policies(workspace_id) {
+        let policy_id = policy.id;
+        let description = policy.description;
+        transaction
+            .execute(
+                r#"
+INSERT INTO policies (id, workspace_id, name, description)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (id) DO UPDATE
+SET workspace_id = EXCLUDED.workspace_id,
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    archived_at = NULL,
+    updated_at = CASE
+        WHEN (policies.workspace_id, policies.name, policies.description, policies.archived_at)
+             IS DISTINCT FROM
+             (EXCLUDED.workspace_id, EXCLUDED.name, EXCLUDED.description, NULL::timestamptz)
+        THEN now()
+        ELSE policies.updated_at
+    END
+"#,
+                &[
+                    &policy_id,
+                    &Uuid::from(workspace_id),
+                    &policy.name,
+                    &description,
+                ],
+            )
+            .await?;
+
+        let control_ids = policy
+            .control_codes
+            .iter()
+            .map(|code| control_id(workspace_id, code))
+            .collect::<Vec<_>>();
+        transaction
+            .execute(
+                r#"
+DELETE FROM policy_control_mappings
+WHERE policy_id = $1
+  AND NOT (control_id = ANY($2::uuid[]))
+"#,
+                &[&policy_id, &control_ids],
+            )
+            .await?;
+        for control_id in control_ids {
+            transaction
+                .execute(
+                    r#"
+INSERT INTO policy_control_mappings (policy_id, control_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+"#,
+                    &[&policy_id, &control_id],
+                )
+                .await?;
+        }
+    }
+
+    transaction.commit().await?;
+
+    Ok(())
+}
+
 async fn seed_demo_evidence_submission(
     repository: &Postgres,
     object_storage: &ObjectStorageConfig,
@@ -557,6 +637,13 @@ struct SeedControl {
     requirement_ids: Vec<Uuid>,
 }
 
+struct SeedPolicy {
+    id: Uuid,
+    name: &'static str,
+    description: Option<&'static str>,
+    control_codes: Vec<&'static str>,
+}
+
 impl SeedEvidenceRequest {
     fn into_new(self) -> CreateEvidenceRequestPayload {
         CreateEvidenceRequestPayload {
@@ -695,6 +782,33 @@ fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
     ]
 }
 
+fn demo_policies(workspace_id: WorkspaceId) -> Vec<SeedPolicy> {
+    vec![
+        SeedPolicy {
+            id: policy_id(workspace_id, "acceptable-use"),
+            name: "Acceptable Use Policy",
+            description: None,
+            control_codes: vec![],
+        },
+        SeedPolicy {
+            id: policy_id(workspace_id, "incident-response"),
+            name: "Incident Response Policy",
+            description: Some(
+                "Defines how security incidents are reported, contained, investigated, and resolved.",
+            ),
+            control_codes: vec!["PP-IR-01"],
+        },
+        SeedPolicy {
+            id: policy_id(workspace_id, "information-security"),
+            name: "Information Security Policy",
+            description: Some(
+                "Establishes safeguards for access control, vulnerability management, and protection of company information.",
+            ),
+            control_codes: vec!["PP-AC-01", "PP-VM-01"],
+        },
+    ]
+}
+
 fn soc2_framework_id() -> Uuid {
     seed_uuid("framework:soc2")
 }
@@ -706,6 +820,13 @@ fn soc2_requirement_id(code: &str) -> Uuid {
 fn control_id(workspace_id: WorkspaceId, code: &str) -> Uuid {
     seed_uuid(&format!(
         "workspace:{}:control:{code}",
+        Uuid::from(workspace_id)
+    ))
+}
+
+fn policy_id(workspace_id: WorkspaceId, slug: &str) -> Uuid {
+    seed_uuid(&format!(
+        "workspace:{}:policy:{slug}",
         Uuid::from(workspace_id)
     ))
 }

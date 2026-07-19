@@ -282,6 +282,21 @@ full description, mapped controls, document status, and eligible download.
 Every control detail page gains an “Attached policies” section linking to
 policy detail pages.
 
+## Guidance And Demo Data
+
+The embedded MCP guide catalog appends a `policies` topic without changing the
+existing topic identifiers or content. Every policy tool points to this guide,
+which distinguishes policies from controls, explains explicit mappings, and
+directs document bytes through the short-lived human browser flow. The MCP
+initialization instructions remain unchanged.
+
+The authorized local workspace seeds three stable-ID, document-less policies:
+an unmapped Acceptable Use Policy, an Incident Response Policy mapped to
+`PP-IR-01`, and an Information Security Policy mapped to `PP-AC-01` and
+`PP-VM-01`. Reseeding converges metadata and mappings owned by these fixtures
+without changing unrelated policies or existing demo control/evidence IDs.
+Policy documents and object-store bytes are not seeded.
+
 ## Audit And Security
 
 Emit identifier-only audit events for policy create, read, update, archive,
@@ -328,6 +343,9 @@ comments, and a compliance-officer policy SPA are deferred.
 
 ## Revisions
 
+- 2026-07-19: Recorded the appended policy guide topic and stable local policy
+  fixtures from ticket 008; initialization guidance and existing demo
+  identifiers remain unchanged.
 - 2026-07-19: Recorded the shipped auditor policy JSON composition, download
   route, and identifier-only read/download audit event names from ticket 006.
 - 2026-07-17: Added required, repository-derived `created_by_user_id`
