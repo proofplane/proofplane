@@ -162,28 +162,42 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
     let server = app.mcp_http_server();
     let raw_token = token.raw_token.clone();
 
-    let ((known, unknown, resources, resource, bad_resource, denied), audit_logs) =
-        capture_audit_logs(|request_id| {
-            let raw_token = raw_token.clone();
-            async move {
-                let client =
-                    McpClient::connect_with_request_id(&server, &raw_token, request_id).await;
-                let known = client
-                    .call_tool("get_proofplane_guide", json!({"topic": " glossary "}))
-                    .await;
-                let unknown = client
-                    .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
-                    .await;
-                let resources = client.list_resources().await;
-                let resource = client.read_resource("proofplane://docs/glossary").await;
-                let bad_resource = client
-                    .read_resource_error("proofplane://docs/Glossary")
-                    .await;
-                let denied = client.call_tool_error("list_controls", json!({})).await;
-                (known, unknown, resources, resource, bad_resource, denied)
-            }
-        })
-        .await;
+    let (
+        (known, policies, unknown, resources, resource, policy_resource, bad_resource, denied),
+        audit_logs,
+    ) = capture_audit_logs(|request_id| {
+        let raw_token = raw_token.clone();
+        async move {
+            let client = McpClient::connect_with_request_id(&server, &raw_token, request_id).await;
+            let known = client
+                .call_tool("get_proofplane_guide", json!({"topic": " glossary "}))
+                .await;
+            let policies = client
+                .call_tool("get_proofplane_guide", json!({"topic": "policies"}))
+                .await;
+            let unknown = client
+                .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
+                .await;
+            let resources = client.list_resources().await;
+            let resource = client.read_resource("proofplane://docs/glossary").await;
+            let policy_resource = client.read_resource("proofplane://docs/policies").await;
+            let bad_resource = client
+                .read_resource_error("proofplane://docs/Glossary")
+                .await;
+            let denied = client.call_tool_error("list_controls", json!({})).await;
+            (
+                known,
+                policies,
+                unknown,
+                resources,
+                resource,
+                policy_resource,
+                bad_resource,
+                denied,
+            )
+        }
+    })
+    .await;
 
     assert_eq!(known["topic"], "glossary");
     assert_eq!(known["title"], "Proofplane Glossary");
@@ -203,6 +217,31 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
             .collect::<BTreeSet<_>>()
     );
 
+    assert_eq!(policies["topic"], "policies");
+    assert_eq!(policies["title"], "Policies");
+    let policy_markdown = policies["markdown"]
+        .as_str()
+        .expect("policy guide markdown is text");
+    for expected in [
+        "Policies record the organization’s rules",
+        "Controls define the safeguards",
+        "policy-control mappings",
+        "manage_policy_document",
+        "File bytes never pass through MCP or the model",
+        "call `get_policy`",
+    ] {
+        assert!(
+            policy_markdown.contains(expected),
+            "policy guide contains {expected:?}"
+        );
+    }
+    for forbidden in ["object key", "session secret", "production configuration"] {
+        assert!(
+            !policy_markdown.to_ascii_lowercase().contains(forbidden),
+            "policy guide omits {forbidden:?}"
+        );
+    }
+
     assert_eq!(unknown["topic"], Value::Null);
     assert_eq!(unknown["title"], "Proofplane guide topics");
     assert_eq!(
@@ -212,7 +251,8 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
             {"topic": "submitting-evidence", "title": "Submitting Evidence"},
             {"topic": "controls-and-mappings", "title": "Controls and Mappings"},
             {"topic": "documents", "title": "Documents"},
-            {"topic": "errors-and-not-found", "title": "Errors and Not Found"}
+            {"topic": "errors-and-not-found", "title": "Errors and Not Found"},
+            {"topic": "policies", "title": "Policies"}
         ])
     );
     assert!(!unknown.to_string().contains("unknown-topic"));
@@ -224,7 +264,8 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
                 {"uri": "proofplane://docs/submitting-evidence", "name": "submitting-evidence", "title": "Submitting Evidence", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/controls-and-mappings", "name": "controls-and-mappings", "title": "Controls and Mappings", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/documents", "name": "documents", "title": "Documents", "mimeType": "text/markdown"},
-                {"uri": "proofplane://docs/errors-and-not-found", "name": "errors-and-not-found", "title": "Errors and Not Found", "mimeType": "text/markdown"}
+                {"uri": "proofplane://docs/errors-and-not-found", "name": "errors-and-not-found", "title": "Errors and Not Found", "mimeType": "text/markdown"},
+                {"uri": "proofplane://docs/policies", "name": "policies", "title": "Policies", "mimeType": "text/markdown"}
             ]
         })
     );
@@ -232,6 +273,11 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
     assert_eq!(resource["contents"][0]["uri"], "proofplane://docs/glossary");
     assert_eq!(resource["contents"][0]["mimeType"], "text/markdown");
     assert_eq!(resource["contents"][0]["text"], known["markdown"]);
+    assert_eq!(
+        policy_resource["contents"][0]["uri"],
+        "proofplane://docs/policies"
+    );
+    assert_eq!(policy_resource["contents"][0]["text"], policies["markdown"]);
     assert_eq!(bad_resource.code, rmcp::model::ErrorCode(-32002));
     assert_eq!(bad_resource.data["problem"]["code"], "not_found");
     assert_eq!(denied.data["problem"]["code"], "not_found");
@@ -532,7 +578,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "manage_policy_document",
-            "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP.",
+            "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "create_auditor_access_link",
@@ -584,31 +630,31 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "list_policies",
-            "List active policies with their mapped-control counts and current document status.",
+            "List active policies with their mapped-control counts and current document status; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "get_policy",
-            "Get one active policy with its mapped controls and safe current document metadata by policy ID.",
+            "Get one active policy with its mapped controls and safe current document metadata by policy ID; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "create_policy",
-            "Create a policy with optional control mappings and return its complete active metadata.",
+            "Create a policy with optional control mappings and return its complete active metadata; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "update_policy",
-            "Update an active policy’s name and optional description without changing mappings or document state.",
+            "Update an active policy’s name and optional description without changing mappings or document state; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "archive_policy",
-            "Archive an active policy when its current document is not being processed.",
+            "Archive an active policy when its current document is not being processed; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "attach_policy_to_control",
-            "Attach an active policy to a control without changing the control or its other mappings.",
+            "Attach an active policy to a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "detach_policy_from_control",
-            "Detach an active policy from a control without changing the control or its other mappings.",
+            "Detach an active policy from a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "get_proofplane_guide",

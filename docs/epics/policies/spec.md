@@ -251,6 +251,13 @@ including unattached policies and policies with no document. Each policy
 contains safe document metadata/status, download eligibility, and mapped
 control summaries. Each control contains its attached active policy summaries.
 
+The auditor JSON endpoint exposes the complete policy collection in a root
+`policies` field and exposes attached summaries in each control's `policies`
+field. Full policy entries use the established policy detail fields plus
+document `policy_id` and `download_eligible`; control summaries expose policy
+identity, description, and nullable document status. Workspace IDs remain
+absent from the response.
+
 The catalog and JSON read model order policies case-insensitively by name with
 UUID tie-breaking. V1 returns the complete active set without search, filters,
 or pagination. Archived policies and archived documents are omitted.
@@ -263,6 +270,8 @@ the auditor session and backing grant, workspace, active policy, document
 association/status, object metadata, and checksums. It uses the existing safe
 download headers. Pending, finalizing, failed, malicious, archived, missing,
 and cross-workspace requests return the portal's generic unavailable result.
+The stable route is
+`GET /auditor-access/portal/policies/{policy_id}/documents/{document_id}/download`.
 
 ## Auditor UX
 
@@ -272,6 +281,21 @@ The Policies page lists every active policy, and a policy detail page shows the
 full description, mapped controls, document status, and eligible download.
 Every control detail page gains an “Attached policies” section linking to
 policy detail pages.
+
+## Guidance And Demo Data
+
+The embedded MCP guide catalog appends a `policies` topic without changing the
+existing topic identifiers or content. Every policy tool points to this guide,
+which distinguishes policies from controls, explains explicit mappings, and
+directs document bytes through the short-lived human browser flow. The MCP
+initialization instructions remain unchanged.
+
+The authorized local workspace seeds three stable-ID, document-less policies:
+an unmapped Acceptable Use Policy, an Incident Response Policy mapped to
+`PP-IR-01`, and an Information Security Policy mapped to `PP-AC-01` and
+`PP-VM-01`. Reseeding converges metadata and mappings owned by these fixtures
+without changing unrelated policies or existing demo control/evidence IDs.
+Policy documents and object-store bytes are not seeded.
 
 ## Audit And Security
 
@@ -290,6 +314,9 @@ operation, outcome, and coarse lifecycle status are allowed.
 The MCP catalog uses `policy.listed`, `policy.read`, `policy.created`,
 `policy.updated`, `policy.archived`, `policy_control_mapping.created`, and
 `policy_control_mapping.deleted` as its stable success event names.
+Auditor policy reads and downloads use `auditor_policy_catalog.read` and
+`auditor_policy_document.downloaded`; their metadata contains identifiers and
+auditor session context only.
 
 ## Testing
 
@@ -316,6 +343,11 @@ comments, and a compliance-officer policy SPA are deferred.
 
 ## Revisions
 
+- 2026-07-19: Recorded the appended policy guide topic and stable local policy
+  fixtures from ticket 008; initialization guidance and existing demo
+  identifiers remain unchanged.
+- 2026-07-19: Recorded the shipped auditor policy JSON composition, download
+  route, and identifier-only read/download audit event names from ticket 006.
 - 2026-07-17: Added required, repository-derived `created_by_user_id`
   attribution to shared documents and their safe metadata projections.
 - 2026-07-17: Standardized the complete upload lifecycle on `document`

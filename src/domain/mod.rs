@@ -27,7 +27,8 @@ pub use auditor_access_session::{
     AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
 };
 pub use auditor_portal::{
-    AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
+    AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest, AuditorPortalPolicy,
+    AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
     AuditorPortalReadModel, AuditorPortalSubmission,
 };
 pub use controls::{

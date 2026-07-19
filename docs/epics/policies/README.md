@@ -18,9 +18,9 @@ Full schema, lifecycle, MCP, document, and auditor decisions live in
 | 003. [Policy Document Lifecycle](./tickets/003-policy-document-lifecycle.md) | Done | Added required, context-derived creator attribution to shared document metadata. |
 | 004. [MCP Policy Document Grants](./tickets/004-mcp-policy-document-grants.md) | Done | Added purpose-separated policy grants and browser sessions. |
 | 005. [Policy Document Management Page](./tickets/005-policy-document-management-page.md) | Done | Added the evidence-like upload, status, archive, and download UI. |
-| 006. [Auditor Policy Read Model And Downloads](./tickets/006-auditor-policy-read-model-and-downloads.md) | Todo | Expose safe policy data and session-bound document downloads. |
-| 007. [Auditor Policy Portal UI](./tickets/007-auditor-policy-portal-ui.md) | Todo | Add policy navigation, catalog/detail pages, and control sections. |
-| 008. [Policy Guidance And Demo Data](./tickets/008-policy-guidance-and-demo-data.md) | Todo | Teach agents the workflow and seed a representative policy catalog. |
+| 006. [Auditor Policy Read Model And Downloads](./tickets/006-auditor-policy-read-model-and-downloads.md) | Done | Added safe policy composition and session-bound document downloads. |
+| 007. [Auditor Policy Portal UI](./tickets/007-auditor-policy-portal-ui.md) | Done | Added policy navigation, catalog/detail pages, and control sections. |
+| 008. [Policy Guidance And Demo Data](./tickets/008-policy-guidance-and-demo-data.md) | Done | Added agent guidance and deterministic document-less demo policies. |
 
 ## Sequencing
 

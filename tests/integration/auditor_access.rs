@@ -1,8 +1,12 @@
 use axum::http::{header::SET_COOKIE, StatusCode};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures_util::stream;
 use proofplane::{
-    domain::{WorkspacePermission, WorkspacePermissions},
+    domain::{CreatePolicyPayload, PolicyId, WorkspacePermission, WorkspacePermissions},
     mailer::DisabledMailAdapter,
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
+    repository::CreatePolicyDocumentResult,
     routes::request_context::REQUEST_ID_HEADER,
     services::{
         agent_connections::AgentConnectionContext,
@@ -10,6 +14,8 @@ use proofplane::{
             AuditorAccessGrantService, CreateAuditorAccessGrantRequest, IssuedAuditorAccessGrant,
         },
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
+        policies::PolicyService,
+        policy_documents::PolicyDocumentService,
     },
 };
 use secrecy::ExposeSecret;
@@ -192,6 +198,59 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
 
+    let alpha_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "alpha policy",
+        Some("Mapped policy"),
+        vec![control_id],
+    )
+    .await;
+    let pending_policy_document = upload_policy_document(
+        &app,
+        workspace_id,
+        alpha_policy_id,
+        "pending-policy.txt",
+        b"pending policy",
+    )
+    .await;
+    let pending_policy_document_id = pending_policy_document.id();
+    let zulu_policy_id = create_policy(&app, workspace_id, "Zulu policy", None, Vec::new()).await;
+    let archived_document_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Archived document policy",
+        None,
+        Vec::new(),
+    )
+    .await;
+    let archived_policy_document = upload_policy_document(
+        &app,
+        workspace_id,
+        archived_document_policy_id,
+        "hidden-policy.txt",
+        b"hidden policy document",
+    )
+    .await;
+    archive_document(&app, archived_policy_document.id().into()).await;
+    let archived_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Hidden archived policy",
+        Some("must not appear"),
+        vec![control_id],
+    )
+    .await;
+    archive_policy(&app, archived_policy_id).await;
+    let other_policy_id = create_policy(
+        &app,
+        app.workspace_id("other"),
+        "Other workspace policy",
+        None,
+        vec![app.control_id("other", "PP-OTHER")],
+    )
+    .await;
+
     let request = app
         .create_evidence_request(
             workspace_id,
@@ -290,6 +349,11 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
     assert!(!serialized.contains("object_key"));
     assert!(!serialized.contains("quarantine/"));
     assert!(!serialized.contains("workspaces/"));
+    assert!(!serialized.contains("hidden-policy.txt"));
+    assert!(!serialized.contains("Hidden archived policy"));
+    assert!(!serialized.contains("Other workspace policy"));
+    assert!(!serialized.contains(&archived_policy_id.to_string()));
+    assert!(!serialized.contains(&other_policy_id.to_string()));
     assert!(!serialized.contains(invite_token));
     assert!(!serialized.contains(&raw_session));
 
@@ -298,6 +362,13 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
         .iter()
         .find(|control| control["code"] == "PP-AC-01")
         .expect("mapped control appears");
+    let control_policies = control["policies"]
+        .as_array()
+        .expect("control policies is array");
+    assert_eq!(control_policies.len(), 1);
+    assert_eq!(control_policies[0]["id"], alpha_policy_id.to_string());
+    assert_eq!(control_policies[0]["name"], "alpha policy");
+    assert_eq!(control_policies[0]["document"]["upload_status"], "pending");
     let requirement = &control["framework_requirements"][0];
     assert_eq!(requirement["framework_name"], "SOC 2");
     assert_eq!(requirement["code"], "CC6.1");
@@ -335,8 +406,39 @@ async fn portal_data_returns_workspace_graph_and_filters_archived_documents() {
     assert_eq!(documents[1]["download_eligible"], false);
     assert_eq!(uuid_field(&documents[1]["id"]), pending_id);
 
+    let policies = body["policies"].as_array().expect("policies is array");
+    assert_eq!(
+        policies
+            .iter()
+            .map(|policy| policy["name"].as_str().expect("policy name"))
+            .collect::<Vec<_>>(),
+        ["alpha policy", "Archived document policy", "Zulu policy"]
+    );
+    let alpha_policy = &policies[0];
+    assert_eq!(alpha_policy["id"], alpha_policy_id.to_string());
+    assert_eq!(alpha_policy["description"], "Mapped policy");
+    assert_eq!(alpha_policy["controls"][0]["id"], control_id.to_string());
+    assert_eq!(
+        alpha_policy["document"]["id"],
+        pending_policy_document_id.to_string()
+    );
+    assert_eq!(
+        alpha_policy["document"]["policy_id"],
+        alpha_policy_id.to_string()
+    );
+    assert_eq!(
+        alpha_policy["document"]["created_by_user_id"],
+        app.user_id().to_string()
+    );
+    assert_eq!(alpha_policy["document"]["upload_status"], "pending");
+    assert_eq!(alpha_policy["document"]["download_eligible"], false);
+    assert_eq!(policies[1]["document"], Value::Null);
+    assert_eq!(policies[2]["id"], zulu_policy_id.to_string());
+    assert_eq!(policies[2]["document"], Value::Null);
+
     let logs = serde_json::to_string(&logs).expect("logs serialize");
     assert!(logs.contains("auditor_portal.read"));
+    assert!(logs.contains("auditor_policy_catalog.read"));
     assert!(!logs.contains(invite_token));
     assert!(!logs.contains(&raw_session));
 }
@@ -429,6 +531,256 @@ async fn auditor_session_downloads_uploaded_document_with_safe_headers_and_audit
     assert!(!logs.contains(&raw_session));
     assert!(!logs.contains(final_key.as_str()));
     assert!(!logs.contains("auditor downloadable bytes"));
+}
+
+#[tokio::test]
+async fn auditor_session_downloads_uploaded_policy_document_with_safe_headers_and_audit() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Downloadable policy",
+        Some("Policy description must not enter download audits"),
+        Vec::new(),
+    )
+    .await;
+    let content = b"auditor policy bytes";
+    let document =
+        upload_policy_document(&app, workspace_id, policy_id, "Auditor policy.txt", content).await;
+    let document_id = document.id();
+    let final_key =
+        finalize_policy_document(&app, workspace_id, policy_id, document_id.into()).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+
+    let request = app
+        .server()
+        .get(&policy_auditor_download_path(policy_id, document_id.into()))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        );
+    let (response, logs) = capture_audit_logs(|request_id| async move {
+        request
+            .add_header(REQUEST_ID_HEADER, request_id.to_string())
+            .await
+    })
+    .await;
+
+    response.assert_status_ok();
+    assert_eq!(response.as_bytes().as_ref(), content);
+    assert_eq!(response.header("content-type"), "text/plain");
+    assert_eq!(response.header("content-length"), content.len().to_string());
+    assert_eq!(
+        response.header("content-disposition"),
+        "document; filename=\"Auditor policy.txt\""
+    );
+    assert_eq!(response.header("cache-control"), "private, no-store");
+    assert_eq!(response.header("referrer-policy"), "no-referrer");
+
+    let logs = serde_json::to_string(&logs).expect("logs serialize");
+    assert!(logs.contains("auditor_policy_document.downloaded"));
+    assert!(logs.contains(&workspace_id.to_string()));
+    assert!(logs.contains(&policy_id.to_string()));
+    assert!(logs.contains(&document_id.to_string()));
+    assert!(!logs.contains("Downloadable policy"));
+    assert!(!logs.contains("Policy description"));
+    assert!(!logs.contains("Auditor policy.txt"));
+    assert!(!logs.contains(invite_token));
+    assert!(!logs.contains(&raw_session));
+    assert!(!logs.contains(&final_key));
+    assert!(!logs.contains("auditor policy bytes"));
+}
+
+#[tokio::test]
+async fn auditor_policy_download_conceals_ineligible_tenant_and_session_states() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    let policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Unavailable policy document",
+        None,
+        Vec::new(),
+    )
+    .await;
+    let document = upload_policy_document(
+        &app,
+        workspace_id,
+        policy_id,
+        "unavailable-policy.txt",
+        b"unavailable policy",
+    )
+    .await;
+    let document_id = document.id();
+    let path = policy_auditor_download_path(policy_id, document_id.into());
+
+    app.server().get(&path).await.assert_status_not_found();
+    app.server()
+        .get(&path)
+        .add_header("Cookie", "proofplane_auditor_session=tampered")
+        .await
+        .assert_status_not_found();
+    assert_policy_auditor_download_not_found(&app, &raw_session, policy_id, document_id.into())
+        .await;
+    for status in ["finalizing", "failed", "contains_virus"] {
+        set_document_status(&app, document_id.into(), status).await;
+        assert_policy_auditor_download_not_found(&app, &raw_session, policy_id, document_id.into())
+            .await;
+    }
+    finalize_policy_document(&app, workspace_id, policy_id, document_id.into()).await;
+    assert_policy_auditor_download_not_found(
+        &app,
+        &raw_session,
+        Uuid::new_v4().into(),
+        document_id.into(),
+    )
+    .await;
+    archive_document(&app, document_id.into()).await;
+    assert_policy_auditor_download_not_found(&app, &raw_session, policy_id, document_id.into())
+        .await;
+
+    let archived_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Archived policy download",
+        None,
+        Vec::new(),
+    )
+    .await;
+    let archived_policy_document = upload_policy_document(
+        &app,
+        workspace_id,
+        archived_policy_id,
+        "archived-policy.txt",
+        b"archived policy",
+    )
+    .await;
+    finalize_policy_document(
+        &app,
+        workspace_id,
+        archived_policy_id,
+        archived_policy_document.id().into(),
+    )
+    .await;
+    archive_policy(&app, archived_policy_id).await;
+    assert_policy_auditor_download_not_found(
+        &app,
+        &raw_session,
+        archived_policy_id,
+        archived_policy_document.id().into(),
+    )
+    .await;
+
+    let other_policy_id = create_policy(
+        &app,
+        other_workspace_id,
+        "Other tenant policy",
+        None,
+        Vec::new(),
+    )
+    .await;
+    let other_document = upload_policy_document(
+        &app,
+        other_workspace_id,
+        other_policy_id,
+        "other-policy.txt",
+        b"other tenant policy",
+    )
+    .await;
+    finalize_policy_document(
+        &app,
+        other_workspace_id,
+        other_policy_id,
+        other_document.id().into(),
+    )
+    .await;
+    assert_policy_auditor_download_not_found(
+        &app,
+        &raw_session,
+        other_policy_id,
+        other_document.id().into(),
+    )
+    .await;
+
+    AuditorAccessGrantService::new(app.postgres_arc())
+        .revoke(
+            &agent_connection_context(&app, workspace_id),
+            grant.grant.id,
+        )
+        .await
+        .expect("grant revokes");
+    app.server()
+        .get(&policy_auditor_download_path(
+            other_policy_id,
+            other_document.id().into(),
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await
+        .assert_status_not_found();
+}
+
+#[tokio::test]
+async fn auditor_policy_download_metadata_mismatch_is_internal_without_storage_details() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Metadata mismatch policy",
+        None,
+        Vec::new(),
+    )
+    .await;
+    let document = upload_policy_document(
+        &app,
+        workspace_id,
+        policy_id,
+        "policy-mismatch.txt",
+        b"policy mismatch bytes",
+    )
+    .await;
+    let document_id = document.id();
+    let final_key =
+        finalize_policy_document(&app, workspace_id, policy_id, document_id.into()).await;
+    let metadata_path = app
+        .object_storage_root()
+        .join("metadata")
+        .join(format!("{final_key}.json"));
+    let mut metadata: Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).expect("metadata reads"))
+            .expect("metadata parses");
+    metadata["sha256"] = Value::String("0".repeat(64));
+    std::fs::write(
+        metadata_path,
+        serde_json::to_vec_pretty(&metadata).expect("metadata serializes"),
+    )
+    .expect("metadata writes");
+    let raw_session =
+        verified_session_cookie(&app, workspace_id, grant.raw_secret.expose_secret()).await;
+
+    let response = app
+        .server()
+        .get(&policy_auditor_download_path(policy_id, document_id.into()))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    response.assert_status_internal_server_error();
+    let body = String::from_utf8_lossy(response.as_bytes().as_ref());
+    assert!(!body.contains(&final_key));
+    assert!(!body.contains("policy mismatch bytes"));
 }
 
 #[tokio::test]
@@ -766,12 +1118,288 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     assert!(body.contains("Access review evidence"));
     assert!(body.contains("browser portal submission"));
     assert!(body.contains("Evidence documents"));
+    assert!(body.contains("No policies attached"));
     assert!(body.contains("auditor-evidence.txt"));
     assert!(body.contains(&auditor_download_path(submission_id, uploaded_id)));
     assert!(body.contains("pending-evidence.txt"));
     assert!(!body.contains(&auditor_download_path(submission_id, pending_id)));
     assert!(!body.contains(invite_token));
     assert!(!body.contains(&raw_session));
+}
+
+#[tokio::test]
+async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_safe() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let framework_control_id = app.control_id("workspace", "PP-AC-01");
+    let standalone_control_id = app.control_id("workspace", "PP-STANDALONE");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+
+    let alpha_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "alpha <policy>",
+        Some("Review <script>alert('policy')</script> controls."),
+        vec![framework_control_id, standalone_control_id],
+    )
+    .await;
+    let pending = upload_policy_document(
+        &app,
+        workspace_id,
+        alpha_policy_id,
+        "pending <policy>.txt",
+        b"pending policy bytes",
+    )
+    .await;
+    let beta_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Beta policy",
+        Some("Downloadable policy description."),
+        vec![framework_control_id],
+    )
+    .await;
+    let uploaded = upload_policy_document(
+        &app,
+        workspace_id,
+        beta_policy_id,
+        "approved policy.txt",
+        b"approved policy bytes",
+    )
+    .await;
+    finalize_policy_document(
+        &app,
+        workspace_id,
+        beta_policy_id,
+        Uuid::from(uploaded.id()),
+    )
+    .await;
+    let zulu_policy_id = create_policy(&app, workspace_id, "Zulu policy", None, Vec::new()).await;
+    let archived_policy_id = create_policy(
+        &app,
+        workspace_id,
+        "Archived browser policy",
+        Some("Must stay hidden."),
+        Vec::new(),
+    )
+    .await;
+    archive_policy(&app, archived_policy_id).await;
+
+    let request = app
+        .server()
+        .get("/auditor-access/portal/policies")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        );
+    let (catalog, logs) = capture_audit_logs(|request_id| async move {
+        request
+            .add_header(REQUEST_ID_HEADER, request_id.to_string())
+            .await
+    })
+    .await;
+    catalog.assert_status_ok();
+    let body = html_body(&catalog);
+    assert!(body
+        .contains(r#"href="/auditor-access/portal/policies" class="current" aria-current="page""#));
+    assert!(body.contains("alpha &lt;policy&gt;"));
+    assert!(body.contains("Review &lt;script&gt;alert(&#39;policy&#39;)&lt;/script&gt; controls."));
+    assert!(!body.contains("<script>alert"));
+    assert!(body.contains("Uploading"));
+    assert!(body.contains("Uploaded"));
+    assert!(body.contains("No document"));
+    assert!(body.contains("No description"));
+    assert!(!body.contains("Archived browser policy"));
+    assert!(!body.contains(&workspace_id.to_string()));
+    assert!(!body.contains(invite_token));
+    assert!(!body.contains(&raw_session));
+    let alpha_position = body
+        .find("alpha &lt;policy&gt;")
+        .expect("alpha policy renders");
+    let beta_position = body.find("Beta policy").expect("beta policy renders");
+    let zulu_position = body.find("Zulu policy").expect("zulu policy renders");
+    assert!(alpha_position < beta_position && beta_position < zulu_position);
+    let logs = serde_json::to_string(&logs).expect("logs serialize");
+    assert!(logs.contains("auditor_policy_catalog.read"));
+    assert!(!logs.contains("alpha <policy>"));
+    assert!(!logs.contains("pending <policy>.txt"));
+    assert!(!logs.contains(invite_token));
+    assert!(!logs.contains(&raw_session));
+
+    let alpha = app
+        .server()
+        .get(&format!(
+            "/auditor-access/portal/policies/{alpha_policy_id}"
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    alpha.assert_status_ok();
+    let body = html_body(&alpha);
+    assert!(body.contains("Mapped controls (2)"));
+    assert!(body.contains("pending &lt;policy&gt;.txt"));
+    assert!(body.contains("This document is uploading and is not available for download."));
+    assert!(!body.contains(&policy_auditor_download_path(
+        alpha_policy_id,
+        Uuid::from(pending.id())
+    )));
+    assert!(body.contains(&format!(
+        "/auditor-access/portal/framework-requirements/{}/controls/{framework_control_id}",
+        cc61_id()
+    )));
+    assert!(body.contains(&format!(
+        "/auditor-access/portal/controls/{standalone_control_id}"
+    )));
+
+    for (status, label, message) in [
+        (
+            "finalizing",
+            "Scanning",
+            "This document is being scanned and is not available for download.",
+        ),
+        (
+            "contains_virus",
+            "Upload failed",
+            "This document is unavailable for download.",
+        ),
+        (
+            "failed",
+            "Upload failed",
+            "This document is unavailable for download.",
+        ),
+    ] {
+        set_policy_document_status(&app, Uuid::from(pending.id()), status).await;
+        let response = app
+            .server()
+            .get(&format!(
+                "/auditor-access/portal/policies/{alpha_policy_id}"
+            ))
+            .add_header(
+                "Cookie",
+                format!("proofplane_auditor_session={raw_session}"),
+            )
+            .await;
+        response.assert_status_ok();
+        let body = html_body(&response);
+        assert!(body.contains(label));
+        assert!(body.contains(message));
+        assert!(!body.contains(&policy_auditor_download_path(
+            alpha_policy_id,
+            Uuid::from(pending.id())
+        )));
+    }
+
+    let beta = app
+        .server()
+        .get(&format!("/auditor-access/portal/policies/{beta_policy_id}"))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    beta.assert_status_ok();
+    let body = html_body(&beta);
+    assert!(body.contains("approved policy.txt"));
+    assert!(body.contains(&policy_auditor_download_path(
+        beta_policy_id,
+        Uuid::from(uploaded.id())
+    )));
+
+    let framework_control = app
+        .server()
+        .get(&format!(
+            "/auditor-access/portal/framework-requirements/{}/controls/{framework_control_id}",
+            cc61_id()
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    framework_control.assert_status_ok();
+    let body = html_body(&framework_control);
+    assert!(body.contains("Attached policies (2)"));
+    assert!(body.contains(&format!(
+        "/auditor-access/portal/policies/{alpha_policy_id}"
+    )));
+    assert!(body.contains(&format!("/auditor-access/portal/policies/{beta_policy_id}")));
+
+    let standalone_control = app
+        .server()
+        .get(&format!(
+            "/auditor-access/portal/controls/{standalone_control_id}"
+        ))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    standalone_control.assert_status_ok();
+    let body = html_body(&standalone_control);
+    assert!(body.contains("Standalone control"));
+    assert!(body.contains("Attached policies (1)"));
+    assert!(body.contains("alpha &lt;policy&gt;"));
+
+    let zulu = app
+        .server()
+        .get(&format!("/auditor-access/portal/policies/{zulu_policy_id}"))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    zulu.assert_status_ok();
+    let body = html_body(&zulu);
+    assert!(body.contains("No controls attached"));
+    assert!(body.contains("No policy document is available"));
+}
+
+#[tokio::test]
+async fn browser_policy_pages_render_empty_and_conceal_unavailable_resources() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+
+    let catalog = app
+        .server()
+        .get("/auditor-access/portal/policies")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    catalog.assert_status_ok();
+    assert!(html_body(&catalog).contains("No policies available"));
+
+    for path in [
+        "/auditor-access/portal/policies/not-a-uuid".to_owned(),
+        format!("/auditor-access/portal/policies/{}", Uuid::new_v4()),
+        format!("/auditor-access/portal/controls/{}", Uuid::new_v4()),
+    ] {
+        let response = app
+            .server()
+            .get(&path)
+            .add_header(
+                "Cookie",
+                format!("proofplane_auditor_session={raw_session}"),
+            )
+            .await;
+        response.assert_status_not_found();
+        let body = html_body(&response);
+        assert!(body.contains("This auditor portal is not available"));
+        assert!(!body.contains("Auditor access workspace"));
+    }
+
+    app.server()
+        .get("/auditor-access/portal/policies")
+        .await
+        .assert_status_not_found();
 }
 
 #[tokio::test]
@@ -812,6 +1440,17 @@ async fn browser_unavailable_states_do_not_leak_workspace_data() {
     assert!(body.contains("This auditor portal is not available"));
     assert!(!body.contains("Auditor access workspace"));
     assert!(!body.contains("Access reviews"));
+
+    let revoked_policy_session = app
+        .server()
+        .get("/auditor-access/portal/policies")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    revoked_policy_session.assert_status_not_found();
+    assert!(html_body(&revoked_policy_session).contains("This auditor portal is not available"));
 }
 
 #[tokio::test]
@@ -945,6 +1584,7 @@ async fn auditor_app() -> TestApp {
         .with_soc2_reference_data()
         .workspace("workspace", "Auditor access workspace")
         .with_control("PP-AC-01", "Access reviews", vec![cc61_id()])
+        .with_control("PP-STANDALONE", "Standalone control", vec![])
         .with_default_membership()
         .workspace("other", "Other auditor access workspace")
         .with_control("PP-OTHER", "Other control", vec![])
@@ -964,6 +1604,131 @@ async fn create_grant(app: &TestApp, workspace_id: Uuid) -> IssuedAuditorAccessG
         )
         .await
         .expect("auditor grant creates")
+}
+
+async fn create_policy(
+    app: &TestApp,
+    workspace_id: Uuid,
+    name: &str,
+    description: Option<&str>,
+    control_ids: Vec<Uuid>,
+) -> PolicyId {
+    PolicyService::new(app.postgres_arc())
+        .create(
+            app.agent_connection_context(workspace_id),
+            CreatePolicyPayload {
+                name: name.to_owned(),
+                description: description.map(str::to_owned),
+                control_ids: control_ids.into_iter().map(Into::into).collect(),
+            },
+        )
+        .await
+        .expect("policy creates")
+        .policy
+        .id
+}
+
+async fn upload_policy_document(
+    app: &TestApp,
+    workspace_id: Uuid,
+    policy_id: PolicyId,
+    filename: &str,
+    content: &[u8],
+) -> proofplane::domain::Document {
+    let object_store = Arc::new(
+        FilesystemObjectStore::new(app.object_storage_root())
+            .await
+            .expect("policy document object store initializes"),
+    );
+    let service = PolicyDocumentService::new(app.postgres_arc(), object_store);
+    let connection = app.agent_connection_context(workspace_id);
+    let bytes = Bytes::copy_from_slice(content);
+    let payload = service
+        .upload(
+            &connection,
+            policy_id,
+            filename.to_owned(),
+            "text/plain".to_owned(),
+            stream::once(async move { Ok(bytes) }),
+        )
+        .await
+        .expect("policy document stages");
+    match service
+        .create(&connection, Uuid::new_v4(), policy_id, payload)
+        .await
+        .expect("policy document creates")
+    {
+        CreatePolicyDocumentResult::Created(document) => document,
+        other => panic!("expected created policy document, got {other:?}"),
+    }
+}
+
+async fn finalize_policy_document(
+    app: &TestApp,
+    workspace_id: Uuid,
+    policy_id: PolicyId,
+    document_id: Uuid,
+) -> String {
+    let client = app.postgres().get().await.expect("connection opens");
+    let row = client
+        .query_one(
+            "SELECT filename, object_key FROM documents WHERE id = $1",
+            &[&document_id],
+        )
+        .await
+        .expect("policy document reads");
+    let filename: String = row.get("filename");
+    let source =
+        ObjectKey::parse(row.get::<_, String>("object_key")).expect("policy quarantine key parses");
+    let target = ObjectKey::new(
+        workspace_id.into(),
+        format!("policies/{policy_id}/documents/{document_id}"),
+        &filename,
+    )
+    .expect("policy final key builds");
+    let store = FilesystemObjectStore::new(app.object_storage_root())
+        .await
+        .expect("policy object store initializes");
+    store
+        .copy_object(&source, &target)
+        .await
+        .expect("policy document finalizes");
+    let final_key = target.to_string();
+    client
+        .execute(
+            "UPDATE documents SET object_key = $2, upload_status = 'uploaded' WHERE id = $1",
+            &[&document_id, &final_key],
+        )
+        .await
+        .expect("policy document status updates");
+
+    final_key
+}
+
+async fn archive_policy(app: &TestApp, policy_id: PolicyId) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE policies SET archived_at = now() WHERE id = $1",
+            &[&Uuid::from(policy_id)],
+        )
+        .await
+        .expect("policy archives");
+}
+
+async fn set_policy_document_status(app: &TestApp, document_id: Uuid, status: &str) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE documents SET upload_status = $2 WHERE id = $1",
+            &[&document_id, &status],
+        )
+        .await
+        .expect("policy document status updates");
 }
 
 fn agent_connection_context(app: &TestApp, workspace_id: Uuid) -> AgentConnectionContext {
@@ -1044,6 +1809,10 @@ fn auditor_download_path(submission_id: Uuid, document_id: Uuid) -> String {
     )
 }
 
+fn policy_auditor_download_path(policy_id: PolicyId, document_id: Uuid) -> String {
+    format!("/auditor-access/portal/policies/{policy_id}/documents/{document_id}/download")
+}
+
 async fn assert_auditor_download_not_found(
     app: &TestApp,
     raw_session: &str,
@@ -1052,6 +1821,22 @@ async fn assert_auditor_download_not_found(
 ) {
     app.server()
         .get(&auditor_download_path(submission_id, document_id))
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await
+        .assert_status_not_found();
+}
+
+async fn assert_policy_auditor_download_not_found(
+    app: &TestApp,
+    raw_session: &str,
+    policy_id: PolicyId,
+    document_id: Uuid,
+) {
+    app.server()
+        .get(&policy_auditor_download_path(policy_id, document_id))
         .add_header(
             "Cookie",
             format!("proofplane_auditor_session={raw_session}"),

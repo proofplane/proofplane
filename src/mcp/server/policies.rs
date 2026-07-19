@@ -27,7 +27,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "list_policies",
-        description = "List active policies with their mapped-control counts and current document status."
+        description = "List active policies with their mapped-control counts and current document status; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn list_policies(
         &self,
@@ -49,7 +49,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "get_policy",
-        description = "Get one active policy with its mapped controls and safe current document metadata by policy ID."
+        description = "Get one active policy with its mapped controls and safe current document metadata by policy ID; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn get_policy(
         &self,
@@ -77,7 +77,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "create_policy",
-        description = "Create a policy with optional control mappings and return its complete active metadata."
+        description = "Create a policy with optional control mappings and return its complete active metadata; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn create_policy(
         &self,
@@ -104,7 +104,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "update_policy",
-        description = "Update an active policy’s name and optional description without changing mappings or document state."
+        description = "Update an active policy’s name and optional description without changing mappings or document state; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn update_policy(
         &self,
@@ -132,7 +132,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "archive_policy",
-        description = "Archive an active policy when its current document is not being processed."
+        description = "Archive an active policy when its current document is not being processed; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn archive_policy(
         &self,
@@ -182,7 +182,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "attach_policy_to_control",
-        description = "Attach an active policy to a control without changing the control or its other mappings."
+        description = "Attach an active policy to a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn attach_policy_to_control(
         &self,
@@ -214,7 +214,7 @@ impl ProofplaneMcp {
 
     #[tool(
         name = "detach_policy_from_control",
-        description = "Detach an active policy from a control without changing the control or its other mappings."
+        description = "Detach an active policy from a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies."
     )]
     async fn detach_policy_from_control(
         &self,
