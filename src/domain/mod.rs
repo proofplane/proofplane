@@ -2,6 +2,7 @@ mod agent_connection;
 mod auditor_access_grant;
 mod auditor_access_session;
 mod auditor_portal;
+mod batch;
 mod controls;
 mod document;
 mod error;
@@ -31,6 +32,7 @@ pub use auditor_portal::{
     AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
     AuditorPortalReadModel, AuditorPortalSubmission,
 };
+pub use batch::{validate_batch, BatchError, MAX_BATCH_ITEMS};
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload, CreateEvidenceControlMappingPayload,
     EvidenceControlMapping, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,

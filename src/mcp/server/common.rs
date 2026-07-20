@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::super::context::McpRequestContext;
 use crate::{
-    domain::{DomainError, WorkspacePermission},
+    domain::{BatchError, DomainError, WorkspacePermission},
     repository::{ConflictKind, Error as RepositoryError},
     services::Error as ServiceError,
     validation::Validation,
@@ -208,6 +208,38 @@ impl From<DomainError> for FieldIssue {
     }
 }
 
+impl From<BatchError> for rmcp::ErrorData {
+    fn from(error: BatchError) -> Self {
+        let message = error.to_string();
+        let problem = match error {
+            BatchError::Empty { field } => json!({
+                "code": "empty_batch",
+                "message": message,
+                "field": field,
+            }),
+            BatchError::TooLarge {
+                field,
+                maximum,
+                received,
+            } => json!({
+                "code": "batch_too_large",
+                "message": message,
+                "field": field,
+                "maximum": maximum,
+                "received": received,
+            }),
+            BatchError::Duplicates { field, ids } => json!({
+                "code": "duplicate_ids",
+                "message": message,
+                "field": field,
+                "ids": ids,
+            }),
+        };
+
+        rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
+    }
+}
+
 pub(super) fn not_found() -> rmcp::ErrorData {
     rmcp::ErrorData::resource_not_found(
         "resource not found",
@@ -262,10 +294,11 @@ pub(super) fn format_datetime(value: DateTime<Utc>) -> String {
 mod tests {
     use super::{
         argument_errors, domain_errors, optional_timestamp, required_timestamp, required_uuid,
-        FieldIssue, McpArgumentError,
+        BatchError, FieldIssue, McpArgumentError,
     };
     use crate::domain::DomainError;
     use rmcp::model::ErrorCode;
+    use uuid::Uuid;
 
     fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
         error.data.as_ref().expect("error data")["problem"]["field_issues"]
@@ -405,6 +438,55 @@ mod tests {
         assert_eq!(
             field_issues(&error),
             [("workspace_id".to_owned(), "is required".to_owned())]
+        );
+    }
+
+    fn problem(error: &rmcp::ErrorData) -> &serde_json::Value {
+        &error.data.as_ref().expect("error data")["problem"]
+    }
+
+    #[test]
+    fn empty_batch_renders_its_own_problem_code() {
+        let error = rmcp::ErrorData::from(BatchError::Empty {
+            field: "control_ids",
+        });
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(error.message, "control_ids must not be empty");
+        let problem = problem(&error);
+        assert_eq!(problem["code"], "empty_batch");
+        assert_eq!(problem["field"], "control_ids");
+    }
+
+    #[test]
+    fn oversized_batch_reports_the_limit_and_the_received_count() {
+        let error = rmcp::ErrorData::from(BatchError::TooLarge {
+            field: "control_ids",
+            maximum: 50,
+            received: 51,
+        });
+
+        let problem = problem(&error);
+        assert_eq!(problem["code"], "batch_too_large");
+        assert_eq!(problem["maximum"], 50);
+        assert_eq!(problem["received"], 51);
+    }
+
+    #[test]
+    fn duplicate_batch_ids_all_appear_in_the_response() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let error = rmcp::ErrorData::from(BatchError::Duplicates {
+            field: "evidence_ids",
+            ids: vec![first, second],
+        });
+
+        let problem = problem(&error);
+        assert_eq!(problem["code"], "duplicate_ids");
+        assert_eq!(problem["field"], "evidence_ids");
+        assert_eq!(
+            problem["ids"],
+            serde_json::json!([first.to_string(), second.to_string()])
         );
     }
 }

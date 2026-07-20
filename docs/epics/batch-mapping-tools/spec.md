@@ -73,22 +73,39 @@ bit to act on: it worked, or it did not and the world is unchanged. Retrying the
 whole corrected batch is always safe.
 
 The rejection payload names every bad ID, not just the first, so a single retry
-can fix the whole batch:
+can fix the whole batch. It follows Proofplane's existing MCP `problem` envelope
+— the same shape `not_found`, `conflict`, and argument validation already use —
+with the offending list under `ids` and the argument it belongs to under `field`:
 
 ```json
 {
-  "error": "unknown_control_ids",
-  "control_ids": ["0f7c…", "91ab…"]
+  "problem": {
+    "code": "unknown_ids",
+    "message": "control_ids contains unknown ids",
+    "field": "control_ids",
+    "ids": ["0f7c…", "91ab…"]
+  }
 }
 ```
+
+_(Revised during ticket 001 — originally sketched as a bare
+`{"error": "unknown_control_ids", "control_ids": [...]}`. Every other MCP error
+in the codebase nests under `problem`, and an agent that has learned to read
+`problem.code` should not need a second parser for batch failures.)_
 
 ### Duplicates within a batch
 
 A repeated counterpart ID in one batch is a client bug, not an intent. Reject the
-call with `duplicate_control_ids` (or the counterpart-appropriate code) rather
-than silently collapsing — collapsing would make the response's mapping count
-disagree with the request's item count, which is precisely the kind of quiet
-mismatch an agent mis-reports to its user.
+call with `duplicate_ids` rather than silently collapsing — collapsing would make
+the response's mapping count disagree with the request's item count, which is
+precisely the kind of quiet mismatch an agent mis-reports to its user. The
+payload's `field` names which argument held the duplicates and `ids` lists each
+repeated ID once, in first-seen order.
+
+_(Revised during ticket 001 — originally specified as a per-counterpart code
+such as `duplicate_control_ids`. One code plus a `field` key means all eight
+tools share a single error contract, and the shared validator does not need a
+code table keyed by counterpart type.)_
 
 ### Already-mapped pairs
 
@@ -141,7 +158,9 @@ RETURNING evidence_id, control_id
 method per tool, wrapping the repository call in the same
 `in_agent_connection_workspace_context` transaction helper the single-pair
 methods use. Batch-shape validation (empty, size cap, duplicates) happens here,
-before the transaction opens. The service returns either the full set of created
+before the transaction opens, via `domain::validate_batch` — one helper for all
+eight tools, taking a key extractor so it serves both bare ID lists and
+`{control_id, rationale}` objects. The service returns either the full set of created
 or deleted mappings, or a typed error carrying the offending IDs.
 
 **MCP** (`src/mcp/server/controls.rs`, `src/mcp/server/policies.rs`) — one

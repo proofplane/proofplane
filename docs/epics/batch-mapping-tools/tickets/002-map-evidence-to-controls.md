@@ -10,6 +10,7 @@ transaction. This is the reference implementation the other batch tools follow.
 
 - [ ] Given an evidence ID and several `{control_id, rationale}` items, when the tool is called, then every mapping is created and all of them are returned with their rationales.
 - [ ] Given a batch containing a control ID that does not exist in the workspace, when the tool is called, then the call fails naming every unknown control ID and no mapping from that batch is created.
+- [ ] Given a batch error carrying several unknown IDs, when it is rendered for MCP, then every offending ID appears in the response, not just the first.
 - [ ] Given a batch containing a pair that is already mapped, when the tool is called, then the call fails and no mapping from that batch is created.
 - [ ] Given an evidence ID from another workspace, when the tool is called, then it is rejected as not found.
 - [ ] Given a connection without `WriteControls`, when the tool is called, then it is rejected and nothing is written.
@@ -18,6 +19,7 @@ transaction. This is the reference implementation the other batch tools follow.
 **Tasks**
 
 - [ ] Add the batch insert repository method using `UNNEST`, returning the created rows.
+- [ ] Add the `BatchError::Unknown { field, ids }` variant and its MCP rendering arm (deferred here from 001, which had no producer for it).
 - [ ] Compute the unknown-ID set from a short `RETURNING` count.
 - [ ] Add the service method wrapping it in the agent-connection workspace transaction.
 - [ ] Add the `#[tool]` and register it on the controls tool router.
