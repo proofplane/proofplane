@@ -1,8 +1,10 @@
 # Submitting Evidence
 
-1. Call `list_evidence_requests` or `list_due_evidence_requests` to find work. Read each request with `get_evidence_request`, especially its `collection_instructions`, due date, cadence, and freshness window.
-2. Collect the requested proof, then call `create_evidence_submission` with the request ID, coverage window, source system, collection method, and a useful summary or description. The submission records the connected agent's provenance.
-3. If files are needed, call `manage_evidence_submission_document` with the new submission ID. Give the returned bearer-secret URL only to the human who will manage the documents before it expires; the human uses the browser flow and file bytes never pass through MCP or the model.
-4. After the human finishes, call `get_evidence_submission` to inspect document status and detailed metadata. Use `get_latest_evidence_submission` when you need the newest proof for a request.
+1. Call `list_evidence` to find work, and read a piece of evidence with `get_evidence` — especially its `collection_instructions`.
+2. Call `manage_evidence_submissions` with the evidence ID and the coverage window the proof covers. It returns a short-lived browser URL. Give it only to the human who will upload the files; the URL is a bearer secret, so keep it out of durable notes, logs, and broadly visible messages.
+3. The human opens the URL and uploads one or more files. Each file becomes one submission stamped with that coverage window and the connected agent's provenance. File bytes never pass through MCP or the model.
+4. Call `list_evidence_submissions` to confirm what arrived, and inspect each submission's document metadata and `upload_status`. Do not assume that issuing a URL means the upload succeeded. Use `get_evidence_submission` when you already hold a submission ID.
 
-Do not create a replacement submission merely to retry an document transfer. Issue a fresh document-management URL for the existing submission when the earlier URL expires.
+Uploads are scanned before they become available, so `upload_status` moves from `pending` through `finalizing` to `uploaded`. A file that fails scanning lands on `contains_virus` or `failed` and cannot be downloaded.
+
+Do not issue a new link merely to retry a transfer that is still processing. If a link expires, request a fresh one for the same evidence and coverage window — it will still list the files already uploaded for that period.

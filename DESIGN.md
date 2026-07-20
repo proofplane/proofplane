@@ -327,7 +327,7 @@ acknowledge that the token has been saved before continuing.
 ### Auditor Packet Preview
 
 Packet preview should look like an inspectable artifact, not a chart dashboard.
-Rows should connect controls, evidence requests, latest submission status,
+Rows should connect controls, evidence, latest submission status,
 provenance, and gaps. Missing evidence is a clear work item, not a vague warning.
 
 ## 6. Do's and Don'ts
@@ -341,7 +341,7 @@ provenance, and gaps. Missing evidence is a clear work item, not a vague warning
 - **Do** use Code Slate for config snippets and make copy actions obvious.
 - **Do** label MCP branch-preview or coming-soon states with Clay Signal and
   plain language.
-- **Do** prioritize evidence requests, control mappings, packet gaps, timestamps,
+- **Do** prioritize evidence, control mappings, packet gaps, timestamps,
   and provenance over abstract dashboard metrics.
 - **Do** keep cards to `8px` radius or less and use them for real objects, not
   decorative page sections.

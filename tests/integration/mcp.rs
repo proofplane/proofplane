@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
+use axum_test::multipart::{MultipartForm, Part};
 use chrono::{Duration, Utc};
 use proofplane::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
@@ -27,7 +28,9 @@ use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
-use super::support::{capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, TestApp};
+use super::support::{
+    capture_audit_logs, cc61_id, cc71_id, soc2_framework_id, submit_evidence_file, TestApp,
+};
 use proofplane::services::agent_connections::digest_secret;
 
 const MCP: &str = "/mcp";
@@ -250,7 +253,6 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
             {"topic": "glossary", "title": "Proofplane Glossary"},
             {"topic": "submitting-evidence", "title": "Submitting Evidence"},
             {"topic": "controls-and-mappings", "title": "Controls and Mappings"},
-            {"topic": "documents", "title": "Documents"},
             {"topic": "errors-and-not-found", "title": "Errors and Not Found"},
             {"topic": "policies", "title": "Policies"}
         ])
@@ -263,7 +265,6 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
                 {"uri": "proofplane://docs/glossary", "name": "glossary", "title": "Proofplane Glossary", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/submitting-evidence", "name": "submitting-evidence", "title": "Submitting Evidence", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/controls-and-mappings", "name": "controls-and-mappings", "title": "Controls and Mappings", "mimeType": "text/markdown"},
-                {"uri": "proofplane://docs/documents", "name": "documents", "title": "Documents", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/errors-and-not-found", "name": "errors-and-not-found", "title": "Errors and Not Found", "mimeType": "text/markdown"},
                 {"uri": "proofplane://docs/policies", "name": "policies", "title": "Policies", "mimeType": "text/markdown"}
             ]
@@ -298,23 +299,22 @@ async fn auth0_connection_claims_authorize_write_tools_with_agent_provenance() {
             .expect("workspace id is a string"),
     )
     .expect("workspace id is a UUID");
-    let evidence_request_id = Uuid::new_v4();
+    let evidence_id = Uuid::new_v4();
     app.postgres()
         .get()
         .await
         .expect("database opens")
         .execute(
             r#"
-INSERT INTO evidence_requests (
-    id, workspace_id, title, description, collection_instructions,
-    cadence, due_at, schedule_anchor_at, freshness_window_days, status
+INSERT INTO evidence (
+    id, workspace_id, title, description, collection_instructions, status
 )
-VALUES ($1, $2, 'Agent request', 'Description', 'Instructions', 'quarterly', now(), now(), 90, 'active')
+VALUES ($1, $2, 'Agent evidence', 'Description', 'Instructions', 'active')
 "#,
-            &[&evidence_request_id, &workspace_id],
+            &[&evidence_id, &workspace_id],
         )
         .await
-        .expect("evidence request inserts");
+        .expect("evidence inserts");
     let connection_id = AgentConnectionId::from(Uuid::new_v4());
     app.postgres()
         .create_pending_agent_connection(&NewPendingAgentConnection {
@@ -353,48 +353,18 @@ VALUES ($1, $2, 'Agent request', 'Description', 'Instructions', 'quarterly', now
     }));
     let client = McpClient::connect(&server, "auth0-agent-write-token").await;
 
-    let created = client
+    let grant = client
         .call_tool(
-            "create_evidence_submission",
+            "manage_evidence_submissions",
             json!({
-                "evidence_request_id": evidence_request_id,
-                "coverage_start_at": "2026-01-01T00:00:00Z",
-                "coverage_end_at": "2026-03-31T23:59:59Z",
-                "source_system": "agent",
-                "collection_method": "api_export",
-                "summary": "Agent-created submission"
+                "evidence_id": evidence_id,
+                "valid_from": "2026-01-01T00:00:00Z",
+                "valid_until": "2026-03-31T23:59:59Z"
             }),
         )
         .await;
-    let submission_id = uuid_from(&created["submission_id"]);
-
-    let submission = app
-        .postgres()
-        .get()
-        .await
-        .expect("database opens")
-        .query_one(
-            r#"
-SELECT submitted_by_agent_connection_id
-FROM evidence_submissions
-WHERE id = $1
-"#,
-            &[&submission_id],
-        )
-        .await
-        .expect("submission loads");
-    assert_eq!(
-        submission.get::<_, Option<Uuid>>("submitted_by_agent_connection_id"),
-        Some(Uuid::from(connection_id))
-    );
-
-    let grant = client
-        .call_tool(
-            "manage_evidence_submission_document",
-            json!({ "submission_id": submission_id }),
-        )
-        .await;
-    assert_eq!(grant["submission_id"], submission_id.to_string());
+    assert_eq!(grant["evidence_id"], evidence_id.to_string());
+    assert_eq!(grant["url_secret_type"], "bearer_secret");
 
     let grant_row = app
         .postgres()
@@ -403,17 +373,21 @@ WHERE id = $1
         .expect("database opens")
         .query_one(
             r#"
-SELECT issued_via_agent_connection_id
+SELECT issued_via_agent_connection_id, valid_from, valid_until
 FROM document_upload_grants
-WHERE evidence_submission_id = $1
+WHERE evidence_id = $1
 "#,
-            &[&submission_id],
+            &[&evidence_id],
         )
         .await
         .expect("upload grant loads");
     assert_eq!(
         grant_row.get::<_, Option<Uuid>>("issued_via_agent_connection_id"),
         Some(Uuid::from(connection_id))
+    );
+    assert!(
+        grant_row.get::<_, chrono::DateTime<chrono::Utc>>("valid_until")
+            > grant_row.get::<_, chrono::DateTime<chrono::Utc>>("valid_from")
     );
 }
 
@@ -466,8 +440,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "authorization_servers": ["https://api.proofplane.test/"],
         "bearer_methods_supported": ["header"],
         "scopes_supported": [
-            "read_evidence_requests",
-            "write_evidence_requests",
+            "read_evidence",
+            "write_evidence",
             "read_evidence_submissions",
             "write_evidence_submissions",
             "read_controls",
@@ -510,15 +484,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         .map(|tool| tool["name"].as_str().expect("tool has a name"))
         .collect::<BTreeSet<_>>();
     let expected_tool_names = [
-        "create_evidence_request",
-        "list_evidence_requests",
-        "get_evidence_request",
-        "list_due_evidence_requests",
+        "create_evidence",
+        "list_evidence",
+        "get_evidence",
+        "list_evidence_submissions",
         "get_evidence_submission",
         "get_latest_evidence_submission",
-        "create_evidence_submission",
-        "manage_evidence_submission_document",
         "manage_policy_document",
+        "manage_evidence_submissions",
         "create_auditor_access_link",
         "list_auditor_access_links",
         "revoke_auditor_access_link",
@@ -528,9 +501,9 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_control",
         "create_control",
         "replace_control",
-        "list_evidence_request_control_mappings",
-        "map_evidence_request_to_control",
-        "remove_evidence_request_control_mapping",
+        "list_evidence_control_mappings",
+        "map_evidence_to_control",
+        "remove_evidence_control_mapping",
         "list_policies",
         "get_policy",
         "create_policy",
@@ -545,36 +518,32 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_eq!(tool_names, expected_tool_names);
     let expected_descriptions = [
         (
-            "create_evidence_request",
-            "Create an evidence request that states what proof to collect, how to collect it, and when it is due; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "create_evidence",
+            "Create a piece of evidence that states what the organization must prove and how to collect it; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
-            "list_evidence_requests",
-            "List evidence requests with their collection instructions, due dates, cadence, and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "list_evidence",
+            "List evidence with their collection instructions and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
-            "get_evidence_request",
-            "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "get_evidence",
+            "Get one piece of evidence with its collection instructions and status by evidence ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
-            "list_due_evidence_requests",
-            "List evidence requests due at or before `now`, using the current time when `now` is omitted; for guidance, call get_proofplane_guide with topic submitting-evidence.",
-        ),
-        (
-            "create_evidence_submission",
-            "Create a submission that records proof for an evidence request; call manage_evidence_submission_document afterward to obtain a human-browser document flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "list_evidence_submissions",
+            "List the submissions for a piece of evidence, each one file with its coverage window, provenance, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_evidence_submission",
-            "Get one evidence submission with detailed provenance, coverage, collection, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Get one evidence submission with its coverage window, provenance, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "get_latest_evidence_submission",
-            "Get the latest submission for an evidence request with compact provenance, coverage, summary, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Get the latest submission for a piece of evidence with its coverage window, provenance, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
-            "manage_evidence_submission_document",
-            "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
+            "manage_evidence_submissions",
+            "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "manage_policy_document",
@@ -617,16 +586,16 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "Replace a control’s code, title, description, and complete framework-requirement links by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
-            "list_evidence_request_control_mappings",
-            "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            "list_evidence_control_mappings",
+            "List the controls mapped to a piece of evidence, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
-            "map_evidence_request_to_control",
-            "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            "map_evidence_to_control",
+            "Map a piece of evidence to a control with a rationale explaining how that proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
-            "remove_evidence_request_control_mapping",
-            "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            "remove_evidence_control_mapping",
+            "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "list_policies",
@@ -668,11 +637,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "{name} exposes its expected description"
         );
     }
-    let submission_description = find_tool(&tool_list, "create_evidence_submission")["description"]
+    let upload_description = find_tool(&tool_list, "manage_evidence_submissions")["description"]
         .as_str()
-        .expect("submission tool has a description");
-    assert!(submission_description.contains("manage_evidence_submission_document afterward"));
-    assert!(submission_description.contains("human-browser document flow"));
+        .expect("upload tool has a description");
+    assert!(upload_description.contains("each file becomes one submission"));
     assert_schema_has_property(
         &find_tool(&tool_list, "get_proofplane_guide")["inputSchema"],
         "topic",
@@ -682,39 +650,43 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "workspace_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
+        &find_tool(&tool_list, "create_evidence")["inputSchema"],
         "title",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
-        "due_at",
+        &find_tool(&tool_list, "create_evidence")["inputSchema"],
+        "collection_instructions",
     );
     assert_schema_lacks_property(
-        &find_tool(&tool_list, "create_evidence_request")["inputSchema"],
+        &find_tool(&tool_list, "create_evidence")["inputSchema"],
         "workspace_id",
     );
     assert_schema_lacks_property(
-        &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
+        &find_tool(&tool_list, "list_evidence_submissions")["inputSchema"],
         "workspace_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "list_due_evidence_requests")["inputSchema"],
-        "now",
+        &find_tool(&tool_list, "list_evidence_submissions")["inputSchema"],
+        "evidence_id",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "get_evidence_submission")["inputSchema"],
         "submission_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_submission")["inputSchema"],
-        "coverage_start_at",
+        &find_tool(&tool_list, "manage_evidence_submissions")["inputSchema"],
+        "valid_from",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_submission")["inputSchema"],
-        "source_system",
+        &find_tool(&tool_list, "manage_evidence_submissions")["inputSchema"],
+        "valid_until",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_document")["inputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submissions")["inputSchema"],
+        "evidence_id",
+    );
+    assert_schema_lacks_property(
+        &find_tool(&tool_list, "manage_evidence_submissions")["inputSchema"],
         "submission_id",
     );
     assert_schema_has_property(
@@ -734,11 +706,11 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "grant_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "map_evidence_request_to_control")["inputSchema"],
+        &find_tool(&tool_list, "map_evidence_to_control")["inputSchema"],
         "rationale",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "remove_evidence_request_control_mapping")["inputSchema"],
+        &find_tool(&tool_list, "remove_evidence_control_mapping")["inputSchema"],
         "control_id",
     );
     assert_schema_has_property(
@@ -782,12 +754,12 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "framework_requirement_ids",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "list_evidence_requests")["outputSchema"],
-        "evidence_requests",
+        &find_tool(&tool_list, "list_evidence")["outputSchema"],
+        "evidence",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "create_evidence_request")["outputSchema"],
-        "evidence_request",
+        &find_tool(&tool_list, "create_evidence")["outputSchema"],
+        "evidence",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
@@ -795,7 +767,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "get_evidence_submission")["outputSchema"],
-        "documents",
+        "document",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "list_controls")["outputSchema"],
@@ -819,15 +791,15 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "framework_requirements",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "list_evidence_request_control_mappings")["outputSchema"],
+        &find_tool(&tool_list, "list_evidence_control_mappings")["outputSchema"],
         "mappings",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "map_evidence_request_to_control")["outputSchema"],
+        &find_tool(&tool_list, "map_evidence_to_control")["outputSchema"],
         "control",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "remove_evidence_request_control_mapping")["outputSchema"],
+        &find_tool(&tool_list, "remove_evidence_control_mapping")["outputSchema"],
         "removed",
     );
     assert_schema_has_property(
@@ -851,15 +823,15 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "policy_id",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submissions")["outputSchema"],
         "url_secret_type",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submissions")["outputSchema"],
         "expires_at",
     );
     assert_schema_has_property(
-        &find_tool(&tool_list, "manage_evidence_submission_document")["outputSchema"],
+        &find_tool(&tool_list, "manage_evidence_submissions")["outputSchema"],
         "intended_use",
     );
     assert_schema_has_property(
@@ -992,7 +964,7 @@ async fn mcp_cors_is_available_for_browser_based_clients() {
 }
 
 #[tokio::test]
-async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
+async fn mcp_evidence_tools_scope_to_the_connection_and_validate_all_fields() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP request workspace")
         .with_default_membership()
@@ -1004,19 +976,12 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
     let other_workspace_id = app.workspace_id("other");
-    let due = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Due request", "2026-01-01T00:00:00Z"),
-        )
+    let first = app
+        .create_evidence(workspace_id, &evidence_body("First evidence"))
         .await;
-    let later = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Later request", "2026-03-01T00:00:00Z"),
-        )
+    app.create_evidence(workspace_id, &evidence_body("Second evidence"))
         .await;
-    app.insert_evidence_request_row(other_workspace_id, "Hidden request")
+    app.insert_evidence_row(other_workspace_id, "Hidden evidence")
         .await;
 
     let token = app.api_token().to_owned();
@@ -1026,146 +991,73 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
         async move {
             let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
             mcp_client
-                .call_tool(
-                    "create_evidence_request",
-                    mcp_evidence_request("Created by MCP", "2026-02-15T00:00:00Z"),
-                )
+                .call_tool("create_evidence", mcp_evidence_args("Created by MCP"))
                 .await
         }
     })
     .await;
-    let created_id = uuid_from(&created["evidence_request"]["id"]);
+    let created_id = uuid_from(&created["evidence"]["id"]);
     assert_eq!(
-        created["evidence_request"]["workspace_id"],
+        created["evidence"]["workspace_id"],
         workspace_id.to_string()
     );
-    assert_eq!(created["evidence_request"]["title"], "Created by MCP");
-    assert_eq!(created["evidence_request"]["cadence"], "quarterly");
-    assert_eq!(created["evidence_request"]["status"], "active");
+    assert_eq!(created["evidence"]["title"], "Created by MCP");
+    assert_eq!(created["evidence"]["status"], "active");
+    assert!(created["evidence"].get("cadence").is_none());
     assert_eq!(create_logs.len(), 1);
     assert_audit_event(
         &create_logs[0],
         ExpectedAuditEvent {
-            event_name: "evidence_request.created",
-            operation: "create_evidence_request",
+            event_name: "evidence.created",
+            operation: "create_evidence",
             client_type: "mcp",
             workspace_id,
             user_id: app.user_id(),
             api_token_id: app.api_token_id(),
-            object_type: "evidence_request",
+            object_type: "evidence",
             object_id: created_id,
         },
     );
 
-    let listed = mcp_client
-        .call_tool("list_evidence_requests", json!({}))
-        .await;
-    assert_eq!(
-        listed["evidence_requests"]
-            .as_array()
-            .expect("requests array")
-            .len(),
-        3
-    );
-    assert_eq!(
-        listed["evidence_requests"][0]["workspace_id"],
-        workspace_id.to_string()
-    );
-    assert!(!listed["evidence_requests"]
-        .as_array()
-        .expect("requests array")
+    let listed = mcp_client.call_tool("list_evidence", json!({})).await;
+    let evidence = listed["evidence"].as_array().expect("evidence array");
+    assert_eq!(evidence.len(), 3);
+    assert_eq!(evidence[0]["workspace_id"], workspace_id.to_string());
+    assert!(!evidence
         .iter()
-        .any(|request| request["title"] == "Hidden request"));
-    assert!(listed["evidence_requests"]
-        .as_array()
-        .expect("requests array")
+        .any(|item| item["title"] == "Hidden evidence"));
+    assert!(evidence
         .iter()
-        .any(|request| request["id"] == created_id.to_string()));
+        .any(|item| item["id"] == created_id.to_string()));
 
     let got = mcp_client
         .call_tool(
-            "get_evidence_request",
+            "get_evidence",
             json!({
-                "evidence_request_id": due["id"],
+                "evidence_id": first["id"],
             }),
         )
         .await;
-    assert_eq!(got["evidence_request"]["title"], "Due request");
-
-    let due_only = mcp_client
-        .call_tool(
-            "list_due_evidence_requests",
-            json!({
-                "now": "2026-02-01T00:00:00Z",
-            }),
-        )
-        .await;
-    assert_eq!(due_only["evidence_requests"][0]["id"], due["id"]);
-    assert_ne!(due_only["evidence_requests"][0]["id"], later["id"]);
-
-    let invalid = mcp_client
-        .call_tool_error("list_due_evidence_requests", json!({ "now": "not-a-date" }))
-        .await;
-    assert_eq!(invalid.code.0, -32602);
-    let fields: Vec<_> = invalid.data["problem"]["field_issues"]
-        .as_array()
-        .expect("field issues")
-        .iter()
-        .map(|issue| issue["field"].as_str().expect("field"))
-        .collect();
-    assert_eq!(fields, ["now"]);
+    assert_eq!(got["evidence"]["title"], "First evidence");
 
     let invalid_create = mcp_client
         .call_tool_error(
-            "create_evidence_request",
+            "create_evidence",
             json!({
                 "title": "",
                 "description": " ",
-                "collection_instructions": "\t",
-                "cadence": "weekly",
-                "due_at": "not-a-date",
-                "schedule_anchor_at": "also-not-a-date",
-                "freshness_window_days": 0
+                "collection_instructions": "\t"
             }),
         )
         .await;
     assert_eq!(invalid_create.code.0, -32602);
     assert_eq!(
         field_issue_names(&invalid_create.data),
-        ["due_at", "schedule_anchor_at",]
-    );
-
-    let invalid_domain = mcp_client
-        .call_tool_error(
-            "create_evidence_request",
-            json!({
-                "title": "",
-                "description": " ",
-                "collection_instructions": "\t",
-                "cadence": "weekly",
-                "due_at": "2026-02-15T00:00:00Z",
-                "schedule_anchor_at": "2026-01-01T00:00:00Z",
-                "freshness_window_days": 0
-            }),
-        )
-        .await;
-    assert_eq!(invalid_domain.code.0, -32602);
-    assert_eq!(
-        field_issue_names(&invalid_domain.data),
-        [
-            "title",
-            "description",
-            "collection_instructions",
-            "cadence",
-            "freshness_window_days"
-        ]
+        ["title", "description", "collection_instructions"]
     );
 
     let read_only = app
-        .issue_api_token(
-            workspace_id,
-            vec![WorkspacePermission::ReadEvidenceRequests],
-        )
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadEvidence])
         .await;
     let read_only_token = read_only.raw_token.clone();
     let (denied_create, denied_create_logs) = capture_audit_logs(|request_id| {
@@ -1175,10 +1067,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
             let read_only_client =
                 McpClient::connect_with_request_id(server, &read_only_token, request_id).await;
             read_only_client
-                .call_tool_error(
-                    "create_evidence_request",
-                    mcp_evidence_request("Denied request", "2026-02-15T00:00:00Z"),
-                )
+                .call_tool_error("create_evidence", mcp_evidence_args("Denied evidence"))
                 .await
                 .data
         }
@@ -1189,7 +1078,7 @@ async fn mcp_evidence_request_tools_match_rest_scope_and_validate_all_fields() {
 }
 
 #[tokio::test]
-async fn mcp_submission_tools_preserve_selective_context() {
+async fn mcp_submission_reads_return_one_document_and_newest_first_for_evidence() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP submission workspace")
         .with_default_membership()
@@ -1198,229 +1087,96 @@ async fn mcp_submission_tools_preserve_selective_context() {
     let server = app.mcp_http_server();
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
     let workspace_id = app.workspace_id("workspace");
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Submission request", "2026-04-01T00:00:00Z"),
-        )
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Submission evidence"))
         .await;
-    let evidence_request_id = uuid_from(&request["id"]);
-    let created = app
-        .create_evidence_submission(
-            workspace_id,
-            evidence_request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-03-31T23:59:59Z",
-            "source_system": "okta",
-            "collection_method": "api_export",
-            "summary": "Quarterly access review",
-            "description": "Reviewer decisions and exceptions."
-            }),
+    let evidence_id = uuid_from(&evidence["id"]);
+
+    let older = submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
+        "older.txt",
+        b"older evidence",
+    )
+    .await;
+    let newer = submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-03-31T23:59:59Z",
+        "newer.txt",
+        b"newer evidence",
+    )
+    .await;
+    let older_id = uuid_from(&older["submission_id"]);
+    let newer_id = uuid_from(&newer["submission_id"]);
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .execute(
+            "UPDATE evidence_submissions SET received_at = CASE WHEN id = $1 THEN '2026-01-01T00:00:00Z'::timestamptz ELSE '2026-02-01T00:00:00Z'::timestamptz END WHERE id IN ($1, $2)",
+            &[&older_id, &newer_id],
         )
-        .await;
-    let submission_id = uuid_from(&created["id"]);
+        .await
+        .expect("submission order sets");
 
     let direct = mcp_client
         .call_tool(
             "get_evidence_submission",
-            json!({ "submission_id": submission_id }),
+            json!({ "submission_id": older_id }),
         )
         .await;
-    assert_eq!(direct["submission"]["summary"], "Quarterly access review");
+    assert_eq!(direct["submission"]["id"], older_id.to_string());
+    assert_eq!(direct["submission"]["evidence_id"], evidence_id.to_string());
     assert_eq!(
-        direct["submission"]["description"],
-        "Reviewer decisions and exceptions."
+        direct["submission"]["valid_from"],
+        "2026-01-01T00:00:00.000Z"
     );
-    assert_eq!(direct["submission"]["source_system"], "okta");
+    assert_eq!(direct["document"]["filename"], "older.txt");
+    assert!(direct["document"].get("object_key").is_none());
+
+    let listed = mcp_client
+        .call_tool(
+            "list_evidence_submissions",
+            json!({ "evidence_id": evidence_id }),
+        )
+        .await;
+    let submissions = listed["submissions"]
+        .as_array()
+        .expect("submissions is an array");
+    assert_eq!(submissions.len(), 2);
+    assert_eq!(submissions[0]["submission"]["id"], newer_id.to_string());
+    assert_eq!(submissions[1]["submission"]["id"], older_id.to_string());
+    assert_eq!(submissions[0]["document"]["filename"], "newer.txt");
 
     let latest = mcp_client
         .call_tool(
             "get_latest_evidence_submission",
-            json!({ "evidence_request_id": evidence_request_id }),
+            json!({ "evidence_id": evidence_id }),
         )
         .await;
-    assert_eq!(latest["submission"]["summary"], "Quarterly access review");
-    assert!(latest["submission"].get("description").is_none());
-    assert!(latest["submission"].get("source_system").is_none());
+    assert_eq!(latest["submission"]["id"], newer_id.to_string());
+    assert_eq!(latest["document"]["filename"], "newer.txt");
 }
 
 #[tokio::test]
-async fn mcp_create_evidence_submission_persists_and_returns_upload_next_step() {
-    let app = TestApp::builder()
-        .workspace("workspace", "MCP submission create workspace")
-        .with_default_membership()
-        .build()
-        .await;
-    let server = app.mcp_http_server();
-    let workspace_id = app.workspace_id("workspace");
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Create submission request", "2026-04-01T00:00:00Z"),
-        )
-        .await;
-    let evidence_request_id = uuid_from(&request["id"]);
-
-    let token = app.api_token().to_owned();
-    let (created, logs) = capture_audit_logs(|request_id| {
-        let server = &server;
-        let token = token.clone();
-        async move {
-            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
-            mcp_client
-                .call_tool(
-                    "create_evidence_submission",
-                    json!({
-                        "evidence_request_id": evidence_request_id,
-                        "coverage_start_at": "2026-01-01T00:00:00Z",
-                        "coverage_end_at": "2026-03-31T23:59:59Z",
-                        "source_system": "okta",
-                        "collection_method": "api_export",
-                        "summary": "Quarterly access review",
-                        "description": "Reviewer decisions and exceptions."
-                    }),
-                )
-                .await
-        }
-    })
-    .await;
-    let submission_id = uuid_from(&created["submission_id"]);
-
-    assert_eq!(
-        created["evidence_request_id"],
-        evidence_request_id.to_string()
-    );
-    assert!(created.get("summary").is_none());
-    assert!(created.get("description").is_none());
-    assert!(created.get("token").is_none());
-
-    let persisted = app
-        .postgres()
-        .get()
-        .await
-        .expect("database opens")
-        .query_one(
-            "SELECT source_system, collection_method, summary, description FROM evidence_submissions WHERE id = $1",
-            &[&submission_id],
-        )
-        .await
-        .expect("submission loads");
-    assert_eq!(persisted.get::<_, String>("source_system"), "okta");
-    assert_eq!(
-        persisted.get::<_, String>("collection_method"),
-        "api_export"
-    );
-    assert_eq!(
-        persisted.get::<_, Option<String>>("summary").as_deref(),
-        Some("Quarterly access review")
-    );
-    assert_eq!(
-        persisted.get::<_, Option<String>>("description").as_deref(),
-        Some("Reviewer decisions and exceptions.")
-    );
-
-    assert_eq!(logs.len(), 1);
-    assert_audit_event(
-        &logs[0],
-        ExpectedAuditEvent {
-            event_name: "evidence_submission.created",
-            operation: "create_evidence_submission",
-            client_type: "mcp",
-            workspace_id,
-            user_id: app.user_id(),
-            api_token_id: app.api_token_id(),
-            object_type: "evidence_submission",
-            object_id: submission_id,
-        },
-    );
-    let metadata = audit_metadata(&logs[0]);
-    assert_eq!(
-        metadata["evidence_request_id"],
-        evidence_request_id.to_string()
-    );
-    assert_eq!(
-        metadata["evidence_submission_id"],
-        submission_id.to_string()
-    );
-    let serialized = serde_json::to_string(&logs).expect("logs serialize");
-    assert!(!serialized.contains(app.api_token()));
-    assert!(!serialized.contains("Quarterly access review"));
-    assert!(!serialized.contains("Reviewer decisions and exceptions."));
-}
-
-#[tokio::test]
-async fn mcp_create_evidence_submission_reports_structured_validation_errors() {
-    let app = TestApp::builder()
-        .workspace("workspace", "MCP submission validation workspace")
-        .with_default_membership()
-        .build()
-        .await;
-    let server = app.mcp_http_server();
-    let mcp_client = McpClient::connect(&server, app.api_token()).await;
-    let workspace_id = app.workspace_id("workspace");
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Validation request", "2026-04-01T00:00:00Z"),
-        )
-        .await;
-    let evidence_request_id = uuid_from(&request["id"]);
-
-    let invalid_args = mcp_client
-        .call_tool_error(
-            "create_evidence_submission",
-            json!({
-                "evidence_request_id": evidence_request_id,
-                "coverage_start_at": "not-a-date",
-                "coverage_end_at": "2026-03-31T23:59:59Z",
-                "source_system": "okta",
-                "collection_method": "api_export"
-            }),
-        )
-        .await;
-    assert_eq!(invalid_args.data["problem"]["code"], "validation_failed");
-    assert_eq!(field_issue_names(&invalid_args.data), ["coverage_start_at"]);
-
-    let invalid_domain = mcp_client
-        .call_tool_error(
-            "create_evidence_submission",
-            json!({
-                "evidence_request_id": evidence_request_id,
-                "coverage_start_at": "2026-04-01T00:00:00Z",
-                "coverage_end_at": "2026-03-31T23:59:59Z",
-                "source_system": " ",
-                "collection_method": "\t",
-                "summary": " ",
-                "description": "x".repeat(4_001)
-            }),
-        )
-        .await;
-    assert_eq!(invalid_domain.data["problem"]["code"], "validation_failed");
-    assert_eq!(
-        field_issue_names(&invalid_domain.data),
-        [
-            "source_system",
-            "collection_method",
-            "summary",
-            "description",
-            "coverage_end_at"
-        ]
-    );
-}
-
-#[tokio::test]
-async fn mcp_document_management_issues_bearer_secret_urls_and_audit_success_only() {
+async fn mcp_manage_evidence_submissions_persists_coverage_and_audits_without_secrets() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP upload grant workspace")
         .with_default_membership()
-        .workspace("other", "MCP upload grant hidden workspace")
-        .without_membership()
         .build()
         .await;
     let server = app.mcp_http_server();
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Upload link evidence"))
+        .await;
+    let evidence_id = uuid_from(&evidence["id"]);
     let token = app.api_token().to_owned();
 
     let (grant, logs) = capture_audit_logs(|request_id| {
@@ -1430,79 +1186,196 @@ async fn mcp_document_management_issues_bearer_secret_urls_and_audit_success_onl
             let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
             mcp_client
                 .call_tool(
-                    "manage_evidence_submission_document",
-                    json!({ "submission_id": submission_id }),
+                    "manage_evidence_submissions",
+                    json!({
+                        "evidence_id": evidence_id,
+                        "valid_from": "2026-01-01T00:00:00Z",
+                        "valid_until": "2026-03-31T23:59:59Z"
+                    }),
                 )
                 .await
         }
     })
     .await;
 
-    let url = grant["url"].as_str().expect("upload grant URL");
-    assert!(url.starts_with("https://api.proofplane.test/evidence-document-uploads?token="));
-    assert_eq!(grant["submission_id"], submission_id.to_string());
+    assert_eq!(grant["evidence_id"], evidence_id.to_string());
+    assert_eq!(grant["valid_from"], "2026-01-01T00:00:00.000Z");
+    assert_eq!(grant["valid_until"], "2026-03-31T23:59:59.000Z");
     assert_eq!(grant["url_secret_type"], "bearer_secret");
-    assert_eq!(grant["intended_use"], "human_browser_document_management");
-    assert!(grant["expires_at"].as_str().is_some());
-    assert!(grant.get("token").is_none());
-    assert!(grant.get("api_token").is_none());
-    assert!(grant.get("upload_session_cookie").is_none());
-    assert!(grant.get("file").is_none());
-    assert!(grant.get("bytes").is_none());
+    assert_eq!(grant["intended_use"], "human_browser_evidence_upload");
+    assert!(grant["url"]
+        .as_str()
+        .expect("upload grant URL")
+        .contains("/evidence-document-uploads?token="));
+    assert_secret_fields_absent(&grant);
+
+    let persisted = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            "SELECT valid_from, valid_until, issued_via_agent_connection_id FROM document_upload_grants WHERE evidence_id = $1",
+            &[&evidence_id],
+        )
+        .await
+        .expect("upload grant loads");
+    assert_eq!(
+        persisted.get::<_, chrono::DateTime<chrono::Utc>>("valid_from"),
+        "2026-01-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .expect("valid_from parses")
+    );
+    assert_eq!(
+        persisted.get::<_, Option<Uuid>>("issued_via_agent_connection_id"),
+        Some(app.api_token_id())
+    );
 
     assert_eq!(logs.len(), 1);
     assert_audit_event(
         &logs[0],
         ExpectedAuditEvent {
             event_name: "evidence_document_upload_grant.issued",
-            operation: "manage_evidence_submission_document",
+            operation: "manage_evidence_submissions",
             client_type: "mcp",
             workspace_id,
             user_id: app.user_id(),
             api_token_id: app.api_token_id(),
-            object_type: "evidence_submission",
-            object_id: submission_id,
+            object_type: "evidence",
+            object_id: evidence_id,
         },
     );
-    let metadata = audit_metadata(&logs[0]);
     assert_eq!(
-        metadata["evidence_submission_id"],
-        submission_id.to_string()
+        audit_metadata(&logs[0])["evidence_id"],
+        evidence_id.to_string()
     );
-    assert!(!metadata.to_string().contains("token"));
-    assert!(!metadata.to_string().contains("url"));
+    let serialized = serde_json::to_string(&logs).expect("logs serialize");
+    assert!(!serialized.contains(app.api_token()));
+    assert!(!serialized.contains(grant["url"].as_str().expect("url")));
 
+    let upload_url = url::Url::parse(grant["url"].as_str().expect("upload URL is a string"))
+        .expect("upload URL parses");
+    let upload_path = format!(
+        "{}?{}",
+        upload_url.path(),
+        upload_url.query().expect("upload URL contains a token")
+    );
+    let redeemed = app.server().get(&upload_path).await;
+    redeemed.assert_status(StatusCode::SEE_OTHER);
+    let set_cookie_header = redeemed.header("set-cookie");
+    let cookie = set_cookie_header
+        .to_str()
+        .expect("upload session cookie is a header")
+        .split(';')
+        .next()
+        .expect("upload session cookie has a name and value")
+        .to_owned();
+    app.server()
+        .post("/evidence-document-uploads/files")
+        .add_header("cookie", cookie)
+        .multipart(
+            MultipartForm::new().add_part(
+                "file",
+                Part::bytes(b"MCP browser upload".to_vec())
+                    .file_name("mcp-upload.txt")
+                    .mime_type("text/plain"),
+            ),
+        )
+        .await
+        .assert_status(StatusCode::SEE_OTHER);
+
+    let persisted = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+SELECT s.evidence_id, s.valid_from, s.valid_until, d.filename
+FROM evidence_submissions s
+JOIN documents d
+  ON d.owner_type = 'evidence_submission'
+ AND d.owner_id = s.id
+WHERE s.evidence_id = $1
+"#,
+            &[&evidence_id],
+        )
+        .await
+        .expect("browser-created submission loads");
+    assert_eq!(persisted.get::<_, Uuid>("evidence_id"), evidence_id);
+    assert_eq!(
+        persisted.get::<_, chrono::DateTime<chrono::Utc>>("valid_from"),
+        "2026-01-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .expect("valid_from parses")
+    );
+    assert_eq!(
+        persisted.get::<_, chrono::DateTime<chrono::Utc>>("valid_until"),
+        "2026-03-31T23:59:59Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .expect("valid_until parses")
+    );
+    assert_eq!(persisted.get::<_, String>("filename"), "mcp-upload.txt");
+}
+
+#[tokio::test]
+async fn mcp_manage_evidence_submissions_validates_and_conceals_denied_access() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP upload grant validation workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Validation evidence"))
+        .await;
+    let evidence_id = uuid_from(&evidence["id"]);
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
+
     let invalid = mcp_client
         .call_tool_error(
-            "manage_evidence_submission_document",
-            json!({ "submission_id": "not-a-uuid" }),
+            "manage_evidence_submissions",
+            json!({
+                "evidence_id": evidence_id,
+                "valid_from": "not-a-date",
+                "valid_until": "2026-03-31T23:59:59Z"
+            }),
         )
         .await;
-    assert_eq!(invalid.data["problem"]["code"], "validation_failed");
-    assert_eq!(field_issue_names(&invalid.data), ["submission_id"]);
+    assert_eq!(field_issue_names(&invalid.data), ["valid_from"]);
 
     let missing = mcp_client
-        .call_tool_error(
-            "manage_evidence_submission_document",
-            json!({ "submission_id": Uuid::new_v4() }),
-        )
+        .call_tool_error("manage_evidence_submissions", json!({}))
         .await;
-    assert_eq!(missing.data["problem"]["code"], "not_found");
+    assert_eq!(
+        field_issue_names(&missing.data),
+        ["evidence_id", "valid_from", "valid_until"]
+    );
 
-    let other_submission_id = insert_submission_row(
-        &app,
-        app.workspace_id("other"),
-        "Hidden upload grant submission",
-    )
-    .await;
-    let cross_workspace = mcp_client
+    let inverted = mcp_client
         .call_tool_error(
-            "manage_evidence_submission_document",
-            json!({ "submission_id": other_submission_id }),
+            "manage_evidence_submissions",
+            json!({
+                "evidence_id": evidence_id,
+                "valid_from": "2026-04-01T00:00:00Z",
+                "valid_until": "2026-03-31T23:59:59Z"
+            }),
         )
         .await;
-    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
+    assert_eq!(field_issue_names(&inverted.data), ["valid_until"]);
+
+    let unknown = mcp_client
+        .call_tool_error(
+            "manage_evidence_submissions",
+            json!({
+                "evidence_id": Uuid::new_v4(),
+                "valid_from": "2026-01-01T00:00:00Z",
+                "valid_until": "2026-03-31T23:59:59Z"
+            }),
+        )
+        .await;
+    assert_eq!(unknown.data["problem"]["code"], "not_found");
 
     let read_only = app
         .issue_api_token(
@@ -1510,24 +1383,18 @@ async fn mcp_document_management_issues_bearer_secret_urls_and_audit_success_onl
             vec![WorkspacePermission::ReadEvidenceSubmissions],
         )
         .await;
-    let (denied, denied_logs) = capture_audit_logs(|request_id| {
-        let server = &server;
-        let token = read_only.raw_token.clone();
-        async move {
-            let read_only_client =
-                McpClient::connect_with_request_id(server, &token, request_id).await;
-            read_only_client
-                .call_tool_error(
-                    "manage_evidence_submission_document",
-                    json!({ "submission_id": submission_id }),
-                )
-                .await
-                .data
-        }
-    })
-    .await;
-    assert_eq!(denied["problem"]["code"], "not_found");
-    assert!(denied_logs.is_empty());
+    let denied = McpClient::connect(&server, &read_only.raw_token)
+        .await
+        .call_tool_error(
+            "manage_evidence_submissions",
+            json!({
+                "evidence_id": evidence_id,
+                "valid_from": "2026-01-01T00:00:00Z",
+                "valid_until": "2026-03-31T23:59:59Z"
+            }),
+        )
+        .await;
+    assert_eq!(denied.data["problem"]["code"], "not_found");
 }
 
 #[tokio::test]
@@ -1789,7 +1656,7 @@ async fn mcp_framework_tools_list_global_reference_data_without_workspace_argume
     let limited = app
         .issue_api_token(
             app.workspace_id("workspace"),
-            vec![WorkspacePermission::ReadEvidenceRequests],
+            vec![WorkspacePermission::ReadEvidence],
         )
         .await;
     let limited_client = McpClient::connect(&server, &limited.raw_token).await;
@@ -2541,15 +2408,12 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-01");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Mapped request", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence(workspace_id, &evidence_body("Mapped evidence"))
         .await;
-    let evidence_request_id = uuid_from(&request["id"]);
+    let evidence_id = uuid_from(&request["id"]);
     insert_control_mapping_row(
         &app,
-        evidence_request_id,
+        evidence_id,
         control_id,
         "Maps access evidence to the access review control.",
     )
@@ -2560,8 +2424,8 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
 
     let mappings = mcp_client
         .call_tool(
-            "list_evidence_request_control_mappings",
-            json!({ "evidence_request_id": evidence_request_id }),
+            "list_evidence_control_mappings",
+            json!({ "evidence_id": evidence_id }),
         )
         .await;
     assert_eq!(
@@ -2570,10 +2434,7 @@ async fn mcp_control_tools_match_rest_visible_mappings_and_permissions() {
     );
 
     let limited = app
-        .issue_api_token(
-            workspace_id,
-            vec![WorkspacePermission::ReadEvidenceRequests],
-        )
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadEvidence])
         .await;
     let limited_client = McpClient::connect(&server, &limited.raw_token).await;
     let denied = limited_client
@@ -2595,27 +2456,21 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-04");
     let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Mapping write request", "2026-05-01T00:00:00Z"),
-        )
+        .create_evidence(workspace_id, &evidence_body("Mapping write evidence"))
         .await;
-    let evidence_request_id = uuid_from(&request["id"]);
+    let evidence_id = uuid_from(&request["id"]);
 
     let created = mcp_client
         .call_tool(
-            "map_evidence_request_to_control",
+            "map_evidence_to_control",
             json!({
-                "evidence_request_id": evidence_request_id,
+                "evidence_id": evidence_id,
                 "control_id": control_id,
                 "rationale": "Maps access evidence to the access review control."
             }),
         )
         .await;
-    assert_eq!(
-        created["evidence_request_id"],
-        evidence_request_id.to_string()
-    );
+    assert_eq!(created["evidence_id"], evidence_id.to_string());
     assert_eq!(created["control"]["id"], control_id.to_string());
     assert_eq!(
         created["rationale"],
@@ -2624,8 +2479,8 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
 
     let listed = mcp_client
         .call_tool(
-            "list_evidence_request_control_mappings",
-            json!({ "evidence_request_id": evidence_request_id }),
+            "list_evidence_control_mappings",
+            json!({ "evidence_id": evidence_id }),
         )
         .await;
     assert_eq!(
@@ -2635,9 +2490,9 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
 
     let duplicate = mcp_client
         .call_tool_error(
-            "map_evidence_request_to_control",
+            "map_evidence_to_control",
             json!({
-                "evidence_request_id": evidence_request_id,
+                "evidence_id": evidence_id,
                 "control_id": control_id,
                 "rationale": "Duplicate mapping"
             }),
@@ -2645,30 +2500,27 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
         .await;
     assert_eq!(
         duplicate.data["problem"]["code"],
-        "evidence_request_control_mapping_exists"
+        "evidence_control_mapping_exists"
     );
 
     let removed = mcp_client
         .call_tool(
-            "remove_evidence_request_control_mapping",
+            "remove_evidence_control_mapping",
             json!({
-                "evidence_request_id": evidence_request_id,
+                "evidence_id": evidence_id,
                 "control_id": control_id
             }),
         )
         .await;
     assert_eq!(removed["removed"], true);
-    assert_eq!(
-        removed["evidence_request_id"],
-        evidence_request_id.to_string()
-    );
+    assert_eq!(removed["evidence_id"], evidence_id.to_string());
     assert_eq!(removed["control_id"], control_id.to_string());
 
     let missing = mcp_client
         .call_tool_error(
-            "remove_evidence_request_control_mapping",
+            "remove_evidence_control_mapping",
             json!({
-                "evidence_request_id": evidence_request_id,
+                "evidence_id": evidence_id,
                 "control_id": control_id
             }),
         )
@@ -2685,9 +2537,9 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
             let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
             mcp_client
                 .call_tool(
-                    "map_evidence_request_to_control",
+                    "map_evidence_to_control",
                     json!({
-                        "evidence_request_id": evidence_request_id,
+                        "evidence_id": evidence_id,
                         "control_id": second_control_id,
                         "rationale": "Audited mapping"
                     }),
@@ -2701,22 +2553,19 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
     assert_audit_event(
         &logs[0],
         ExpectedAuditEvent {
-            event_name: "evidence_request_control_mapping.created",
-            operation: "map_evidence_request_to_control",
+            event_name: "evidence_control_mapping.created",
+            operation: "map_evidence_to_control",
             client_type: "mcp",
             workspace_id,
             user_id: app.user_id(),
             api_token_id: app.api_token_id(),
-            object_type: "evidence_request_control_mapping",
+            object_type: "evidence_control_mapping",
             object_id: second_control_id,
         },
     );
 
     let limited = app
-        .issue_api_token(
-            workspace_id,
-            vec![WorkspacePermission::ReadEvidenceRequests],
-        )
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadEvidence])
         .await;
     let limited_token = limited.raw_token.clone();
     let (denied, denied_logs) = capture_audit_logs(|request_id| {
@@ -2727,9 +2576,9 @@ async fn mcp_mapping_write_tools_create_list_delete_and_audit_success_only() {
                 McpClient::connect_with_request_id(server, &limited_token, request_id).await;
             limited_client
                 .call_tool_error(
-                    "map_evidence_request_to_control",
+                    "map_evidence_to_control",
                     json!({
-                        "evidence_request_id": evidence_request_id,
+                        "evidence_id": evidence_id,
                         "control_id": control_id,
                         "rationale": "Denied mapping"
                     }),
@@ -2933,94 +2782,25 @@ fn assert_unauthorized(response: &axum_test::TestResponse) {
     response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.header(header::WWW_AUTHENTICATE),
-        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence_requests write_evidence_requests read_evidence_submissions write_evidence_submissions read_controls write_controls manage_auditor_access\""
+        "Bearer realm=\"proofplane-mcp\", resource_metadata=\"https://mcp.proofplane.test/.well-known/oauth-protected-resource/mcp\", scope=\"read_evidence write_evidence read_evidence_submissions write_evidence_submissions read_controls write_controls manage_auditor_access\""
     );
 }
 
-fn evidence_request(title: &str, due_at: &str) -> Value {
+fn evidence_body(title: &str) -> Value {
     json!({
         "title": title,
         "description": format!("Collect evidence for {title}."),
         "collection_instructions": format!("Upload the artifact for {title}."),
-        "cadence": "quarterly",
-        "due_at": due_at,
-        "schedule_anchor_at": "2026-01-01T00:00:00Z",
-        "freshness_window_days": 90,
         "status": "active"
     })
 }
 
-fn mcp_evidence_request(title: &str, due_at: &str) -> Value {
+fn mcp_evidence_args(title: &str) -> Value {
     json!({
         "title": title,
         "description": format!("Collect evidence for {title}."),
-        "collection_instructions": format!("Upload the artifact for {title}."),
-        "cadence": "quarterly",
-        "due_at": due_at,
-        "schedule_anchor_at": "2026-01-01T00:00:00Z",
-        "freshness_window_days": 90
+        "collection_instructions": format!("Upload the artifact for {title}.")
     })
-}
-
-async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
-    let request = app
-        .create_evidence_request(
-            workspace_id,
-            &evidence_request("Download evidence", "2099-01-01T00:00:00Z"),
-        )
-        .await;
-    let evidence_request_id = uuid_from(&request["id"]);
-    let response = app
-        .create_evidence_submission(
-            workspace_id,
-            evidence_request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-01-31T23:59:59Z",
-            "source_system": "integration",
-            "collection_method": "manual_upload",
-            }),
-        )
-        .await;
-    uuid_from(&response["id"])
-}
-
-async fn insert_submission_row(app: &TestApp, workspace_id: Uuid, title: &str) -> Uuid {
-    let client = app
-        .postgres()
-        .get()
-        .await
-        .expect("submission fixture connection opens");
-    let evidence_request_id = Uuid::new_v4();
-    let submission_id = Uuid::new_v4();
-    client
-        .execute(
-            r#"
-INSERT INTO evidence_requests (
-    id, workspace_id, title, description, collection_instructions,
-    cadence, due_at, schedule_anchor_at, freshness_window_days, status
-)
-VALUES ($1, $2, $3, 'Seeded description', 'Seeded instructions', 'quarterly', now(), now(), 90, 'active')
-"#,
-            &[&evidence_request_id, &workspace_id, &title],
-        )
-        .await
-        .expect("evidence request fixture inserts");
-    client
-        .execute(
-            r#"
-INSERT INTO evidence_submissions (
-    id, evidence_request_id, submitted_by_agent_connection_id,
-    coverage_start_at, coverage_end_at, source_system, collection_method
-)
-VALUES ($1, $2, $3, now(), now(), 'integration', 'manual_upload')
-"#,
-            &[&submission_id, &evidence_request_id, &app.api_token_id()],
-        )
-        .await
-        .expect("evidence submission fixture inserts");
-
-    submission_id
 }
 
 async fn insert_control_row(app: &TestApp, workspace_id: Uuid, code: &str, title: &str) -> Uuid {
@@ -3050,7 +2830,7 @@ VALUES ($1, $2, $3, $4, $5)
 
 async fn insert_control_mapping_row(
     app: &TestApp,
-    evidence_request_id: Uuid,
+    evidence_id: Uuid,
     control_id: Uuid,
     rationale: &str,
 ) {
@@ -3060,10 +2840,10 @@ async fn insert_control_mapping_row(
         .expect("control mapping fixture connection opens")
         .execute(
             r#"
-INSERT INTO evidence_request_control_mappings (evidence_request_id, control_id, rationale)
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
 VALUES ($1, $2, $3)
 "#,
-            &[&evidence_request_id, &control_id, &rationale],
+            &[&evidence_id, &control_id, &rationale],
         )
         .await
         .expect("control mapping fixture inserts");

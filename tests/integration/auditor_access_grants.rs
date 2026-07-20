@@ -73,11 +73,7 @@ async fn ordinary_read_token_cannot_create_grant() {
 
     let result = service
         .create(
-            &agent_connection_context(
-                &app,
-                workspace_id,
-                [WorkspacePermission::ReadEvidenceRequests],
-            ),
+            &agent_connection_context(&app, workspace_id, [WorkspacePermission::ReadEvidence]),
             CreateAuditorAccessGrantRequest {
                 auditor_email: "auditor@example.com".to_owned(),
                 expires_at: None,

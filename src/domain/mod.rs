@@ -5,7 +5,7 @@ mod auditor_portal;
 mod controls;
 mod document;
 mod error;
-mod evidence_request;
+mod evidence;
 mod evidence_submission;
 mod ids;
 mod oauth;
@@ -27,26 +27,25 @@ pub use auditor_access_session::{
     AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
 };
 pub use auditor_portal::{
-    AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest, AuditorPortalPolicy,
+    AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
     AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
     AuditorPortalReadModel, AuditorPortalSubmission,
 };
 pub use controls::{
-    Control, ControlId, ControlSummary, CreateControlPayload,
-    CreateEvidenceRequestControlMappingPayload, EvidenceRequestControlMapping, Framework,
-    FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+    Control, ControlId, ControlSummary, CreateControlPayload, CreateEvidenceControlMappingPayload,
+    EvidenceControlMapping, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
+    UpdateControlPayload,
 };
 pub use document::{
     CreateDocumentPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,
     DocumentUploadStatus,
 };
 pub use error::DomainError;
-pub use evidence_request::{
-    CreateEvidenceRequestPayload, EvidenceRequest, EvidenceRequestCadence, EvidenceRequestId,
-    EvidenceRequestStatus, UpdateEvidenceRequestPayload,
+pub use evidence::{
+    CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
 };
 pub use evidence_submission::{
-    CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
+    CoverageWindow, CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
 };
 pub use oauth::{
@@ -60,9 +59,7 @@ pub use policy::{
 };
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};
-pub use validation::{
-    optional_text, required_text, validate_document_filename, validate_freshness_window_days,
-};
+pub use validation::{optional_text, required_text, validate_document_filename};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId, WorkspaceMembership,
     WorkspaceRole, WorkspaceWithRole,

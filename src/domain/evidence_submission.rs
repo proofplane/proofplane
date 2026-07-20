@@ -1,26 +1,37 @@
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, AgentConnectionId, Document, EvidenceRequestId, UserId};
+use super::{ids::uuid_id, AgentConnectionId, Document, DomainError, EvidenceId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(DocumentUploadGrantId);
 
-/**
- * An EvidenceSubmission represents a particular piece of evidence that
- * is submitted to satisfy a request for evidence for a certain period.
- */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoverageWindow {
+    pub valid_from: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
+}
+
+impl CoverageWindow {
+    pub fn new(valid_from: DateTime<Utc>, valid_until: DateTime<Utc>) -> Result<Self, DomainError> {
+        if valid_until < valid_from {
+            return Err(DomainError::InvalidCoverageWindow);
+        }
+
+        Ok(Self {
+            valid_from,
+            valid_until,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceSubmission {
     pub id: EvidenceSubmissionId,
-    pub evidence_request_id: EvidenceRequestId,
+    pub evidence_id: EvidenceId,
     pub submitted_by: EvidenceSubmitter,
     pub received_at: DateTime<Utc>,
-    pub coverage_start_at: DateTime<Utc>,
-    pub coverage_end_at: DateTime<Utc>,
-    pub source_system: String,
-    pub collection_method: String,
-    pub summary: Option<String>,
-    pub description: Option<String>,
+    pub valid_from: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,32 +59,26 @@ impl EvidenceSubmitter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CreateEvidenceSubmissionPayload {
-    pub evidence_request_id: EvidenceRequestId,
-    pub coverage_start_at: DateTime<Utc>,
-    pub coverage_end_at: DateTime<Utc>,
-    pub source_system: String,
-    pub collection_method: String,
-    pub summary: Option<String>,
-    pub description: Option<String>,
+    pub id: EvidenceSubmissionId,
+    pub evidence_id: EvidenceId,
+    pub coverage: CoverageWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceSubmissionDetail {
     pub submission: EvidenceSubmission,
-    pub documents: Vec<Document>,
+    pub document: Document,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
+    use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::EvidenceSubmissionId;
+    use super::{CoverageWindow, EvidenceSubmissionId};
     use crate::domain::DomainError;
-    use crate::domain::{DocumentId, DocumentUploadStatus};
 
     #[test]
     fn evidence_submission_id_wraps_uuid() {
@@ -84,45 +89,22 @@ mod tests {
     }
 
     #[test]
-    fn document_id_wraps_uuid() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440004").unwrap();
-        let id = DocumentId::from(uuid);
+    fn coverage_window_accepts_ordered_and_instant_windows() {
+        let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
 
-        assert_eq!(Uuid::from(id), uuid);
+        assert_eq!(CoverageWindow::new(start, end).unwrap().valid_until, end);
+        assert_eq!(CoverageWindow::new(start, start).unwrap().valid_from, start);
     }
 
     #[test]
-    fn upload_status_parses_allowed_values() {
-        assert_eq!(
-            DocumentUploadStatus::from_str("pending").unwrap(),
-            DocumentUploadStatus::PendingUpload
-        );
-        assert_eq!(
-            DocumentUploadStatus::from_str("finalizing").unwrap(),
-            DocumentUploadStatus::Finalizing
-        );
-        assert_eq!(
-            DocumentUploadStatus::from_str("uploaded").unwrap(),
-            DocumentUploadStatus::Uploaded
-        );
-        assert_eq!(
-            DocumentUploadStatus::from_str("contains_virus").unwrap(),
-            DocumentUploadStatus::ContainsVirus
-        );
-        assert_eq!(
-            DocumentUploadStatus::from_str("failed").unwrap(),
-            DocumentUploadStatus::FailedUpload
-        );
-    }
+    fn coverage_window_rejects_end_before_start() {
+        let start = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
 
-    #[test]
-    fn upload_status_rejects_invalid_values() {
         assert_eq!(
-            DocumentUploadStatus::from_str("skipped").unwrap_err(),
-            DomainError::InvalidEnumValue {
-                field: "upload_status",
-                value: "skipped".to_owned()
-            }
+            CoverageWindow::new(start, end).unwrap_err(),
+            DomainError::InvalidCoverageWindow
         );
     }
 }

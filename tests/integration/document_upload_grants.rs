@@ -1,666 +1,146 @@
+use axum::http::StatusCode;
 use axum_test::multipart::{MultipartForm, Part};
-use chrono::{Duration, SecondsFormat, Utc};
 use proofplane::{
-    authentication::{
-        paseto::{
-            RegisteredClaims, UploadGrantDecryptor, UploadGrantEncryptor, UploadSessionEncryptor,
-        },
-        ApiTokenContext,
-    },
-    config::{PasetoUploadGrantConfig, PasetoUploadGrantKey},
-    domain::{EvidenceSubmissionId, WorkspaceId, WorkspacePermission, WorkspacePermissions},
-    services::{
-        document_upload_grants::{DocumentUploadGrantService, UploadGrantError},
-        upload_sessions::UPLOAD_SESSION_AUDIENCE,
-    },
+    domain::{CoverageWindow, EvidenceId},
+    services::document_upload_grants::UploadGrantError,
 };
-use secrecy::SecretString;
-use serde::Serialize;
 use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
-use super::support::{finalize_document, upload_document, TestApp};
+use super::support::TestApp;
 
 #[tokio::test]
-async fn upload_grant_issue_persists_workspace_submission_issuer_and_expiry() {
-    let app = upload_grant_app().await;
+async fn upload_grant_redeems_once_and_session_creates_one_submission_per_file() {
+    let app = upload_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let service = upload_grant_service(&app);
-
-    let issued = service
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-
-    assert_eq!(
-        issued.submission_id,
-        EvidenceSubmissionId::from(submission_id)
-    );
-    assert_eq!(issued.audit.workspace_id, WorkspaceId::from(workspace_id));
-    assert_eq!(
-        issued.audit.issued_by_user_id.to_string(),
-        app.user_id().to_string()
-    );
-    assert!(issued
-        .url
-        .as_str()
-        .starts_with("https://api.proofplane.test/evidence-document-uploads?token=v4.local."));
-
-    let rows = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query(
-            r#"
-SELECT workspace_id, evidence_submission_id, issued_by_user_id, issued_via_api_token_id,
-       issued_at, expires_at, redeemed_at
-FROM document_upload_grants
-"#,
-            &[],
-        )
-        .await
-        .expect("grant row reads");
-    assert_eq!(rows.len(), 1);
-    let row = &rows[0];
-    assert_eq!(row.get::<_, Uuid>("workspace_id"), workspace_id);
-    assert_eq!(row.get::<_, Uuid>("evidence_submission_id"), submission_id);
-    assert_eq!(row.get::<_, Uuid>("issued_by_user_id"), app.user_id());
-    assert_eq!(
-        row.get::<_, Uuid>("issued_via_api_token_id"),
-        app.api_token_id()
-    );
-    assert!(
-        row.get::<_, chrono::DateTime<Utc>>("expires_at")
-            > row.get::<_, chrono::DateTime<Utc>>("issued_at")
-    );
-    assert!(row
-        .get::<_, Option<chrono::DateTime<Utc>>>("redeemed_at")
-        .is_none());
-}
-
-#[tokio::test]
-async fn upload_grant_issue_for_missing_or_cross_workspace_submission_is_unavailable() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let other_workspace_id = app.workspace_id("other");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let service = upload_grant_service(&app);
-
-    let missing = service
-        .issue(
-            &api_token_context(&app, workspace_id),
-            EvidenceSubmissionId::from(Uuid::new_v4()),
-        )
-        .await;
-    assert!(matches!(missing, Err(UploadGrantError::Unavailable)));
-
-    let cross_workspace = service
-        .issue(
-            &api_token_context(&app, other_workspace_id),
-            EvidenceSubmissionId::from(submission_id),
-        )
-        .await;
-    assert!(matches!(
-        cross_workspace,
-        Err(UploadGrantError::Unavailable)
-    ));
-
-    let count = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query_one("SELECT count(*) FROM document_upload_grants", &[])
-        .await
-        .expect("grant count reads")
-        .get::<_, i64>(0);
-    assert_eq!(count, 0);
-}
-
-#[tokio::test]
-async fn upload_grant_redeems_once_and_marks_redeemed_at() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let service = upload_grant_service(&app);
-    let issued = service
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-    let token = token_from_url(&issued.url);
-
-    let redeemed = service
-        .redeem(&token)
-        .await
-        .expect("upload grant redeems once");
-
-    assert_eq!(redeemed.workspace_id, WorkspaceId::from(workspace_id));
-    assert_eq!(
-        redeemed.submission_id,
-        EvidenceSubmissionId::from(submission_id)
-    );
-    assert_eq!(
-        redeemed.issued_by_user_id.to_string(),
-        app.user_id().to_string()
-    );
-    assert_eq!(
-        redeemed.issued_via.api_token_id().map(|id| id.to_string()),
-        Some(app.api_token_id().to_string())
-    );
-
-    let second = service.redeem(&token).await;
-    assert!(matches!(second, Err(UploadGrantError::Unavailable)));
-
-    let redeemed_at = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query_one("SELECT redeemed_at FROM document_upload_grants", &[])
-        .await
-        .expect("grant row reads")
-        .get::<_, Option<chrono::DateTime<Utc>>>("redeemed_at");
-    assert!(redeemed_at.is_some());
-}
-
-#[tokio::test]
-async fn upload_grant_redeem_unavailable_cases_are_generic() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let service = upload_grant_service(&app);
-
-    assert_unavailable(service.redeem("not-a-token").await);
-
-    let expired_token = issue_grant_token(&app, &service, workspace_id).await;
-    app.postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .execute(
-            "UPDATE document_upload_grants SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes'",
-            &[],
-        )
-        .await
-        .expect("grant expiry updates");
-    assert_unavailable(service.redeem(&expired_token).await);
-
-    let missing_row_token = issue_grant_token(&app, &service, workspace_id).await;
-    app.postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .execute("DELETE FROM document_upload_grants", &[])
-        .await
-        .expect("grant rows delete");
-    assert_unavailable(service.redeem(&missing_row_token).await);
-}
-
-#[tokio::test]
-async fn existing_download_grants_remain_reusable() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = super::support::upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "download-still-reusable.txt",
-        b"download",
-    )
-    .await;
-    let document_id = Uuid::parse_str(document["id"].as_str().expect("document id"))
-        .expect("document id parses");
-    finalize_document(&app, workspace_id, submission_id, document_id).await;
-
+    let evidence_id = create_evidence(&app, workspace_id, "Quarterly access review").await;
+    let coverage = coverage();
     let grant = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents/{document_id}/download-grants"
-        ))
-        .await;
-    grant.assert_status_ok();
-    let url = grant.json::<Value>()["url"]
-        .as_str()
-        .expect("download URL")
-        .to_owned();
-    let path = Url::parse(&url)
-        .expect("download URL parses")
-        .path()
-        .to_owned()
-        + "?"
-        + Url::parse(&url)
-            .expect("download URL parses")
-            .query()
-            .expect("download token query");
-
-    app.get(&path).await.assert_status_ok();
-    app.get(&path).await.assert_status_ok();
-}
-
-#[tokio::test]
-async fn upload_session_redeems_grant_sets_cookie_and_marks_redeemed() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let service = upload_grant_service(&app);
-    let issued = service
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-
-    let response = app.server().get(&upload_path(&issued.url)).await;
-    response.assert_status(axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.header("location").to_str().expect("location"),
-        "/evidence-document-uploads"
-    );
-    let set_cookie = response.header("set-cookie");
-    let cookie = set_cookie.to_str().expect("set-cookie");
-
-    assert!(cookie.starts_with("proofplane_document_upload_session=v4.local."));
-    assert!(cookie.contains("; HttpOnly"));
-    assert!(cookie.contains("; SameSite=Lax"));
-    assert!(cookie.contains("; Path=/evidence-document-uploads"));
-    let max_age = cookie_max_age(cookie);
-    assert!((1..=300).contains(&max_age));
-    assert!(cookie.contains("; Secure"));
-    app.server()
-        .get("/evidence-document-uploads")
-        .add_header("cookie", cookie)
-        .await
-        .assert_status_ok();
-
-    let redeemed_at = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query_one("SELECT redeemed_at FROM document_upload_grants", &[])
-        .await
-        .expect("grant row reads")
-        .get::<_, Option<chrono::DateTime<Utc>>>("redeemed_at");
-    assert!(redeemed_at.is_some());
-}
-
-#[tokio::test]
-async fn upload_session_grant_url_cannot_be_opened_twice() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let issued = upload_grant_service(&app)
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-    let path = upload_path(&issued.url);
-
-    app.server()
-        .get(&path)
-        .await
-        .assert_status(axum::http::StatusCode::SEE_OTHER);
-    let second = app.get(&path).await;
-
-    second.assert_status(axum::http::StatusCode::NOT_FOUND);
-    assert_eq!(second.maybe_header("set-cookie"), None);
-}
-
-#[tokio::test]
-async fn upload_session_cookie_expires_at_original_grant_expiry() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let issued = upload_grant_service(&app)
-        .issue(&api_token_context(&app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-    app.postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .execute(
-            "UPDATE document_upload_grants SET expires_at = now() + interval '1 second'",
-            &[],
+        .document_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            EvidenceId::from(evidence_id),
+            coverage,
         )
         .await
-        .expect("grant expiry updates");
+        .expect("upload grant issues");
+    assert_eq!(grant.evidence_id, evidence_id.into());
+    assert_eq!(grant.coverage, coverage);
 
-    let redeemed = app.server().get(&upload_path(&issued.url)).await;
-    redeemed.assert_status(axum::http::StatusCode::SEE_OTHER);
-    let set_cookie = redeemed.header("set-cookie");
-    let cookie = set_cookie.to_str().expect("set-cookie");
-    assert_eq!(cookie_max_age(cookie), 1);
+    let grant_path = local_path(&grant.url);
+    let redeemed = app.server().get(&grant_path).await;
+    redeemed.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(redeemed.header("location"), "/evidence-document-uploads");
+    let set_cookie_header = redeemed.header("set-cookie");
+    let set_cookie = set_cookie_header.to_str().expect("cookie header");
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    assert!(set_cookie.contains("Path=/evidence-document-uploads"));
+    assert!(set_cookie.contains("Secure"));
+    let cookie = request_cookie(set_cookie);
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    app.server()
+        .get(&grant_path)
+        .await
+        .assert_status_not_found();
     app.server()
         .get("/evidence-document-uploads")
-        .add_header("cookie", cookie)
-        .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn upload_session_post_accepts_native_form_and_enters_document_pipeline() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    let response = app
-        .server()
-        .post("/evidence-document-uploads/files")
         .add_header("cookie", cookie.clone())
-        .multipart(browser_upload_form(
-            b"browser bytes",
-            "browser-artifact.txt",
-            "text/plain",
-        ))
-        .await;
-
-    response.assert_status(axum::http::StatusCode::SEE_OTHER);
-    assert_eq!(
-        response.header("location").to_str().expect("location"),
-        "/evidence-document-uploads"
-    );
-    let row = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query_one(
-            r#"
-SELECT a.filename, a.checksum_crc32c, a.upload_status, count(o.id) AS outbox_count
-FROM documents a
-LEFT JOIN outbox_messages o ON o.aggregate_id = a.id::text
-WHERE a.owner_type = 'evidence_submission'
-  AND a.owner_id = $1
-GROUP BY a.id
-"#,
-            &[&submission_id],
-        )
-        .await
-        .expect("document row reads");
-    assert_eq!(row.get::<_, String>("filename"), "browser-artifact.txt");
-    assert_eq!(
-        row.get::<_, String>("checksum_crc32c"),
-        super::support::crc32c_base64(b"browser bytes")
-    );
-    assert_eq!(row.get::<_, String>("upload_status"), "pending");
-    assert_eq!(row.get::<_, i64>("outbox_count"), 1);
-
-    app.server()
-        .get("/evidence-document-uploads")
-        .add_header("cookie", cookie)
         .await
         .assert_status_ok();
-    assert_eq!(document_filenames(&app, submission_id).await.len(), 1);
-}
 
-#[tokio::test]
-async fn upload_session_page_downloads_finalized_document() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "ready.txt",
-        b"ready bytes",
-    )
-    .await;
-    let document_id = Uuid::parse_str(document["id"].as_str().expect("document id"))
-        .expect("document id parses");
-    finalize_document(&app, workspace_id, submission_id, document_id).await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    let redirect = app
-        .server()
-        .get(&format!(
-            "/evidence-document-uploads/files/{document_id}/download"
-        ))
-        .add_header("cookie", cookie)
-        .await;
-    redirect.assert_status(axum::http::StatusCode::SEE_OTHER);
-    let location_header = redirect.header("location");
-    let location = location_header.to_str().expect("location");
-    assert!(location.starts_with("https://api.proofplane.test/document-downloads?token="));
-}
-
-#[tokio::test]
-async fn upload_session_archives_terminal_document_idempotently_and_hides_it() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "archive-me.txt",
-        b"ready",
-    )
-    .await;
-    let document_id = document_id(&document);
-    finalize_document(&app, workspace_id, submission_id, document_id).await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-    let path = format!("/evidence-document-uploads/files/{document_id}/archive");
-
-    for _ in 0..2 {
-        let response = app
-            .server()
-            .post(&path)
+    for bytes in [b"first report".as_slice(), b"second report".as_slice()] {
+        app.server()
+            .post("/evidence-document-uploads/files")
             .add_header("cookie", cookie.clone())
-            .await;
-        response.assert_status(axum::http::StatusCode::SEE_OTHER);
-        assert_eq!(
-            response.header("location").to_str().expect("location"),
-            "/evidence-document-uploads"
-        );
+            .multipart(upload_form(bytes, "report.txt"))
+            .await
+            .assert_status(StatusCode::SEE_OTHER);
     }
 
-    app.server()
+    let rows = submission_documents(&app, evidence_id).await;
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].submission_id, rows[1].submission_id);
+    for row in &rows {
+        assert_eq!(row.filename, "report.txt");
+        assert_eq!(row.valid_from, coverage.valid_from);
+        assert_eq!(row.valid_until, coverage.valid_until);
+        assert_eq!(document_count(&app, row.submission_id).await, 1);
+    }
+    assert!(grant_redeemed(&app, evidence_id).await);
+
+    let page = app
+        .server()
         .get("/evidence-document-uploads")
         .add_header("cookie", cookie)
-        .await
-        .assert_status_ok();
-    assert!(document_archived(&app, document_id).await);
-    assert_eq!(
-        document_filenames(&app, submission_id).await,
-        vec!["archive-me.txt"]
-    );
-}
-
-#[tokio::test]
-async fn upload_session_archive_rejects_non_terminal_document() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "still-pending.txt",
-        b"pending",
-    )
-    .await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    let response = app
-        .server()
-        .post(&format!(
-            "/evidence-document-uploads/files/{}/archive",
-            document_id(&document)
-        ))
-        .add_header("cookie", cookie)
         .await;
-
-    response.assert_status(axum::http::StatusCode::CONFLICT);
-    assert!(!document_archived(&app, document_id(&document)).await);
+    page.assert_status_ok();
+    let body = page.text();
+    assert_eq!(body.matches("report.txt").count(), 2);
+    assert!(!body.contains("object_key"));
 }
 
 #[tokio::test]
-async fn archived_document_cannot_receive_or_redeem_download_grants() {
-    let app = upload_grant_app().await;
+async fn concurrent_browser_uploads_create_distinct_single_document_submissions() {
+    let app = upload_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = upload_document(
-        &app,
-        workspace_id,
-        submission_id,
-        "download-gone.txt",
-        b"ready",
-    )
-    .await;
-    let document_id = document_id(&document);
-    finalize_document(&app, workspace_id, submission_id, document_id).await;
-    let grant = app
-        .post(&format!(
-            "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents/{document_id}/download-grants"
-        ))
-        .await;
-    grant.assert_status_ok();
-    let url = grant.json::<Value>()["url"]
-        .as_str()
-        .expect("download URL")
-        .to_owned();
-    let path = Url::parse(&url)
-        .expect("download URL parses")
-        .path()
-        .to_owned()
-        + "?"
-        + Url::parse(&url)
-            .expect("download URL parses")
-            .query()
-            .expect("download token query");
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    app.server()
-        .post(&format!(
-            "/evidence-document-uploads/files/{document_id}/archive"
-        ))
-        .add_header("cookie", cookie)
-        .await
-        .assert_status(axum::http::StatusCode::SEE_OTHER);
-
-    app.post(&format!(
-        "/workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents/{document_id}/download-grants"
-    ))
-    .await
-    .assert_status_not_found();
-    app.get(&path).await.assert_status_not_found();
-}
-
-#[tokio::test]
-async fn upload_session_post_accepts_more_than_one_browser_upload() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    upload_document(&app, workspace_id, submission_id, "report.pdf", b"existing").await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-
-    let response = app
-        .server()
-        .post("/evidence-document-uploads/files")
-        .add_header("cookie", cookie.clone())
-        .multipart(browser_upload_form(b"new", "report.pdf", "application/pdf"))
-        .await;
-    response.assert_status(axum::http::StatusCode::SEE_OTHER);
-
-    let filenames = document_filenames(&app, submission_id).await;
-    assert_eq!(
-        filenames,
-        vec!["report.pdf".to_owned(), "report.pdf".to_owned()]
-    );
-
-    app.server()
-        .get("/evidence-document-uploads")
-        .add_header("cookie", cookie)
-        .await
-        .assert_status_ok();
-}
-
-#[tokio::test]
-async fn rest_upload_duplicate_filename_behavior_remains_unchanged() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    upload_document(&app, workspace_id, submission_id, "report.pdf", b"existing").await;
-
-    app.post(&document_collection_path(workspace_id, submission_id))
-        .multipart(super::support::document_form(
-            b"rest duplicate",
-            "report.pdf",
-            "application/pdf",
-            None,
-        ))
-        .await
-        .assert_status(axum::http::StatusCode::ACCEPTED);
-
-    assert_eq!(
-        document_filenames(&app, submission_id)
-            .await
-            .iter()
-            .filter(|filename| filename.as_str() == "report.pdf")
-            .count(),
-        2
-    );
-}
-
-#[tokio::test]
-async fn concurrent_browser_uploads_can_create_multiple_documents() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
+    let evidence_id = create_evidence(&app, workspace_id, "Concurrent evidence").await;
+    let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
 
     let first = app
         .server()
         .post("/evidence-document-uploads/files")
         .add_header("cookie", cookie.clone())
-        .multipart(browser_upload_form(b"one", "one.txt", "text/plain"));
+        .multipart(upload_form(b"one", "one.txt"));
     let second = app
         .server()
         .post("/evidence-document-uploads/files")
         .add_header("cookie", cookie)
-        .multipart(browser_upload_form(b"two", "two.txt", "text/plain"));
-
+        .multipart(upload_form(b"two", "two.txt"));
     let (first, second) = tokio::join!(first, second);
-    let statuses = [first.status_code(), second.status_code()];
+    first.assert_status(StatusCode::SEE_OTHER);
+    second.assert_status(StatusCode::SEE_OTHER);
+
+    let rows = submission_documents(&app, evidence_id).await;
+    assert_eq!(rows.len(), 2);
     assert_eq!(
-        statuses
-            .iter()
-            .filter(|status| **status == axum::http::StatusCode::SEE_OTHER)
-            .count(),
-        2
+        rows.iter()
+            .map(|row| row.filename.as_str())
+            .collect::<Vec<_>>(),
+        ["one.txt", "two.txt"]
     );
-    assert_eq!(
-        document_filenames(&app, submission_id).await,
-        vec!["one.txt".to_owned(), "two.txt".to_owned()]
-    );
+    assert_ne!(rows[0].submission_id, rows[1].submission_id);
+    for row in rows {
+        assert_eq!(document_count(&app, row.submission_id).await, 1);
+    }
 }
 
 #[tokio::test]
-async fn upload_session_post_unavailable_session_returns_not_found() {
-    let app = upload_grant_app().await;
-    let response = app
-        .server()
+async fn upload_session_rejects_invalid_forms_and_conceals_unavailable_sessions() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Form validation").await;
+
+    app.server()
+        .get("/evidence-document-uploads")
+        .await
+        .assert_status_not_found();
+    app.server()
+        .get("/evidence-document-uploads")
+        .add_header("cookie", "proofplane_document_upload_session=not-a-token")
+        .await
+        .assert_status_not_found();
+    app.server()
         .post("/evidence-document-uploads/files")
         .add_header("cookie", "proofplane_document_upload_session=not-a-token")
-        .multipart(browser_upload_form(b"bytes", "artifact.txt", "text/plain"))
-        .await;
-
-    response.assert_status(axum::http::StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn upload_session_post_rejects_invalid_or_multiple_file_fields() {
-    let app = upload_grant_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
+        .multipart(upload_form(b"bytes", "artifact.txt"))
+        .await
+        .assert_status_not_found();
 
     for form in [
         MultipartForm::new().add_part("note", Part::text("not a file")),
-        browser_upload_form(b"bytes", "path/file.txt", "text/plain"),
+        upload_form(b"bytes", "path/file.txt"),
         MultipartForm::new()
             .add_part(
                 "file",
@@ -675,187 +155,271 @@ async fn upload_session_post_rejects_invalid_or_multiple_file_fields() {
                     .mime_type("text/plain"),
             ),
     ] {
-        let cookie = upload_session_cookie(&app, workspace_id, submission_id).await;
-        let response = app
-            .server()
+        let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
+        app.server()
             .post("/evidence-document-uploads/files")
             .add_header("cookie", cookie)
             .multipart(form)
-            .await;
-
-        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+            .await
+            .assert_status_bad_request();
     }
-
-    assert!(document_filenames(&app, submission_id).await.is_empty());
+    assert!(submission_documents(&app, evidence_id).await.is_empty());
 }
 
 #[tokio::test]
-async fn upload_session_missing_malformed_expired_tampered_or_wrong_purpose_cookie_is_unavailable()
-{
-    let app = upload_grant_app().await;
+async fn upload_session_archival_is_owner_scoped_and_requires_terminal_status() {
+    let app = upload_app().await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
+    let evidence_id = create_evidence(&app, workspace_id, "Archive evidence").await;
+    let other_evidence_id = create_evidence(&app, workspace_id, "Other evidence").await;
+    let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
+    app.server()
+        .post("/evidence-document-uploads/files")
+        .add_header("cookie", cookie.clone())
+        .multipart(upload_form(b"pending", "pending.txt"))
+        .await
+        .assert_status(StatusCode::SEE_OTHER);
+    let own = submission_documents(&app, evidence_id).await.remove(0);
 
-    app.get("/evidence-document-uploads")
+    let pending_path = archive_path(own.submission_id, own.document_id);
+    app.server()
+        .post(&pending_path)
+        .add_header("cookie", cookie.clone())
         .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
-    app.get("/evidence-document-uploads")
-        .add_header("cookie", "proofplane_document_upload_session=not-a-token")
-        .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
+        .assert_status(StatusCode::CONFLICT);
+    assert!(!document_archived(&app, own.document_id).await);
 
-    let expired = session_cookie(&app, workspace_id, submission_id, 1);
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    app.get("/evidence-document-uploads")
-        .add_header("cookie", expired)
+    let other_cookie = upload_session_cookie(&app, workspace_id, other_evidence_id).await;
+    app.server()
+        .post("/evidence-document-uploads/files")
+        .add_header("cookie", other_cookie)
+        .multipart(upload_form(b"other", "other.txt"))
         .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
+        .assert_status(StatusCode::SEE_OTHER);
+    let other = submission_documents(&app, other_evidence_id)
+        .await
+        .remove(0);
+    app.server()
+        .get(&download_path(other.submission_id, other.document_id))
+        .add_header("cookie", cookie.clone())
+        .await
+        .assert_status_not_found();
+    app.server()
+        .post(&archive_path(other.submission_id, other.document_id))
+        .add_header("cookie", cookie.clone())
+        .await
+        .assert_status_not_found();
 
-    let tampered = format!(
-        "{}x",
-        session_cookie(&app, workspace_id, submission_id, 900)
-    );
-    app.get("/evidence-document-uploads")
-        .add_header("cookie", tampered)
+    set_document_status(&app, own.document_id, "failed").await;
+    app.server()
+        .post(&pending_path)
+        .add_header("cookie", cookie.clone())
         .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
-
-    let wrong_purpose = format!(
-        "proofplane_document_upload_session={}",
-        issue_grant_token(&app, &upload_grant_service(&app), workspace_id).await
-    );
-    app.get("/evidence-document-uploads")
-        .add_header("cookie", wrong_purpose)
-        .await
-        .assert_status(axum::http::StatusCode::NOT_FOUND);
+        .assert_status(StatusCode::SEE_OTHER);
+    assert!(document_archived(&app, own.document_id).await);
+    let page = app
+        .server()
+        .get("/evidence-document-uploads")
+        .add_header("cookie", cookie)
+        .await;
+    page.assert_status_ok();
+    assert!(!page.text().contains("pending.txt"));
 }
 
 #[tokio::test]
-async fn upload_session_cookie_secure_attribute_follows_public_api_base_url() {
-    let https = upload_grant_app().await;
-    let workspace_id = https.workspace_id("workspace");
-    let submission_id = create_submission(&https, workspace_id).await;
-    let issued = upload_grant_service(&https)
-        .issue(
-            &api_token_context(&https, workspace_id),
-            submission_id.into(),
-        )
-        .await
-        .expect("upload grant issues");
-    assert!(https
-        .get(&upload_path(&issued.url))
-        .await
-        .header("set-cookie")
-        .to_str()
-        .expect("set-cookie")
-        .contains("; Secure"));
-
-    let http = TestApp::builder()
-        .with_public_api_base_url(Url::parse("http://api.proofplane.test/").unwrap())
-        .workspace("workspace", "Upload grant workspace")
+async fn upload_grant_issuance_conceals_missing_and_cross_workspace_evidence() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Upload workspace")
+        .with_default_membership()
+        .workspace("other", "Other upload workspace")
         .with_default_membership()
         .build()
         .await;
-    let workspace_id = http.workspace_id("workspace");
-    let submission_id = create_submission(&http, workspace_id).await;
-    let issued = upload_grant_service(&http)
-        .issue(
-            &api_token_context(&http, workspace_id),
-            submission_id.into(),
-        )
-        .await
-        .expect("upload grant issues");
-    assert!(!http
-        .get(&upload_path(&issued.url))
-        .await
-        .header("set-cookie")
-        .to_str()
-        .expect("set-cookie")
-        .contains("; Secure"));
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let other_evidence_id = create_evidence(&app, other_workspace_id, "Other evidence").await;
+    let service = app.document_upload_grant_service();
+
+    for evidence_id in [Uuid::new_v4(), other_evidence_id] {
+        assert!(matches!(
+            service
+                .issue(
+                    &app.agent_connection_context(workspace_id),
+                    evidence_id.into(),
+                    coverage(),
+                )
+                .await,
+            Err(UploadGrantError::Unavailable)
+        ));
+    }
 }
 
-async fn upload_grant_app() -> TestApp {
+async fn upload_app() -> TestApp {
     TestApp::builder()
-        .workspace("workspace", "Upload grant workspace")
-        .with_default_membership()
-        .workspace("other", "Other upload grant workspace")
+        .workspace("workspace", "Upload workspace")
         .with_default_membership()
         .build()
         .await
 }
 
-fn upload_grant_service(app: &TestApp) -> DocumentUploadGrantService {
-    let config = upload_grant_config();
-    let base_url = app.public_api_base_url().clone();
-    DocumentUploadGrantService::new(
-        app.postgres_arc(),
-        base_url.clone(),
-        UploadGrantEncryptor::from_config(
-            base_url.clone(),
-            "proofplane-document-upload-grant",
-            &config,
+async fn create_evidence(app: &TestApp, workspace_id: Uuid, title: &str) -> Uuid {
+    let evidence = app
+        .create_evidence(
+            workspace_id,
+            &json!({
+                "title": title,
+                "description": format!("Collect {title}."),
+                "collection_instructions": format!("Upload {title}."),
+                "status": "active"
+            }),
         )
-        .expect("upload grant encryptor initializes"),
-        UploadGrantDecryptor::from_config(base_url, "proofplane-document-upload-grant", &config)
-            .expect("upload grant decryptor initializes"),
+        .await;
+    uuid_field(&evidence, "id")
+}
+
+async fn upload_session_cookie(app: &TestApp, workspace_id: Uuid, evidence_id: Uuid) -> String {
+    let issued = app
+        .document_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+        )
+        .await
+        .expect("upload grant issues");
+    let response = app.server().get(&local_path(&issued.url)).await;
+    response.assert_status(StatusCode::SEE_OTHER);
+    request_cookie(
+        response
+            .header("set-cookie")
+            .to_str()
+            .expect("cookie header"),
     )
 }
 
-fn upload_path(url: &Url) -> String {
-    let mut path = url.path().to_owned();
-    if let Some(query) = url.query() {
-        path.push('?');
-        path.push_str(query);
-    }
-    path
+fn coverage() -> CoverageWindow {
+    CoverageWindow::new(
+        "2026-01-01T00:00:00Z".parse().expect("valid_from parses"),
+        "2026-03-31T23:59:59Z".parse().expect("valid_until parses"),
+    )
+    .expect("coverage window is valid")
 }
 
-async fn upload_session_cookie(app: &TestApp, workspace_id: Uuid, submission_id: Uuid) -> String {
-    let issued = upload_grant_service(app)
-        .issue(&api_token_context(app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-    app.get(&upload_path(&issued.url))
-        .await
-        .header("set-cookie")
-        .to_str()
-        .expect("set-cookie")
+fn local_path(url: &Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_owned(),
+    }
+}
+
+fn request_cookie(set_cookie: &str) -> String {
+    set_cookie
+        .split(';')
+        .next()
+        .expect("set-cookie contains name and value")
         .to_owned()
 }
 
-fn browser_upload_form(bytes: &[u8], filename: &str, content_type: &str) -> MultipartForm {
+fn upload_form(bytes: &[u8], filename: &str) -> MultipartForm {
     MultipartForm::new().add_part(
         "file",
         Part::bytes(bytes.to_vec())
             .file_name(filename)
-            .mime_type(content_type),
+            .mime_type("text/plain"),
     )
 }
 
-fn cookie_max_age(cookie: &str) -> i64 {
-    cookie
-        .split(';')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix("Max-Age="))
-        .expect("cookie contains Max-Age")
-        .parse()
-        .expect("Max-Age is an integer")
+fn archive_path(submission_id: Uuid, document_id: Uuid) -> String {
+    format!("/evidence-document-uploads/files/{submission_id}/{document_id}/archive")
 }
 
-async fn document_filenames(app: &TestApp, submission_id: Uuid) -> Vec<String> {
+fn download_path(submission_id: Uuid, document_id: Uuid) -> String {
+    format!("/evidence-document-uploads/files/{submission_id}/{document_id}/download")
+}
+
+#[derive(Debug)]
+struct SubmissionDocument {
+    submission_id: Uuid,
+    document_id: Uuid,
+    filename: String,
+    valid_from: chrono::DateTime<chrono::Utc>,
+    valid_until: chrono::DateTime<chrono::Utc>,
+}
+
+async fn submission_documents(app: &TestApp, evidence_id: Uuid) -> Vec<SubmissionDocument> {
     app.postgres()
         .get()
         .await
         .expect("connection opens")
         .query(
-            "SELECT filename FROM documents WHERE owner_type = 'evidence_submission' AND owner_id = $1 ORDER BY filename",
+            r#"
+SELECT
+    s.id AS submission_id,
+    s.valid_from,
+    s.valid_until,
+    d.id AS document_id,
+    d.filename
+FROM evidence_submissions s
+JOIN documents d
+  ON d.owner_type = 'evidence_submission'
+ AND d.owner_id = s.id
+WHERE s.evidence_id = $1
+ORDER BY d.filename, s.id
+"#,
+            &[&evidence_id],
+        )
+        .await
+        .expect("submission documents load")
+        .into_iter()
+        .map(|row| SubmissionDocument {
+            submission_id: row.get("submission_id"),
+            document_id: row.get("document_id"),
+            filename: row.get("filename"),
+            valid_from: row.get("valid_from"),
+            valid_until: row.get("valid_until"),
+        })
+        .collect()
+}
+
+async fn document_count(app: &TestApp, submission_id: Uuid) -> i64 {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            "SELECT COUNT(*) FROM documents WHERE owner_type = 'evidence_submission' AND owner_id = $1",
             &[&submission_id],
         )
         .await
-        .expect("document filenames read")
-        .into_iter()
-        .map(|row| row.get("filename"))
-        .collect()
+        .expect("document count loads")
+        .get(0)
+}
+
+async fn grant_redeemed(app: &TestApp, evidence_id: Uuid) -> bool {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            "SELECT redeemed_at IS NOT NULL FROM document_upload_grants WHERE evidence_id = $1",
+            &[&evidence_id],
+        )
+        .await
+        .expect("upload grant loads")
+        .get(0)
+}
+
+async fn set_document_status(app: &TestApp, document_id: Uuid, status: &str) {
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE documents SET upload_status = $2 WHERE id = $1",
+            &[&document_id, &status],
+        )
+        .await
+        .expect("document status updates");
 }
 
 async fn document_archived(app: &TestApp, document_id: Uuid) -> bool {
@@ -868,147 +432,11 @@ async fn document_archived(app: &TestApp, document_id: Uuid) -> bool {
             &[&document_id],
         )
         .await
-        .expect("document archived flag reads")
+        .expect("document archived flag loads")
         .get("archived")
 }
 
-fn document_id(document: &Value) -> Uuid {
-    Uuid::parse_str(document["id"].as_str().expect("document id"))
-        .expect("document id parses")
-}
-
-fn session_cookie(
-    app: &TestApp,
-    workspace_id: Uuid,
-    submission_id: Uuid,
-    ttl_seconds: i64,
-) -> String {
-    let token = UploadSessionEncryptor::from_config(
-        app.public_api_base_url().clone(),
-        UPLOAD_SESSION_AUDIENCE,
-        &upload_grant_config(),
-    )
-    .expect("upload session encryptor initializes")
-    .encrypt(
-        RegisteredClaims {
-            subject: app.user_id(),
-            token_id: Uuid::new_v4(),
-            expires_at: Utc::now() + chrono::Duration::seconds(ttl_seconds),
-        },
-        &TestUploadSessionClaims {
-            version: 1,
-            workspace_id: workspace_id.to_string(),
-            submission_id: submission_id.to_string(),
-            issued_by_user_id: app.user_id().to_string(),
-            issued_via_api_token_id: app.api_token_id().to_string(),
-        },
-    )
-    .expect("upload session token issues")
-    .token;
-
-    format!("proofplane_document_upload_session={token}")
-}
-
-#[derive(Serialize)]
-struct TestUploadSessionClaims {
-    version: u8,
-    workspace_id: String,
-    submission_id: String,
-    issued_by_user_id: String,
-    issued_via_api_token_id: String,
-}
-
-fn upload_grant_config() -> PasetoUploadGrantConfig {
-    PasetoUploadGrantConfig {
-        active_key_id: "integration-upload-grant-001".to_owned(),
-        keys: vec![PasetoUploadGrantKey {
-            id: "integration-upload-grant-001".to_owned(),
-            secret: SecretString::from("k4.local.cMO6bYZvmIk4f5OppaRjsRYQE0frbAM7qD4cDAO8HxY"),
-        }],
-    }
-}
-
-fn api_token_context(app: &TestApp, workspace_id: Uuid) -> ApiTokenContext {
-    ApiTokenContext {
-        user_id: app.user_id().into(),
-        api_token_id: app.api_token_id().into(),
-        workspace_id: workspace_id.into(),
-        permissions: WorkspacePermissions::from_iter(WorkspacePermission::ALL),
-    }
-}
-
-async fn issue_grant_token(
-    app: &TestApp,
-    service: &DocumentUploadGrantService,
-    workspace_id: Uuid,
-) -> String {
-    let submission_id = create_submission(app, workspace_id).await;
-    let issued = service
-        .issue(&api_token_context(app, workspace_id), submission_id.into())
-        .await
-        .expect("upload grant issues");
-
-    token_from_url(&issued.url).to_owned()
-}
-
-fn token_from_url(url: &Url) -> String {
-    url.query_pairs()
-        .find_map(|(key, value)| (key == "token").then(|| value.into_owned()))
-        .expect("token query exists")
-}
-
-fn assert_unavailable(result: Result<impl std::fmt::Debug, UploadGrantError>) {
-    assert!(matches!(result, Err(UploadGrantError::Unavailable)));
-}
-
-async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
-    let request = app
-        .create_evidence_request(workspace_id, &evidence_request("Upload grant target"))
-        .await;
-    let evidence_request_id = created_id(&request);
-    let created = app
-        .post(&collection_path(workspace_id, evidence_request_id))
-        .json(&evidence_submission())
-        .await
-        .json::<Value>();
-
-    created_id(&created)
-}
-
-fn evidence_request(title: &str) -> Value {
-    json!({
-        "title": title,
-        "description": format!("Collect evidence for {title}."),
-        "collection_instructions": format!("Upload the artifact for {title}."),
-        "cadence": "quarterly",
-        "due_at": dynamic_due_at(),
-        "schedule_anchor_at": "2026-01-01T00:00:00Z",
-        "freshness_window_days": 90,
-        "status": "active"
-    })
-}
-
-fn evidence_submission() -> Value {
-    json!({
-        "coverage_start_at": "2026-01-01T00:00:00Z",
-        "coverage_end_at": "2026-03-31T23:59:59Z",
-        "source_system": "okta",
-        "collection_method": "api_export"
-    })
-}
-
-fn dynamic_due_at() -> String {
-    (Utc::now() + Duration::days(7)).to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn collection_path(workspace_id: Uuid, evidence_request_id: Uuid) -> String {
-    format!("/workspaces/{workspace_id}/evidence-requests/{evidence_request_id}/submissions")
-}
-
-fn document_collection_path(workspace_id: Uuid, submission_id: Uuid) -> String {
-    format!("/workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents")
-}
-
-fn created_id(value: &Value) -> Uuid {
-    Uuid::parse_str(value["id"].as_str().expect("id is a string")).expect("id parses")
+fn uuid_field(value: &Value, field: &str) -> Uuid {
+    Uuid::parse_str(value[field].as_str().expect("UUID field is a string"))
+        .expect("UUID field parses")
 }

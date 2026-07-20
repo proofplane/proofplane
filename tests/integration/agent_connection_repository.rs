@@ -464,7 +464,7 @@ fn new_pending(
 
 fn canonical_test_permissions() -> Vec<WorkspacePermission> {
     vec![
-        WorkspacePermission::ReadEvidenceRequests,
+        WorkspacePermission::ReadEvidence,
         WorkspacePermission::WriteControls,
     ]
 }

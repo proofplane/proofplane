@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use super::{
-    ControlId, ControlSummary, DocumentId, DocumentUploadStatus, EvidenceRequest,
-    EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement, PolicyId, UserId, WorkspaceId,
+    ControlId, ControlSummary, DocumentId, DocumentUploadStatus, Evidence, EvidenceSubmission,
+    FrameworkRequirement, PolicyId, UserId, WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +22,7 @@ pub struct AuditorPortalControl {
     pub title: String,
     pub description: String,
     pub framework_requirements: Vec<FrameworkRequirement>,
-    pub evidence_requests: Vec<AuditorPortalEvidenceRequest>,
+    pub evidence: Vec<AuditorPortalEvidence>,
     pub policies: Vec<AuditorPortalPolicySummary>,
 }
 
@@ -66,29 +66,22 @@ pub struct AuditorPortalPolicyDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditorPortalEvidenceRequest {
+pub struct AuditorPortalEvidence {
     pub mapping_rationale: String,
     pub mapping_created_at: DateTime<Utc>,
-    pub request: EvidenceRequest,
+    pub evidence: Evidence,
     pub submissions: Vec<AuditorPortalSubmission>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalSubmission {
     pub submission: EvidenceSubmission,
-    pub documents: Vec<AuditorPortalDocument>,
+    pub document: AuditorPortalDocument,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalDocument {
-    pub id: DocumentId,
-    pub evidence_submission_id: EvidenceSubmissionId,
-    pub created_by_user_id: UserId,
+    pub document_id: DocumentId,
     pub filename: String,
-    pub content_type: String,
-    pub content_length: i64,
-    pub checksum_sha256: String,
-    pub checksum_crc32c: String,
-    pub upload_status: DocumentUploadStatus,
     pub download_eligible: bool,
 }

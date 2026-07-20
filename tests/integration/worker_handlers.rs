@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration as StdDuration};
 
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use futures_util::StreamExt;
 use proofplane::{
     handlers::{
@@ -16,7 +16,7 @@ use proofplane::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::support::{upload_document as upload_document_request, TestApp};
+use super::support::{submit_evidence_file, TestApp};
 
 const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
@@ -29,15 +29,19 @@ async fn document_worker_handlers_are_idempotent_for_duplicate_deliveries() {
         .build()
         .await;
     let workspace_id = app.workspace_id("workspace");
-    let submission_id = create_submission(&app, workspace_id).await;
-    let document = upload_document_request(
+    let evidence_id = create_submission(&app, workspace_id).await;
+    let uploaded = submit_evidence_file(
         &app,
         workspace_id,
-        submission_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-01-31T23:59:59Z",
         "artifact.txt",
         b"clean document",
     )
     .await;
+    let submission_id = uuid_field(&uploaded, "submission_id");
+    let document = &uploaded["document"];
     let document_id = document["id"].as_str().expect("document ID is a string");
     let document_uuid = Uuid::parse_str(document_id).expect("document ID is a UUID");
     let quarantine_key = document_object_key(&app, document_uuid).await;
@@ -531,35 +535,17 @@ fn pubsub_envelope(message: &OutboxMessage) -> Value {
 
 async fn create_submission(app: &TestApp, workspace_id: Uuid) -> Uuid {
     let request = app
-        .create_evidence_request(
+        .create_evidence(
             workspace_id,
             &json!({
                 "title": "Worker handler target",
                 "description": "Integration fixture",
                 "collection_instructions": "Upload the worker integration fixture.",
-                "cadence": "quarterly",
-                "due_at": (Utc::now() + Duration::days(7))
-                    .to_rfc3339_opts(SecondsFormat::Secs, true),
-                "schedule_anchor_at": "2026-01-01T00:00:00Z",
-                "freshness_window_days": 30,
                 "status": "active",
             }),
         )
         .await;
-    let evidence_request_id = uuid_field(&request, "id");
-    let submission = app
-        .create_evidence_submission(
-            workspace_id,
-            evidence_request_id,
-            &json!({
-            "coverage_start_at": "2026-01-01T00:00:00Z",
-            "coverage_end_at": "2026-01-31T23:59:59Z",
-            "source_system": "integration",
-            "collection_method": "worker test",
-            }),
-        )
-        .await;
-    uuid_field(&submission, "id")
+    uuid_field(&request, "id")
 }
 
 fn uuid_field(value: &Value, field: &str) -> Uuid {
@@ -582,6 +568,7 @@ async fn worker_test_app() -> TestApp {
 
 struct UploadedDocument {
     id: Uuid,
+    submission_id: Uuid,
     object_key: String,
     filename: String,
 }
@@ -589,13 +576,13 @@ struct UploadedDocument {
 async fn upload_document(
     app: &TestApp,
     workspace_id: Uuid,
-    submission_id: Uuid,
+    evidence_id: Uuid,
     filename: &str,
 ) -> UploadedDocument {
     upload_document_with_content(
         app,
         workspace_id,
-        submission_id,
+        evidence_id,
         filename,
         b"handler integration document",
     )
@@ -605,14 +592,24 @@ async fn upload_document(
 async fn upload_document_with_content(
     app: &TestApp,
     workspace_id: Uuid,
-    submission_id: Uuid,
+    evidence_id: Uuid,
     filename: &str,
     content: &[u8],
 ) -> UploadedDocument {
-    let document =
-        upload_document_request(app, workspace_id, submission_id, filename, content).await;
+    let uploaded = submit_evidence_file(
+        app,
+        workspace_id,
+        evidence_id,
+        "2026-01-01T00:00:00Z",
+        "2026-01-31T23:59:59Z",
+        filename,
+        content,
+    )
+    .await;
+    let document = &uploaded["document"];
 
     UploadedDocument {
+        submission_id: uuid_field(&uploaded, "submission_id"),
         id: Uuid::parse_str(document["id"].as_str().expect("document ID is a string"))
             .expect("document ID is a UUID"),
         object_key: document_object_key(
@@ -641,7 +638,7 @@ async fn document_object_key(app: &TestApp, document_id: Uuid) -> String {
 
 fn scan_worker_message(
     document: &UploadedDocument,
-    submission_id: Uuid,
+    _submission_id: Uuid,
     request_id: Option<Uuid>,
     delivery_attempt: Option<u32>,
 ) -> WorkerMessage {
@@ -652,14 +649,14 @@ fn scan_worker_message(
         aggregate_id: document.id.to_string(),
         request_id,
         payload: json!({
-            "evidence_submission_id": submission_id.to_string(),
+            "evidence_submission_id": document.submission_id.to_string(),
             "object_key": document.object_key,
         }),
         delivery_attempt,
     }
 }
 
-fn finalization_worker_message(document: &UploadedDocument, submission_id: Uuid) -> WorkerMessage {
+fn finalization_worker_message(document: &UploadedDocument, _submission_id: Uuid) -> WorkerMessage {
     WorkerMessage {
         message_id: Uuid::new_v4().to_string(),
         event_type: DOCUMENT_FINALIZATION_REQUESTED.to_owned(),
@@ -667,7 +664,7 @@ fn finalization_worker_message(document: &UploadedDocument, submission_id: Uuid)
         aggregate_id: document.id.to_string(),
         request_id: None,
         payload: json!({
-            "evidence_submission_id": submission_id.to_string(),
+            "evidence_submission_id": document.submission_id.to_string(),
             "object_key": document.object_key,
         }),
         delivery_attempt: Some(1),
@@ -814,12 +811,12 @@ fn object_key(value: &str) -> ObjectKey {
 
 fn final_object_key(
     workspace_id: Uuid,
-    submission_id: Uuid,
+    _submission_id: Uuid,
     document: &UploadedDocument,
 ) -> ObjectKey {
     ObjectKey::parse(format!(
-        "workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents/{}/{}",
-        document.id, document.filename
+        "workspaces/{workspace_id}/evidence-submissions/{}/documents/{}/{}",
+        document.submission_id, document.id, document.filename
     ))
     .expect("final object key is valid")
 }

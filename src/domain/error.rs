@@ -23,10 +23,7 @@ pub enum DomainError {
     #[error("control_ids contains a duplicate value")]
     DuplicatePolicyControlId,
 
-    #[error("freshness_window_days must be positive")]
-    InvalidFreshnessWindowDays,
-
-    #[error("coverage_end_at must be greater than or equal to coverage_start_at")]
+    #[error("valid_until must be greater than or equal to valid_from")]
     InvalidCoverageWindow,
 
     #[error("document filename must not be empty")]

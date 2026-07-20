@@ -4,9 +4,9 @@ use thiserror::Error as ThisError;
 
 use crate::{
     domain::{
-        Control, ControlId, CreateControlPayload, CreateEvidenceRequestControlMappingPayload,
-        EvidenceRequestControlMapping, EvidenceRequestId, Framework, FrameworkId,
-        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+        Control, ControlId, CreateControlPayload, CreateEvidenceControlMappingPayload,
+        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
+        FrameworkRequirementId, UpdateControlPayload,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
     services::Error,
@@ -123,45 +123,39 @@ impl ControlService {
             .await?)
     }
 
-    pub async fn create_evidence_request_control_mapping(
+    pub async fn create_evidence_control_mapping(
         &self,
         connection: AgentConnectionContext,
-        payload: CreateEvidenceRequestControlMappingPayload,
-    ) -> Result<Option<EvidenceRequestControlMapping>, Error> {
+        payload: CreateEvidenceControlMappingPayload,
+    ) -> Result<Option<EvidenceControlMapping>, Error> {
         Ok(self
             .repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
                 connection.connection_id,
-                async move |context| {
-                    context
-                        .create_evidence_request_control_mapping(&payload)
-                        .await
-                },
+                async move |context| context.create_evidence_control_mapping(&payload).await,
             )
             .await?)
     }
 
-    pub async fn list_evidence_request_control_mappings(
+    pub async fn list_evidence_control_mappings(
         &self,
         connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
-    ) -> Result<Option<Vec<EvidenceRequestControlMapping>>, Error> {
+        evidence_id: EvidenceId,
+    ) -> Result<Option<Vec<EvidenceControlMapping>>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .list_evidence_request_control_mappings(evidence_request_id)
-                    .await
+                context.list_evidence_control_mappings(evidence_id).await
             })
             .await?)
     }
 
-    pub async fn delete_evidence_request_control_mapping(
+    pub async fn delete_evidence_control_mapping(
         &self,
         connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
+        evidence_id: EvidenceId,
         control_id: ControlId,
     ) -> Result<bool, Error> {
         Ok(self
@@ -172,7 +166,7 @@ impl ControlService {
                 connection.connection_id,
                 async move |context| {
                     context
-                        .delete_evidence_request_control_mapping(evidence_request_id, control_id)
+                        .delete_evidence_control_mapping(evidence_id, control_id)
                         .await
                 },
             )

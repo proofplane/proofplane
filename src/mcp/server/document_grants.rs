@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, format_datetime, not_found, required_uuid,
-        service_error,
+        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
+        required_timestamp, required_uuid, service_error,
     },
     ProofplaneMcp,
 };
 use crate::{
-    domain::{EvidenceSubmissionId, WorkspacePermission},
+    domain::{CoverageWindow, EvidenceId, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::document_upload_grants::{IssuedUploadGrant, UploadGrantError},
     validate,
@@ -23,21 +23,21 @@ use crate::{
 #[tool_router(router = document_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
     #[tool(
-        name = "manage_evidence_submission_document",
-        description = "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents."
+        name = "manage_evidence_submissions",
+        description = "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
-    async fn manage_evidence_submission_document(
+    async fn manage_evidence_submissions(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(args): Parameters<ManageEvidenceSubmissionDocumentRequest>,
-    ) -> Result<Json<ManageEvidenceSubmissionDocumentResponse>, rmcp::ErrorData> {
-        let submission_id = parse_document_grant_request(args)?;
+        Parameters(args): Parameters<ManageEvidenceSubmissionsRequest>,
+    ) -> Result<Json<ManageEvidenceSubmissionsResponse>, rmcp::ErrorData> {
+        let (evidence_id, coverage) = parse_manage_submissions_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
         let workspace_id = context.connection.workspace_id;
         let grant = self
             .document_upload_grants
-            .issue(&context.agent_connection_context(), submission_id)
+            .issue(&context.agent_connection_context(), evidence_id, coverage)
             .await
             .map_err(upload_grant_error)?;
 
@@ -46,18 +46,12 @@ impl ProofplaneMcp {
             AuditOutcome::Success,
             context.audit_actor(),
             AuditClientType::Mcp,
-            "manage_evidence_submission_document",
+            "manage_evidence_submissions",
         )
         .workspace_id(workspace_id.into())
         .request_id(context.request_id.0)
-        .metadata(
-            "evidence_submission_id",
-            Uuid::from(grant.audit.submission_id),
-        )
-        .object(AuditObject::new(
-            "evidence_submission",
-            grant.audit.submission_id.into(),
-        ))
+        .metadata("evidence_id", Uuid::from(grant.audit.evidence_id))
+        .object(AuditObject::new("evidence", grant.audit.evidence_id.into()))
         .emit();
 
         Ok(Json(grant.into()))
@@ -65,41 +59,53 @@ impl ProofplaneMcp {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct ManageEvidenceSubmissionDocumentRequest {
-    submission_id: Option<String>,
+struct ManageEvidenceSubmissionsRequest {
+    evidence_id: Option<String>,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-struct ManageEvidenceSubmissionDocumentResponse {
+struct ManageEvidenceSubmissionsResponse {
     url: String,
     expires_at: String,
-    submission_id: String,
+    evidence_id: String,
+    valid_from: String,
+    valid_until: String,
     url_secret_type: &'static str,
     intended_use: &'static str,
 }
 
-impl From<IssuedUploadGrant> for ManageEvidenceSubmissionDocumentResponse {
+impl From<IssuedUploadGrant> for ManageEvidenceSubmissionsResponse {
     fn from(grant: IssuedUploadGrant) -> Self {
         Self {
             url: grant.url.to_string(),
             expires_at: format_datetime(grant.expires_at),
-            submission_id: grant.submission_id.to_string(),
+            evidence_id: grant.evidence_id.to_string(),
+            valid_from: format_datetime(grant.coverage.valid_from),
+            valid_until: format_datetime(grant.coverage.valid_until),
             url_secret_type: "bearer_secret",
-            intended_use: "human_browser_document_management",
+            intended_use: "human_browser_evidence_upload",
         }
     }
 }
 
-fn parse_document_grant_request(
-    args: ManageEvidenceSubmissionDocumentRequest,
-) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
-    validate! {
-        submission_id <- required_uuid("submission_id", args.submission_id)
-            .map(EvidenceSubmissionId::from),
-        => submission_id,
+fn parse_manage_submissions_request(
+    args: ManageEvidenceSubmissionsRequest,
+) -> Result<(EvidenceId, CoverageWindow), rmcp::ErrorData> {
+    let (evidence_id, valid_from, valid_until) = validate! {
+        evidence_id <- required_uuid("evidence_id", args.evidence_id).map(EvidenceId::from),
+        valid_from <- required_timestamp("valid_from", args.valid_from),
+        valid_until <- required_timestamp("valid_until", args.valid_until),
+        => (evidence_id, valid_from, valid_until),
     }
     .into_result()
-    .map_err(argument_errors)
+    .map_err(argument_errors)?;
+
+    let coverage =
+        CoverageWindow::new(valid_from, valid_until).map_err(|error| domain_errors(vec![error]))?;
+
+    Ok((evidence_id, coverage))
 }
 
 fn upload_grant_error(error: UploadGrantError) -> rmcp::ErrorData {
@@ -115,7 +121,7 @@ fn upload_grant_error(error: UploadGrantError) -> rmcp::ErrorData {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_document_grant_request, ManageEvidenceSubmissionDocumentRequest};
+    use super::{parse_manage_submissions_request, ManageEvidenceSubmissionsRequest};
     use rmcp::model::ErrorCode;
 
     fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
@@ -133,24 +139,28 @@ mod tests {
     }
 
     #[test]
-    fn document_grant_request_requires_submission_uuid() {
-        let missing = parse_document_grant_request(ManageEvidenceSubmissionDocumentRequest {
-            submission_id: None,
+    fn manage_submissions_request_requires_evidence_uuid() {
+        let missing = parse_manage_submissions_request(ManageEvidenceSubmissionsRequest {
+            evidence_id: None,
+            valid_from: Some("2026-01-01T00:00:00Z".to_owned()),
+            valid_until: Some("2026-03-31T00:00:00Z".to_owned()),
         })
-        .expect_err("missing submission");
+        .expect_err("missing evidence");
         assert_eq!(missing.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             field_issues(&missing),
-            [("submission_id".to_owned(), "is required".to_owned())]
+            [("evidence_id".to_owned(), "is required".to_owned())]
         );
 
-        let invalid = parse_document_grant_request(ManageEvidenceSubmissionDocumentRequest {
-            submission_id: Some("nope".to_owned()),
+        let invalid = parse_manage_submissions_request(ManageEvidenceSubmissionsRequest {
+            evidence_id: Some("nope".to_owned()),
+            valid_from: Some("2026-01-01T00:00:00Z".to_owned()),
+            valid_until: Some("2026-03-31T00:00:00Z".to_owned()),
         })
-        .expect_err("invalid submission");
+        .expect_err("invalid evidence");
         assert_eq!(
             field_issues(&invalid),
-            [("submission_id".to_owned(), "must be a UUID".to_owned())]
+            [("evidence_id".to_owned(), "must be a UUID".to_owned())]
         );
     }
 }

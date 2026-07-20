@@ -34,8 +34,8 @@ async fn local_seed_converges_policy_fixtures_without_churning_existing_demo_dat
 
     let initial_policies = policy_states(&app, workspace_id).await;
     assert_representative_policy_catalog(&initial_policies);
-    let initial_evidence_request_ids = evidence_request_ids(&app, workspace_id).await;
-    assert_eq!(initial_evidence_request_ids.len(), 3);
+    let initial_evidence_ids = evidence_ids(&app, workspace_id).await;
+    assert_eq!(initial_evidence_ids.len(), 3);
     assert_existing_demo_identifiers(&app, workspace_id).await;
 
     let unrelated_policy_id = Uuid::new_v4();
@@ -102,19 +102,13 @@ async fn local_seed_converges_policy_fixtures_without_churning_existing_demo_dat
             .collect::<Vec<_>>(),
         ["PP-AC-01"]
     );
-    assert_eq!(
-        evidence_request_ids(&app, workspace_id).await,
-        initial_evidence_request_ids
-    );
+    assert_eq!(evidence_ids(&app, workspace_id).await, initial_evidence_ids);
 
     seed_local_data(app.postgres(), &storage)
         .await
         .expect("third local seed succeeds");
     assert_eq!(policy_states(&app, workspace_id).await, converged);
-    assert_eq!(
-        evidence_request_ids(&app, workspace_id).await,
-        initial_evidence_request_ids
-    );
+    assert_eq!(evidence_ids(&app, workspace_id).await, initial_evidence_ids);
     assert_existing_demo_identifiers(&app, workspace_id).await;
 }
 
@@ -203,17 +197,17 @@ ORDER BY c.code, c.id
     policies
 }
 
-async fn evidence_request_ids(app: &TestApp, workspace_id: Uuid) -> Vec<(String, Uuid)> {
+async fn evidence_ids(app: &TestApp, workspace_id: Uuid) -> Vec<(String, Uuid)> {
     app.postgres()
         .get()
         .await
         .expect("database opens")
         .query(
-            "SELECT title, id FROM evidence_requests WHERE workspace_id = $1 ORDER BY title, id",
+            "SELECT title, id FROM evidence WHERE workspace_id = $1 ORDER BY title, id",
             &[&workspace_id],
         )
         .await
-        .expect("demo evidence requests load")
+        .expect("demo evidence load")
         .into_iter()
         .map(|row| (row.get("title"), row.get("id")))
         .collect()

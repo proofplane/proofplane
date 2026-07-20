@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document, DocumentId,
-        DocumentOwner, EvidenceRequestId, EvidenceSubmission, EvidenceSubmissionDetail,
-        EvidenceSubmissionId,
+        CoverageWindow, CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document,
+        DocumentId, DocumentOwner, EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
@@ -54,25 +53,6 @@ impl EvidenceSubmissionService {
         }
     }
 
-    pub async fn create(
-        &self,
-        connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
-        mut payload: CreateEvidenceSubmissionPayload,
-    ) -> Result<Option<EvidenceSubmission>, Error> {
-        payload.evidence_request_id = evidence_request_id;
-
-        Ok(self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| context.create_evidence_submission(&payload).await,
-            )
-            .await?)
-    }
-
     pub async fn get(
         &self,
         connection: AgentConnectionContext,
@@ -86,30 +66,46 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn latest_for_request(
+    pub async fn list_for_evidence(
         &self,
         connection: AgentConnectionContext,
-        evidence_request_id: EvidenceRequestId,
-    ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
+        evidence_id: EvidenceId,
+    ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context_read(connection.workspace_id, async move |context| {
+                context.list_evidence_submissions(evidence_id).await
+            })
+            .await?)
+    }
+
+    pub async fn list_for_coverage(
+        &self,
+        connection: AgentConnectionContext,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
+    ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context
-                    .latest_evidence_submission_for_request(evidence_request_id)
+                    .list_evidence_submissions_for_coverage(evidence_id, coverage)
                     .await
             })
             .await?)
     }
 
-    pub async fn evidence_submission_exists(
+    pub async fn latest_for_evidence(
         &self,
-        connection: &AgentConnectionContext,
-        id: EvidenceSubmissionId,
-    ) -> Result<bool, Error> {
+        connection: AgentConnectionContext,
+        evidence_id: EvidenceId,
+    ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.evidence_submission_exists(id).await
+                context
+                    .latest_evidence_submission_for_evidence(evidence_id)
+                    .await
             })
             .await?)
     }
@@ -150,70 +146,27 @@ impl EvidenceSubmissionService {
         delete_staged_document(&self.object_store, object_key).await
     }
 
-    pub async fn create_document(
+    pub async fn create_submission(
         &self,
         connection: &AgentConnectionContext,
         request_id: Uuid,
         submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceDocumentPayload,
-    ) -> Result<Document, Error> {
-        payload.evidence_submission_id = submission_id;
-
-        let create_payload = CreateDocumentPayload {
-            owner: DocumentOwner::EvidenceSubmission(submission_id),
-            filename: payload.filename,
-            content_type: payload.content_type,
-            content_length: payload.content_length,
-            object_key: payload.object_key.clone(),
-            checksum_sha256: payload.checksum_sha256,
-            checksum_crc32c: payload.checksum_crc32c,
-        };
-
-        let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let document = context.create_evidence_document(&create_payload).await?;
-                    context
-                        .append_outbox_message(&document_scan_requested_message(
-                            &document, request_id,
-                        ))
-                        .await?;
-
-                    Ok(document)
-                },
-            )
-            .await;
-
-        match result {
-            Ok(document) => Ok(document),
-            Err(error) => {
-                let _ = self
-                    .delete_uploaded_document_object(&payload.object_key)
-                    .await;
-                Err(error.into())
-            }
-        }
-    }
-
-    pub async fn create_first_document(
-        &self,
-        connection: &AgentConnectionContext,
-        request_id: Uuid,
-        submission_id: EvidenceSubmissionId,
-        mut payload: UploadEvidenceDocumentPayload,
+        evidence_id: EvidenceId,
+        coverage: CoverageWindow,
+        payload: UploadEvidenceDocumentPayload,
     ) -> Result<Option<Document>, Error> {
-        payload.evidence_submission_id = submission_id;
-
-        let create_payload = CreateDocumentPayload {
+        let object_key = payload.object_key.clone();
+        let submission_payload = CreateEvidenceSubmissionPayload {
+            id: submission_id,
+            evidence_id,
+            coverage,
+        };
+        let document_payload = CreateDocumentPayload {
             owner: DocumentOwner::EvidenceSubmission(submission_id),
             filename: payload.filename,
             content_type: payload.content_type,
             content_length: payload.content_length,
-            object_key: payload.object_key.clone(),
+            object_key: payload.object_key,
             checksum_sha256: payload.checksum_sha256,
             checksum_crc32c: payload.checksum_crc32c,
         };
@@ -225,12 +178,14 @@ impl EvidenceSubmissionService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    let Some(document) = context
-                        .create_first_evidence_document(&create_payload)
+                    if context
+                        .create_evidence_submission(&submission_payload)
                         .await?
-                    else {
+                        .is_none()
+                    {
                         return Ok(None);
-                    };
+                    }
+                    let document = context.create_evidence_document(&document_payload).await?;
                     context
                         .append_outbox_message(&document_scan_requested_message(
                             &document, request_id,
@@ -245,15 +200,11 @@ impl EvidenceSubmissionService {
         match result {
             Ok(Some(document)) => Ok(Some(document)),
             Ok(None) => {
-                let _ = self
-                    .delete_uploaded_document_object(&payload.object_key)
-                    .await;
+                let _ = self.delete_uploaded_document_object(&object_key).await;
                 Ok(None)
             }
             Err(error) => {
-                let _ = self
-                    .delete_uploaded_document_object(&payload.object_key)
-                    .await;
+                let _ = self.delete_uploaded_document_object(&object_key).await;
                 Err(error.into())
             }
         }

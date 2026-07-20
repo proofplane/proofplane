@@ -256,7 +256,7 @@
       "name": "Auditor Packet Row",
       "kind": "custom",
       "refersTo": "auditor-packet-preview",
-      "description": "Inspectable packet row connecting a control, evidence request, latest status, and gap.",
+      "description": "Inspectable packet row connecting a control, evidence, latest status, and gap.",
       "html": "<div class=\"ds-packet-row\"><div><strong>MFA enforced</strong><span>Mapped to quarterly access review</span></div><span class=\"ds-status\">Missing latest evidence</span></div>",
       "css": ".ds-packet-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #3b4842; color: #edf3ec; } .ds-packet-row strong { display: block; font: 640 16px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row span { display: block; margin-top: 3px; color: #aeb9b3; font: 400 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-packet-row .ds-status { margin: 0; padding: 5px 8px; border-radius: 4px; background: #3b2f2a; color: #e6aa8d; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }"
     },
@@ -317,7 +317,7 @@
       "Do give token creation job-based presets and show the granular permissions underneath.",
       "Do use Code Slate for config snippets and make copy actions obvious.",
       "Do label MCP branch-preview or coming-soon states with Clay Signal and plain language.",
-      "Do prioritize evidence requests, control mappings, packet gaps, timestamps, and provenance over abstract dashboard metrics.",
+      "Do prioritize evidence, control mappings, packet gaps, timestamps, and provenance over abstract dashboard metrics.",
       "Do use the Perplexity-style long-scroll pattern for the landing page: full-height sections, sticky visuals, short copy, and a persistent CTA.",
       "Do use the dark operational palette for authenticated product screens, onboarding, settings, token creation, packet previews, and empty states.",
       "Do let the landing page use a dark cinematic palette when it makes compliance tasks feel simpler and more focused."

@@ -145,7 +145,7 @@ Stable event names are:
 - `evidence_document_finalization.completed`.
 
 Allowed fields include workspace ID, user ID, agent connection ID, system
-client, request correlation ID, event name, outcome, evidence request ID,
+client, request correlation ID, event name, outcome, evidence ID,
 submission ID, document ID, grant ID, and coarse lifecycle status where
 applicable. (The actor identifier is the agent connection ID, not an API token
 ID — `ppat_` was removed in PR #42.) Audit records must not include raw grant

@@ -31,7 +31,7 @@ make seed
 checks that those services are reachable and creates the local filesystem
 storage directory when needed. `make seed` runs the database migrations and
 writes demo data (an owner user, a workspace, frameworks, controls, and an
-evidence request).
+evidence).
 
 The local Docker services listen on:
 
@@ -64,28 +64,29 @@ for the full design.
 
 ## Configuration
 
-Make targets default to the loopback config:
+Make targets default to the private local config:
 
 ```text
-PROOFPLANE_CONFIG=config/local.yaml
+PROOFPLANE_CONFIG=.local/config.yaml
 ```
 
-`config/local.yaml` is committed and covers process bind addresses, Postgres,
-Pub/Sub, PASETO keys, filesystem object storage, ClamAV, observability, Auth0
-settings, worker settings, upload limits, and health paths.
-
-To connect a real agent you need public URLs and real Auth0 credentials, so use
-a private override at `.local/config.yaml` (the whole `.local/` directory is
-gitignored, so it is safe for secrets and per-session values):
+`config/local.yaml` is the committed template. It covers process bind addresses,
+Postgres, Pub/Sub, PASETO keys, filesystem object storage, ClamAV,
+observability, Auth0 settings, worker settings, upload limits, and health paths.
+Copy it before running a process for the first time:
 
 ```bash
 cp config/local.yaml .local/config.yaml
 ```
 
-Then run any process against it by exporting the path once:
+The whole `.local/` directory is gitignored, so `.local/config.yaml` is safe for
+real Auth0 credentials, public tunnel URLs, and other per-session values. To use
+a different config path, override the Make variable or export it once:
 
 ```bash
-export PROOFPLANE_CONFIG=.local/config.yaml
+PROOFPLANE_CONFIG=path/to/config.yaml make api
+# or
+export PROOFPLANE_CONFIG=path/to/config.yaml
 ```
 
 Object storage is not run in Docker Compose for the MVP; local config reserves
@@ -96,7 +97,7 @@ tracked in the
 ## Running Processes
 
 Start a process with the Make target for that binary (they read
-`$PROOFPLANE_CONFIG`, defaulting to `config/local.yaml`):
+`$PROOFPLANE_CONFIG`, defaulting to `.local/config.yaml`):
 
 ```bash
 make api        # control-plane REST + OAuth authorization server, :3000

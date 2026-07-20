@@ -17,10 +17,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidenceRequest,
-        AuditorPortalPolicy, AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus,
-        AuditorPortalPolicySummary, AuditorPortalReadModel, AuditorPortalSubmission,
-        ControlSummary, Document, EvidenceRequest, EvidenceSubmission, FrameworkRequirement,
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
+        AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
+        AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, Document, Evidence,
+        EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement,
     },
     object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -876,7 +876,7 @@ fn render_portal_page(model: &AuditorPortalReadModel) -> String {
                 }
                 current_framework = &requirement.framework_code;
                 output.push_str(&format!(
-                    r#"<section class="framework-section" id="framework-{}" aria-labelledby="framework-title-{}"><div class="section-heading"><p class="eyebrow">Framework</p><h2 id="framework-title-{}">{}</h2><p>{}</p></div><table class="ledger"><thead><tr><th>Requirement</th><th class="numeric">Mapped controls</th><th class="numeric">Evidence requests</th><th class="numeric">Evidence submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>"#,
+                    r#"<section class="framework-section" id="framework-{}" aria-labelledby="framework-title-{}"><div class="section-heading"><p class="eyebrow">Framework</p><h2 id="framework-title-{}">{}</h2><p>{}</p></div><table class="ledger"><thead><tr><th>Requirement</th><th class="numeric">Mapped controls</th><th class="numeric">Evidence</th><th class="numeric">Evidence submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>"#,
                     escape_html(&requirement.framework_code),
                     escape_html(&requirement.framework_code),
                     escape_html(&requirement.framework_code),
@@ -1005,11 +1005,8 @@ fn render_policy_page(model: &AuditorPortalReadModel, policy_id: Uuid) -> Option
         &format!(
             r#"{}<main class="portal" id="main-content">
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal/policies">Policies</a><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
-<header class="control-detail-header"><div><p class="eyebrow">Policy</p><h1>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Mapped controls</dt><dd>{}</dd></div><div><dt>Document</dt><dd class="status-stat">{}</dd></div></dl></header>
-<div class="policy-detail-layout">
-<section class="policy-document-panel" aria-labelledby="policy-document-title"><div class="section-heading"><p class="eyebrow">Current document</p><h2 id="policy-document-title">Document</h2></div>{}</section>
+<header class="control-detail-header"><div><p class="eyebrow">Policy</p><h1>{}</h1><p class="lede">{}</p></div><div class="header-aside"><dl class="page-stats"><div><dt>Mapped controls</dt><dd>{}</dd></div><div><dt>Document</dt><dd class="status-stat">{}</dd></div></dl>{}</div></header>
 <section class="detail-ledger" aria-labelledby="policy-controls-title"><div class="section-heading"><p class="eyebrow">Control mappings</p><h2 id="policy-controls-title">Mapped controls ({})</h2></div>{}</section>
-</div>
 </main>"#,
             render_portal_bar(model, PortalDestination::Policies),
             escape_html(&policy.name),
@@ -1022,7 +1019,7 @@ fn render_policy_page(model: &AuditorPortalReadModel, policy_id: Uuid) -> Option
                     .as_ref()
                     .map(|document| document.upload_status)
             ),
-            render_policy_document(policy),
+            render_policy_document_action(policy),
             policy.controls.len(),
             controls,
         ),
@@ -1038,31 +1035,19 @@ fn render_policy_control_row(model: &AuditorPortalReadModel, control: &ControlSu
     )
 }
 
-fn render_policy_document(policy: &AuditorPortalPolicy) -> String {
+fn render_policy_document_action(policy: &AuditorPortalPolicy) -> String {
     let Some(document) = &policy.document else {
-        return r#"<div class="empty-state compact-state"><h3>No document</h3><p>No policy document is available.</p></div>"#.to_owned();
+        return String::new();
     };
-    let action = if document.download_eligible {
-        format!(
-            r#"<a class="button" href="/auditor-access/portal/policies/{}/documents/{}/download" aria-label="Download policy document {}">Download document</a>"#,
-            Uuid::from(policy.id),
-            Uuid::from(document.id),
-            escape_html(&document.filename),
-        )
-    } else {
-        format!(
-            r#"<p class="document-unavailable">{}</p>"#,
-            policy_document_unavailable_message(document.upload_status)
-        )
-    };
+    if !document.download_eligible {
+        return String::new();
+    }
 
     format!(
-        r#"<dl class="policy-document-details"><div><dt>Filename</dt><dd>{}</dd></div><div><dt>Size</dt><dd>{}</dd></div><div><dt>Status</dt><dd><span class="coverage {}">{}</span></dd></div></dl>{}"#,
+        r#"<a class="button" href="/auditor-access/portal/policies/{}/documents/{}/download" aria-label="Download policy document {}">Download document</a>"#,
+        Uuid::from(policy.id),
+        Uuid::from(document.id),
         escape_html(&document.filename),
-        format_bytes(document.content_length),
-        policy_document_tone(Some(document.upload_status)),
-        policy_document_status(Some(document.upload_status)),
-        action,
     )
 }
 
@@ -1086,33 +1071,33 @@ fn render_requirement_row(
     requirement: &FrameworkRequirement,
 ) -> String {
     let controls = controls_for_requirement(model, Uuid::from(requirement.id));
-    let request_count = controls
+    let evidence_count = controls
         .iter()
-        .map(|control| control.evidence_requests.len())
+        .map(|control| control.evidence.len())
         .sum::<usize>();
     let submission_count = controls
         .iter()
-        .flat_map(|control| &control.evidence_requests)
-        .map(|request| request.submissions.len())
+        .flat_map(|control| &control.evidence)
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
-    let submitted_request_count = controls
+    let submitted_evidence_count = controls
         .iter()
-        .flat_map(|control| &control.evidence_requests)
-        .filter(|request| !request.submissions.is_empty())
+        .flat_map(|control| &control.evidence)
+        .filter(|evidence| !evidence.submissions.is_empty())
         .count();
-    let (coverage, tone) = coverage_state(controls.len(), request_count, submitted_request_count);
+    let (coverage, tone) = coverage_state(controls.len(), evidence_count, submitted_evidence_count);
     let href = format!(
         "/auditor-access/portal/framework-requirements/{}",
         Uuid::from(requirement.id)
     );
 
     format!(
-        r#"<tr class="linked-row"><td data-label="Requirement"><a class="row-link" href="{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Mapped controls">{}</td><td class="numeric" data-label="Evidence requests">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        r#"<tr class="linked-row"><td data-label="Requirement"><a class="row-link" href="{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Mapped controls">{}</td><td class="numeric" data-label="Evidence">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
         href,
         escape_html(&requirement.code),
         escape_html(&requirement.title),
         controls.len(),
-        request_count,
+        evidence_count,
         submission_count,
         tone,
         coverage,
@@ -1159,7 +1144,7 @@ fn render_requirement_page(model: &AuditorPortalReadModel, requirement_id: Uuid)
                 rows
             } else {
                 format!(
-                    r#"<table class="ledger control-ledger"><thead><tr><th>Control</th><th class="numeric">Requests</th><th class="numeric">Submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
+                    r#"<table class="ledger control-ledger"><thead><tr><th>Control</th><th class="numeric">Evidence</th><th class="numeric">Submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{}</tbody></table>"#,
                     rows
                 )
             },
@@ -1171,25 +1156,25 @@ fn render_control_row(
     requirement: &FrameworkRequirement,
     control: &AuditorPortalControl,
 ) -> String {
-    let request_count = control.evidence_requests.len();
+    let evidence_count = control.evidence.len();
     let submission_count = control
-        .evidence_requests
+        .evidence
         .iter()
-        .map(|request| request.submissions.len())
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
-    let submitted_request_count = control
-        .evidence_requests
+    let submitted_evidence_count = control
+        .evidence
         .iter()
-        .filter(|request| !request.submissions.is_empty())
+        .filter(|evidence| !evidence.submissions.is_empty())
         .count();
-    let (coverage, tone) = coverage_state(1, request_count, submitted_request_count);
+    let (coverage, tone) = coverage_state(1, evidence_count, submitted_evidence_count);
     format!(
-        r#"<tr class="linked-row"><td data-label="Control"><a class="row-link" href="/auditor-access/portal/framework-requirements/{}/controls/{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Evidence requests">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
+        r#"<tr class="linked-row"><td data-label="Control"><a class="row-link" href="/auditor-access/portal/framework-requirements/{}/controls/{}"><strong>{}</strong><span>{}</span></a></td><td class="numeric" data-label="Evidence">{}</td><td class="numeric" data-label="Evidence submissions">{}</td><td data-label="Coverage"><span class="coverage {}">{}</span></td><td class="row-arrow" aria-hidden="true">›</td></tr>"#,
         Uuid::from(requirement.id),
         Uuid::from(control.id),
         escape_html(&control.code),
         escape_html(&control.title),
-        request_count,
+        evidence_count,
         submission_count,
         tone,
         coverage,
@@ -1232,19 +1217,19 @@ fn render_control_detail_page(
     control: &AuditorPortalControl,
 ) -> String {
     let submission_count = control
-        .evidence_requests
+        .evidence
         .iter()
-        .map(|request| request.submissions.len())
+        .map(|evidence| evidence.submissions.len())
         .sum::<usize>();
-    let requests = if control.evidence_requests.is_empty() {
-        r#"<div class="empty-state"><h2>No evidence requested</h2><p>No evidence requests are mapped to this control.</p></div>"#.to_owned()
+    let evidence_blocks = if control.evidence.is_empty() {
+        r#"<div class="empty-state"><h2>No evidence mapped</h2><p>No evidence is mapped to this control.</p></div>"#.to_owned()
     } else {
         control
-            .evidence_requests
+            .evidence
             .iter()
             .rev()
             .enumerate()
-            .map(|(index, request)| render_evidence_request(request, index == 0))
+            .map(|(index, evidence)| render_evidence(evidence, index == 0))
             .collect::<Vec<_>>()
             .join("")
     };
@@ -1271,20 +1256,20 @@ fn render_control_detail_page(
         &format!(
             r#"{}<main class="portal" id="main-content">
 {}
-<header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence requests</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
+<header class="control-detail-header"><div><p class="eyebrow">Control</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></div><dl class="page-stats"><div><dt>Evidence</dt><dd>{}</dd></div><div><dt>Evidence submissions</dt><dd>{}</dd></div></dl></header>
 <section class="attached-policies" aria-labelledby="attached-policies-title"><div class="section-heading"><p class="eyebrow">Policy mappings</p><h2 id="attached-policies-title">Attached policies ({})</h2></div>{}</section>
-<section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence by request</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
+<section class="evidence-dossier" aria-labelledby="evidence-title"><div class="section-heading"><p class="eyebrow">Evidence</p><h2 id="evidence-title">Submission history</h2></div>{}</section>
 </main>"#,
             render_portal_bar(model, PortalDestination::FrameworkRequirements),
             breadcrumbs,
             escape_html(&control.code),
             escape_html(&control.title),
             escape_html(&control.description),
-            control.evidence_requests.len(),
+            control.evidence.len(),
             submission_count,
             control.policies.len(),
             policies,
-            requests,
+            evidence_blocks,
         ),
     )
 }
@@ -1315,29 +1300,29 @@ fn render_attached_policies(control: &AuditorPortalControl) -> String {
     )
 }
 
-fn render_evidence_request(request: &AuditorPortalEvidenceRequest, open: bool) -> String {
-    let submissions = if request.submissions.is_empty() {
-        r#"<p class="empty compact">Awaiting submission. No evidence has been received for this request.</p>"#.to_owned()
+fn render_evidence(evidence: &AuditorPortalEvidence, open: bool) -> String {
+    let submissions = if evidence.submissions.is_empty() {
+        r#"<p class="empty compact">Awaiting submission. No evidence has been received.</p>"#
+            .to_owned()
     } else {
-        request
-            .submissions
-            .iter()
-            .map(render_submission)
-            .collect::<Vec<_>>()
-            .join("")
+        format!(
+            r#"<table class="submission-table"><caption class="sr-only">Evidence submissions</caption><thead><tr><th>File</th><th>Received</th><th>Valid from</th><th>Valid until</th><th class="action-column">Actions</th></tr></thead><tbody>{}</tbody></table>"#,
+            evidence
+                .submissions
+                .iter()
+                .map(render_submission_row)
+                .collect::<Vec<_>>()
+                .join(""),
+        )
     };
 
     format!(
-        r#"<details class="request-disclosure" {}><summary><span class="summary-title"><strong>{}</strong><small>{}</small></span><span class="summary-meta"><span>Due {}</span><span>{}</span><span>{} submissions</span><span class="status-chip">{}</span><span class="disclosure-action"><span class="when-closed sr-only">Expand evidence request</span><span class="when-open sr-only">Collapse evidence request</span><span class="disclosure-chevron" aria-hidden="true"></span></span></span></summary><div class="request-body"><p>{}</p><dl class="mapping"><dt>Control mapping rationale</dt><dd>{}</dd></dl><div class="submission-list">{}</div></div></details>"#,
+        r#"<details class="request-disclosure" {}><summary><span class="summary-title"><strong>{}</strong><small>{}</small></span><span class="summary-meta"><span>{} submissions</span><span class="status-chip">{}</span><span class="disclosure-action"><span class="when-closed sr-only">Expand evidence</span><span class="when-open sr-only">Collapse evidence</span><span class="disclosure-chevron" aria-hidden="true"></span></span></span></summary><div class="request-body">{}</div></details>"#,
         if open { "open" } else { "" },
-        escape_html(&request.request.title),
-        escape_html(&request.request.description),
-        format_date(request.request.due_at),
-        escape_html(request.request.cadence.as_str()),
-        request.submissions.len(),
-        escape_html(request.request.status.as_str()),
-        escape_html(&request.request.description),
-        escape_html(&request.mapping_rationale),
+        escape_html(&evidence.evidence.title),
+        escape_html(&evidence.evidence.description),
+        evidence.submissions.len(),
+        escape_html(evidence.evidence.status.as_str()),
         submissions,
     )
 }
@@ -1366,7 +1351,7 @@ fn coverage_state(
     if control_count == 0 {
         ("No controls mapped", "gap")
     } else if request_count == 0 {
-        ("No evidence requested", "gap")
+        ("No evidence mapped", "gap")
     } else if submitted_request_count < request_count {
         ("Awaiting submission", "gap")
     } else {
@@ -1404,7 +1389,7 @@ fn policy_document_status(status: Option<crate::domain::DocumentUploadStatus>) -
     use crate::domain::DocumentUploadStatus;
 
     match status {
-        None => "No document",
+        None => "Missing",
         Some(DocumentUploadStatus::PendingUpload) => "Uploading",
         Some(DocumentUploadStatus::Finalizing) => "Scanning",
         Some(DocumentUploadStatus::Uploaded) => "Uploaded",
@@ -1421,98 +1406,30 @@ fn policy_document_tone(status: Option<crate::domain::DocumentUploadStatus>) -> 
     }
 }
 
-fn policy_document_unavailable_message(
-    status: crate::domain::DocumentUploadStatus,
-) -> &'static str {
-    use crate::domain::DocumentUploadStatus;
-
-    match status {
-        DocumentUploadStatus::PendingUpload => {
-            "This document is uploading and is not available for download."
-        }
-        DocumentUploadStatus::Finalizing => {
-            "This document is being scanned and is not available for download."
-        }
-        DocumentUploadStatus::ContainsVirus | DocumentUploadStatus::FailedUpload => {
-            "This document is unavailable for download."
-        }
-        DocumentUploadStatus::Uploaded => "This document is available for download.",
-    }
-}
-
-fn render_submission(submission: &AuditorPortalSubmission) -> String {
-    let documents = if submission.documents.is_empty() {
-        r#"<p class="empty compact">No documents are available for this submission.</p>"#.to_owned()
-    } else {
-        format!(
-            r#"<table class="document-table"><caption>Evidence documents</caption><thead><tr><th>Document</th><th>Size</th><th>Status</th><th>Checksum (SHA-256)</th><th>Action</th></tr></thead><tbody>{}</tbody></table>"#,
-            submission
-                .documents
-                .iter()
-                .map(render_document)
-                .collect::<Vec<_>>()
-                .join("")
-        )
-    };
-    let summary = submission
-        .submission
-        .summary
-        .as_deref()
-        .map(|summary| format!(r#"<p>{}</p>"#, escape_html(summary)))
-        .unwrap_or_default();
-    let description = submission
-        .submission
-        .description
-        .as_deref()
-        .map(|description| format!(r#"<p class="muted">{}</p>"#, escape_html(description)))
-        .unwrap_or_default();
-
+fn render_submission_row(submission: &AuditorPortalSubmission) -> String {
     format!(
-        r#"<article class="submission">
-<header>
-<p class="object-label">Evidence submission</p>
-<h4>Received {}</h4>
-</header>
-<dl class="details">
-<div><dt>Coverage period</dt><dd>{} to {}</dd></div>
-<div><dt>Source system</dt><dd>{}</dd></div>
-<div><dt>Collection method</dt><dd>{}</dd></div>
-</dl>
-{}
-{}
-{}
-</article>"#,
+        r#"<tr><td class="filename" data-label="File">{}</td><td data-label="Received">{}</td><td data-label="Valid from">{}</td><td data-label="Valid until">{}</td><td class="action-column" data-label="Actions">{}</td></tr>"#,
+        escape_html(&submission.document.filename),
         format_datetime(submission.submission.received_at),
-        format_date(submission.submission.coverage_start_at),
-        format_date(submission.submission.coverage_end_at),
-        escape_html(&submission.submission.source_system),
-        escape_html(&submission.submission.collection_method),
-        summary,
-        description,
-        documents,
+        format_date(submission.submission.valid_from),
+        format_date(submission.submission.valid_until),
+        render_document_action(submission.submission.id, &submission.document),
     )
 }
 
-fn render_document(document: &AuditorPortalDocument) -> String {
-    let action = if document.download_eligible {
+fn render_document_action(
+    submission_id: EvidenceSubmissionId,
+    document: &AuditorPortalDocument,
+) -> String {
+    if document.download_eligible {
         format!(
-            r#"<a class="button" href="/auditor-access/portal/evidence-submissions/{}/documents/{}/download">Download evidence</a>"#,
-            Uuid::from(document.evidence_submission_id),
-            Uuid::from(document.id),
+            r#"<a class="button icon-button" href="/auditor-access/portal/evidence-submissions/{}/documents/{}/download" aria-label="Download evidence file"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span class="sr-only">Download</span></a>"#,
+            Uuid::from(submission_id),
+            Uuid::from(document.document_id),
         )
     } else {
-        "Unavailable".to_owned()
-    };
-
-    format!(
-        r#"<tr><td data-label="Document">{}</td><td data-label="Size">{}</td><td data-label="Status">{}</td><td class="checksum" data-label="Checksum (SHA-256)" title="{}">{}</td><td data-label="Action">{}</td></tr>"#,
-        escape_html(&document.filename),
-        format_bytes(document.content_length),
-        escape_html(document.upload_status.as_str()),
-        escape_html(&document.checksum_sha256),
-        compact_checksum(&document.checksum_sha256),
-        action,
-    )
+        r#"<span class="unavailable">Unavailable</span>"#.to_owned()
+    }
 }
 
 fn render_shell(title: &str, body: &str) -> String {
@@ -1616,14 +1533,11 @@ dd {{ margin: 4px 0 0; }}
   font-size: 0.8125rem;
   font-weight: 620;
 }}
+.status-chip {{ display: inline-flex; align-items: center; gap: 7px; }}
+.status-chip::before {{ content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }}
 .request-list {{ display: grid; gap: 14px; margin-top: 18px; }}
 .request {{ padding: 18px; background: var(--surface-raised); }}
 .request-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: start; }}
-.mapping {{ margin: 14px 0 0; }}
-.mapping dd {{ color: var(--ink); line-height: 1.5; }}
-.submissions-label {{ margin-top: 18px; }}
-.submission-list {{ display: grid; gap: 12px; margin-top: 16px; }}
-.submission {{ padding: 16px; background: var(--surface); }}
 .muted, .empty {{ color: var(--muted); }}
 .compact {{ margin-bottom: 0; }}
 table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
@@ -1708,21 +1622,16 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .context-panel dl {{ display: grid; gap: 20px; margin: 24px 0 0; }}
 .context-panel dd {{ color: var(--ink); }}
 .detail-ledger .ledger {{ margin-top: 20px; }}
-.control-ledger .row-link {{ grid-template-columns: 72px 1fr; }}
+.control-ledger .row-link {{ grid-template-columns: minmax(72px, auto) 1fr; }}
+.control-ledger .row-link strong {{ white-space: nowrap; }}
 .policy-ledger .policy-row-link {{ grid-template-columns: 1fr; gap: 4px; }}
 .policy-ledger .policy-row-link strong {{ color: var(--ink); font-size: 0.9375rem; }}
 .policy-ledger .policy-row-link small {{ grid-column: 1; max-width: 72ch; }}
 .clamped-description {{ display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }}
 .evidence-dossier {{ max-width: 1180px; }}
 .attached-policies {{ max-width: 1180px; margin-bottom: 48px; }}
-.policy-detail-layout {{ display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 48px; }}
-.policy-document-panel {{ padding-right: 36px; border-inline-end: 1px solid var(--line); }}
-.policy-document-details {{ display: grid; gap: 18px; margin: 24px 0; }}
-.policy-document-details dd {{ overflow-wrap: anywhere; color: var(--ink); }}
-.policy-document-panel .button {{ min-height: 44px; }}
-.document-unavailable {{ max-width: 36ch; margin: 24px 0 0; }}
-.compact-state {{ padding: 24px 0; }}
-.compact-state p {{ margin-bottom: 0; }}
+.header-aside {{ display: flex; flex: 0 0 auto; align-items: end; gap: 28px; }}
+.header-aside .button {{ display: inline-flex; align-items: center; min-height: 44px; }}
 .status-stat {{ max-width: 160px; font-size: 1rem !important; }}
 .request-disclosure {{ border-top: 1px solid var(--line); }}
 .request-disclosure:last-child {{ border-bottom: 1px solid var(--line); }}
@@ -1740,17 +1649,32 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 .request-disclosure[open] .when-closed {{ display: none; }}
 .disclosure-chevron {{ display: block; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 180ms cubic-bezier(.25,1,.5,1); }}
 .request-disclosure[open] .disclosure-chevron {{ transform: translateY(2px) rotate(225deg); }}
-.request-body {{ padding: 8px 16px 28px 40px; }}
+.request-body {{ padding: 4px 16px 28px 40px; }}
 .request-body > p {{ max-width: 70ch; }}
-.mapping {{ max-width: 76ch; padding-top: 16px; border-top: 1px solid var(--line); }}
-.submission-list {{ gap: 0; margin-top: 24px; border-top: 1px solid var(--line); }}
-.submission {{ padding: 24px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }}
-.submission h4 {{ font-size: 1rem; }}
-.submission .details {{ margin-top: 14px; }}
-.document-table {{ margin-top: 20px; }}
-.document-table th {{ background: oklch(19% 0.013 170); }}
+.submission-table {{ margin-top: 0; }}
+.submission-table th {{
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 620;
+}}
+.submission-table td {{ font-variant-numeric: tabular-nums; }}
+.submission-table .filename {{ color: var(--ink); font-weight: 650; overflow-wrap: anywhere; }}
+.submission-table .action-column {{ width: 1%; text-align: right; white-space: nowrap; }}
+.submission-table .unavailable {{ display: inline-grid; height: 40px; place-items: center; color: var(--muted); font-size: 0.8125rem; }}
+.icon-button {{
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  transition: background-color 160ms cubic-bezier(.25,1,.5,1), color 160ms cubic-bezier(.25,1,.5,1);
+}}
+.icon-button svg {{ width: 18px; height: 18px; stroke: currentColor; }}
+.icon-button:hover {{ background: var(--surface-raised); color: var(--ink); }}
 .checksum {{ font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: 0.8125rem; font-variant-ligatures: none; }}
-.document-table .button {{ min-height: 40px; white-space: nowrap; }}
 .empty-state {{ padding: 40px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }}
 .empty-state h2 {{ font-size: 1.25rem; }}
 
@@ -1759,8 +1683,7 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
   .requirement-layout {{ grid-template-columns: 1fr; gap: 28px; }}
   .context-panel {{ padding: 0 0 24px; border-inline-end: 0; border-bottom: 1px solid var(--line); }}
   .context-panel dl {{ grid-template-columns: repeat(3, 1fr); }}
-  .policy-detail-layout {{ grid-template-columns: 1fr; gap: 32px; }}
-  .policy-document-panel {{ padding: 0 0 28px; border-inline-end: 0; border-bottom: 1px solid var(--line); }}
+  .header-aside {{ display: grid; gap: 20px; align-items: start; }}
 }}
 
 @media (max-width: 900px) {{
@@ -1796,7 +1719,8 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
   .context-panel dl {{ grid-template-columns: 1fr; }}
   .request-disclosure summary {{ padding-left: 28px; }}
   .request-body {{ padding-left: 12px; padding-right: 12px; }}
-  .document-table tr {{ display: block; padding: 16px 0; }}
+  .submission-table tr {{ display: block; padding: 16px 0; }}
+  .submission-table .action-column {{ width: auto; text-align: left; }}
 }}
 
 @media (prefers-reduced-motion: reduce) {{
@@ -1839,40 +1763,12 @@ fn notice(message: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn format_bytes(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = 1024 * KB;
-    if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn format_date(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d").to_string()
 }
 
 fn format_datetime(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M UTC").to_string()
-}
-
-fn compact_checksum(checksum: &str) -> String {
-    if checksum.chars().count() <= 20 {
-        return escape_html(checksum);
-    }
-    let prefix = checksum.chars().take(12).collect::<String>();
-    let suffix = checksum
-        .chars()
-        .rev()
-        .take(6)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    format!("{}…{}", escape_html(&prefix), escape_html(&suffix))
 }
 
 fn escape_html(value: &str) -> String {
@@ -2036,7 +1932,7 @@ struct AuditorPortalControlResponse {
     title: String,
     description: String,
     framework_requirements: Vec<FrameworkRequirementResponse>,
-    evidence_requests: Vec<AuditorPortalEvidenceRequestResponse>,
+    evidence: Vec<AuditorPortalEvidenceResponse>,
     policies: Vec<AuditorPortalPolicySummaryResponse>,
 }
 
@@ -2052,11 +1948,7 @@ impl From<AuditorPortalControl> for AuditorPortalControlResponse {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
-            evidence_requests: control
-                .evidence_requests
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            evidence: control.evidence.into_iter().map(Into::into).collect(),
             policies: control.policies.into_iter().map(Into::into).collect(),
         }
     }
@@ -2108,13 +2000,14 @@ impl From<AuditorPortalPolicySummary> for AuditorPortalPolicySummaryResponse {
 
 #[derive(Debug, Serialize)]
 struct AuditorPortalPolicyDocumentStatusResponse {
-    upload_status: &'static str,
+    download_eligible: bool,
 }
 
 impl From<AuditorPortalPolicyDocumentStatus> for AuditorPortalPolicyDocumentStatusResponse {
     fn from(document: AuditorPortalPolicyDocumentStatus) -> Self {
         Self {
-            upload_status: document.upload_status.as_str(),
+            download_eligible: document.upload_status
+                == crate::domain::DocumentUploadStatus::Uploaded,
         }
     }
 }
@@ -2142,13 +2035,7 @@ impl From<ControlSummary> for AuditorPortalPolicyControlResponse {
 struct AuditorPortalPolicyDocumentResponse {
     id: Uuid,
     policy_id: Uuid,
-    created_by_user_id: Uuid,
     filename: String,
-    content_type: String,
-    content_length: i64,
-    checksum_sha256: String,
-    checksum_crc32c: String,
-    upload_status: &'static str,
     created_at: DateTime<Utc>,
     download_eligible: bool,
 }
@@ -2158,13 +2045,7 @@ impl From<AuditorPortalPolicyDocument> for AuditorPortalPolicyDocumentResponse {
         Self {
             id: document.id.into(),
             policy_id: document.policy_id.into(),
-            created_by_user_id: document.created_by_user_id.into(),
             filename: document.filename,
-            content_type: document.content_type,
-            content_length: document.content_length,
-            checksum_sha256: document.checksum_sha256,
-            checksum_crc32c: document.checksum_crc32c,
-            upload_status: document.upload_status.as_str(),
             created_at: document.created_at,
             download_eligible: document.download_eligible,
         }
@@ -2197,53 +2078,45 @@ impl From<FrameworkRequirement> for FrameworkRequirementResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct AuditorPortalEvidenceRequestResponse {
+struct AuditorPortalEvidenceResponse {
     mapping_rationale: String,
     mapping_created_at: DateTime<Utc>,
-    request: EvidenceRequestResponse,
+    evidence: EvidenceResponse,
     submissions: Vec<AuditorPortalSubmissionResponse>,
 }
 
-impl From<AuditorPortalEvidenceRequest> for AuditorPortalEvidenceRequestResponse {
-    fn from(request: AuditorPortalEvidenceRequest) -> Self {
+impl From<AuditorPortalEvidence> for AuditorPortalEvidenceResponse {
+    fn from(evidence: AuditorPortalEvidence) -> Self {
         Self {
-            mapping_rationale: request.mapping_rationale,
-            mapping_created_at: request.mapping_created_at,
-            request: request.request.into(),
-            submissions: request.submissions.into_iter().map(Into::into).collect(),
+            mapping_rationale: evidence.mapping_rationale,
+            mapping_created_at: evidence.mapping_created_at,
+            evidence: evidence.evidence.into(),
+            submissions: evidence.submissions.into_iter().map(Into::into).collect(),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-struct EvidenceRequestResponse {
+struct EvidenceResponse {
     id: Uuid,
     title: String,
     description: String,
     collection_instructions: String,
-    cadence: &'static str,
-    due_at: DateTime<Utc>,
-    schedule_anchor_at: DateTime<Utc>,
-    freshness_window_days: Option<i32>,
     status: &'static str,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl From<EvidenceRequest> for EvidenceRequestResponse {
-    fn from(request: EvidenceRequest) -> Self {
+impl From<Evidence> for EvidenceResponse {
+    fn from(evidence: Evidence) -> Self {
         Self {
-            id: Uuid::from(request.id),
-            title: request.title,
-            description: request.description,
-            collection_instructions: request.collection_instructions,
-            cadence: request.cadence.as_str(),
-            due_at: request.due_at,
-            schedule_anchor_at: request.schedule_anchor_at,
-            freshness_window_days: request.freshness_window_days,
-            status: request.status.as_str(),
-            created_at: request.created_at,
-            updated_at: request.updated_at,
+            id: Uuid::from(evidence.id),
+            title: evidence.title,
+            description: evidence.description,
+            collection_instructions: evidence.collection_instructions,
+            status: evidence.status.as_str(),
+            created_at: evidence.created_at,
+            updated_at: evidence.updated_at,
         }
     }
 }
@@ -2251,14 +2124,14 @@ impl From<EvidenceRequest> for EvidenceRequestResponse {
 #[derive(Debug, Serialize)]
 struct AuditorPortalSubmissionResponse {
     submission: EvidenceSubmissionResponse,
-    documents: Vec<AuditorPortalDocumentResponse>,
+    document: AuditorPortalDocumentResponse,
 }
 
 impl From<AuditorPortalSubmission> for AuditorPortalSubmissionResponse {
     fn from(submission: AuditorPortalSubmission) -> Self {
         Self {
             submission: submission.submission.into(),
-            documents: submission.documents.into_iter().map(Into::into).collect(),
+            document: submission.document.into(),
         }
     }
 }
@@ -2266,32 +2139,22 @@ impl From<AuditorPortalSubmission> for AuditorPortalSubmissionResponse {
 #[derive(Debug, Serialize)]
 struct EvidenceSubmissionResponse {
     id: Uuid,
-    evidence_request_id: Uuid,
+    evidence_id: Uuid,
     submitted_by: EvidenceSubmitterResponse,
     received_at: DateTime<Utc>,
-    coverage_start_at: DateTime<Utc>,
-    coverage_end_at: DateTime<Utc>,
-    source_system: String,
-    collection_method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    valid_from: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
 }
 
 impl From<EvidenceSubmission> for EvidenceSubmissionResponse {
     fn from(submission: EvidenceSubmission) -> Self {
         Self {
             id: Uuid::from(submission.id),
-            evidence_request_id: Uuid::from(submission.evidence_request_id),
+            evidence_id: Uuid::from(submission.evidence_id),
             submitted_by: EvidenceSubmitterResponse::from(submission.submitted_by),
             received_at: submission.received_at,
-            coverage_start_at: submission.coverage_start_at,
-            coverage_end_at: submission.coverage_end_at,
-            source_system: submission.source_system,
-            collection_method: submission.collection_method,
-            summary: submission.summary,
-            description: submission.description,
+            valid_from: submission.valid_from,
+            valid_until: submission.valid_until,
         }
     }
 }
@@ -2313,30 +2176,16 @@ impl From<crate::domain::EvidenceSubmitter> for EvidenceSubmitterResponse {
 
 #[derive(Debug, Serialize)]
 struct AuditorPortalDocumentResponse {
-    id: Uuid,
-    evidence_submission_id: Uuid,
-    created_by_user_id: Uuid,
+    document_id: Uuid,
     filename: String,
-    content_type: String,
-    content_length: i64,
-    checksum_sha256: String,
-    checksum_crc32c: String,
-    upload_status: &'static str,
     download_eligible: bool,
 }
 
 impl From<AuditorPortalDocument> for AuditorPortalDocumentResponse {
     fn from(document: AuditorPortalDocument) -> Self {
         Self {
-            id: Uuid::from(document.id),
-            evidence_submission_id: Uuid::from(document.evidence_submission_id),
-            created_by_user_id: Uuid::from(document.created_by_user_id),
+            document_id: Uuid::from(document.document_id),
             filename: document.filename,
-            content_type: document.content_type,
-            content_length: document.content_length,
-            checksum_sha256: document.checksum_sha256,
-            checksum_crc32c: document.checksum_crc32c,
-            upload_status: document.upload_status.as_str(),
             download_eligible: document.download_eligible,
         }
     }

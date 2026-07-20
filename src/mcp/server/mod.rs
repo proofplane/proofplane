@@ -2,7 +2,7 @@ mod auditor_access_grants;
 mod common;
 mod controls;
 mod document_grants;
-mod evidence_requests;
+mod evidence;
 mod evidence_submissions;
 mod guide;
 mod policies;
@@ -23,9 +23,9 @@ use crate::{
     mcp::server::common::authorize_connection,
     services::{
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        document_upload_grants::DocumentUploadGrantService,
-        evidence_requests::EvidenceRequestService, evidence_submissions::EvidenceSubmissionService,
-        policies::PolicyService, policy_document_upload_grants::PolicyDocumentUploadGrantService,
+        document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
+        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
+        policy_document_upload_grants::PolicyDocumentUploadGrantService,
     },
     VERSION,
 };
@@ -34,23 +34,23 @@ use url::Url;
 // The lead should be 512 characters max. OpenAI specifically documents that ChatGPT pays special
 // attention to these first 512 characters, even though that behavior isn't part of the MCP spec.
 const SERVER_INSTRUCTION_LEAD: &str = concat!(
-    "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
-    "requests with list_evidence_requests or list_due_evidence_requests and read ",
-    "collection_instructions; second, create an evidence submission for the request with ",
-    "create_evidence_submission; third, use manage_evidence_submission_document to get a ",
-    "short-lived human browser flow for documents. A human uploads files there; file bytes ",
-    "never pass through MCP or the model. "
+    "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence with ",
+    "list_evidence and read its collection_instructions; second, call manage_evidence_submissions ",
+    "with the evidence ID and the coverage window the proof covers to get a short-lived human ",
+    "browser flow; third, a human uploads files there and each file becomes one submission for ",
+    "that window. File bytes never pass through MCP or the model. "
 );
 
 const SERVER_INSTRUCTION_DETAIL: &str = concat!(
-    "Frameworks contain requirements, requirements are ",
-    "satisfied by controls, and control mappings link controls to evidence requests. Each ",
-    "evidence request can have submissions, and each submission can have documents. Controls ",
-    "define what must be proven, so review their mappings when deciding which proof satisfies a ",
-    "request. Submissions record the connected agent's provenance. Treat the browser URL as a ",
-    "bearer secret and share it only with the human managing the document before it expires. ",
-    "Call get_proofplane_guide without a topic to see its topic index. Clients that surface MCP ",
-    "resources can also browse these guides at proofplane://docs/{topic}."
+    "Frameworks contain requirements, requirements are satisfied by controls, and control mappings ",
+    "link controls to evidence. A submission is one file with a coverage window and the time it was ",
+    "received. Several submissions may share a coverage window when one file cannot cover the ",
+    "period. To replace proof, archive a submission and upload another. Controls define what must ",
+    "be proven, so review their mappings when deciding which proof satisfies evidence. Submissions ",
+    "record the connected agent's provenance. Treat the browser URL as a bearer secret and share it ",
+    "only with the human uploading the files before it expires. Call get_proofplane_guide without a ",
+    "topic to see its topic index. Clients that surface MCP resources can also browse these guides ",
+    "at proofplane://docs/{topic}."
 );
 
 fn server_instructions() -> String {
@@ -63,7 +63,7 @@ fn server_instructions() -> String {
 
 #[derive(Clone)]
 pub struct ProofplaneMcp {
-    evidence_requests: EvidenceRequestService,
+    evidence: EvidenceService,
     evidence_submissions: EvidenceSubmissionService,
     document_upload_grants: DocumentUploadGrantService,
     policy_document_upload_grants: PolicyDocumentUploadGrantService,
@@ -81,7 +81,7 @@ pub(super) struct DocumentGrantServices {
 
 impl ProofplaneMcp {
     pub(super) fn new(
-        evidence_requests: EvidenceRequestService,
+        evidence: EvidenceService,
         evidence_submissions: EvidenceSubmissionService,
         document_grants: DocumentGrantServices,
         auditor_access_grants: AuditorAccessGrantService,
@@ -90,7 +90,7 @@ impl ProofplaneMcp {
         public_api_base_url: Url,
     ) -> Self {
         Self {
-            evidence_requests,
+            evidence,
             evidence_submissions,
             document_upload_grants: document_grants.evidence,
             policy_document_upload_grants: document_grants.policy,
@@ -104,7 +104,7 @@ impl ProofplaneMcp {
 
     fn tool_router() -> ToolRouter<Self> {
         ToolRouter::new()
-            + Self::evidence_requests_tool_router()
+            + Self::evidence_tool_router()
             + Self::evidence_submissions_tool_router()
             + Self::document_grants_tool_router()
             + Self::policy_document_grants_tool_router()
@@ -176,12 +176,8 @@ mod tests {
                 "Create a control that defines what must be proven and link it to the supplied framework requirement IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "create_evidence_request",
-                "Create an evidence request that states what proof to collect, how to collect it, and when it is due; for guidance, call get_proofplane_guide with topic submitting-evidence.",
-            ),
-            (
-                "create_evidence_submission",
-                "Create a submission that records proof for an evidence request; call manage_evidence_submission_document afterward to obtain a human-browser document flow; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "create_evidence",
+                "Create a piece of evidence that states what the organization must prove and how to collect it; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "create_policy",
@@ -196,16 +192,16 @@ mod tests {
                 "Get one control and its linked framework requirements by control ID; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "get_evidence_request",
-                "Get one evidence request with its collection instructions, due date, cadence, and status by evidence request ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "get_evidence",
+                "Get one piece of evidence with its collection instructions and status by evidence ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_evidence_submission",
-                "Get one evidence submission with detailed provenance, coverage, collection, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Get one evidence submission with its coverage window, provenance, and document metadata by submission ID; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_latest_evidence_submission",
-                "Get the latest submission for an evidence request with compact provenance, coverage, summary, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Get the latest submission for a piece of evidence with its coverage window, provenance, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "get_policy",
@@ -224,16 +220,16 @@ mod tests {
                 "List controls that define what must be proven for compliance; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "list_due_evidence_requests",
-                "List evidence requests due at or before `now`, using the current time when `now` is omitted; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "list_evidence",
+                "List evidence with their collection instructions and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
-                "list_evidence_request_control_mappings",
-                "List the controls mapped to an evidence request, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+                "list_evidence_control_mappings",
+                "List the controls mapped to a piece of evidence, including each mapping rationale; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "list_evidence_requests",
-                "List evidence requests with their collection instructions, due dates, cadence, and status; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "list_evidence_submissions",
+                "List the submissions for a piece of evidence, each one file with its coverage window, provenance, and document metadata; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "list_framework_requirements",
@@ -248,20 +244,20 @@ mod tests {
                 "List active policies with their mapped-control counts and current document status; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
-                "manage_evidence_submission_document",
-                "Create a short-lived bearer-secret browser URL for a human to upload or download an evidence submission’s documents; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic documents.",
+                "manage_evidence_submissions",
+                "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "manage_policy_document",
                 "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
-                "map_evidence_request_to_control",
-                "Map an evidence request to a control with a rationale explaining how the requested proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+                "map_evidence_to_control",
+                "Map a piece of evidence to a control with a rationale explaining how that proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
-                "remove_evidence_request_control_mapping",
-                "Remove the mapping between an evidence request and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+                "remove_evidence_control_mapping",
+                "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
                 "replace_control",
@@ -292,12 +288,11 @@ mod tests {
         assert_eq!(
             SERVER_INSTRUCTION_LEAD,
             concat!(
-                "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence ",
-                "requests with list_evidence_requests or list_due_evidence_requests and read ",
-                "collection_instructions; second, create an evidence submission for the request with ",
-                "create_evidence_submission; third, use manage_evidence_submission_document to get a ",
-                "short-lived human browser flow for documents. A human uploads files there; file bytes ",
-                "never pass through MCP or the model. "
+                "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence with ",
+                "list_evidence and read its collection_instructions; second, call manage_evidence_submissions ",
+                "with the evidence ID and the coverage window the proof covers to get a short-lived human ",
+                "browser flow; third, a human uploads files there and each file becomes one submission for ",
+                "that window. File bytes never pass through MCP or the model. "
             ),
             "the protected instruction lead remains byte-for-byte stable"
         );
@@ -310,11 +305,11 @@ mod tests {
         for expected in [
             "SOC 2",
             "compliance evidence",
-            "find evidence requests",
-            "read collection_instructions",
-            "create an evidence submission",
-            "human browser flow",
-            "file bytes never pass through MCP or the model",
+            "find evidence with list_evidence",
+            "read its collection_instructions",
+            "call manage_evidence_submissions",
+            "each file becomes one submission",
+            "File bytes never pass through MCP or the model",
         ] {
             assert!(
                 SERVER_INSTRUCTION_LEAD.contains(expected),
@@ -334,9 +329,9 @@ mod tests {
         for expected in [
             "Frameworks contain requirements",
             "requirements are satisfied by controls",
-            "control mappings link controls to evidence requests",
-            "Each evidence request can have submissions",
-            "each submission can have documents",
+            "control mappings link controls to evidence",
+            "A submission is one file",
+            "coverage window",
             "Controls define what must be proven",
             "connected agent's provenance",
             "browser URL as a bearer secret",
@@ -434,23 +429,22 @@ mod tests {
             }
 
             let expected_topic = match tool.name.as_ref() {
-                "create_evidence_request"
-                | "list_evidence_requests"
-                | "get_evidence_request"
-                | "list_due_evidence_requests"
-                | "create_evidence_submission"
+                "create_evidence"
+                | "list_evidence"
+                | "get_evidence"
+                | "list_evidence_submissions"
                 | "get_evidence_submission"
-                | "get_latest_evidence_submission" => Some("submitting-evidence"),
-                "manage_evidence_submission_document" => Some("documents"),
+                | "get_latest_evidence_submission"
+                | "manage_evidence_submissions" => Some("submitting-evidence"),
                 "list_frameworks"
                 | "list_framework_requirements"
                 | "list_controls"
                 | "get_control"
                 | "create_control"
                 | "replace_control"
-                | "list_evidence_request_control_mappings"
-                | "map_evidence_request_to_control"
-                | "remove_evidence_request_control_mapping" => Some("controls-and-mappings"),
+                | "list_evidence_control_mappings"
+                | "map_evidence_to_control"
+                | "remove_evidence_control_mapping" => Some("controls-and-mappings"),
                 "list_policies"
                 | "get_policy"
                 | "create_policy"
