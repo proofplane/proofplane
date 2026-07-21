@@ -21,6 +21,9 @@ pub enum BatchError {
 
     #[error("{field} contains duplicate ids")]
     Duplicates { field: &'static str, ids: Vec<Uuid> },
+
+    #[error("{field} contains unknown ids")]
+    Unknown { field: &'static str, ids: Vec<Uuid> },
 }
 
 /// Validates the shape of a batch before any database work happens.

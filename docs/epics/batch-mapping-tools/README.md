@@ -15,7 +15,7 @@ Full rationale, SQL sketches, and the error contract live in
 | Ticket                                                                             | Status | Notes                                                    |
 | ---------------------------------------------------------------------------------- | ------ | -------------------------------------------------------- |
 | 001. [Batch Validation and Errors](./tickets/001-batch-validation-and-errors.md)    | Done   | Shared size/empty/duplicate checks and typed batch errors. |
-| 002. [Map Evidence to Controls](./tickets/002-map-evidence-to-controls.md)          | Todo   | One evidence → many controls, with per-pair rationale.     |
+| 002. [Map Evidence to Controls](./tickets/002-map-evidence-to-controls.md)          | Done   | One evidence → many controls, with per-pair rationale.     |
 | 003. [Map Control to Evidence](./tickets/003-map-control-to-evidence.md)            | Todo   | One control → many evidence, the mirror half.              |
 | 004. [Unmap Evidence from Controls](./tickets/004-unmap-evidence-from-controls.md)  | Todo   | One evidence → remove many control mappings.               |
 | 005. [Unmap Control from Evidence](./tickets/005-unmap-control-from-evidence.md)    | Todo   | One control → remove many evidence mappings.               |

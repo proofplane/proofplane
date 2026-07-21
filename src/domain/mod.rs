@@ -35,8 +35,8 @@ pub use auditor_portal::{
 pub use batch::{validate_batch, BatchError, MAX_BATCH_ITEMS};
 pub use controls::{
     Control, ControlId, ControlSummary, CreateControlPayload, CreateEvidenceControlMappingPayload,
-    EvidenceControlMapping, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
-    UpdateControlPayload,
+    CreateEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
+    Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
 };
 pub use document::{
     CreateDocumentPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,

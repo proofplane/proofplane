@@ -134,24 +134,28 @@ teaches an agent that its malformed call worked.
 The layering mirrors what is already in place; no new architectural seams.
 
 **Repository** (`src/repository/controls.rs`, `src/repository/policies.rs`) —
-add a batch method beside each existing single-pair method. Each is one
-statement using `UNNEST` over arrays of counterpart IDs, joined against the
-anchor and workspace-scoped exactly as the single-pair SQL is today. The insert
-`RETURNING`s the created rows so the count can be compared against the requested
-count; a short count means at least one ID did not resolve inside the workspace,
-which is how the unknown-ID set is computed — re-query the requested IDs to
-report precisely which ones were missing. The existing single-pair methods are
-left untouched.
+add a batch method beside each existing single-pair method, sharing the anchor's
+transaction. Each method, in order: check the anchor exists inside the workspace;
+resolve every counterpart ID against the workspace with a read; if any is
+missing, return the unknown-ID set without writing; otherwise insert each pair.
+The existing single-pair methods are left untouched.
 
-Sketch for the evidence→controls half:
+_(Revised during ticket 002 — originally sketched as a single
+`INSERT ... SELECT FROM UNNEST(...)` with the unknown-ID set inferred from a short
+`RETURNING` count and a follow-up re-query. That cannot work: an already-mapped
+pair raises a unique violation on the insert, and **Postgres marks the whole
+transaction failed after any statement error**, so the follow-up re-query — and
+the eventual commit — would themselves error. Resolving IDs with plain reads
+*before* any insert keeps the transaction healthy, names every unknown ID at once
+(a failed insert would abort before the rest were checked), and lets an
+already-mapped conflict roll the batch back cleanly. The batch is capped at 50, so
+the extra per-item round trips are bounded and off any hot path.)_
+
+Sketch for the evidence→controls half — one simple insert per resolved item:
 
 ```sql
 INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
-SELECT er.id, c.id, m.rationale
-FROM UNNEST($2::uuid[], $3::text[]) AS m(control_id, rationale)
-JOIN controls c ON c.id = m.control_id AND c.workspace_id = $4
-JOIN evidence er ON er.id = $1 AND er.workspace_id = $4
-RETURNING evidence_id, control_id
+VALUES ($1, $2, $3)
 ```
 
 **Service** (`src/services/controls.rs`, `src/services/policies.rs`) — one
@@ -160,8 +164,14 @@ method per tool, wrapping the repository call in the same
 methods use. Batch-shape validation (empty, size cap, duplicates) happens here,
 before the transaction opens, via `domain::validate_batch` — one helper for all
 eight tools, taking a key extractor so it serves both bare ID lists and
-`{control_id, rationale}` objects. The service returns either the full set of created
-or deleted mappings, or a typed error carrying the offending IDs.
+`{control_id, rationale}` objects. The service returns the set of affected
+counterpart IDs, or a typed error carrying the offending IDs.
+
+_(Revised during ticket 002 — the create tools' success response is lean:
+`{ evidence_id, count, control_ids }`, not the full mapping objects. An agent that
+needs each mapping's code, title, or rationale reads `list_evidence_control_mappings`
+or the single-pair tool; echoing them back on every batch would bloat a 50-item
+response for data the caller already holds.)_
 
 **MCP** (`src/mcp/server/controls.rs`, `src/mcp/server/policies.rs`) — one
 `#[tool]` per method, added to the existing `controls_tool_router` and

@@ -256,6 +256,10 @@ mod tests {
                 "Map a piece of evidence to a control with a rationale explaining how that proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
             (
+                "map_evidence_to_controls",
+                "Map one piece of evidence to many controls in a single all-or-nothing batch, each with its own rationale; if any control id is unknown or already mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            ),
+            (
                 "remove_evidence_control_mapping",
                 "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
@@ -444,6 +448,7 @@ mod tests {
                 | "replace_control"
                 | "list_evidence_control_mappings"
                 | "map_evidence_to_control"
+                | "map_evidence_to_controls"
                 | "remove_evidence_control_mapping" => Some("controls-and-mappings"),
                 "list_policies"
                 | "get_policy"
