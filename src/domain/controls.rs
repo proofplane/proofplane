@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
-use super::{ids::uuid_id, EvidenceId, WorkspaceId};
+use super::{ids::uuid_id, BatchKey, EvidenceId, WorkspaceId};
 
 uuid_id!(FrameworkId);
 uuid_id!(FrameworkRequirementId);
@@ -93,6 +94,12 @@ pub struct EvidenceControlMappingItem {
     pub rationale: String,
 }
 
+impl BatchKey for EvidenceControlMappingItem {
+    fn key(&self) -> Uuid {
+        self.control_id.into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateEvidenceControlMappingsPayload {
     pub evidence_id: EvidenceId,
@@ -103,6 +110,12 @@ pub struct CreateEvidenceControlMappingsPayload {
 pub struct ControlEvidenceMappingItem {
     pub evidence_id: EvidenceId,
     pub rationale: String,
+}
+
+impl BatchKey for ControlEvidenceMappingItem {
+    fn key(&self) -> Uuid {
+        self.evidence_id.into()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

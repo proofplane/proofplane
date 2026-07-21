@@ -4,10 +4,10 @@ use thiserror::Error as ThisError;
 
 use crate::{
     domain::{
-        validate_batch, BatchError, Control, ControlId, CreateControlEvidenceMappingsPayload,
-        CreateControlPayload, CreateEvidenceControlMappingPayload,
-        CreateEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
-        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+        Control, ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
+        CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
+        FrameworkRequirementId, UpdateControlPayload,
     },
     repository::{
         ConflictKind, CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome,
@@ -41,9 +41,6 @@ impl From<RepositoryError> for ControlMutationError {
 
 #[derive(Debug, ThisError)]
 pub enum MapEvidenceToControlsError {
-    #[error("control batch validation failed")]
-    Validation(Vec<BatchError>),
-
     #[error("resource not found")]
     EvidenceNotFound,
 
@@ -70,9 +67,6 @@ impl From<RepositoryError> for MapEvidenceToControlsError {
 
 #[derive(Debug, ThisError)]
 pub enum MapControlToEvidenceError {
-    #[error("evidence batch validation failed")]
-    Validation(Vec<BatchError>),
-
     #[error("resource not found")]
     ControlNotFound,
 
@@ -206,15 +200,6 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateEvidenceControlMappingsPayload,
     ) -> Result<Vec<ControlId>, MapEvidenceToControlsError> {
-        let items = validate_batch("control_ids", payload.items, |item| item.control_id.into())
-            .into_result()
-            .map_err(MapEvidenceToControlsError::Validation)?;
-
-        let payload = CreateEvidenceControlMappingsPayload {
-            evidence_id: payload.evidence_id,
-            items,
-        };
-
         let outcome = self
             .repository
             .in_agent_connection_workspace_context(
@@ -242,17 +227,6 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateControlEvidenceMappingsPayload,
     ) -> Result<Vec<EvidenceId>, MapControlToEvidenceError> {
-        let items = validate_batch("evidence_ids", payload.items, |item| {
-            item.evidence_id.into()
-        })
-        .into_result()
-        .map_err(MapControlToEvidenceError::Validation)?;
-
-        let payload = CreateControlEvidenceMappingsPayload {
-            control_id: payload.control_id,
-            items,
-        };
-
         let outcome = self
             .repository
             .in_agent_connection_workspace_context(

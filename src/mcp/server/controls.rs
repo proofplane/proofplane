@@ -15,7 +15,7 @@ use super::{
     ProofplaneMcp,
 };
 use crate::domain::{
-    required_text, BatchError, Control, ControlEvidenceMappingItem, ControlId,
+    required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem, ControlId,
     CreateControlEvidenceMappingsPayload, CreateControlPayload,
     CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
     EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
@@ -630,22 +630,18 @@ fn parse_map_evidence_to_control_request(
 fn parse_map_evidence_to_controls_request(
     args: MapEvidenceToControlsRequest,
 ) -> Result<CreateEvidenceControlMappingsPayload, rmcp::ErrorData> {
-    let evidence_id = validate! {
-        evidence_id <- required_uuid("evidence_id", args.evidence_id).map(EvidenceId::from),
-        => evidence_id,
-    }
-    .into_result()
-    .map_err(argument_errors)?;
+    let evidence_id = required_uuid("evidence_id", args.evidence_id)
+        .map(EvidenceId::from)
+        .into_result()
+        .map_err(argument_errors)?;
 
     let item_args = args.items.unwrap_or_default();
     let mut items = Vec::with_capacity(item_args.len());
     for item in item_args {
-        let control_id = validate! {
-            control_id <- required_uuid("control_id", item.control_id).map(ControlId::from),
-            => control_id,
-        }
-        .into_result()
-        .map_err(argument_errors)?;
+        let control_id = required_uuid("control_id", item.control_id)
+            .map(ControlId::from)
+            .into_result()
+            .map_err(argument_errors)?;
 
         let rationale = required_text("rationale", item.rationale.unwrap_or_default())
             .into_result()
@@ -657,28 +653,26 @@ fn parse_map_evidence_to_controls_request(
         });
     }
 
+    let items = validate_batch("control_ids", items).map_err(rmcp::ErrorData::from)?;
+
     Ok(CreateEvidenceControlMappingsPayload { evidence_id, items })
 }
 
 fn parse_map_control_to_evidence_request(
     args: MapControlToEvidenceRequest,
 ) -> Result<CreateControlEvidenceMappingsPayload, rmcp::ErrorData> {
-    let control_id = validate! {
-        control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
-        => control_id,
-    }
-    .into_result()
-    .map_err(argument_errors)?;
+    let control_id = required_uuid("control_id", args.control_id)
+        .map(ControlId::from)
+        .into_result()
+        .map_err(argument_errors)?;
 
     let item_args = args.items.unwrap_or_default();
     let mut items = Vec::with_capacity(item_args.len());
     for item in item_args {
-        let evidence_id = validate! {
-            evidence_id <- required_uuid("evidence_id", item.evidence_id).map(EvidenceId::from),
-            => evidence_id,
-        }
-        .into_result()
-        .map_err(argument_errors)?;
+        let evidence_id = required_uuid("evidence_id", item.evidence_id)
+            .map(EvidenceId::from)
+            .into_result()
+            .map_err(argument_errors)?;
 
         let rationale = required_text("rationale", item.rationale.unwrap_or_default())
             .into_result()
@@ -690,17 +684,13 @@ fn parse_map_control_to_evidence_request(
         });
     }
 
+    let items = validate_batch("evidence_ids", items).map_err(rmcp::ErrorData::from)?;
+
     Ok(CreateControlEvidenceMappingsPayload { control_id, items })
 }
 
 fn map_evidence_to_controls_error(error: MapEvidenceToControlsError) -> rmcp::ErrorData {
     match error {
-        MapEvidenceToControlsError::Validation(errors) => rmcp::ErrorData::from(
-            errors
-                .into_iter()
-                .next()
-                .expect("batch validation failure carries at least one error"),
-        ),
         MapEvidenceToControlsError::UnknownControls(ids) => {
             rmcp::ErrorData::from(BatchError::Unknown {
                 field: "control_ids",
@@ -729,12 +719,6 @@ fn map_evidence_to_controls_error(error: MapEvidenceToControlsError) -> rmcp::Er
 
 fn map_control_to_evidence_error(error: MapControlToEvidenceError) -> rmcp::ErrorData {
     match error {
-        MapControlToEvidenceError::Validation(errors) => rmcp::ErrorData::from(
-            errors
-                .into_iter()
-                .next()
-                .expect("batch validation failure carries at least one error"),
-        ),
         MapControlToEvidenceError::UnknownEvidence(ids) => {
             rmcp::ErrorData::from(BatchError::Unknown {
                 field: "evidence_ids",

@@ -3,9 +3,13 @@ use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::validation::Validation;
-
 pub const MAX_BATCH_ITEMS: usize = 50;
+
+/// Exposes the counterpart id a batch is keyed on, so [`validate_batch`] can
+/// detect duplicates without every caller passing an extraction closure.
+pub trait BatchKey {
+    fn key(&self) -> Uuid;
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BatchError {
@@ -26,21 +30,15 @@ pub enum BatchError {
     Unknown { field: &'static str, ids: Vec<Uuid> },
 }
 
-/// Validates the shape of a batch before any database work happens.
-///
-/// `key` extracts the counterpart id from each item so one helper can
-/// be used both for simple lists of IDs as well as more complex batches
-/// of mapping targets.
-pub fn validate_batch<T>(
+pub fn validate_batch<T: BatchKey>(
     field: &'static str,
     items: Vec<T>,
-    key: impl Fn(&T) -> Uuid,
-) -> Validation<Vec<T>, BatchError> {
+) -> Result<Vec<T>, BatchError> {
     if items.is_empty() {
-        return Validation::invalid(BatchError::Empty { field });
+        return Err(BatchError::Empty { field });
     }
     if items.len() > MAX_BATCH_ITEMS {
-        return Validation::invalid(BatchError::TooLarge {
+        return Err(BatchError::TooLarge {
             field,
             maximum: MAX_BATCH_ITEMS,
             received: items.len(),
@@ -49,91 +47,120 @@ pub fn validate_batch<T>(
 
     let mut seen = HashSet::with_capacity(items.len());
     let mut duplicates = Vec::new();
-    for id in items.iter().map(&key) {
+    for id in items.iter().map(BatchKey::key) {
         if !seen.insert(id) && !duplicates.contains(&id) {
             duplicates.push(id);
         }
     }
 
     if !duplicates.is_empty() {
-        return Validation::invalid(BatchError::Duplicates {
+        return Err(BatchError::Duplicates {
             field,
             ids: duplicates,
         });
     }
 
-    Validation::valid(items)
+    Ok(items)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_batch, BatchError, MAX_BATCH_ITEMS};
+    use super::{validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
     use uuid::Uuid;
 
-    fn ids(count: usize) -> Vec<Uuid> {
-        (0..count).map(|_| Uuid::new_v4()).collect()
+    /// Carries a non-key field so the duplicate tests prove `validate_batch`
+    /// keys off [`BatchKey::key`] rather than whole-item equality.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Item {
+        id: Uuid,
+        note: String,
+    }
+
+    impl Item {
+        fn new(id: Uuid, note: &str) -> Self {
+            Self {
+                id,
+                note: note.to_owned(),
+            }
+        }
+    }
+
+    impl BatchKey for Item {
+        fn key(&self) -> Uuid {
+            self.id
+        }
+    }
+
+    fn items(count: usize) -> Vec<Item> {
+        (0..count)
+            .map(|_| Item::new(Uuid::new_v4(), "item"))
+            .collect()
     }
 
     #[test]
     fn batch_at_the_cap_is_accepted() {
-        let items = ids(MAX_BATCH_ITEMS);
+        let batch = items(MAX_BATCH_ITEMS);
 
-        assert_eq!(
-            validate_batch("control_ids", items.clone(), |id| *id).into_result(),
-            Ok(items)
-        );
+        assert_eq!(validate_batch("control_ids", batch.clone()), Ok(batch));
     }
 
     #[test]
     fn batch_over_the_cap_reports_the_limit_and_the_received_count() {
         assert_eq!(
-            validate_batch("control_ids", ids(MAX_BATCH_ITEMS + 1), |id| *id).into_result(),
-            Err(vec![BatchError::TooLarge {
+            validate_batch("control_ids", items(MAX_BATCH_ITEMS + 1)),
+            Err(BatchError::TooLarge {
                 field: "control_ids",
                 maximum: 50,
                 received: 51,
-            }])
+            })
         );
     }
 
     #[test]
     fn empty_batch_is_rejected() {
         assert_eq!(
-            validate_batch("control_ids", Vec::<Uuid>::new(), |id| *id).into_result(),
-            Err(vec![BatchError::Empty {
+            validate_batch("control_ids", Vec::<Item>::new()),
+            Err(BatchError::Empty {
                 field: "control_ids"
-            }])
+            })
         );
     }
 
     #[test]
     fn repeated_ids_are_each_reported_once_in_first_seen_order() {
         let [first, second, third] = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let items = vec![third, first, second, first, third, first];
+        let batch = vec![
+            Item::new(third, "a"),
+            Item::new(first, "b"),
+            Item::new(second, "c"),
+            Item::new(first, "d"),
+            Item::new(third, "e"),
+            Item::new(first, "f"),
+        ];
 
         assert_eq!(
-            validate_batch("evidence_ids", items, |id| *id).into_result(),
-            Err(vec![BatchError::Duplicates {
+            validate_batch("evidence_ids", batch),
+            Err(BatchError::Duplicates {
                 field: "evidence_ids",
                 ids: vec![first, third],
-            }])
+            })
         );
     }
 
     #[test]
-    fn duplicates_are_detected_through_the_key_extractor() {
+    fn duplicates_are_detected_through_the_key() {
         let control_id = Uuid::new_v4();
-        let items = vec![
-            (control_id, "covers access review".to_owned()),
-            (control_id, "covers offboarding".to_owned()),
+        let batch = vec![
+            Item::new(control_id, "covers access review"),
+            Item::new(control_id, "covers offboarding"),
         ];
 
         assert_eq!(
-            validate_batch("control_ids", items, |(id, _)| *id).into_result(),
-            Err(vec![BatchError::Duplicates {
+            validate_batch("control_ids", batch),
+            Err(BatchError::Duplicates {
                 field: "control_ids",
                 ids: vec![control_id],
-            }])
+            })
         );
     }
 }
