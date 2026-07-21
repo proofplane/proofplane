@@ -99,6 +99,18 @@ pub struct CreateEvidenceControlMappingsPayload {
     pub items: Vec<EvidenceControlMappingItem>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlEvidenceMappingItem {
+    pub evidence_id: EvidenceId,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateControlEvidenceMappingsPayload {
+    pub control_id: ControlId,
+    pub items: Vec<ControlEvidenceMappingItem>,
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;

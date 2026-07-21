@@ -252,6 +252,10 @@ mod tests {
                 "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
+                "map_control_to_evidence",
+                "Map one control to many pieces of evidence in a single all-or-nothing batch, each with its own rationale; if any evidence id is unknown or already mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            ),
+            (
                 "map_evidence_to_control",
                 "Map a piece of evidence to a control with a rationale explaining how that proof supports it; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
             ),
@@ -449,6 +453,7 @@ mod tests {
                 | "list_evidence_control_mappings"
                 | "map_evidence_to_control"
                 | "map_evidence_to_controls"
+                | "map_control_to_evidence"
                 | "remove_evidence_control_mapping" => Some("controls-and-mappings"),
                 "list_policies"
                 | "get_policy"

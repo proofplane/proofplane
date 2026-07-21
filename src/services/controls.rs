@@ -4,13 +4,14 @@ use thiserror::Error as ThisError;
 
 use crate::{
     domain::{
-        validate_batch, BatchError, Control, ControlId, CreateControlPayload,
-        CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
-        FrameworkRequirementId, UpdateControlPayload,
+        validate_batch, BatchError, Control, ControlId, CreateControlEvidenceMappingsPayload,
+        CreateControlPayload, CreateEvidenceControlMappingPayload,
+        CreateEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
+        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
     },
     repository::{
-        ConflictKind, CreateEvidenceControlMappingsOutcome, Error as RepositoryError, Postgres,
+        ConflictKind, CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome,
+        Error as RepositoryError, Postgres,
     },
     services::Error,
 };
@@ -57,6 +58,35 @@ pub enum MapEvidenceToControlsError {
 }
 
 impl From<RepositoryError> for MapEvidenceToControlsError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::Conflict(ConflictKind::EvidenceControlMappingExists) => {
+                Self::AlreadyMapped
+            }
+            other => Self::Repository(other),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum MapControlToEvidenceError {
+    #[error("evidence batch validation failed")]
+    Validation(Vec<BatchError>),
+
+    #[error("resource not found")]
+    ControlNotFound,
+
+    #[error("evidence_ids contains unknown ids")]
+    UnknownEvidence(Vec<EvidenceId>),
+
+    #[error("this evidence is already mapped to the control")]
+    AlreadyMapped,
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for MapControlToEvidenceError {
     fn from(error: RepositoryError) -> Self {
         match error {
             RepositoryError::Conflict(ConflictKind::EvidenceControlMappingExists) => {
@@ -203,6 +233,44 @@ impl ControlService {
             }
             CreateEvidenceControlMappingsOutcome::UnknownControls(ids) => {
                 Err(MapEvidenceToControlsError::UnknownControls(ids))
+            }
+        }
+    }
+
+    pub async fn map_control_to_evidence(
+        &self,
+        connection: AgentConnectionContext,
+        payload: CreateControlEvidenceMappingsPayload,
+    ) -> Result<Vec<EvidenceId>, MapControlToEvidenceError> {
+        let items = validate_batch("evidence_ids", payload.items, |item| {
+            item.evidence_id.into()
+        })
+        .into_result()
+        .map_err(MapControlToEvidenceError::Validation)?;
+
+        let payload = CreateControlEvidenceMappingsPayload {
+            control_id: payload.control_id,
+            items,
+        };
+
+        let outcome = self
+            .repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
+                async move |context| context.create_control_evidence_mappings(&payload).await,
+            )
+            .await
+            .map_err(MapControlToEvidenceError::from)?;
+
+        match outcome {
+            CreateControlEvidenceMappingsOutcome::Created(evidence_ids) => Ok(evidence_ids),
+            CreateControlEvidenceMappingsOutcome::ControlNotFound => {
+                Err(MapControlToEvidenceError::ControlNotFound)
+            }
+            CreateControlEvidenceMappingsOutcome::UnknownEvidence(ids) => {
+                Err(MapControlToEvidenceError::UnknownEvidence(ids))
             }
         }
     }
