@@ -14,9 +14,6 @@ use crate::{
 
 use super::{constraints::classify_db_error, Error};
 
-/// Outcome of a batch evidence→control mapping insert. The two rejection cases
-/// carry `Ok` because nothing was written, so the transaction commits harmlessly;
-/// an already-mapped pair instead surfaces as a `Conflict` error that rolls back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateEvidenceControlMappingsOutcome {
     Created(Vec<ControlId>),
@@ -24,11 +21,6 @@ pub enum CreateEvidenceControlMappingsOutcome {
     UnknownControls(Vec<ControlId>),
 }
 
-/// Outcome of a batch control→evidence mapping insert, the mirror of
-/// [`CreateEvidenceControlMappingsOutcome`] anchored on the control instead. The
-/// two rejection cases carry `Ok` because nothing was written, so the
-/// transaction commits harmlessly; an already-mapped pair instead surfaces as a
-/// `Conflict` error that rolls back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateControlEvidenceMappingsOutcome {
     Created(Vec<EvidenceId>),
