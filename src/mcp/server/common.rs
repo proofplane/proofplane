@@ -23,6 +23,7 @@ pub(super) enum McpArgumentError {
     Missing { field: &'static str },
     InvalidUuid { field: &'static str },
     InvalidTimestamp { field: &'static str },
+    DuplicateIds { field: &'static str, ids: Vec<Uuid> },
 }
 
 pub(super) fn authorize_token_workspace(
@@ -148,6 +149,16 @@ impl From<McpArgumentError> for FieldIssue {
             McpArgumentError::InvalidTimestamp { field } => Self {
                 field,
                 message: "must be an RFC 3339 timestamp".to_owned(),
+            },
+            McpArgumentError::DuplicateIds { field, ids } => Self {
+                field,
+                message: format!(
+                    "must not contain duplicate ids: {}",
+                    ids.iter()
+                        .map(Uuid::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             },
         }
     }
@@ -387,6 +398,15 @@ mod tests {
         assert_eq!(
             FieldIssue::from(McpArgumentError::InvalidTimestamp { field: "now" }).message,
             "must be an RFC 3339 timestamp"
+        );
+        let [first, second] = [Uuid::new_v4(), Uuid::new_v4()];
+        assert_eq!(
+            FieldIssue::from(McpArgumentError::DuplicateIds {
+                field: "framework_requirement_ids",
+                ids: vec![first, second],
+            })
+            .message,
+            format!("must not contain duplicate ids: {first}, {second}")
         );
     }
 

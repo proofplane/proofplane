@@ -107,6 +107,15 @@ such as `duplicate_control_ids`. One code plus a `field` key means all eight
 tools share a single error contract, and the shared validator does not need a
 code table keyed by counterpart type.)_
 
+_(Extended during PR #67 review — the rule now also covers `create_control` and
+`replace_control`, whose `framework_requirement_ids` previously collapsed
+repeats silently through `ON CONFLICT DO NOTHING`. They are not batch tools:
+an empty list is legal there, and the size cap does not apply, so they reuse
+only the duplicate scan (`domain::duplicate_ids`) and report it the way they
+already report unknown requirement ids — `validation_failed` with a
+`framework_requirement_ids` field issue naming each repeated ID — rather than
+the batch tools' `duplicate_ids` payload.)_
+
 ### Already-mapped pairs
 
 Creating a mapping that already exists fails the batch, matching the existing

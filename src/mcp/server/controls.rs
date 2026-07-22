@@ -15,8 +15,8 @@ use super::{
     ProofplaneMcp,
 };
 use crate::domain::{
-    required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem, ControlId,
-    CreateControlEvidenceMappingsPayload, CreateControlPayload,
+    duplicate_ids, required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem,
+    ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
     CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
     DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
     EvidenceId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
@@ -944,11 +944,21 @@ fn required_uuid_array(
         }
     }
 
-    if errors.is_empty() {
-        return Validation::valid(ids);
+    if !errors.is_empty() {
+        return Validation::invalid_many(errors);
     }
 
-    Validation::invalid_many(errors)
+    // A repeated id is a client bug, not an intent: `ON CONFLICT DO NOTHING`
+    // would collapse it silently, matching the batch mapping tools' rule.
+    let duplicates = duplicate_ids(&ids);
+    if !duplicates.is_empty() {
+        return Validation::invalid(super::common::McpArgumentError::DuplicateIds {
+            field,
+            ids: duplicates,
+        });
+    }
+
+    Validation::valid(ids)
 }
 
 fn parse_remove_evidence_control_mapping_request(
@@ -1014,6 +1024,7 @@ mod tests {
         parse_create_control_request, parse_replace_control_request, ControlDTO,
         ReplaceControlRequest,
     };
+    use serde_json::json;
     use uuid::Uuid;
 
     fn field_issue_names(error: &rmcp::ErrorData) -> Vec<String> {
@@ -1120,5 +1131,45 @@ mod tests {
         })
         .expect_err("missing control id fails validation");
         assert_eq!(field_issue_names(&missing_control_id), ["control_id"]);
+    }
+
+    #[test]
+    fn create_control_request_rejects_duplicate_framework_requirement_ids() {
+        let requirement_id = Uuid::new_v4();
+        let error = parse_create_control_request(ControlDTO {
+            code: Some("PP-AC-01".to_owned()),
+            title: Some("Access review".to_owned()),
+            description: Some("Review access quarterly.".to_owned()),
+            framework_requirement_ids: Some(vec![
+                requirement_id.to_string(),
+                Uuid::new_v4().to_string(),
+                requirement_id.to_string(),
+            ]),
+        })
+        .expect_err("repeated requirement id fails validation");
+
+        assert_eq!(field_issue_names(&error), ["framework_requirement_ids"]);
+        assert_eq!(
+            error.data.as_ref().expect("error data")["problem"]["field_issues"][0]["message"],
+            json!(format!("must not contain duplicate ids: {requirement_id}"))
+        );
+    }
+
+    #[test]
+    fn replace_control_request_rejects_duplicate_framework_requirement_ids() {
+        let requirement_id = Uuid::new_v4();
+        let error = parse_replace_control_request(ReplaceControlRequest {
+            control_id: Some(Uuid::new_v4().to_string()),
+            code: Some("PP-AC-02".to_owned()),
+            title: Some("Updated access review".to_owned()),
+            description: Some("Updated review control.".to_owned()),
+            framework_requirement_ids: Some(vec![
+                requirement_id.to_string(),
+                requirement_id.to_string(),
+            ]),
+        })
+        .expect_err("repeated requirement id fails validation");
+
+        assert_eq!(field_issue_names(&error), ["framework_requirement_ids"]);
     }
 }

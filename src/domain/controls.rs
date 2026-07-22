@@ -57,6 +57,12 @@ pub struct ControlSummary {
     pub description: String,
 }
 
+impl BatchKey for FrameworkRequirementId {
+    fn key(&self) -> Uuid {
+        (*self).into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateControlPayload {
     pub code: String,

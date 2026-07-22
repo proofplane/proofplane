@@ -32,7 +32,7 @@ pub use auditor_portal::{
     AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
     AuditorPortalReadModel, AuditorPortalSubmission,
 };
-pub use batch::{validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
+pub use batch::{duplicate_ids, validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
 pub use controls::{
     Control, ControlEvidenceMappingItem, ControlId, ControlSummary,
     CreateControlEvidenceMappingsPayload, CreateControlPayload,

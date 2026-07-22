@@ -85,8 +85,9 @@ ORDER BY fr.code
             return Ok(true);
         }
 
-        // Counted distinctly on both sides: a caller may repeat an id, and a
-        // repeated id that exists must still count as present.
+        // Counted distinctly on both sides: duplicates are rejected upstream at
+        // the MCP parse layer, so this only keeps a repeated id from being
+        // reported as unknown if one ever reaches here.
         let requested = ids.iter().copied().map(Uuid::from).collect::<HashSet<_>>();
         let found = self
             .get()
