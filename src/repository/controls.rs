@@ -508,8 +508,6 @@ FROM requested r
         Ok(Some(payload.control_ids.clone()))
     }
 
-    /// Removes a batch of evidence→control mappings for one control anchor — the
-    /// mirror of [`delete_evidence_control_mappings`](Self::delete_evidence_control_mappings).
     pub async fn delete_control_evidence_mappings(
         &self,
         payload: &DeleteControlEvidenceMappingsPayload,
