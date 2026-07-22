@@ -28,6 +28,9 @@ pub enum BatchError {
 
     #[error("{field} contains unknown ids")]
     Unknown { field: &'static str, ids: Vec<Uuid> },
+
+    #[error("{field} contains ids that are not mapped")]
+    NotMapped { field: &'static str, ids: Vec<Uuid> },
 }
 
 pub fn validate_batch<T: BatchKey>(

@@ -37,8 +37,8 @@ pub use controls::{
     Control, ControlEvidenceMappingItem, ControlId, ControlSummary,
     CreateControlEvidenceMappingsPayload, CreateControlPayload,
     CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-    EvidenceControlMapping, EvidenceControlMappingItem, Framework, FrameworkId,
-    FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+    DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
+    Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
 };
 pub use document::{
     CreateDocumentPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,

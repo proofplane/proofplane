@@ -276,6 +276,10 @@ mod tests {
                 "Revoke an auditor access grant by grant ID and return its updated metadata.",
             ),
             (
+                "unmap_evidence_from_controls",
+                "Remove the mappings between one piece of evidence and many controls in a single all-or-nothing batch; if any control id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+            ),
+            (
                 "update_policy",
                 "Update an active policy’s name and optional description without changing mappings or document state; for guidance, call get_proofplane_guide with topic policies.",
             ),
@@ -454,6 +458,7 @@ mod tests {
                 | "map_evidence_to_control"
                 | "map_evidence_to_controls"
                 | "map_control_to_evidence"
+                | "unmap_evidence_from_controls"
                 | "remove_evidence_control_mapping" => Some("controls-and-mappings"),
                 "list_policies"
                 | "get_policy"

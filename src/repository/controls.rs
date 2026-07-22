@@ -5,14 +5,14 @@ use crate::{
     domain::{
         Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
         CreateControlPayload, CreateEvidenceControlMappingPayload,
-        CreateEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
-        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
-        WorkspaceId,
+        CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
+        FrameworkRequirementId, UpdateControlPayload, WorkspaceId,
     },
     repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
-use super::{constraints::classify_db_error, Error};
+use super::{constraints::classify_db_error, BatchRejection, Error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateEvidenceControlMappingsOutcome {
@@ -396,6 +396,109 @@ WHERE m.evidence_id = er.id
             .await?;
 
         Ok(rows > 0)
+    }
+
+    /// Removes a batch of evidence→control mappings for one evidence anchor —
+    /// the mirror of [`create_evidence_control_mappings`](Self::create_evidence_control_mappings).
+    ///
+    /// Returns `None` when the evidence is not in the workspace.
+    ///
+    /// Unlike the create half, this does not resolve ids before writing: a
+    /// delete cannot abort the transaction the way a conflicting insert does, so
+    /// one statement can remove the mappings and classify every id the caller
+    /// asked for. A rejection is therefore discovered *after* the delete and
+    /// must be returned as [`Error::BatchRejected`] — the operation's `Ok` value
+    /// is what commits, so reporting a rejection as `Ok` would commit the very
+    /// deletes it is rejecting.
+    pub async fn delete_evidence_control_mappings(
+        &self,
+        payload: &DeleteEvidenceControlMappingsPayload,
+    ) -> Result<Option<Vec<ControlId>>, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let evidence_id = Uuid::from(payload.evidence_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM evidence
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&evidence_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(None);
+        }
+
+        let control_ids = payload
+            .control_ids
+            .iter()
+            .map(|id| Uuid::from(*id))
+            .collect::<Vec<_>>();
+        let rows = self
+            .transaction
+            .query(
+                r#"
+WITH requested AS (
+    SELECT unnest($2::uuid[]) AS control_id
+),
+removed AS (
+    DELETE FROM evidence_control_mappings m
+    USING evidence er, controls c
+    WHERE m.evidence_id = er.id
+      AND m.control_id = c.id
+      AND er.id = $1
+      AND c.id IN (SELECT control_id FROM requested)
+      AND er.workspace_id = $3
+      AND c.workspace_id = $3
+    RETURNING m.control_id
+)
+SELECT
+    r.control_id,
+    EXISTS (
+        SELECT 1
+        FROM controls c
+        WHERE c.id = r.control_id
+          AND c.workspace_id = $3
+    ) AS control_exists,
+    EXISTS (
+        SELECT 1
+        FROM removed
+        WHERE removed.control_id = r.control_id
+    ) AS was_removed
+FROM requested r
+"#,
+                &[&evidence_id, &control_ids, &workspace_id],
+            )
+            .await?;
+
+        let mut unknown = Vec::new();
+        let mut not_mapped = Vec::new();
+        for row in &rows {
+            let control_id = row.try_get::<_, Uuid>("control_id")?;
+            if !row.try_get::<_, bool>("control_exists")? {
+                unknown.push(control_id);
+            } else if !row.try_get::<_, bool>("was_removed")? {
+                not_mapped.push(control_id);
+            }
+        }
+
+        // An id the workspace does not have and an id it has but never mapped
+        // read alike here yet call for opposite corrections, so they stay
+        // separate. Either one rolls the whole batch back.
+        if !unknown.is_empty() {
+            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
+        }
+
+        if !not_mapped.is_empty() {
+            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        }
+
+        Ok(Some(payload.control_ids.clone()))
     }
 
     async fn get_control_in_transaction(&self, id: ControlId) -> Result<Option<Control>, Error> {

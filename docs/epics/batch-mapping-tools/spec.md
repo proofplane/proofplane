@@ -111,10 +111,19 @@ code table keyed by counterpart type.)_
 
 Creating a mapping that already exists fails the batch, matching the existing
 single-pair tools' conflict behavior. The `unmap`/`detach` batches are the mirror
-image: removing a pair that is not mapped fails the batch. Neither tool is an
-upsert. An agent that wants "make these the mappings" should read the current
-mappings first — `list_evidence_control_mappings` and `get_control` already
-expose them.
+image: removing a pair that is not mapped fails the batch with `not_mapped_ids`,
+listing every counterpart id that was not mapped. Neither tool is an upsert. An
+agent that wants "make these the mappings" should read the current mappings
+first — `list_evidence_control_mappings` and `get_control` already expose them.
+
+_(Revised during ticket 004 — `not_mapped_ids` is a new code, kept distinct from
+`unknown_ids`. A removal batch can fail two ways that read alike but demand
+opposite corrections: the counterpart id does not exist in the workspace (the
+agent has the wrong id) versus it exists but carries no such mapping (the id is
+right and there is nothing to remove). Collapsing both into `unknown_ids` would
+send an agent hunting for a control it can plainly see in `list_controls`. The
+removal statement classifies both cases in the same pass that deletes — see the
+Implementation shape revision below.)_
 
 ### Batch size
 
@@ -150,6 +159,37 @@ the eventual commit — would themselves error. Resolving IDs with plain reads
 (a failed insert would abort before the rest were checked), and lets an
 already-mapped conflict roll the batch back cleanly. The batch is capped at 50, so
 the extra per-item round trips are bounded and off any hot path.)_
+
+_(Revised during ticket 004 — **the removal methods do not resolve ids first, and
+must not report a rejection as an `Ok` value.** The read-first order above exists
+only because a conflicting `INSERT` aborts the transaction; a `DELETE` conflicts
+with nothing, so one statement can remove the mappings and classify every
+requested id in the same pass — 2 round trips for a 50-item batch instead of 52.
+The catch is that the rejection is then discovered *after* the write, and
+`in_agent_connection_workspace_context` **commits whenever the operation returns
+`Ok`** — so a rejection returned as an outcome value would commit the very
+deletes it was rejecting. Rejections therefore travel as
+`Error::BatchRejected(BatchRejection)`, and the rollback the transaction already
+provides is what makes the batch atomic. The service turns that error back into
+its typed outcome via `From`.)_
+
+Sketch for the evidence→controls removal half — one statement that deletes and
+classifies, so an id the workspace lacks stays distinguishable from one it has
+but never mapped:
+
+```sql
+WITH requested AS (SELECT unnest($2::uuid[]) AS control_id),
+removed AS (
+    DELETE FROM evidence_control_mappings m ...
+      AND c.id IN (SELECT control_id FROM requested)
+    RETURNING m.control_id
+)
+SELECT r.control_id,
+       EXISTS (SELECT 1 FROM controls c
+               WHERE c.id = r.control_id AND c.workspace_id = $3) AS control_exists,
+       EXISTS (SELECT 1 FROM removed WHERE removed.control_id = r.control_id) AS was_removed
+FROM requested r
+```
 
 Sketch for the evidence→controls half — one simple insert per resolved item:
 

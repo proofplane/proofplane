@@ -28,7 +28,7 @@ pub use constraints::ConflictKind;
 pub use controls::{CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome};
 pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
 pub use documents::TypedDocumentUploadWork;
-pub use error::Error;
+pub use error::{BatchRejection, Error};
 pub use evidence_submissions::{
     ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
     PendingDocumentUploadWork,
