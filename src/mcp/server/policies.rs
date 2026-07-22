@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::{
     common::{
         argument_errors, authorize_token_workspace, domain_errors, format_datetime, invalid_field,
-        not_found, required_uuid, service_error, McpArgumentError,
+        not_found, required_uuid, McpArgumentError,
     },
     ProofplaneMcp,
 };
@@ -37,8 +37,7 @@ impl ProofplaneMcp {
         let policies = self
             .policies
             .list(context.agent_connection_context())
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         emit_policy_audit(&context, "policy.listed", "list_policies", None);
 
@@ -61,8 +60,7 @@ impl ProofplaneMcp {
         let policy = self
             .policies
             .get(context.agent_connection_context(), policy_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         emit_policy_audit(
@@ -89,8 +87,7 @@ impl ProofplaneMcp {
         let policy = self
             .policies
             .create(context.agent_connection_context(), payload)
-            .await
-            .map_err(policy_mutation_error)?;
+            .await?;
 
         emit_policy_audit(
             &context,
@@ -116,8 +113,7 @@ impl ProofplaneMcp {
         let policy = self
             .policies
             .update(context.agent_connection_context(), policy_id, payload)
-            .await
-            .map_err(policy_mutation_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         emit_policy_audit(
@@ -144,8 +140,7 @@ impl ProofplaneMcp {
         let result = self
             .policies
             .archive(context.agent_connection_context(), policy_id)
-            .await
-            .map_err(policy_mutation_error)?;
+            .await?;
 
         let ArchivePolicyResult::Archived {
             policy_id,
@@ -194,8 +189,7 @@ impl ProofplaneMcp {
         let mapping = self
             .policies
             .attach_to_control(context.agent_connection_context(), policy_id, control_id)
-            .await
-            .map_err(policy_mutation_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         emit_policy_control_audit(
@@ -226,8 +220,7 @@ impl ProofplaneMcp {
         let detached = self
             .policies
             .detach_from_control(context.agent_connection_context(), policy_id, control_id)
-            .await
-            .map_err(policy_mutation_error)?;
+            .await?;
         if !detached {
             return Err(not_found());
         }
@@ -469,21 +462,23 @@ fn optional_control_ids(
     }
 }
 
-fn policy_mutation_error(error: PolicyMutationError) -> rmcp::ErrorData {
-    match error {
-        PolicyMutationError::Validation(errors) => domain_errors(errors),
-        PolicyMutationError::NameTaken => conflict(
-            "policy_name_taken",
-            "an active policy with this name already exists in the workspace",
-        ),
-        PolicyMutationError::MappingExists => conflict(
-            "policy_control_mapping_exists",
-            "this control is already mapped to the policy",
-        ),
-        PolicyMutationError::InvalidControlReferences => {
-            invalid_field("control_ids", "control_ids contains unknown ids")
+impl From<PolicyMutationError> for rmcp::ErrorData {
+    fn from(error: PolicyMutationError) -> Self {
+        match error {
+            PolicyMutationError::Validation(errors) => domain_errors(errors),
+            PolicyMutationError::NameTaken => conflict(
+                "policy_name_taken",
+                "an active policy with this name already exists in the workspace",
+            ),
+            PolicyMutationError::MappingExists => conflict(
+                "policy_control_mapping_exists",
+                "this control is already mapped to the policy",
+            ),
+            PolicyMutationError::InvalidControlReferences => {
+                invalid_field("control_ids", "control_ids contains unknown ids")
+            }
+            PolicyMutationError::Repository(error) => ServiceError::Repository(error).into(),
         }
-        PolicyMutationError::Repository(error) => service_error(ServiceError::Repository(error)),
     }
 }
 

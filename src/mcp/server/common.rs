@@ -277,21 +277,23 @@ pub(super) fn conflict(code: &'static str, message: &'static str) -> rmcp::Error
     )
 }
 
-pub(super) fn service_error(error: ServiceError) -> rmcp::ErrorData {
-    if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
-        return repository_conflict(kind);
-    }
+impl From<ServiceError> for rmcp::ErrorData {
+    fn from(error: ServiceError) -> Self {
+        if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
+            return repository_conflict(kind);
+        }
 
-    tracing::error!(%error, "MCP service failure");
-    rmcp::ErrorData::internal_error(
-        "dependency failure",
-        Some(json!({
-            "problem": {
-                "code": "dependency_failed",
-                "message": "a dependency failed while handling the tool call",
-            }
-        })),
-    )
+        tracing::error!(%error, "MCP service failure");
+        rmcp::ErrorData::internal_error(
+            "dependency failure",
+            Some(json!({
+                "problem": {
+                    "code": "dependency_failed",
+                    "message": "a dependency failed while handling the tool call",
+                }
+            })),
+        )
+    }
 }
 
 fn repository_conflict(kind: ConflictKind) -> rmcp::ErrorData {

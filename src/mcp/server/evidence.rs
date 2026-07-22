@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     common::{
         argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
-        required_uuid, service_error,
+        required_uuid,
     },
     ProofplaneMcp,
 };
@@ -38,8 +38,7 @@ impl ProofplaneMcp {
         let evidence = self
             .evidence
             .create(context.agent_connection_context(), payload)
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         AuditEvent::new(
             "evidence.created",
@@ -71,8 +70,7 @@ impl ProofplaneMcp {
         let evidence = self
             .evidence
             .list_by_workspace(context.agent_connection_context())
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         Ok(Json(ListEvidenceResponse {
             evidence: evidence.into_iter().map(Into::into).collect(),
@@ -93,8 +91,7 @@ impl ProofplaneMcp {
         let evidence = self
             .evidence
             .get(context.agent_connection_context(), evidence_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         Ok(Json(GetEvidenceResponse {

@@ -9,14 +9,17 @@ use serde::{Deserialize, Serialize};
 use super::{
     common::{
         argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
-        required_timestamp, required_uuid, service_error,
+        required_timestamp, required_uuid,
     },
     ProofplaneMcp,
 };
 use crate::{
     domain::{CoverageWindow, EvidenceId, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::document_upload_grants::{IssuedUploadGrant, UploadGrantError},
+    services::{
+        document_upload_grants::{IssuedUploadGrant, UploadGrantError},
+        Error as ServiceError,
+    },
     validate,
 };
 
@@ -38,8 +41,7 @@ impl ProofplaneMcp {
         let grant = self
             .document_upload_grants
             .issue(&context.agent_connection_context(), evidence_id, coverage)
-            .await
-            .map_err(upload_grant_error)?;
+            .await?;
 
         AuditEvent::new(
             "evidence_document_upload_grant.issued",
@@ -108,14 +110,18 @@ fn parse_manage_submissions_request(
     Ok((evidence_id, coverage))
 }
 
-fn upload_grant_error(error: UploadGrantError) -> rmcp::ErrorData {
-    match error {
-        UploadGrantError::Unavailable => not_found(),
-        UploadGrantError::Internal => {
-            tracing::error!(%error, "MCP document upload grant failure");
-            rmcp::ErrorData::internal_error("internal error", None)
+impl From<UploadGrantError> for rmcp::ErrorData {
+    fn from(error: UploadGrantError) -> Self {
+        match error {
+            UploadGrantError::Unavailable => not_found(),
+            UploadGrantError::Internal => {
+                tracing::error!(%error, "MCP document upload grant failure");
+                rmcp::ErrorData::internal_error("internal error", None)
+            }
+            UploadGrantError::Repository(repository_error) => {
+                ServiceError::from(repository_error).into()
+            }
         }
-        UploadGrantError::Repository(repository_error) => service_error(repository_error.into()),
     }
 }
 

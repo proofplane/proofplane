@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use super::{
     common::{
         argument_errors, authorize_token_workspace, format_datetime, not_found, required_uuid,
-        service_error,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
@@ -37,8 +36,7 @@ impl ProofplaneMcp {
         let submissions = self
             .evidence_submissions
             .list_for_evidence(context.agent_connection_context(), evidence_id)
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         Ok(Json(ListEvidenceSubmissionsResponse {
             submissions: submissions
@@ -63,8 +61,7 @@ impl ProofplaneMcp {
         let detail = self
             .evidence_submissions
             .get(context.agent_connection_context(), submission_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         Ok(Json(EvidenceSubmissionResponse::from_detail(detail)))
@@ -85,8 +82,7 @@ impl ProofplaneMcp {
         let detail = self
             .evidence_submissions
             .latest_for_evidence(context.agent_connection_context(), evidence_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         Ok(Json(EvidenceSubmissionResponse::from_detail(detail)))
