@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
+        BatchKey, Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
         CreateControlPayload, CreateEvidenceControlMappingPayload,
         CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
         EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
@@ -269,12 +269,10 @@ WHERE id = ANY($1)
             )
             .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.items, |item| {
-            Uuid::from(item.control_id)
-        })?
-        .into_iter()
-        .map(ControlId::from)
-        .collect::<Vec<_>>();
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.items)?
+            .into_iter()
+            .map(ControlId::from)
+            .collect::<Vec<_>>();
 
         if !unknown.is_empty() {
             return Ok(CreateEvidenceControlMappingsOutcome::UnknownControls(
@@ -355,12 +353,10 @@ WHERE id = ANY($1)
             )
             .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.items, |item| {
-            Uuid::from(item.evidence_id)
-        })?
-        .into_iter()
-        .map(EvidenceId::from)
-        .collect::<Vec<_>>();
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.items)?
+            .into_iter()
+            .map(EvidenceId::from)
+            .collect::<Vec<_>>();
 
         if !unknown.is_empty() {
             return Ok(CreateControlEvidenceMappingsOutcome::UnknownEvidence(
@@ -738,11 +734,10 @@ ORDER BY c.code
 
 /// The requested ids a resolving read did not return, in request order so a
 /// rejection lists them the way the caller wrote them.
-fn ids_missing_from<T>(
+fn ids_missing_from<T: BatchKey>(
     found: &[Row],
     column: &str,
     requested: &[T],
-    key: impl Fn(&T) -> Uuid,
 ) -> Result<Vec<Uuid>, Error> {
     let present = found
         .iter()
@@ -751,7 +746,7 @@ fn ids_missing_from<T>(
 
     Ok(requested
         .iter()
-        .map(key)
+        .map(BatchKey::key)
         .filter(|id| !present.contains(id))
         .collect())
 }
