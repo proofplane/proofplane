@@ -1852,8 +1852,6 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
     );
     assert!(unknown_requirement_logs.is_empty());
 
-    // A repeated requirement id is rejected rather than collapsed, matching the
-    // batch mapping tools.
     let repeated_requirement = mcp_client
         .call_tool_error(
             "replace_control",

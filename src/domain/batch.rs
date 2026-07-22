@@ -59,9 +59,6 @@ pub fn validate_batch<T: BatchKey>(
     Ok(items)
 }
 
-/// Reports each repeated key once, in first-seen order, without the batch size
-/// rules, so fields that legitimately accept an empty list can reject
-/// duplicates too.
 pub fn duplicate_ids<T: BatchKey>(items: &[T]) -> Vec<Uuid> {
     let mut seen = HashSet::with_capacity(items.len());
     let mut duplicates = Vec::new();

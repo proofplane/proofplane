@@ -14,13 +14,16 @@ use super::{
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
 };
-use crate::domain::{
-    duplicate_ids, required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem,
-    ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
-    CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-    DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
-    EvidenceId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
-    UpdateControlPayload, WorkspacePermission,
+use crate::{
+    domain::{
+        duplicate_ids, required_text, validate_batch, BatchError, Control,
+        ControlEvidenceMappingItem, ControlId, CreateControlEvidenceMappingsPayload,
+        CreateControlPayload, CreateEvidenceControlMappingPayload,
+        CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
+        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+    },
+    mcp::server::common::McpArgumentError,
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -948,11 +951,9 @@ fn required_uuid_array(
         return Validation::invalid_many(errors);
     }
 
-    // A repeated id is a client bug, not an intent: `ON CONFLICT DO NOTHING`
-    // would collapse it silently, matching the batch mapping tools' rule.
     let duplicates = duplicate_ids(&ids);
     if !duplicates.is_empty() {
-        return Validation::invalid(super::common::McpArgumentError::DuplicateIds {
+        return Validation::invalid(McpArgumentError::DuplicateIds {
             field,
             ids: duplicates,
         });
