@@ -57,6 +57,12 @@ pub struct ControlSummary {
     pub description: String,
 }
 
+impl BatchKey for FrameworkRequirementId {
+    fn key(&self) -> Uuid {
+        (*self).into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateControlPayload {
     pub code: String,
@@ -104,6 +110,18 @@ impl BatchKey for EvidenceControlMappingItem {
 pub struct CreateEvidenceControlMappingsPayload {
     pub evidence_id: EvidenceId,
     pub items: Vec<EvidenceControlMappingItem>,
+}
+
+impl BatchKey for ControlId {
+    fn key(&self) -> Uuid {
+        (*self).into()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteEvidenceControlMappingsPayload {
+    pub evidence_id: EvidenceId,
+    pub control_ids: Vec<ControlId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

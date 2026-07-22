@@ -28,6 +28,9 @@ pub enum BatchError {
 
     #[error("{field} contains unknown ids")]
     Unknown { field: &'static str, ids: Vec<Uuid> },
+
+    #[error("{field} contains ids that are not mapped")]
+    NotMapped { field: &'static str, ids: Vec<Uuid> },
 }
 
 pub fn validate_batch<T: BatchKey>(
@@ -45,14 +48,7 @@ pub fn validate_batch<T: BatchKey>(
         });
     }
 
-    let mut seen = HashSet::with_capacity(items.len());
-    let mut duplicates = Vec::new();
-    for id in items.iter().map(BatchKey::key) {
-        if !seen.insert(id) && !duplicates.contains(&id) {
-            duplicates.push(id);
-        }
-    }
-
+    let duplicates = duplicate_ids(&items);
     if !duplicates.is_empty() {
         return Err(BatchError::Duplicates {
             field,
@@ -63,9 +59,21 @@ pub fn validate_batch<T: BatchKey>(
     Ok(items)
 }
 
+pub fn duplicate_ids<T: BatchKey>(items: &[T]) -> Vec<Uuid> {
+    let mut seen = HashSet::with_capacity(items.len());
+    let mut duplicates = Vec::new();
+    for id in items.iter().map(BatchKey::key) {
+        if !seen.insert(id) && !duplicates.contains(&id) {
+            duplicates.push(id);
+        }
+    }
+
+    duplicates
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
+    use super::{duplicate_ids, validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
     use uuid::Uuid;
 
     /// Carries a non-key field so the duplicate tests prove `validate_batch`
@@ -145,6 +153,26 @@ mod tests {
                 ids: vec![first, third],
             })
         );
+    }
+
+    #[test]
+    fn duplicate_ids_reports_nothing_when_every_key_is_distinct() {
+        assert!(duplicate_ids(&items(3)).is_empty());
+        assert!(duplicate_ids(&Vec::<Item>::new()).is_empty());
+    }
+
+    #[test]
+    fn duplicate_ids_reports_each_repeat_once_in_first_seen_order() {
+        let [first, second] = [Uuid::new_v4(), Uuid::new_v4()];
+        let batch = vec![
+            Item::new(second, "a"),
+            Item::new(first, "b"),
+            Item::new(second, "c"),
+            Item::new(first, "d"),
+            Item::new(first, "e"),
+        ];
+
+        assert_eq!(duplicate_ids(&batch), vec![second, first]);
     }
 
     #[test]

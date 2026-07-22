@@ -23,6 +23,7 @@ pub(super) enum McpArgumentError {
     Missing { field: &'static str },
     InvalidUuid { field: &'static str },
     InvalidTimestamp { field: &'static str },
+    DuplicateIds { field: &'static str, ids: Vec<Uuid> },
 }
 
 pub(super) fn authorize_token_workspace(
@@ -149,6 +150,16 @@ impl From<McpArgumentError> for FieldIssue {
                 field,
                 message: "must be an RFC 3339 timestamp".to_owned(),
             },
+            McpArgumentError::DuplicateIds { field, ids } => Self {
+                field,
+                message: format!(
+                    "must not contain duplicate ids: {}",
+                    ids.iter()
+                        .map(Uuid::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
         }
     }
 }
@@ -240,6 +251,12 @@ impl From<BatchError> for rmcp::ErrorData {
                 "field": field,
                 "ids": ids,
             }),
+            BatchError::NotMapped { field, ids } => json!({
+                "code": "not_mapped_ids",
+                "message": message,
+                "field": field,
+                "ids": ids,
+            }),
         };
 
         rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
@@ -271,21 +288,23 @@ pub(super) fn conflict(code: &'static str, message: &'static str) -> rmcp::Error
     )
 }
 
-pub(super) fn service_error(error: ServiceError) -> rmcp::ErrorData {
-    if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
-        return repository_conflict(kind);
-    }
+impl From<ServiceError> for rmcp::ErrorData {
+    fn from(error: ServiceError) -> Self {
+        if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
+            return repository_conflict(kind);
+        }
 
-    tracing::error!(%error, "MCP service failure");
-    rmcp::ErrorData::internal_error(
-        "dependency failure",
-        Some(json!({
-            "problem": {
-                "code": "dependency_failed",
-                "message": "a dependency failed while handling the tool call",
-            }
-        })),
-    )
+        tracing::error!(%error, "MCP service failure");
+        rmcp::ErrorData::internal_error(
+            "dependency failure",
+            Some(json!({
+                "problem": {
+                    "code": "dependency_failed",
+                    "message": "a dependency failed while handling the tool call",
+                }
+            })),
+        )
+    }
 }
 
 fn repository_conflict(kind: ConflictKind) -> rmcp::ErrorData {
@@ -379,6 +398,15 @@ mod tests {
         assert_eq!(
             FieldIssue::from(McpArgumentError::InvalidTimestamp { field: "now" }).message,
             "must be an RFC 3339 timestamp"
+        );
+        let [first, second] = [Uuid::new_v4(), Uuid::new_v4()];
+        assert_eq!(
+            FieldIssue::from(McpArgumentError::DuplicateIds {
+                field: "framework_requirement_ids",
+                ids: vec![first, second],
+            })
+            .message,
+            format!("must not contain duplicate ids: {first}, {second}")
         );
     }
 
@@ -508,6 +536,25 @@ mod tests {
         assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
         let problem = problem(&error);
         assert_eq!(problem["code"], "unknown_ids");
+        assert_eq!(problem["field"], "control_ids");
+        assert_eq!(
+            problem["ids"],
+            serde_json::json!([first.to_string(), second.to_string()])
+        );
+    }
+
+    #[test]
+    fn not_mapped_batch_ids_are_distinct_from_unknown_ids() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let error = rmcp::ErrorData::from(BatchError::NotMapped {
+            field: "control_ids",
+            ids: vec![first, second],
+        });
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        let problem = problem(&error);
+        assert_eq!(problem["code"], "not_mapped_ids");
         assert_eq!(problem["field"], "control_ids");
         assert_eq!(
             problem["ids"],

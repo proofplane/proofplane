@@ -10,15 +10,18 @@ use uuid::Uuid;
 use super::{
     common::{
         argument_errors, authorize_token_workspace, format_datetime, invalid_field, not_found,
-        optional_timestamp, required_uuid, service_error,
+        optional_timestamp, required_uuid,
     },
     ProofplaneMcp,
 };
 use crate::{
     domain::{AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::auditor_access_grants::{
-        AuditorAccessGrantError, CreateAuditorAccessGrantRequest, IssuedAuditorAccessGrant,
+    services::{
+        auditor_access_grants::{
+            AuditorAccessGrantError, CreateAuditorAccessGrantRequest, IssuedAuditorAccessGrant,
+        },
+        Error as ServiceError,
     },
     validate,
 };
@@ -40,8 +43,7 @@ impl ProofplaneMcp {
         let issued = self
             .auditor_access_grants
             .create(&context.connection, request)
-            .await
-            .map_err(auditor_grant_error)?;
+            .await?;
 
         emit_auditor_grant_audit(
             "auditor_access_grant.created",
@@ -66,11 +68,7 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListAuditorAccessLinksResponse>, rmcp::ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
-        let grants = self
-            .auditor_access_grants
-            .list(&context.connection)
-            .await
-            .map_err(auditor_grant_error)?;
+        let grants = self.auditor_access_grants.list(&context.connection).await?;
 
         Ok(Json(ListAuditorAccessLinksResponse {
             grants: grants
@@ -94,8 +92,7 @@ impl ProofplaneMcp {
         let grant = self
             .auditor_access_grants
             .revoke(&context.connection, grant_id)
-            .await
-            .map_err(auditor_grant_error)?;
+            .await?;
 
         emit_auditor_grant_audit(
             "auditor_access_grant.revoked",
@@ -207,22 +204,24 @@ fn parse_revoke_request(
         .map_err(argument_errors)
 }
 
-fn auditor_grant_error(error: AuditorAccessGrantError) -> rmcp::ErrorData {
-    match error {
-        AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
-        AuditorAccessGrantError::Invalid(message) => {
-            let field = if message.starts_with("expires_at") {
-                "expires_at"
-            } else {
-                "email"
-            };
-            invalid_field(field, message)
+impl From<AuditorAccessGrantError> for rmcp::ErrorData {
+    fn from(error: AuditorAccessGrantError) -> Self {
+        match error {
+            AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
+            AuditorAccessGrantError::Invalid(message) => {
+                let field = if message.starts_with("expires_at") {
+                    "expires_at"
+                } else {
+                    "email"
+                };
+                invalid_field(field, message)
+            }
+            AuditorAccessGrantError::Secret(error) => {
+                tracing::error!(%error, "MCP auditor access grant secret failure");
+                rmcp::ErrorData::internal_error("internal error", None)
+            }
+            AuditorAccessGrantError::Repository(error) => ServiceError::from(error).into(),
         }
-        AuditorAccessGrantError::Secret(error) => {
-            tracing::error!(%error, "MCP auditor access grant secret failure");
-            rmcp::ErrorData::internal_error("internal error", None)
-        }
-        AuditorAccessGrantError::Repository(error) => service_error(error.into()),
     }
 }
 

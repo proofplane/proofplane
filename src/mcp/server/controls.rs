@@ -9,23 +9,28 @@ use uuid::Uuid;
 use super::{
     common::{
         argument_errors, authorize_token_workspace, conflict, domain_errors, format_datetime,
-        not_found, parse_uuid_arg, required_uuid, service_error,
+        not_found, parse_uuid_arg, required_uuid,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
 };
-use crate::domain::{
-    required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem, ControlId,
-    CreateControlEvidenceMappingsPayload, CreateControlPayload,
-    CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-    EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
-    FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+use crate::{
+    domain::{
+        duplicate_ids, required_text, validate_batch, BatchError, Control,
+        ControlEvidenceMappingItem, ControlId, CreateControlEvidenceMappingsPayload,
+        CreateControlPayload, CreateEvidenceControlMappingPayload,
+        CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
+        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+    },
+    mcp::server::common::McpArgumentError,
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     repository::ConflictKind,
     services::controls::{
         ControlMutationError, MapControlToEvidenceError, MapEvidenceToControlsError,
+        UnmapEvidenceFromControlsError,
     },
     validate,
     validation::Validation,
@@ -42,11 +47,7 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListFrameworksResponse>, rmcp::ErrorData> {
         authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
-        let frameworks = self
-            .controls
-            .list_frameworks()
-            .await
-            .map_err(service_error)?;
+        let frameworks = self.controls.list_frameworks().await?;
 
         Ok(Json(ListFrameworksResponse {
             frameworks: frameworks.into_iter().map(Into::into).collect(),
@@ -68,8 +69,7 @@ impl ProofplaneMcp {
         let requirements = self
             .controls
             .list_framework_requirements(framework_id)
-            .await
-            .map_err(service_error)?;
+            .await?;
         if requirements.is_empty() {
             return Err(not_found());
         }
@@ -91,8 +91,7 @@ impl ProofplaneMcp {
         let controls = self
             .controls
             .list_controls(context.agent_connection_context())
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         Ok(Json(ListControlsResponse {
             controls: controls.into_iter().map(Into::into).collect(),
@@ -113,8 +112,7 @@ impl ProofplaneMcp {
         let control = self
             .controls
             .get_control(context.agent_connection_context(), control_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         Ok(Json(control.into()))
@@ -135,8 +133,7 @@ impl ProofplaneMcp {
         let control = self
             .controls
             .create_control(context.agent_connection_context(), payload)
-            .await
-            .map_err(control_mutation_error)?;
+            .await?;
 
         AuditEvent::new(
             "control.created",
@@ -169,8 +166,7 @@ impl ProofplaneMcp {
         let control = self
             .controls
             .replace_control(context.agent_connection_context(), control_id, payload)
-            .await
-            .map_err(control_mutation_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         AuditEvent::new(
@@ -203,8 +199,7 @@ impl ProofplaneMcp {
         let mappings = self
             .controls
             .list_evidence_control_mappings(context.agent_connection_context(), evidence_id)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         Ok(Json(ListEvidenceControlMappingsResponse {
@@ -227,8 +222,7 @@ impl ProofplaneMcp {
         let mapping = self
             .controls
             .create_evidence_control_mapping(context.agent_connection_context(), payload)
-            .await
-            .map_err(service_error)?
+            .await?
             .ok_or_else(not_found)?;
 
         AuditEvent::new(
@@ -267,8 +261,7 @@ impl ProofplaneMcp {
         let control_ids = self
             .controls
             .map_evidence_to_controls(context.agent_connection_context(), payload)
-            .await
-            .map_err(map_evidence_to_controls_error)?;
+            .await?;
 
         let control_id_strings = control_ids
             .iter()
@@ -313,8 +306,7 @@ impl ProofplaneMcp {
         let evidence_ids = self
             .controls
             .map_control_to_evidence(context.agent_connection_context(), payload)
-            .await
-            .map_err(map_control_to_evidence_error)?;
+            .await?;
 
         let evidence_id_strings = evidence_ids
             .iter()
@@ -344,6 +336,51 @@ impl ProofplaneMcp {
     }
 
     #[tool(
+        name = "unmap_evidence_from_controls",
+        description = "Remove the mappings between one piece of evidence and many controls in a single all-or-nothing batch; if any control id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+    )]
+    async fn unmap_evidence_from_controls(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<UnmapEvidenceFromControlsRequest>,
+    ) -> Result<Json<UnmapEvidenceFromControlsResponse>, rmcp::ErrorData> {
+        let payload = parse_unmap_evidence_from_controls_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let evidence_id = payload.evidence_id;
+        let control_ids = self
+            .controls
+            .unmap_evidence_from_controls(context.agent_connection_context(), payload)
+            .await?;
+
+        let control_id_strings = control_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "evidence_control_mappings.deleted",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "unmap_evidence_from_controls",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("evidence_id", Uuid::from(evidence_id))
+        .metadata("control_ids", json!(control_id_strings))
+        .metadata("count", control_ids.len())
+        .object(AuditObject::new("evidence", Uuid::from(evidence_id)))
+        .emit();
+
+        Ok(Json(UnmapEvidenceFromControlsResponse {
+            evidence_id: evidence_id.to_string(),
+            count: control_ids.len(),
+            control_ids: control_id_strings,
+        }))
+    }
+
+    #[tool(
         name = "remove_evidence_control_mapping",
         description = "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
@@ -362,8 +399,7 @@ impl ProofplaneMcp {
                 evidence_id,
                 control_id,
             )
-            .await
-            .map_err(service_error)?;
+            .await?;
 
         if !deleted {
             return Err(not_found());
@@ -466,6 +502,19 @@ struct MapControlToEvidenceResponse {
     control_id: String,
     count: usize,
     evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnmapEvidenceFromControlsRequest {
+    evidence_id: Option<String>,
+    control_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct UnmapEvidenceFromControlsResponse {
+    evidence_id: String,
+    count: usize,
+    control_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -653,7 +702,7 @@ fn parse_map_evidence_to_controls_request(
         });
     }
 
-    let items = validate_batch("control_ids", items).map_err(rmcp::ErrorData::from)?;
+    let items = validate_batch("control_ids", items)?;
 
     Ok(CreateEvidenceControlMappingsPayload { evidence_id, items })
 }
@@ -684,63 +733,126 @@ fn parse_map_control_to_evidence_request(
         });
     }
 
-    let items = validate_batch("evidence_ids", items).map_err(rmcp::ErrorData::from)?;
+    let items = validate_batch("evidence_ids", items)?;
 
     Ok(CreateControlEvidenceMappingsPayload { control_id, items })
 }
 
-fn map_evidence_to_controls_error(error: MapEvidenceToControlsError) -> rmcp::ErrorData {
-    match error {
-        MapEvidenceToControlsError::UnknownControls(ids) => {
-            rmcp::ErrorData::from(BatchError::Unknown {
-                field: "control_ids",
-                ids: ids.into_iter().map(Uuid::from).collect(),
-            })
-        }
-        MapEvidenceToControlsError::EvidenceNotFound => not_found(),
-        MapEvidenceToControlsError::AlreadyMapped => conflict(
-            ConflictKind::EvidenceControlMappingExists.code(),
-            ConflictKind::EvidenceControlMappingExists.message(),
-        ),
-        MapEvidenceToControlsError::Repository(error) => {
-            tracing::error!(%error, "MCP batch evidence control mapping repository failure");
-            rmcp::ErrorData::internal_error(
-                "dependency failure",
-                Some(json!({
-                    "problem": {
-                        "code": "dependency_failed",
-                        "message": "a dependency failed while handling the tool call",
-                    }
-                })),
-            )
+fn parse_unmap_evidence_from_controls_request(
+    args: UnmapEvidenceFromControlsRequest,
+) -> Result<DeleteEvidenceControlMappingsPayload, rmcp::ErrorData> {
+    let evidence_id = required_uuid("evidence_id", args.evidence_id)
+        .map(EvidenceId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.control_ids.unwrap_or_default();
+    let mut control_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let control_id = required_uuid("control_ids", Some(value))
+            .map(ControlId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        control_ids.push(control_id);
+    }
+
+    let control_ids = validate_batch("control_ids", control_ids)?;
+
+    Ok(DeleteEvidenceControlMappingsPayload {
+        evidence_id,
+        control_ids,
+    })
+}
+
+impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
+    fn from(error: UnmapEvidenceFromControlsError) -> Self {
+        match error {
+            UnmapEvidenceFromControlsError::UnknownControls(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            UnmapEvidenceFromControlsError::NotMapped(ids) => {
+                rmcp::ErrorData::from(BatchError::NotMapped {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            UnmapEvidenceFromControlsError::EvidenceNotFound => not_found(),
+            UnmapEvidenceFromControlsError::Repository(error) => {
+                tracing::error!(%error, "MCP batch evidence control unmapping repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
         }
     }
 }
 
-fn map_control_to_evidence_error(error: MapControlToEvidenceError) -> rmcp::ErrorData {
-    match error {
-        MapControlToEvidenceError::UnknownEvidence(ids) => {
-            rmcp::ErrorData::from(BatchError::Unknown {
-                field: "evidence_ids",
-                ids: ids.into_iter().map(Uuid::from).collect(),
-            })
+impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
+    fn from(error: MapEvidenceToControlsError) -> Self {
+        match error {
+            MapEvidenceToControlsError::UnknownControls(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            MapEvidenceToControlsError::EvidenceNotFound => not_found(),
+            MapEvidenceToControlsError::AlreadyMapped => conflict(
+                ConflictKind::EvidenceControlMappingExists.code(),
+                ConflictKind::EvidenceControlMappingExists.message(),
+            ),
+            MapEvidenceToControlsError::Repository(error) => {
+                tracing::error!(%error, "MCP batch evidence control mapping repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
         }
-        MapControlToEvidenceError::ControlNotFound => not_found(),
-        MapControlToEvidenceError::AlreadyMapped => conflict(
-            ConflictKind::EvidenceControlMappingExists.code(),
-            ConflictKind::EvidenceControlMappingExists.message(),
-        ),
-        MapControlToEvidenceError::Repository(error) => {
-            tracing::error!(%error, "MCP batch control evidence mapping repository failure");
-            rmcp::ErrorData::internal_error(
-                "dependency failure",
-                Some(json!({
-                    "problem": {
-                        "code": "dependency_failed",
-                        "message": "a dependency failed while handling the tool call",
-                    }
-                })),
-            )
+    }
+}
+
+impl From<MapControlToEvidenceError> for rmcp::ErrorData {
+    fn from(error: MapControlToEvidenceError) -> Self {
+        match error {
+            MapControlToEvidenceError::UnknownEvidence(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "evidence_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            MapControlToEvidenceError::ControlNotFound => not_found(),
+            MapControlToEvidenceError::AlreadyMapped => conflict(
+                ConflictKind::EvidenceControlMappingExists.code(),
+                ConflictKind::EvidenceControlMappingExists.message(),
+            ),
+            MapControlToEvidenceError::Repository(error) => {
+                tracing::error!(%error, "MCP batch control evidence mapping repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
         }
     }
 }
@@ -835,11 +947,19 @@ fn required_uuid_array(
         }
     }
 
-    if errors.is_empty() {
-        return Validation::valid(ids);
+    if !errors.is_empty() {
+        return Validation::invalid_many(errors);
     }
 
-    Validation::invalid_many(errors)
+    let duplicates = duplicate_ids(&ids);
+    if !duplicates.is_empty() {
+        return Validation::invalid(McpArgumentError::DuplicateIds {
+            field,
+            ids: duplicates,
+        });
+    }
+
+    Validation::valid(ids)
 }
 
 fn parse_remove_evidence_control_mapping_request(
@@ -855,44 +975,46 @@ fn parse_remove_evidence_control_mapping_request(
     .map_err(argument_errors)
 }
 
-fn control_mutation_error(error: ControlMutationError) -> rmcp::ErrorData {
-    match error {
-        ControlMutationError::CodeTaken => rmcp::ErrorData::new(
-            ErrorCode(-32000),
-            "a control with this code already exists in the workspace",
-            Some(json!({
-                "problem": {
-                    "code": "control_code_taken",
-                    "message": "a control with this code already exists in the workspace",
-                }
-            })),
-        ),
-        ControlMutationError::InvalidFrameworkRequirementReferences => {
-            rmcp::ErrorData::invalid_params(
-                "tool argument validation failed",
+impl From<ControlMutationError> for rmcp::ErrorData {
+    fn from(error: ControlMutationError) -> Self {
+        match error {
+            ControlMutationError::CodeTaken => rmcp::ErrorData::new(
+                ErrorCode(-32000),
+                "a control with this code already exists in the workspace",
                 Some(json!({
                     "problem": {
-                        "code": "validation_failed",
-                        "message": "tool argument validation failed",
-                        "field_issues": [{
-                            "field": "framework_requirement_ids",
-                            "message": "framework_requirement_ids contains unknown ids",
-                        }],
+                        "code": "control_code_taken",
+                        "message": "a control with this code already exists in the workspace",
                     }
                 })),
-            )
-        }
-        ControlMutationError::Repository(error) => {
-            tracing::error!(%error, "MCP control mutation repository failure");
-            rmcp::ErrorData::internal_error(
-                "dependency failure",
-                Some(json!({
-                    "problem": {
-                        "code": "dependency_failed",
-                        "message": "a dependency failed while handling the tool call",
-                    }
-                })),
-            )
+            ),
+            ControlMutationError::InvalidFrameworkRequirementReferences => {
+                rmcp::ErrorData::invalid_params(
+                    "tool argument validation failed",
+                    Some(json!({
+                        "problem": {
+                            "code": "validation_failed",
+                            "message": "tool argument validation failed",
+                            "field_issues": [{
+                                "field": "framework_requirement_ids",
+                                "message": "framework_requirement_ids contains unknown ids",
+                            }],
+                        }
+                    })),
+                )
+            }
+            ControlMutationError::Repository(error) => {
+                tracing::error!(%error, "MCP control mutation repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
         }
     }
 }
@@ -903,6 +1025,7 @@ mod tests {
         parse_create_control_request, parse_replace_control_request, ControlDTO,
         ReplaceControlRequest,
     };
+    use serde_json::json;
     use uuid::Uuid;
 
     fn field_issue_names(error: &rmcp::ErrorData) -> Vec<String> {
@@ -1009,5 +1132,45 @@ mod tests {
         })
         .expect_err("missing control id fails validation");
         assert_eq!(field_issue_names(&missing_control_id), ["control_id"]);
+    }
+
+    #[test]
+    fn create_control_request_rejects_duplicate_framework_requirement_ids() {
+        let requirement_id = Uuid::new_v4();
+        let error = parse_create_control_request(ControlDTO {
+            code: Some("PP-AC-01".to_owned()),
+            title: Some("Access review".to_owned()),
+            description: Some("Review access quarterly.".to_owned()),
+            framework_requirement_ids: Some(vec![
+                requirement_id.to_string(),
+                Uuid::new_v4().to_string(),
+                requirement_id.to_string(),
+            ]),
+        })
+        .expect_err("repeated requirement id fails validation");
+
+        assert_eq!(field_issue_names(&error), ["framework_requirement_ids"]);
+        assert_eq!(
+            error.data.as_ref().expect("error data")["problem"]["field_issues"][0]["message"],
+            json!(format!("must not contain duplicate ids: {requirement_id}"))
+        );
+    }
+
+    #[test]
+    fn replace_control_request_rejects_duplicate_framework_requirement_ids() {
+        let requirement_id = Uuid::new_v4();
+        let error = parse_replace_control_request(ReplaceControlRequest {
+            control_id: Some(Uuid::new_v4().to_string()),
+            code: Some("PP-AC-02".to_owned()),
+            title: Some("Updated access review".to_owned()),
+            description: Some("Updated review control.".to_owned()),
+            framework_requirement_ids: Some(vec![
+                requirement_id.to_string(),
+                requirement_id.to_string(),
+            ]),
+        })
+        .expect_err("repeated requirement id fails validation");
+
+        assert_eq!(field_issue_names(&error), ["framework_requirement_ids"]);
     }
 }

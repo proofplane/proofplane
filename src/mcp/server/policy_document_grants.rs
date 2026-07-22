@@ -8,14 +8,16 @@ use uuid::Uuid;
 use super::{
     common::{
         argument_errors, authorize_token_workspace, format_datetime, not_found, required_uuid,
-        service_error,
     },
     ProofplaneMcp,
 };
 use crate::{
     domain::{PolicyId, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::policy_document_upload_grants::{IssuedPolicyUploadGrant, PolicyUploadGrantError},
+    services::{
+        policy_document_upload_grants::{IssuedPolicyUploadGrant, PolicyUploadGrantError},
+        Error as ServiceError,
+    },
     validate,
 };
 
@@ -35,8 +37,7 @@ impl ProofplaneMcp {
         let grant = self
             .policy_document_upload_grants
             .issue(&context.agent_connection_context(), policy_id)
-            .await
-            .map_err(policy_upload_grant_error)?;
+            .await?;
 
         AuditEvent::new(
             "policy_document_upload_grant.issued",
@@ -92,15 +93,17 @@ fn parse_policy_document_grant_request(
     .map_err(argument_errors)
 }
 
-fn policy_upload_grant_error(error: PolicyUploadGrantError) -> rmcp::ErrorData {
-    match error {
-        PolicyUploadGrantError::Unavailable => not_found(),
-        PolicyUploadGrantError::Internal => {
-            tracing::error!(%error, "MCP policy document upload grant failure");
-            rmcp::ErrorData::internal_error("internal error", None)
-        }
-        PolicyUploadGrantError::Repository(repository_error) => {
-            service_error(repository_error.into())
+impl From<PolicyUploadGrantError> for rmcp::ErrorData {
+    fn from(error: PolicyUploadGrantError) -> Self {
+        match error {
+            PolicyUploadGrantError::Unavailable => not_found(),
+            PolicyUploadGrantError::Internal => {
+                tracing::error!(%error, "MCP policy document upload grant failure");
+                rmcp::ErrorData::internal_error("internal error", None)
+            }
+            PolicyUploadGrantError::Repository(repository_error) => {
+                ServiceError::from(repository_error).into()
+            }
         }
     }
 }
