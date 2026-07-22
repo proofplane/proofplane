@@ -19,9 +19,10 @@ use crate::{
         duplicate_ids, required_text, validate_batch, BatchError, Control,
         ControlEvidenceMappingItem, ControlId, CreateControlEvidenceMappingsPayload,
         CreateControlPayload, CreateEvidenceControlMappingPayload,
-        CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
-        EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
-        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+        CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
+        DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
+        EvidenceId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
+        UpdateControlPayload, WorkspacePermission,
     },
     mcp::server::common::McpArgumentError,
 };
@@ -30,7 +31,7 @@ use crate::{
     repository::ConflictKind,
     services::controls::{
         ControlMutationError, MapControlToEvidenceError, MapEvidenceToControlsError,
-        UnmapEvidenceFromControlsError,
+        UnmapControlFromEvidenceError, UnmapEvidenceFromControlsError,
     },
     validate,
     validation::Validation,
@@ -381,6 +382,51 @@ impl ProofplaneMcp {
     }
 
     #[tool(
+        name = "unmap_control_from_evidence",
+        description = "Remove the mappings between one control and many pieces of evidence in a single all-or-nothing batch; if any evidence id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+    )]
+    async fn unmap_control_from_evidence(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<UnmapControlFromEvidenceRequest>,
+    ) -> Result<Json<UnmapControlFromEvidenceResponse>, rmcp::ErrorData> {
+        let payload = parse_unmap_control_from_evidence_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let control_id = payload.control_id;
+        let evidence_ids = self
+            .controls
+            .unmap_control_from_evidence(context.agent_connection_context(), payload)
+            .await?;
+
+        let evidence_id_strings = evidence_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "evidence_control_mappings.deleted",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "unmap_control_from_evidence",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("control_id", Uuid::from(control_id))
+        .metadata("evidence_ids", json!(evidence_id_strings))
+        .metadata("count", evidence_ids.len())
+        .object(AuditObject::new("control", Uuid::from(control_id)))
+        .emit();
+
+        Ok(Json(UnmapControlFromEvidenceResponse {
+            control_id: control_id.to_string(),
+            count: evidence_ids.len(),
+            evidence_ids: evidence_id_strings,
+        }))
+    }
+
+    #[tool(
         name = "remove_evidence_control_mapping",
         description = "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
@@ -515,6 +561,19 @@ struct UnmapEvidenceFromControlsResponse {
     evidence_id: String,
     count: usize,
     control_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnmapControlFromEvidenceRequest {
+    control_id: Option<String>,
+    evidence_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct UnmapControlFromEvidenceResponse {
+    control_id: String,
+    count: usize,
+    evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -763,6 +822,65 @@ fn parse_unmap_evidence_from_controls_request(
         evidence_id,
         control_ids,
     })
+}
+
+fn parse_unmap_control_from_evidence_request(
+    args: UnmapControlFromEvidenceRequest,
+) -> Result<DeleteControlEvidenceMappingsPayload, rmcp::ErrorData> {
+    let control_id = required_uuid("control_id", args.control_id)
+        .map(ControlId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.evidence_ids.unwrap_or_default();
+    let mut evidence_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let evidence_id = required_uuid("evidence_ids", Some(value))
+            .map(EvidenceId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        evidence_ids.push(evidence_id);
+    }
+
+    let evidence_ids = validate_batch("evidence_ids", evidence_ids)?;
+
+    Ok(DeleteControlEvidenceMappingsPayload {
+        control_id,
+        evidence_ids,
+    })
+}
+
+impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
+    fn from(error: UnmapControlFromEvidenceError) -> Self {
+        match error {
+            UnmapControlFromEvidenceError::UnknownEvidence(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "evidence_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            UnmapControlFromEvidenceError::NotMapped(ids) => {
+                rmcp::ErrorData::from(BatchError::NotMapped {
+                    field: "evidence_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            UnmapControlFromEvidenceError::ControlNotFound => not_found(),
+            UnmapControlFromEvidenceError::Repository(error) => {
+                tracing::error!(%error, "MCP batch control evidence unmapping repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
+        }
+    }
 }
 
 impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {

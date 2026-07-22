@@ -125,6 +125,12 @@ pub struct DeleteEvidenceControlMappingsPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteControlEvidenceMappingsPayload {
+    pub control_id: ControlId,
+    pub evidence_ids: Vec<EvidenceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlEvidenceMappingItem {
     pub evidence_id: EvidenceId,
     pub rationale: String,
