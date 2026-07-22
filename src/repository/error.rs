@@ -5,9 +5,6 @@ use crate::domain::DomainError;
 
 use super::constraints::ConflictKind;
 
-/// Why a batch cannot be applied, carried through [`Error`] so returning it
-/// rolls the transaction back — the operation's `Ok` value is what commits, so a
-/// rejection discovered after a write must travel as an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchRejection {
     UnknownIds(Vec<Uuid>),

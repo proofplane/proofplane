@@ -106,8 +106,6 @@ pub struct CreateEvidenceControlMappingsPayload {
     pub items: Vec<EvidenceControlMappingItem>,
 }
 
-/// Lets a bare control id batch — the removal tools take no per-pair payload —
-/// go through [`validate_batch`](super::validate_batch) unchanged.
 impl BatchKey for ControlId {
     fn key(&self) -> Uuid {
         (*self).into()

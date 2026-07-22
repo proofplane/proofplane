@@ -419,18 +419,6 @@ WHERE m.evidence_id = er.id
         Ok(rows > 0)
     }
 
-    /// Removes a batch of evidence→control mappings for one evidence anchor —
-    /// the mirror of [`create_evidence_control_mappings`](Self::create_evidence_control_mappings).
-    ///
-    /// Returns `None` when the evidence is not in the workspace.
-    ///
-    /// Unlike the create half, this does not resolve ids before writing: a
-    /// delete cannot abort the transaction the way a conflicting insert does, so
-    /// one statement can remove the mappings and classify every id the caller
-    /// asked for. A rejection is therefore discovered *after* the delete and
-    /// must be returned as [`Error::BatchRejected`] — the operation's `Ok` value
-    /// is what commits, so reporting a rejection as `Ok` would commit the very
-    /// deletes it is rejecting.
     pub async fn delete_evidence_control_mappings(
         &self,
         payload: &DeleteEvidenceControlMappingsPayload,
