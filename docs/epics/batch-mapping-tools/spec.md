@@ -145,9 +145,9 @@ The layering mirrors what is already in place; no new architectural seams.
 **Repository** (`src/repository/controls.rs`, `src/repository/policies.rs`) —
 add a batch method beside each existing single-pair method, sharing the anchor's
 transaction. Each method, in order: check the anchor exists inside the workspace;
-resolve every counterpart ID against the workspace with a read; if any is
-missing, return the unknown-ID set without writing; otherwise insert each pair.
-The existing single-pair methods are left untouched.
+resolve every counterpart ID against the workspace with one set-based read; if
+any is missing, return the unknown-ID set without writing; otherwise insert every
+pair in one statement. The existing single-pair methods are left untouched.
 
 _(Revised during ticket 002 — originally sketched as a single
 `INSERT ... SELECT FROM UNNEST(...)` with the unknown-ID set inferred from a short
@@ -157,8 +157,20 @@ transaction failed after any statement error**, so the follow-up re-query — an
 the eventual commit — would themselves error. Resolving IDs with plain reads
 *before* any insert keeps the transaction healthy, names every unknown ID at once
 (a failed insert would abort before the rest were checked), and lets an
-already-mapped conflict roll the batch back cleanly. The batch is capped at 50, so
-the extra per-item round trips are bounded and off any hot path.)_
+already-mapped conflict roll the batch back cleanly.)_
+
+_(Revised again after ticket 004 — **the resolve-before-insert order above is
+unchanged and still required; only the per-item looping is gone.** Both steps are
+now set-based: one `WHERE id = ANY($1)` read resolves every counterpart, and one
+`INSERT ... SELECT FROM unnest($2::uuid[], $3::text[])` writes every pair, so a
+create batch is 3 statements instead of 1 + 2N — 101 round trips for a 50-item
+batch became 3. Nothing about the failure contract moves: the multi-row insert
+raises the same `evidence_control_mappings_pkey` unique violation, and the
+unknown-ID set is still named in full, in request order, before any write.
+`insert_policy_control_mappings` was already set-based; note that it may infer
+its unknown IDs from a short `RETURNING` count only because it inserts against a
+brand-new policy where no duplicate can exist — the evidence↔control halves
+cannot, for the reason above.)_
 
 _(Revised during ticket 004 — **the removal methods do not resolve ids first, and
 must not report a rejection as an `Ok` value.** The read-first order above exists
@@ -191,11 +203,15 @@ SELECT r.control_id,
 FROM requested r
 ```
 
-Sketch for the evidence→controls half — one simple insert per resolved item:
+Sketch for the evidence→controls create half — one read that resolves every
+control, then one insert that writes every pair:
 
 ```sql
+SELECT id FROM controls WHERE id = ANY($1) AND workspace_id = $2;
+
 INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
-VALUES ($1, $2, $3)
+SELECT $1, requested.control_id, requested.rationale
+FROM unnest($2::uuid[], $3::text[]) AS requested(control_id, rationale)
 ```
 
 **Service** (`src/services/controls.rs`, `src/services/policies.rs`) — one

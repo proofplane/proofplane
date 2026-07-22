@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -83,21 +85,24 @@ ORDER BY fr.code
             return Ok(true);
         }
 
-        let client = self.get().await?;
-        for id in ids {
-            let exists = client
-                .query_one(
-                    "SELECT EXISTS (SELECT 1 FROM framework_requirements WHERE id = $1) AS exists",
-                    &[&Uuid::from(*id)],
-                )
-                .await?
-                .try_get::<_, bool>("exists")?;
-            if !exists {
-                return Ok(false);
-            }
-        }
+        // Counted distinctly on both sides: a caller may repeat an id, and a
+        // repeated id that exists must still count as present.
+        let requested = ids.iter().copied().map(Uuid::from).collect::<HashSet<_>>();
+        let found = self
+            .get()
+            .await?
+            .query_one(
+                r#"
+SELECT count(DISTINCT id) AS found
+FROM framework_requirements
+WHERE id = ANY($1)
+"#,
+                &[&requested.iter().copied().collect::<Vec<_>>()],
+            )
+            .await?
+            .try_get::<_, i64>("found")?;
 
-        Ok(true)
+        Ok(found == requested.len() as i64)
     }
 }
 
@@ -217,10 +222,10 @@ RETURNING evidence_id, control_id
 
     /// Inserts a batch of evidence→control mappings for one evidence anchor.
     ///
-    /// The anchor and every control are resolved with plain reads *before* any
+    /// The anchor and every control are resolved with plain reads *before* the
     /// insert, so an unknown-id rejection reports every offending id (a failed
     /// insert would abort the whole transaction and prevent further queries). The
-    /// inserts then run against ids already known to exist in the workspace; an
+    /// insert then runs against ids already known to exist in the workspace; an
     /// already-mapped pair raises a unique violation, which rolls the batch back.
     pub async fn create_evidence_control_mappings(
         &self,
@@ -246,25 +251,30 @@ WHERE id = $1
             return Ok(CreateEvidenceControlMappingsOutcome::EvidenceNotFound);
         }
 
-        let mut unknown = Vec::new();
-        for item in &payload.items {
-            let found = self
-                .transaction
-                .query_opt(
-                    r#"
-SELECT 1
+        let control_ids = payload
+            .items
+            .iter()
+            .map(|item| Uuid::from(item.control_id))
+            .collect::<Vec<_>>();
+        let in_workspace = self
+            .transaction
+            .query(
+                r#"
+SELECT id
 FROM controls
-WHERE id = $1
+WHERE id = ANY($1)
   AND workspace_id = $2
 "#,
-                    &[&Uuid::from(item.control_id), &workspace_id],
-                )
-                .await?;
+                &[&control_ids, &workspace_id],
+            )
+            .await?;
 
-            if found.is_none() {
-                unknown.push(item.control_id);
-            }
-        }
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.items, |item| {
+            Uuid::from(item.control_id)
+        })?
+        .into_iter()
+        .map(ControlId::from)
+        .collect::<Vec<_>>();
 
         if !unknown.is_empty() {
             return Ok(CreateEvidenceControlMappingsOutcome::UnknownControls(
@@ -272,32 +282,35 @@ WHERE id = $1
             ));
         }
 
-        let mut created = Vec::with_capacity(payload.items.len());
-        for item in &payload.items {
-            self.transaction
-                .execute(
-                    r#"
+        let rationales = payload
+            .items
+            .iter()
+            .map(|item| item.rationale.clone())
+            .collect::<Vec<_>>();
+        self.transaction
+            .execute(
+                r#"
 INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
-VALUES ($1, $2, $3)
+SELECT $1, requested.control_id, requested.rationale
+FROM unnest($2::uuid[], $3::text[]) AS requested(control_id, rationale)
 "#,
-                    &[&evidence_id, &Uuid::from(item.control_id), &item.rationale],
-                )
-                .await
-                .map_err(classify_db_error)?;
+                &[&evidence_id, &control_ids, &rationales],
+            )
+            .await
+            .map_err(classify_db_error)?;
 
-            created.push(item.control_id);
-        }
-
-        Ok(CreateEvidenceControlMappingsOutcome::Created(created))
+        Ok(CreateEvidenceControlMappingsOutcome::Created(
+            payload.items.iter().map(|item| item.control_id).collect(),
+        ))
     }
 
     /// Inserts a batch of evidence→control mappings for one control anchor — the
     /// mirror of [`create_evidence_control_mappings`](Self::create_evidence_control_mappings).
     ///
     /// The anchor and every evidence id are resolved with plain reads *before*
-    /// any insert, so an unknown-id rejection reports every offending id (a
+    /// the insert, so an unknown-id rejection reports every offending id (a
     /// failed insert would abort the whole transaction and prevent further
-    /// queries). The inserts then run against ids already known to exist in the
+    /// queries). The insert then runs against ids already known to exist in the
     /// workspace; an already-mapped pair raises a unique violation, which rolls
     /// the batch back.
     pub async fn create_control_evidence_mappings(
@@ -324,25 +337,30 @@ WHERE id = $1
             return Ok(CreateControlEvidenceMappingsOutcome::ControlNotFound);
         }
 
-        let mut unknown = Vec::new();
-        for item in &payload.items {
-            let found = self
-                .transaction
-                .query_opt(
-                    r#"
-SELECT 1
+        let evidence_ids = payload
+            .items
+            .iter()
+            .map(|item| Uuid::from(item.evidence_id))
+            .collect::<Vec<_>>();
+        let in_workspace = self
+            .transaction
+            .query(
+                r#"
+SELECT id
 FROM evidence
-WHERE id = $1
+WHERE id = ANY($1)
   AND workspace_id = $2
 "#,
-                    &[&Uuid::from(item.evidence_id), &workspace_id],
-                )
-                .await?;
+                &[&evidence_ids, &workspace_id],
+            )
+            .await?;
 
-            if found.is_none() {
-                unknown.push(item.evidence_id);
-            }
-        }
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.items, |item| {
+            Uuid::from(item.evidence_id)
+        })?
+        .into_iter()
+        .map(EvidenceId::from)
+        .collect::<Vec<_>>();
 
         if !unknown.is_empty() {
             return Ok(CreateControlEvidenceMappingsOutcome::UnknownEvidence(
@@ -350,23 +368,26 @@ WHERE id = $1
             ));
         }
 
-        let mut created = Vec::with_capacity(payload.items.len());
-        for item in &payload.items {
-            self.transaction
-                .execute(
-                    r#"
+        let rationales = payload
+            .items
+            .iter()
+            .map(|item| item.rationale.clone())
+            .collect::<Vec<_>>();
+        self.transaction
+            .execute(
+                r#"
 INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
-VALUES ($1, $2, $3)
+SELECT requested.evidence_id, $1, requested.rationale
+FROM unnest($2::uuid[], $3::text[]) AS requested(evidence_id, rationale)
 "#,
-                    &[&Uuid::from(item.evidence_id), &control_id, &item.rationale],
-                )
-                .await
-                .map_err(classify_db_error)?;
+                &[&control_id, &evidence_ids, &rationales],
+            )
+            .await
+            .map_err(classify_db_error)?;
 
-            created.push(item.evidence_id);
-        }
-
-        Ok(CreateControlEvidenceMappingsOutcome::Created(created))
+        Ok(CreateControlEvidenceMappingsOutcome::Created(
+            payload.items.iter().map(|item| item.evidence_id).collect(),
+        ))
     }
 
     pub async fn delete_evidence_control_mapping(
@@ -591,25 +612,29 @@ WHERE m.control_id = c.id
             )
             .await?;
 
-        for requirement_id in requirement_ids {
-            self.transaction
-                .execute(
-                    r#"
+        let requirement_ids = requirement_ids
+            .iter()
+            .copied()
+            .map(Uuid::from)
+            .collect::<Vec<_>>();
+        self.transaction
+            .execute(
+                r#"
 INSERT INTO control_framework_requirement_mappings (control_id, framework_requirement_id)
-SELECT c.id, $2
+SELECT c.id, requested.framework_requirement_id
 FROM controls c
+CROSS JOIN unnest($2::uuid[]) AS requested(framework_requirement_id)
 WHERE c.id = $1
   AND c.workspace_id = $3
 ON CONFLICT DO NOTHING
 "#,
-                    &[
-                        &Uuid::from(control_id),
-                        &Uuid::from(*requirement_id),
-                        &Uuid::from(self.workspace_id),
-                    ],
-                )
-                .await?;
-        }
+                &[
+                    &Uuid::from(control_id),
+                    &requirement_ids,
+                    &Uuid::from(self.workspace_id),
+                ],
+            )
+            .await?;
 
         Ok(())
     }
@@ -721,6 +746,26 @@ ORDER BY c.code
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
+}
+
+/// The requested ids a resolving read did not return, in request order so a
+/// rejection lists them the way the caller wrote them.
+fn ids_missing_from<T>(
+    found: &[Row],
+    column: &str,
+    requested: &[T],
+    key: impl Fn(&T) -> Uuid,
+) -> Result<Vec<Uuid>, Error> {
+    let present = found
+        .iter()
+        .map(|row| row.try_get::<_, Uuid>(column))
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    Ok(requested
+        .iter()
+        .map(key)
+        .filter(|id| !present.contains(id))
+        .collect())
 }
 
 fn framework_from_row(row: Row) -> Result<Framework, Error> {

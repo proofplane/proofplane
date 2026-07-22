@@ -1852,6 +1852,26 @@ async fn mcp_control_crud_tools_create_get_replace_validate_and_audit_success_on
     );
     assert!(unknown_requirement_logs.is_empty());
 
+    // A repeated requirement id is not an error: it resolves to the one
+    // requirement and maps once.
+    let repeated_requirement = mcp_client
+        .call_tool(
+            "replace_control",
+            json!({
+                "control_id": control_id,
+                "code": "PP-MCP-04",
+                "title": "Repeated requirement mapping",
+                "description": "Repeated requirement control description.",
+                "framework_requirement_ids": [cc71_id(), cc71_id()]
+            }),
+        )
+        .await;
+    let mapped = repeated_requirement["framework_requirements"]
+        .as_array()
+        .expect("framework requirements array");
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0]["id"], cc71_id().to_string());
+
     let missing = mcp_client
         .call_tool_error("get_control", json!({ "control_id": Uuid::new_v4() }))
         .await;
