@@ -3,8 +3,9 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        Control, ControlId, ControlSummary, CreateControlPayload,
-        CreateEvidenceControlMappingPayload, EvidenceControlMapping, EvidenceId, Framework,
+        Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
+        CreateControlPayload, CreateEvidenceControlMappingPayload,
+        CreateEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
         FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
         WorkspaceId,
     },
@@ -12,6 +13,20 @@ use crate::{
 };
 
 use super::{constraints::classify_db_error, Error};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateEvidenceControlMappingsOutcome {
+    Created(Vec<ControlId>),
+    EvidenceNotFound,
+    UnknownControls(Vec<ControlId>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateControlEvidenceMappingsOutcome {
+    Created(Vec<EvidenceId>),
+    ControlNotFound,
+    UnknownEvidence(Vec<EvidenceId>),
+}
 
 impl Postgres {
     pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
@@ -198,6 +213,160 @@ RETURNING evidence_id, control_id
                 "created evidence control mapping must be readable in transaction",
             ))
             .map(Some)
+    }
+
+    /// Inserts a batch of evidence→control mappings for one evidence anchor.
+    ///
+    /// The anchor and every control are resolved with plain reads *before* any
+    /// insert, so an unknown-id rejection reports every offending id (a failed
+    /// insert would abort the whole transaction and prevent further queries). The
+    /// inserts then run against ids already known to exist in the workspace; an
+    /// already-mapped pair raises a unique violation, which rolls the batch back.
+    pub async fn create_evidence_control_mappings(
+        &self,
+        payload: &CreateEvidenceControlMappingsPayload,
+    ) -> Result<CreateEvidenceControlMappingsOutcome, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let evidence_id = Uuid::from(payload.evidence_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM evidence
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&evidence_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(CreateEvidenceControlMappingsOutcome::EvidenceNotFound);
+        }
+
+        let mut unknown = Vec::new();
+        for item in &payload.items {
+            let found = self
+                .transaction
+                .query_opt(
+                    r#"
+SELECT 1
+FROM controls
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                    &[&Uuid::from(item.control_id), &workspace_id],
+                )
+                .await?;
+
+            if found.is_none() {
+                unknown.push(item.control_id);
+            }
+        }
+
+        if !unknown.is_empty() {
+            return Ok(CreateEvidenceControlMappingsOutcome::UnknownControls(
+                unknown,
+            ));
+        }
+
+        let mut created = Vec::with_capacity(payload.items.len());
+        for item in &payload.items {
+            self.transaction
+                .execute(
+                    r#"
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
+VALUES ($1, $2, $3)
+"#,
+                    &[&evidence_id, &Uuid::from(item.control_id), &item.rationale],
+                )
+                .await
+                .map_err(classify_db_error)?;
+
+            created.push(item.control_id);
+        }
+
+        Ok(CreateEvidenceControlMappingsOutcome::Created(created))
+    }
+
+    /// Inserts a batch of evidence→control mappings for one control anchor — the
+    /// mirror of [`create_evidence_control_mappings`](Self::create_evidence_control_mappings).
+    ///
+    /// The anchor and every evidence id are resolved with plain reads *before*
+    /// any insert, so an unknown-id rejection reports every offending id (a
+    /// failed insert would abort the whole transaction and prevent further
+    /// queries). The inserts then run against ids already known to exist in the
+    /// workspace; an already-mapped pair raises a unique violation, which rolls
+    /// the batch back.
+    pub async fn create_control_evidence_mappings(
+        &self,
+        payload: &CreateControlEvidenceMappingsPayload,
+    ) -> Result<CreateControlEvidenceMappingsOutcome, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let control_id = Uuid::from(payload.control_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM controls
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&control_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(CreateControlEvidenceMappingsOutcome::ControlNotFound);
+        }
+
+        let mut unknown = Vec::new();
+        for item in &payload.items {
+            let found = self
+                .transaction
+                .query_opt(
+                    r#"
+SELECT 1
+FROM evidence
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                    &[&Uuid::from(item.evidence_id), &workspace_id],
+                )
+                .await?;
+
+            if found.is_none() {
+                unknown.push(item.evidence_id);
+            }
+        }
+
+        if !unknown.is_empty() {
+            return Ok(CreateControlEvidenceMappingsOutcome::UnknownEvidence(
+                unknown,
+            ));
+        }
+
+        let mut created = Vec::with_capacity(payload.items.len());
+        for item in &payload.items {
+            self.transaction
+                .execute(
+                    r#"
+INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale)
+VALUES ($1, $2, $3)
+"#,
+                    &[&Uuid::from(item.evidence_id), &control_id, &item.rationale],
+                )
+                .await
+                .map_err(classify_db_error)?;
+
+            created.push(item.evidence_id);
+        }
+
+        Ok(CreateControlEvidenceMappingsOutcome::Created(created))
     }
 
     pub async fn delete_evidence_control_mapping(

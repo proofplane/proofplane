@@ -8,20 +8,25 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
-        parse_uuid_arg, required_uuid, service_error,
+        argument_errors, authorize_token_workspace, conflict, domain_errors, format_datetime,
+        not_found, parse_uuid_arg, required_uuid, service_error,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
 };
 use crate::domain::{
-    required_text, Control, ControlId, CreateControlPayload, CreateEvidenceControlMappingPayload,
-    EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
-    FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+    required_text, validate_batch, BatchError, Control, ControlEvidenceMappingItem, ControlId,
+    CreateControlEvidenceMappingsPayload, CreateControlPayload,
+    CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
+    EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
+    FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::controls::ControlMutationError,
+    repository::ConflictKind,
+    services::controls::{
+        ControlMutationError, MapControlToEvidenceError, MapEvidenceToControlsError,
+    },
     validate,
     validation::Validation,
 };
@@ -247,6 +252,98 @@ impl ProofplaneMcp {
     }
 
     #[tool(
+        name = "map_evidence_to_controls",
+        description = "Map one piece of evidence to many controls in a single all-or-nothing batch, each with its own rationale; if any control id is unknown or already mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+    )]
+    async fn map_evidence_to_controls(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<MapEvidenceToControlsRequest>,
+    ) -> Result<Json<MapEvidenceToControlsResponse>, rmcp::ErrorData> {
+        let payload = parse_map_evidence_to_controls_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let evidence_id = payload.evidence_id;
+        let control_ids = self
+            .controls
+            .map_evidence_to_controls(context.agent_connection_context(), payload)
+            .await
+            .map_err(map_evidence_to_controls_error)?;
+
+        let control_id_strings = control_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "evidence_control_mappings.created",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "map_evidence_to_controls",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("evidence_id", Uuid::from(evidence_id))
+        .metadata("control_ids", json!(control_id_strings))
+        .metadata("count", control_ids.len())
+        .object(AuditObject::new("evidence", Uuid::from(evidence_id)))
+        .emit();
+
+        Ok(Json(MapEvidenceToControlsResponse {
+            evidence_id: evidence_id.to_string(),
+            count: control_ids.len(),
+            control_ids: control_id_strings,
+        }))
+    }
+
+    #[tool(
+        name = "map_control_to_evidence",
+        description = "Map one control to many pieces of evidence in a single all-or-nothing batch, each with its own rationale; if any evidence id is unknown or already mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings."
+    )]
+    async fn map_control_to_evidence(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<MapControlToEvidenceRequest>,
+    ) -> Result<Json<MapControlToEvidenceResponse>, rmcp::ErrorData> {
+        let payload = parse_map_control_to_evidence_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let control_id = payload.control_id;
+        let evidence_ids = self
+            .controls
+            .map_control_to_evidence(context.agent_connection_context(), payload)
+            .await
+            .map_err(map_control_to_evidence_error)?;
+
+        let evidence_id_strings = evidence_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "evidence_control_mappings.created",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "map_control_to_evidence",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("control_id", Uuid::from(control_id))
+        .metadata("evidence_ids", json!(evidence_id_strings))
+        .metadata("count", evidence_ids.len())
+        .object(AuditObject::new("control", Uuid::from(control_id)))
+        .emit();
+
+        Ok(Json(MapControlToEvidenceResponse {
+            control_id: control_id.to_string(),
+            count: evidence_ids.len(),
+            evidence_ids: evidence_id_strings,
+        }))
+    }
+
+    #[tool(
         name = "remove_evidence_control_mapping",
         description = "Remove the mapping between a piece of evidence and a control by their IDs; for guidance, call get_proofplane_guide with topic controls-and-mappings."
     )]
@@ -331,6 +428,44 @@ struct MapEvidenceToControlRequest {
     evidence_id: Option<String>,
     control_id: Option<String>,
     rationale: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MapEvidenceToControlsRequest {
+    evidence_id: Option<String>,
+    items: Option<Vec<MapEvidenceToControlItemArg>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MapEvidenceToControlItemArg {
+    control_id: Option<String>,
+    rationale: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct MapEvidenceToControlsResponse {
+    evidence_id: String,
+    count: usize,
+    control_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MapControlToEvidenceRequest {
+    control_id: Option<String>,
+    items: Option<Vec<MapControlToEvidenceItemArg>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MapControlToEvidenceItemArg {
+    evidence_id: Option<String>,
+    rationale: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct MapControlToEvidenceResponse {
+    control_id: String,
+    count: usize,
+    evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -490,6 +625,124 @@ fn parse_map_evidence_to_control_request(
         control_id,
         rationale,
     })
+}
+
+fn parse_map_evidence_to_controls_request(
+    args: MapEvidenceToControlsRequest,
+) -> Result<CreateEvidenceControlMappingsPayload, rmcp::ErrorData> {
+    let evidence_id = required_uuid("evidence_id", args.evidence_id)
+        .map(EvidenceId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let item_args = args.items.unwrap_or_default();
+    let mut items = Vec::with_capacity(item_args.len());
+    for item in item_args {
+        let control_id = required_uuid("control_id", item.control_id)
+            .map(ControlId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        let rationale = required_text("rationale", item.rationale.unwrap_or_default())
+            .into_result()
+            .map_err(domain_errors)?;
+
+        items.push(EvidenceControlMappingItem {
+            control_id,
+            rationale,
+        });
+    }
+
+    let items = validate_batch("control_ids", items).map_err(rmcp::ErrorData::from)?;
+
+    Ok(CreateEvidenceControlMappingsPayload { evidence_id, items })
+}
+
+fn parse_map_control_to_evidence_request(
+    args: MapControlToEvidenceRequest,
+) -> Result<CreateControlEvidenceMappingsPayload, rmcp::ErrorData> {
+    let control_id = required_uuid("control_id", args.control_id)
+        .map(ControlId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let item_args = args.items.unwrap_or_default();
+    let mut items = Vec::with_capacity(item_args.len());
+    for item in item_args {
+        let evidence_id = required_uuid("evidence_id", item.evidence_id)
+            .map(EvidenceId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        let rationale = required_text("rationale", item.rationale.unwrap_or_default())
+            .into_result()
+            .map_err(domain_errors)?;
+
+        items.push(ControlEvidenceMappingItem {
+            evidence_id,
+            rationale,
+        });
+    }
+
+    let items = validate_batch("evidence_ids", items).map_err(rmcp::ErrorData::from)?;
+
+    Ok(CreateControlEvidenceMappingsPayload { control_id, items })
+}
+
+fn map_evidence_to_controls_error(error: MapEvidenceToControlsError) -> rmcp::ErrorData {
+    match error {
+        MapEvidenceToControlsError::UnknownControls(ids) => {
+            rmcp::ErrorData::from(BatchError::Unknown {
+                field: "control_ids",
+                ids: ids.into_iter().map(Uuid::from).collect(),
+            })
+        }
+        MapEvidenceToControlsError::EvidenceNotFound => not_found(),
+        MapEvidenceToControlsError::AlreadyMapped => conflict(
+            ConflictKind::EvidenceControlMappingExists.code(),
+            ConflictKind::EvidenceControlMappingExists.message(),
+        ),
+        MapEvidenceToControlsError::Repository(error) => {
+            tracing::error!(%error, "MCP batch evidence control mapping repository failure");
+            rmcp::ErrorData::internal_error(
+                "dependency failure",
+                Some(json!({
+                    "problem": {
+                        "code": "dependency_failed",
+                        "message": "a dependency failed while handling the tool call",
+                    }
+                })),
+            )
+        }
+    }
+}
+
+fn map_control_to_evidence_error(error: MapControlToEvidenceError) -> rmcp::ErrorData {
+    match error {
+        MapControlToEvidenceError::UnknownEvidence(ids) => {
+            rmcp::ErrorData::from(BatchError::Unknown {
+                field: "evidence_ids",
+                ids: ids.into_iter().map(Uuid::from).collect(),
+            })
+        }
+        MapControlToEvidenceError::ControlNotFound => not_found(),
+        MapControlToEvidenceError::AlreadyMapped => conflict(
+            ConflictKind::EvidenceControlMappingExists.code(),
+            ConflictKind::EvidenceControlMappingExists.message(),
+        ),
+        MapControlToEvidenceError::Repository(error) => {
+            tracing::error!(%error, "MCP batch control evidence mapping repository failure");
+            rmcp::ErrorData::internal_error(
+                "dependency failure",
+                Some(json!({
+                    "problem": {
+                        "code": "dependency_failed",
+                        "message": "a dependency failed while handling the tool call",
+                    }
+                })),
+            )
+        }
+    }
 }
 
 fn parse_get_control_request(args: GetControlRequest) -> Result<ControlId, rmcp::ErrorData> {
