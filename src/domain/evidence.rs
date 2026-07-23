@@ -1,10 +1,17 @@
 use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
-use super::{ids::uuid_id, DomainError, WorkspaceId};
+use super::{ids::uuid_id, BatchKey, DomainError, WorkspaceId};
 
 uuid_id!(EvidenceId);
+
+impl BatchKey for EvidenceId {
+    fn key(&self) -> Uuid {
+        (*self).into()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceStatus {

@@ -506,6 +506,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "map_evidence_to_controls",
         "map_control_to_evidence",
         "unmap_evidence_from_controls",
+        "unmap_control_from_evidence",
         "remove_evidence_control_mapping",
         "list_policies",
         "get_policy",
@@ -607,6 +608,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         (
             "unmap_evidence_from_controls",
             "Remove the mappings between one piece of evidence and many controls in a single all-or-nothing batch; if any control id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
+        ),
+        (
+            "unmap_control_from_evidence",
+            "Remove the mappings between one control and many pieces of evidence in a single all-or-nothing batch; if any evidence id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic controls-and-mappings.",
         ),
         (
             "remove_evidence_control_mapping",
@@ -3402,6 +3407,261 @@ async fn mcp_unmap_evidence_from_controls_rejects_bad_batches_and_removes_nothin
     assert_eq!(denied["problem"]["code"], "not_found");
     assert!(denied_logs.is_empty());
     assert_eq!(evidence_control_mapping_count(&app, evidence_id).await, 1);
+}
+
+#[tokio::test]
+async fn mcp_unmap_control_from_evidence_removes_the_whole_batch_and_audits_once() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP batch control unmapping workspace")
+        .with_control("PP-AC-01", "Access review", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let first_evidence = app
+        .create_evidence(workspace_id, &evidence_body("First unmapping evidence"))
+        .await;
+    let first_evidence_id = uuid_from(&first_evidence["id"]);
+    let second_evidence = app
+        .create_evidence(workspace_id, &evidence_body("Second unmapping evidence"))
+        .await;
+    let second_evidence_id = uuid_from(&second_evidence["id"]);
+    insert_control_mapping_row(&app, first_evidence_id, control_id, "First proof.").await;
+    insert_control_mapping_row(&app, second_evidence_id, control_id, "Second proof.").await;
+
+    let token = app.api_token().to_owned();
+    let (removed, logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "unmap_control_from_evidence",
+                    json!({
+                        "control_id": control_id,
+                        "evidence_ids": [first_evidence_id, second_evidence_id],
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+
+    assert_eq!(removed["control_id"], control_id.to_string());
+    assert_eq!(removed["count"], 2);
+    let returned = removed["evidence_ids"]
+        .as_array()
+        .expect("evidence_ids array")
+        .iter()
+        .map(|value| value.as_str().expect("evidence id string").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        returned,
+        BTreeSet::from([
+            first_evidence_id.to_string(),
+            second_evidence_id.to_string()
+        ])
+    );
+
+    assert_eq!(logs.len(), 1);
+    assert_audit_event(
+        &logs[0],
+        ExpectedAuditEvent {
+            event_name: "evidence_control_mappings.deleted",
+            operation: "unmap_control_from_evidence",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "control",
+            object_id: control_id,
+        },
+    );
+    let metadata = audit_metadata(&logs[0]);
+    assert_eq!(metadata["count"], "2");
+    let audited_evidence: Vec<String> = serde_json::from_str(
+        metadata["evidence_ids"]
+            .as_str()
+            .expect("evidence_ids metadata is text"),
+    )
+    .expect("evidence_ids metadata is a json array");
+    assert_eq!(
+        audited_evidence.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            first_evidence_id.to_string(),
+            second_evidence_id.to_string()
+        ])
+    );
+
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 0);
+    let listed = mcp_client
+        .call_tool(
+            "list_evidence_control_mappings",
+            json!({ "evidence_id": first_evidence_id }),
+        )
+        .await;
+    assert!(listed["mappings"].as_array().expect("mappings").is_empty());
+}
+
+#[tokio::test]
+async fn mcp_unmap_control_from_evidence_rejects_bad_batches_and_removes_nothing() {
+    let app = TestApp::builder()
+        .workspace(
+            "workspace",
+            "MCP batch control unmapping rejection workspace",
+        )
+        .with_control("PP-AC-01", "Access review", vec![])
+        .with_default_membership()
+        .workspace("other", "Other batch workspace")
+        .with_control("PP-OTHER-01", "Other access review", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let other_control_id = app.control_id("other", "PP-OTHER-01");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let mapped_evidence = app
+        .create_evidence(workspace_id, &evidence_body("Mapped rejection evidence"))
+        .await;
+    let mapped_evidence_id = uuid_from(&mapped_evidence["id"]);
+    let unmapped_evidence = app
+        .create_evidence(workspace_id, &evidence_body("Unmapped rejection evidence"))
+        .await;
+    let unmapped_evidence_id = uuid_from(&unmapped_evidence["id"]);
+    insert_control_mapping_row(
+        &app,
+        mapped_evidence_id,
+        control_id,
+        "Covers access review.",
+    )
+    .await;
+
+    let empty = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({ "control_id": control_id, "evidence_ids": [] }),
+        )
+        .await;
+    assert_eq!(empty.data["problem"]["code"], "empty_batch");
+
+    let oversized_ids = (0..51).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+    let oversized = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({ "control_id": control_id, "evidence_ids": oversized_ids }),
+        )
+        .await;
+    assert_eq!(oversized.data["problem"]["code"], "batch_too_large");
+    assert_eq!(oversized.data["problem"]["received"], 51);
+
+    let duplicate = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({
+                "control_id": control_id,
+                "evidence_ids": [mapped_evidence_id, mapped_evidence_id],
+            }),
+        )
+        .await;
+    assert_eq!(duplicate.data["problem"]["code"], "duplicate_ids");
+    assert_eq!(
+        duplicate.data["problem"]["ids"],
+        json!([mapped_evidence_id.to_string()])
+    );
+
+    let unknown_a = Uuid::new_v4();
+    let unknown_b = Uuid::new_v4();
+    let unknown = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({
+                "control_id": control_id,
+                "evidence_ids": [mapped_evidence_id, unknown_a, unknown_b],
+            }),
+        )
+        .await;
+    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["field"], "evidence_ids");
+    let reported = unknown.data["problem"]["ids"]
+        .as_array()
+        .expect("unknown ids array")
+        .iter()
+        .map(|value| value.as_str().expect("unknown id string").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        reported,
+        BTreeSet::from([unknown_a.to_string(), unknown_b.to_string()])
+    );
+
+    // unmapped_evidence_id exists but was never mapped, so the batch fails and
+    // the mapped_evidence_id removal that did succeed is rolled back with it.
+    let not_mapped = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({
+                "control_id": control_id,
+                "evidence_ids": [mapped_evidence_id, unmapped_evidence_id],
+            }),
+        )
+        .await;
+    assert_eq!(not_mapped.data["problem"]["code"], "not_mapped_ids");
+    assert_eq!(not_mapped.data["problem"]["field"], "evidence_ids");
+    assert_eq!(
+        not_mapped.data["problem"]["ids"],
+        json!([unmapped_evidence_id.to_string()])
+    );
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
+
+    let cross_workspace = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({
+                "control_id": other_control_id,
+                "evidence_ids": [mapped_evidence_id],
+            }),
+        )
+        .await;
+    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
+
+    let read_only = app
+        .issue_api_token(
+            workspace_id,
+            vec![
+                WorkspacePermission::ReadControls,
+                WorkspacePermission::ReadEvidence,
+            ],
+        )
+        .await;
+    let read_only_token = read_only.raw_token.clone();
+    let (denied, denied_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let read_only_token = read_only_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &read_only_token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "unmap_control_from_evidence",
+                    json!({
+                        "control_id": control_id,
+                        "evidence_ids": [mapped_evidence_id],
+                    }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied["problem"]["code"], "not_found");
+    assert!(denied_logs.is_empty());
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
 }
 
 struct McpClient {

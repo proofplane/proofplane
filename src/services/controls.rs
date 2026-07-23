@@ -6,8 +6,9 @@ use crate::{
     domain::{
         Control, ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
         CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-        DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
-        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+        DeleteControlEvidenceMappingsPayload, DeleteEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
+        FrameworkRequirementId, UpdateControlPayload,
     },
     repository::{
         BatchRejection, ConflictKind, CreateControlEvidenceMappingsOutcome,
@@ -114,6 +115,35 @@ impl From<RepositoryError> for UnmapEvidenceFromControlsError {
             }
             RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
                 Self::NotMapped(ids.into_iter().map(ControlId::from).collect())
+            }
+            other => Self::Repository(other),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum UnmapControlFromEvidenceError {
+    #[error("resource not found")]
+    ControlNotFound,
+
+    #[error("evidence_ids contains unknown ids")]
+    UnknownEvidence(Vec<EvidenceId>),
+
+    #[error("evidence_ids contains ids that are not mapped")]
+    NotMapped(Vec<EvidenceId>),
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for UnmapControlFromEvidenceError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
+                Self::UnknownEvidence(ids.into_iter().map(EvidenceId::from).collect())
+            }
+            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
+                Self::NotMapped(ids.into_iter().map(EvidenceId::from).collect())
             }
             other => Self::Repository(other),
         }
@@ -295,6 +325,25 @@ impl ControlService {
             .await
             .map_err(UnmapEvidenceFromControlsError::from)?
             .ok_or(UnmapEvidenceFromControlsError::EvidenceNotFound)
+    }
+
+    pub async fn unmap_control_from_evidence(
+        &self,
+        connection: AgentConnectionContext,
+        payload: DeleteControlEvidenceMappingsPayload,
+    ) -> Result<Vec<EvidenceId>, UnmapControlFromEvidenceError> {
+        // A rejected batch arrives as an error because that is what rolls the
+        // deletes back; `From` turns it back into the typed outcome.
+        self.repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
+                async move |context| context.delete_control_evidence_mappings(&payload).await,
+            )
+            .await
+            .map_err(UnmapControlFromEvidenceError::from)?
+            .ok_or(UnmapControlFromEvidenceError::ControlNotFound)
     }
 
     pub async fn list_evidence_control_mappings(

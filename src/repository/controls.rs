@@ -7,9 +7,10 @@ use crate::{
     domain::{
         BatchKey, Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
         CreateControlPayload, CreateEvidenceControlMappingPayload,
-        CreateEvidenceControlMappingsPayload, DeleteEvidenceControlMappingsPayload,
-        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
-        FrameworkRequirementId, UpdateControlPayload, WorkspaceId,
+        CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
+        DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
+        FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+        WorkspaceId,
     },
     repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -505,6 +506,97 @@ FROM requested r
         }
 
         Ok(Some(payload.control_ids.clone()))
+    }
+
+    pub async fn delete_control_evidence_mappings(
+        &self,
+        payload: &DeleteControlEvidenceMappingsPayload,
+    ) -> Result<Option<Vec<EvidenceId>>, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let control_id = Uuid::from(payload.control_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM controls
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&control_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(None);
+        }
+
+        let evidence_ids = payload
+            .evidence_ids
+            .iter()
+            .map(|id| Uuid::from(*id))
+            .collect::<Vec<_>>();
+        let rows = self
+            .transaction
+            .query(
+                r#"
+WITH requested AS (
+    SELECT unnest($2::uuid[]) AS evidence_id
+),
+removed AS (
+    DELETE FROM evidence_control_mappings m
+    USING evidence er, controls c
+    WHERE m.evidence_id = er.id
+      AND m.control_id = c.id
+      AND c.id = $1
+      AND er.id IN (SELECT evidence_id FROM requested)
+      AND er.workspace_id = $3
+      AND c.workspace_id = $3
+    RETURNING m.evidence_id
+)
+SELECT
+    r.evidence_id,
+    EXISTS (
+        SELECT 1
+        FROM evidence er
+        WHERE er.id = r.evidence_id
+          AND er.workspace_id = $3
+    ) AS evidence_exists,
+    EXISTS (
+        SELECT 1
+        FROM removed
+        WHERE removed.evidence_id = r.evidence_id
+    ) AS was_removed
+FROM requested r
+"#,
+                &[&control_id, &evidence_ids, &workspace_id],
+            )
+            .await?;
+
+        let mut unknown = Vec::new();
+        let mut not_mapped = Vec::new();
+        for row in &rows {
+            let evidence_id = row.try_get::<_, Uuid>("evidence_id")?;
+            if !row.try_get::<_, bool>("evidence_exists")? {
+                unknown.push(evidence_id);
+            } else if !row.try_get::<_, bool>("was_removed")? {
+                not_mapped.push(evidence_id);
+            }
+        }
+
+        // An id the workspace does not have and an id it has but never mapped
+        // read alike here yet call for opposite corrections, so they stay
+        // separate. Either one rolls the whole batch back.
+        if !unknown.is_empty() {
+            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
+        }
+
+        if !not_mapped.is_empty() {
+            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        }
+
+        Ok(Some(payload.evidence_ids.clone()))
     }
 
     async fn get_control_in_transaction(&self, id: ControlId) -> Result<Option<Control>, Error> {
