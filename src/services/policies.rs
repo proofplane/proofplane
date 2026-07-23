@@ -6,12 +6,14 @@ use crate::{
     domain::{
         optional_text, validate_policy_name, validate_unique_policy_control_ids, ControlId,
         CreateControlPolicyMappingsPayload, CreatePolicyControlMappingsPayload,
-        CreatePolicyPayload, DomainError, PolicyControlMapping, PolicyId, UpdatePolicyPayload,
+        CreatePolicyPayload, DeleteControlPolicyMappingsPayload,
+        DeletePolicyControlMappingsPayload, DomainError, PolicyControlMapping, PolicyId,
+        UpdatePolicyPayload,
     },
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail},
     repository::{
         ArchivePolicyResult, AttachControlToPoliciesOutcome, AttachPolicyToControlsOutcome,
-        ConflictKind, Error as RepositoryError, Postgres,
+        BatchRejection, ConflictKind, Error as RepositoryError, Postgres,
     },
     validation::Validation,
 };
@@ -98,6 +100,70 @@ impl From<RepositoryError> for AttachControlToPoliciesError {
         match error {
             RepositoryError::Conflict(ConflictKind::PolicyControlMappingExists) => {
                 Self::AlreadyAttached
+            }
+            other => Self::Repository(other),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum DetachPolicyFromControlsError {
+    #[error("resource not found")]
+    PolicyNotFound,
+
+    #[error("control_ids contains unknown ids")]
+    UnknownControls(Vec<ControlId>),
+
+    #[error("control_ids contains ids that are not mapped")]
+    NotMapped(Vec<ControlId>),
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for DetachPolicyFromControlsError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
+                Self::UnknownControls(ids.into_iter().map(ControlId::from).collect())
+            }
+            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
+                Self::NotMapped(ids.into_iter().map(ControlId::from).collect())
+            }
+            other => Self::Repository(other),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum DetachControlFromPoliciesError {
+    #[error("resource not found")]
+    ControlNotFound,
+
+    #[error("policy_ids contains unknown ids")]
+    UnknownPolicies(Vec<PolicyId>),
+
+    #[error("policy_ids contains archived ids")]
+    ArchivedPolicies(Vec<PolicyId>),
+
+    #[error("policy_ids contains ids that are not mapped")]
+    NotMapped(Vec<PolicyId>),
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for DetachControlFromPoliciesError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
+                Self::UnknownPolicies(ids.into_iter().map(PolicyId::from).collect())
+            }
+            RepositoryError::BatchRejected(BatchRejection::Archived(ids)) => {
+                Self::ArchivedPolicies(ids.into_iter().map(PolicyId::from).collect())
+            }
+            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
+                Self::NotMapped(ids.into_iter().map(PolicyId::from).collect())
             }
             other => Self::Repository(other),
         }
@@ -265,6 +331,44 @@ impl PolicyService {
                 Err(AttachControlToPoliciesError::InvalidPolicies { unknown, archived })
             }
         }
+    }
+
+    pub async fn detach_policy_from_controls(
+        &self,
+        connection: AgentConnectionContext,
+        payload: DeletePolicyControlMappingsPayload,
+    ) -> Result<Vec<ControlId>, DetachPolicyFromControlsError> {
+        // A rejected batch arrives as an error because that is what rolls the
+        // deletes back; `From` turns it back into the typed outcome.
+        self.repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
+                async move |context| context.detach_policy_from_controls(&payload).await,
+            )
+            .await
+            .map_err(DetachPolicyFromControlsError::from)?
+            .ok_or(DetachPolicyFromControlsError::PolicyNotFound)
+    }
+
+    pub async fn detach_control_from_policies(
+        &self,
+        connection: AgentConnectionContext,
+        payload: DeleteControlPolicyMappingsPayload,
+    ) -> Result<Vec<PolicyId>, DetachControlFromPoliciesError> {
+        // A rejected batch arrives as an error because that is what rolls the
+        // deletes back; `From` turns it back into the typed outcome.
+        self.repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
+                async move |context| context.detach_control_from_policies(&payload).await,
+            )
+            .await
+            .map_err(DetachControlFromPoliciesError::from)?
+            .ok_or(DetachControlFromPoliciesError::ControlNotFound)
     }
 
     pub async fn detach_from_control(

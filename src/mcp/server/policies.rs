@@ -16,15 +16,17 @@ use super::{
 use crate::{
     domain::{
         validate_batch, BatchError, ControlId, CreateControlPolicyMappingsPayload,
-        CreatePolicyControlMappingsPayload, CreatePolicyPayload, PolicyId, UpdatePolicyPayload,
-        WorkspacePermission,
+        CreatePolicyControlMappingsPayload, CreatePolicyPayload,
+        DeleteControlPolicyMappingsPayload, DeletePolicyControlMappingsPayload, PolicyId,
+        UpdatePolicyPayload, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
     repository::{ArchivePolicyResult, ConflictKind},
     services::{
         policies::{
-            AttachControlToPoliciesError, AttachPolicyToControlsError, PolicyMutationError,
+            AttachControlToPoliciesError, AttachPolicyToControlsError,
+            DetachControlFromPoliciesError, DetachPolicyFromControlsError, PolicyMutationError,
         },
         Error as ServiceError,
     },
@@ -337,6 +339,96 @@ impl ProofplaneMcp {
             policy_ids: policy_id_strings,
         }))
     }
+
+    #[tool(
+        name = "detach_policy_from_controls",
+        description = "Remove the mappings between one active policy and many controls in a single all-or-nothing batch; if any control id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies."
+    )]
+    async fn detach_policy_from_controls(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<DetachPolicyFromControlsRequest>,
+    ) -> Result<Json<DetachPolicyFromControlsResponse>, rmcp::ErrorData> {
+        let payload = parse_detach_policy_from_controls_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let policy_id = payload.policy_id;
+        let control_ids = self
+            .policies
+            .detach_policy_from_controls(context.agent_connection_context(), payload)
+            .await?;
+
+        let control_id_strings = control_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "policy_control_mappings.deleted",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "detach_policy_from_controls",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("policy_id", Uuid::from(policy_id))
+        .metadata("control_ids", json!(control_id_strings))
+        .metadata("count", control_ids.len())
+        .object(AuditObject::new("policy", Uuid::from(policy_id)))
+        .emit();
+
+        Ok(Json(DetachPolicyFromControlsResponse {
+            policy_id: policy_id.to_string(),
+            count: control_ids.len(),
+            control_ids: control_id_strings,
+        }))
+    }
+
+    #[tool(
+        name = "detach_control_from_policies",
+        description = "Remove the mappings between one control and many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies."
+    )]
+    async fn detach_control_from_policies(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<DetachControlFromPoliciesRequest>,
+    ) -> Result<Json<DetachControlFromPoliciesResponse>, rmcp::ErrorData> {
+        let payload = parse_detach_control_from_policies_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let control_id = payload.control_id;
+        let policy_ids = self
+            .policies
+            .detach_control_from_policies(context.agent_connection_context(), payload)
+            .await?;
+
+        let policy_id_strings = policy_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "policy_control_mappings.deleted",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "detach_control_from_policies",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("control_id", Uuid::from(control_id))
+        .metadata("policy_ids", json!(policy_id_strings))
+        .metadata("count", policy_ids.len())
+        .object(AuditObject::new("control", Uuid::from(control_id)))
+        .emit();
+
+        Ok(Json(DetachControlFromPoliciesResponse {
+            control_id: control_id.to_string(),
+            count: policy_ids.len(),
+            policy_ids: policy_id_strings,
+        }))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -509,6 +601,32 @@ struct AttachControlToPoliciesResponse {
     policy_ids: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DetachPolicyFromControlsRequest {
+    policy_id: Option<String>,
+    control_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct DetachPolicyFromControlsResponse {
+    policy_id: String,
+    count: usize,
+    control_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DetachControlFromPoliciesRequest {
+    control_id: Option<String>,
+    policy_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct DetachControlFromPoliciesResponse {
+    control_id: String,
+    count: usize,
+    policy_ids: Vec<String>,
+}
+
 fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, rmcp::ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
@@ -617,6 +735,60 @@ fn parse_attach_control_to_policies_request(
     })
 }
 
+fn parse_detach_policy_from_controls_request(
+    args: DetachPolicyFromControlsRequest,
+) -> Result<DeletePolicyControlMappingsPayload, rmcp::ErrorData> {
+    let policy_id = required_uuid("policy_id", args.policy_id)
+        .map(PolicyId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.control_ids.unwrap_or_default();
+    let mut control_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let control_id = required_uuid("control_ids", Some(value))
+            .map(ControlId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        control_ids.push(control_id);
+    }
+
+    let control_ids = validate_batch("control_ids", control_ids)?;
+
+    Ok(DeletePolicyControlMappingsPayload {
+        policy_id,
+        control_ids,
+    })
+}
+
+fn parse_detach_control_from_policies_request(
+    args: DetachControlFromPoliciesRequest,
+) -> Result<DeleteControlPolicyMappingsPayload, rmcp::ErrorData> {
+    let control_id = required_uuid("control_id", args.control_id)
+        .map(ControlId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.policy_ids.unwrap_or_default();
+    let mut policy_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let policy_id = required_uuid("policy_ids", Some(value))
+            .map(PolicyId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        policy_ids.push(policy_id);
+    }
+
+    let policy_ids = validate_batch("policy_ids", policy_ids)?;
+
+    Ok(DeleteControlPolicyMappingsPayload {
+        control_id,
+        policy_ids,
+    })
+}
+
 fn optional_control_ids(
     values: Option<Vec<String>>,
 ) -> Validation<Vec<ControlId>, McpArgumentError> {
@@ -720,6 +892,76 @@ impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
             AttachControlToPoliciesError::ControlNotFound => not_found(),
             AttachControlToPoliciesError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control policy attachment repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
+        }
+    }
+}
+
+impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
+    fn from(error: DetachPolicyFromControlsError) -> Self {
+        match error {
+            DetachPolicyFromControlsError::UnknownControls(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            DetachPolicyFromControlsError::NotMapped(ids) => {
+                rmcp::ErrorData::from(BatchError::NotMapped {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            DetachPolicyFromControlsError::PolicyNotFound => not_found(),
+            DetachPolicyFromControlsError::Repository(error) => {
+                tracing::error!(%error, "MCP batch policy control detachment repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
+        }
+    }
+}
+
+impl From<DetachControlFromPoliciesError> for rmcp::ErrorData {
+    fn from(error: DetachControlFromPoliciesError) -> Self {
+        match error {
+            DetachControlFromPoliciesError::UnknownPolicies(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "policy_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            DetachControlFromPoliciesError::ArchivedPolicies(ids) => {
+                rmcp::ErrorData::from(BatchError::Archived {
+                    field: "policy_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            DetachControlFromPoliciesError::NotMapped(ids) => {
+                rmcp::ErrorData::from(BatchError::NotMapped {
+                    field: "policy_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            DetachControlFromPoliciesError::ControlNotFound => not_found(),
+            DetachControlFromPoliciesError::Repository(error) => {
+                tracing::error!(%error, "MCP batch control policy detachment repository failure");
                 rmcp::ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({

@@ -29,6 +29,9 @@ pub enum BatchError {
     #[error("{field} contains unknown ids")]
     Unknown { field: &'static str, ids: Vec<Uuid> },
 
+    #[error("{field} contains archived ids")]
+    Archived { field: &'static str, ids: Vec<Uuid> },
+
     #[error("{field} contains ids that are not mapped")]
     NotMapped { field: &'static str, ids: Vec<Uuid> },
 }

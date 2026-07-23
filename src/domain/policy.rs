@@ -61,6 +61,18 @@ pub struct CreateControlPolicyMappingsPayload {
     pub policy_ids: Vec<PolicyId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletePolicyControlMappingsPayload {
+    pub policy_id: PolicyId,
+    pub control_ids: Vec<ControlId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteControlPolicyMappingsPayload {
+    pub control_id: ControlId,
+    pub policy_ids: Vec<PolicyId>,
+}
+
 pub fn validate_policy_name(value: String) -> Validation<String, DomainError> {
     let value = value.trim().to_owned();
     if value.is_empty() {

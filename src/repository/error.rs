@@ -8,6 +8,7 @@ use super::constraints::ConflictKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchRejection {
     UnknownIds(Vec<Uuid>),
+    Archived(Vec<Uuid>),
     NotMapped(Vec<Uuid>),
 }
 

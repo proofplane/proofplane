@@ -251,6 +251,12 @@ impl From<BatchError> for rmcp::ErrorData {
                 "field": field,
                 "ids": ids,
             }),
+            BatchError::Archived { field, ids } => json!({
+                "code": "archived_ids",
+                "message": message,
+                "field": field,
+                "ids": ids,
+            }),
             BatchError::NotMapped { field, ids } => json!({
                 "code": "not_mapped_ids",
                 "message": message,
@@ -537,6 +543,25 @@ mod tests {
         let problem = problem(&error);
         assert_eq!(problem["code"], "unknown_ids");
         assert_eq!(problem["field"], "control_ids");
+        assert_eq!(
+            problem["ids"],
+            serde_json::json!([first.to_string(), second.to_string()])
+        );
+    }
+
+    #[test]
+    fn archived_batch_ids_render_their_own_problem_code() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let error = rmcp::ErrorData::from(BatchError::Archived {
+            field: "policy_ids",
+            ids: vec![first, second],
+        });
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        let problem = problem(&error);
+        assert_eq!(problem["code"], "archived_ids");
+        assert_eq!(problem["field"], "policy_ids");
         assert_eq!(
             problem["ids"],
             serde_json::json!([first.to_string(), second.to_string()])
