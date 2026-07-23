@@ -282,14 +282,6 @@ RETURNING policy_id, control_id
             .map(Some)
     }
 
-    /// Attaches a batch of controls to one active policy anchor.
-    ///
-    /// The anchor and every control are resolved with plain reads *before* the
-    /// insert, so an unknown-id rejection reports every offending id (a failed
-    /// insert would abort the whole transaction and prevent further queries). The
-    /// insert then runs against ids already known to exist in the workspace; an
-    /// already-attached pair raises a unique violation, which rolls the batch
-    /// back.
     pub async fn attach_policy_to_controls(
         &self,
         payload: &CreatePolicyControlMappingsPayload,
@@ -315,6 +307,10 @@ WHERE id = $1
             return Ok(AttachPolicyToControlsOutcome::PolicyNotFound);
         }
 
+        // Check for unknown controls before trying to insert so that we
+        // can see which are the actual IDs that are unknown, instead of
+        // just letting the insert fail giving us no useful information
+        // due to the transaction being rolled back.
         let control_ids = payload
             .control_ids
             .iter()
