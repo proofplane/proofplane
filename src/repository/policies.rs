@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, CreateDocumentPayload, CreatePolicyPayload, Document,
-        DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy,
-        PolicyControlMapping, PolicyId, UpdatePolicyPayload, WorkspaceId,
+        ControlId, ControlSummary, CreateDocumentPayload, CreatePolicyControlMappingsPayload,
+        CreatePolicyPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,
+        DocumentUploadStatus, Policy, PolicyControlMapping, PolicyId, UpdatePolicyPayload,
+        WorkspaceId,
     },
     projections::policy_projection::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
@@ -19,7 +20,16 @@ use crate::{
     },
 };
 
-use super::{constraints::classify_db_error, documents::document_from_row, Error};
+use super::{
+    constraints::classify_db_error, controls::ids_missing_from, documents::document_from_row, Error,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachPolicyToControlsOutcome {
+    Attached(Vec<ControlId>),
+    PolicyNotFound,
+    UnknownControls(Vec<ControlId>),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivePolicyResult {
@@ -270,6 +280,83 @@ RETURNING policy_id, control_id
                 "created policy control mapping must be readable in transaction",
             ))
             .map(Some)
+    }
+
+    /// Attaches a batch of controls to one active policy anchor.
+    ///
+    /// The anchor and every control are resolved with plain reads *before* the
+    /// insert, so an unknown-id rejection reports every offending id (a failed
+    /// insert would abort the whole transaction and prevent further queries). The
+    /// insert then runs against ids already known to exist in the workspace; an
+    /// already-attached pair raises a unique violation, which rolls the batch
+    /// back.
+    pub async fn attach_policy_to_controls(
+        &self,
+        payload: &CreatePolicyControlMappingsPayload,
+    ) -> Result<AttachPolicyToControlsOutcome, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let policy_id = Uuid::from(payload.policy_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM policies
+WHERE id = $1
+  AND workspace_id = $2
+  AND archived_at IS NULL
+"#,
+                &[&policy_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(AttachPolicyToControlsOutcome::PolicyNotFound);
+        }
+
+        let control_ids = payload
+            .control_ids
+            .iter()
+            .copied()
+            .map(Uuid::from)
+            .collect::<Vec<_>>();
+        let in_workspace = self
+            .transaction
+            .query(
+                r#"
+SELECT id
+FROM controls
+WHERE id = ANY($1)
+  AND workspace_id = $2
+"#,
+                &[&control_ids, &workspace_id],
+            )
+            .await?;
+
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.control_ids)?
+            .into_iter()
+            .map(ControlId::from)
+            .collect::<Vec<_>>();
+
+        if !unknown.is_empty() {
+            return Ok(AttachPolicyToControlsOutcome::UnknownControls(unknown));
+        }
+
+        self.transaction
+            .execute(
+                r#"
+INSERT INTO policy_control_mappings (policy_id, control_id)
+SELECT $1, unnest($2::uuid[])
+"#,
+                &[&policy_id, &control_ids],
+            )
+            .await
+            .map_err(classify_db_error)?;
+
+        Ok(AttachPolicyToControlsOutcome::Attached(
+            payload.control_ids.clone(),
+        ))
     }
 
     pub async fn detach_policy_from_control(

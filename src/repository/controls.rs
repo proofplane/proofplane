@@ -827,7 +827,7 @@ ORDER BY c.code
 
 /// The requested ids a resolving read did not return, in request order so a
 /// rejection lists them the way the caller wrote them.
-fn ids_missing_from<T: BatchKey>(
+pub(super) fn ids_missing_from<T: BatchKey>(
     found: &[Row],
     column: &str,
     requested: &[T],

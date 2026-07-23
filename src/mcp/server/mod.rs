@@ -168,6 +168,10 @@ mod tests {
                 "Attach an active policy to a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
+                "attach_policy_to_controls",
+                "Attach one active policy to many controls in a single all-or-nothing batch; if any control id is unknown or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
+            ),
+            (
                 "create_auditor_access_link",
                 "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
             ),
@@ -471,6 +475,7 @@ mod tests {
                 | "update_policy"
                 | "archive_policy"
                 | "attach_policy_to_control"
+                | "attach_policy_to_controls"
                 | "detach_policy_from_control"
                 | "manage_policy_document" => Some("policies"),
                 "create_auditor_access_link"
