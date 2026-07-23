@@ -515,6 +515,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "archive_policy",
         "attach_policy_to_control",
         "attach_policy_to_controls",
+        "attach_control_to_policies",
         "detach_policy_from_control",
         "get_proofplane_guide",
     ]
@@ -647,6 +648,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
             "Attach one active policy to many controls in a single all-or-nothing batch; if any control id is unknown or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
+            "attach_control_to_policies",
+            "Attach one control to many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
+        ),
+        (
             "detach_policy_from_control",
             "Detach an active policy from a control without changing the control or its other mappings; for guidance, call get_proofplane_guide with topic policies.",
         ),
@@ -767,6 +772,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "control_ids",
     );
     assert_schema_has_property(
+        &find_tool(&tool_list, "attach_control_to_policies")["inputSchema"],
+        "policy_ids",
+    );
+    assert_schema_has_property(
         &find_tool(&tool_list, "list_framework_requirements")["inputSchema"],
         "framework_id",
     );
@@ -870,6 +879,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "attach_policy_to_controls")["outputSchema"],
         "control_ids",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "attach_control_to_policies")["outputSchema"],
+        "policy_ids",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "manage_evidence_submissions")["outputSchema"],
@@ -3411,6 +3424,287 @@ async fn mcp_attach_policy_to_controls_rejects_bad_batches_and_writes_nothing() 
 }
 
 #[tokio::test]
+async fn mcp_attach_control_to_policies_attaches_the_whole_batch_and_audits_once() {
+    let app = TestApp::builder()
+        .workspace("workspace", "MCP batch control attachment workspace")
+        .with_control("PP-AC-01", "Access review", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let first_policy = insert_policy_row(&app, workspace_id, "Governing policy").await;
+    let second_policy = insert_policy_row(&app, workspace_id, "Supporting policy").await;
+
+    let token = app.api_token().to_owned();
+    let (attached, logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let token = token.clone();
+        async move {
+            let mcp_client = McpClient::connect_with_request_id(server, &token, request_id).await;
+            mcp_client
+                .call_tool(
+                    "attach_control_to_policies",
+                    json!({
+                        "control_id": control_id,
+                        "policy_ids": [first_policy, second_policy],
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+
+    assert_eq!(attached["control_id"], control_id.to_string());
+    assert_eq!(attached["count"], 2);
+    let returned = attached["policy_ids"]
+        .as_array()
+        .expect("policy_ids array")
+        .iter()
+        .map(|value| value.as_str().expect("policy id string").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        returned,
+        BTreeSet::from([first_policy.to_string(), second_policy.to_string()])
+    );
+
+    assert_eq!(logs.len(), 1);
+    assert_audit_event(
+        &logs[0],
+        ExpectedAuditEvent {
+            event_name: "policy_control_mappings.created",
+            operation: "attach_control_to_policies",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "control",
+            object_id: control_id,
+        },
+    );
+    let metadata = audit_metadata(&logs[0]);
+    assert_eq!(metadata["count"], "2");
+    let audited_policies: Vec<String> = serde_json::from_str(
+        metadata["policy_ids"]
+            .as_str()
+            .expect("policy_ids metadata is text"),
+    )
+    .expect("policy_ids metadata is a json array");
+    assert_eq!(
+        audited_policies.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([first_policy.to_string(), second_policy.to_string()])
+    );
+
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        2
+    );
+    let got = mcp_client
+        .call_tool("get_policy", json!({ "policy_id": first_policy }))
+        .await;
+    assert_eq!(got["controls"].as_array().expect("controls").len(), 1);
+}
+
+#[tokio::test]
+async fn mcp_attach_control_to_policies_rejects_bad_batches_and_writes_nothing() {
+    let app = TestApp::builder()
+        .workspace(
+            "workspace",
+            "MCP batch control attachment rejection workspace",
+        )
+        .with_control("PP-AC-01", "Access review", vec![])
+        .with_default_membership()
+        .workspace("other", "Other control workspace")
+        .with_control("PP-OT-01", "Other control", vec![])
+        .with_default_membership()
+        .build()
+        .await;
+    let server = app.mcp_http_server();
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    let other_control_id = app.control_id("other", "PP-OT-01");
+    let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let first_policy = insert_policy_row(&app, workspace_id, "Governing policy").await;
+    let second_policy = insert_policy_row(&app, workspace_id, "Supporting policy").await;
+    let other_policy = insert_policy_row(&app, other_workspace_id, "Hidden policy").await;
+
+    let empty = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({ "control_id": control_id, "policy_ids": [] }),
+        )
+        .await;
+    assert_eq!(empty.data["problem"]["code"], "empty_batch");
+
+    let oversized_ids = (0..51).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+    let oversized = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({ "control_id": control_id, "policy_ids": oversized_ids }),
+        )
+        .await;
+    assert_eq!(oversized.data["problem"]["code"], "batch_too_large");
+    assert_eq!(oversized.data["problem"]["received"], 51);
+
+    let duplicate = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({ "control_id": control_id, "policy_ids": [first_policy, first_policy] }),
+        )
+        .await;
+    assert_eq!(duplicate.data["problem"]["code"], "duplicate_ids");
+    assert_eq!(
+        duplicate.data["problem"]["ids"],
+        json!([first_policy.to_string()])
+    );
+
+    let unknown_id = Uuid::new_v4();
+    let unknown = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [first_policy, unknown_id, other_policy],
+            }),
+        )
+        .await;
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
+    assert_eq!(unknown.data["problem"]["field"], "policy_ids");
+    assert_eq!(unknown.data["problem"]["archived_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
+        .as_array()
+        .expect("unknown ids array")
+        .iter()
+        .map(|value| value.as_str().expect("unknown id string").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        reported,
+        BTreeSet::from([unknown_id.to_string(), other_policy.to_string()])
+    );
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        0
+    );
+
+    let archived_policy = insert_policy_row(&app, workspace_id, "Retired policy").await;
+    archive_policy_row(&app, archived_policy).await;
+    let archived = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [first_policy, archived_policy],
+            }),
+        )
+        .await;
+    assert_eq!(archived.data["problem"]["code"], "batch_rejected");
+    assert_eq!(archived.data["problem"]["field"], "policy_ids");
+    assert_eq!(archived.data["problem"]["unknown_ids"], json!([]));
+    assert_eq!(
+        archived.data["problem"]["archived_ids"],
+        json!([archived_policy.to_string()])
+    );
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        0
+    );
+
+    // A batch mixing an unknown id and an archived one reports both at once so a
+    // single retry can fix everything.
+    let both = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [unknown_id, archived_policy],
+            }),
+        )
+        .await;
+    assert_eq!(both.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        both.data["problem"]["unknown_ids"],
+        json!([unknown_id.to_string()])
+    );
+    assert_eq!(
+        both.data["problem"]["archived_ids"],
+        json!([archived_policy.to_string()])
+    );
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        0
+    );
+
+    let cross_workspace = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": other_control_id,
+                "policy_ids": [other_policy],
+            }),
+        )
+        .await;
+    assert_eq!(cross_workspace.data["problem"]["code"], "not_found");
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, other_control_id).await,
+        0
+    );
+
+    insert_policy_control_mapping_row(&app, first_policy, control_id).await;
+    let already_attached = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [second_policy, first_policy],
+            }),
+        )
+        .await;
+    assert_eq!(
+        already_attached.data["problem"]["code"],
+        "policy_control_mapping_exists"
+    );
+    // The successful second_policy insert is rolled back with the failing
+    // batch, leaving only the pre-existing mapping.
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        1
+    );
+
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let read_only_token = read_only.raw_token.clone();
+    let (denied, denied_logs) = capture_audit_logs(|request_id| {
+        let server = &server;
+        let read_only_token = read_only_token.clone();
+        async move {
+            let read_only_client =
+                McpClient::connect_with_request_id(server, &read_only_token, request_id).await;
+            read_only_client
+                .call_tool_error(
+                    "attach_control_to_policies",
+                    json!({
+                        "control_id": control_id,
+                        "policy_ids": [second_policy],
+                    }),
+                )
+                .await
+                .data
+        }
+    })
+    .await;
+    assert_eq!(denied["problem"]["code"], "not_found");
+    assert!(denied_logs.is_empty());
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        1
+    );
+}
+
+#[tokio::test]
 async fn mcp_unmap_evidence_from_controls_removes_the_whole_batch_and_audits_once() {
     let app = TestApp::builder()
         .workspace("workspace", "MCP batch unmapping workspace")
@@ -4298,6 +4592,20 @@ async fn policy_control_mapping_count(app: &TestApp, policy_id: Uuid) -> i64 {
         .query_one(
             "SELECT count(*) AS count FROM policy_control_mappings WHERE policy_id = $1",
             &[&policy_id],
+        )
+        .await
+        .expect("mapping count reads")
+        .get("count")
+}
+
+async fn policy_control_mapping_count_for_control(app: &TestApp, control_id: Uuid) -> i64 {
+    app.postgres()
+        .get()
+        .await
+        .expect("mapping count connection opens")
+        .query_one(
+            "SELECT count(*) AS count FROM policy_control_mappings WHERE control_id = $1",
+            &[&control_id],
         )
         .await
         .expect("mapping count reads")

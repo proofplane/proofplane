@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, CreateDocumentPayload, CreatePolicyControlMappingsPayload,
-        CreatePolicyPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,
-        DocumentUploadStatus, Policy, PolicyControlMapping, PolicyId, UpdatePolicyPayload,
-        WorkspaceId,
+        ControlId, ControlSummary, CreateControlPolicyMappingsPayload, CreateDocumentPayload,
+        CreatePolicyControlMappingsPayload, CreatePolicyPayload, Document, DocumentId,
+        DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy, PolicyControlMapping,
+        PolicyId, UpdatePolicyPayload, WorkspaceId,
     },
     projections::policy_projection::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
@@ -29,6 +29,16 @@ pub enum AttachPolicyToControlsOutcome {
     Attached(Vec<ControlId>),
     PolicyNotFound,
     UnknownControls(Vec<ControlId>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachControlToPoliciesOutcome {
+    Attached(Vec<PolicyId>),
+    ControlNotFound,
+    InvalidPolicies {
+        unknown: Vec<PolicyId>,
+        archived: Vec<PolicyId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +362,91 @@ SELECT $1, unnest($2::uuid[])
 
         Ok(AttachPolicyToControlsOutcome::Attached(
             payload.control_ids.clone(),
+        ))
+    }
+
+    pub async fn attach_control_to_policies(
+        &self,
+        payload: &CreateControlPolicyMappingsPayload,
+    ) -> Result<AttachControlToPoliciesOutcome, Error> {
+        let workspace_id = Uuid::from(self.workspace_id);
+        let control_id = Uuid::from(payload.control_id);
+
+        let anchor = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT 1
+FROM controls
+WHERE id = $1
+  AND workspace_id = $2
+"#,
+                &[&control_id, &workspace_id],
+            )
+            .await?;
+
+        if anchor.is_none() {
+            return Ok(AttachControlToPoliciesOutcome::ControlNotFound);
+        }
+
+        // Resolve every requested policy before inserting so an unknown or
+        // archived id can be named precisely; a failing insert would abort the
+        // transaction and leave us no way to report which ids were at fault.
+        let policy_ids = payload
+            .policy_ids
+            .iter()
+            .copied()
+            .map(Uuid::from)
+            .collect::<Vec<_>>();
+        let in_workspace = self
+            .transaction
+            .query(
+                r#"
+SELECT id, archived_at IS NOT NULL AS archived
+FROM policies
+WHERE id = ANY($1)
+  AND workspace_id = $2
+"#,
+                &[&policy_ids, &workspace_id],
+            )
+            .await?;
+
+        let unknown = ids_missing_from(&in_workspace, "id", &payload.policy_ids)?
+            .into_iter()
+            .map(PolicyId::from)
+            .collect::<Vec<_>>();
+
+        let archived_uuids = in_workspace
+            .iter()
+            .filter(|row| row.try_get::<_, bool>("archived").unwrap_or(false))
+            .map(|row| row.try_get::<_, Uuid>("id"))
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        // Preserve the caller's request order so the rejection lists archived
+        // ids the way they were written.
+        let archived = payload
+            .policy_ids
+            .iter()
+            .copied()
+            .filter(|id| archived_uuids.contains(&Uuid::from(*id)))
+            .collect::<Vec<_>>();
+
+        if !unknown.is_empty() || !archived.is_empty() {
+            return Ok(AttachControlToPoliciesOutcome::InvalidPolicies { unknown, archived });
+        }
+
+        self.transaction
+            .execute(
+                r#"
+INSERT INTO policy_control_mappings (policy_id, control_id)
+SELECT unnest($1::uuid[]), $2
+"#,
+                &[&policy_ids, &control_id],
+            )
+            .await
+            .map_err(classify_db_error)?;
+
+        Ok(AttachControlToPoliciesOutcome::Attached(
+            payload.policy_ids.clone(),
         ))
     }
 

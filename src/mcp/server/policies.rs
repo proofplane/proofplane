@@ -15,14 +15,17 @@ use super::{
 };
 use crate::{
     domain::{
-        validate_batch, BatchError, ControlId, CreatePolicyControlMappingsPayload,
-        CreatePolicyPayload, PolicyId, UpdatePolicyPayload, WorkspacePermission,
+        validate_batch, BatchError, ControlId, CreateControlPolicyMappingsPayload,
+        CreatePolicyControlMappingsPayload, CreatePolicyPayload, PolicyId, UpdatePolicyPayload,
+        WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
     repository::{ArchivePolicyResult, ConflictKind},
     services::{
-        policies::{AttachPolicyToControlsError, PolicyMutationError},
+        policies::{
+            AttachControlToPoliciesError, AttachPolicyToControlsError, PolicyMutationError,
+        },
         Error as ServiceError,
     },
     validate,
@@ -289,6 +292,51 @@ impl ProofplaneMcp {
             control_ids: control_id_strings,
         }))
     }
+
+    #[tool(
+        name = "attach_control_to_policies",
+        description = "Attach one control to many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies."
+    )]
+    async fn attach_control_to_policies(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<AttachControlToPoliciesRequest>,
+    ) -> Result<Json<AttachControlToPoliciesResponse>, rmcp::ErrorData> {
+        let payload = parse_attach_control_to_policies_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let control_id = payload.control_id;
+        let policy_ids = self
+            .policies
+            .attach_control_to_policies(context.agent_connection_context(), payload)
+            .await?;
+
+        let policy_id_strings = policy_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "policy_control_mappings.created",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "attach_control_to_policies",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("control_id", Uuid::from(control_id))
+        .metadata("policy_ids", json!(policy_id_strings))
+        .metadata("count", policy_ids.len())
+        .object(AuditObject::new("control", Uuid::from(control_id)))
+        .emit();
+
+        Ok(Json(AttachControlToPoliciesResponse {
+            control_id: control_id.to_string(),
+            count: policy_ids.len(),
+            policy_ids: policy_id_strings,
+        }))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -448,6 +496,19 @@ struct AttachPolicyToControlsResponse {
     control_ids: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AttachControlToPoliciesRequest {
+    control_id: Option<String>,
+    policy_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct AttachControlToPoliciesResponse {
+    control_id: String,
+    count: usize,
+    policy_ids: Vec<String>,
+}
+
 fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, rmcp::ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
@@ -529,6 +590,33 @@ fn parse_attach_policy_to_controls_request(
     })
 }
 
+fn parse_attach_control_to_policies_request(
+    args: AttachControlToPoliciesRequest,
+) -> Result<CreateControlPolicyMappingsPayload, rmcp::ErrorData> {
+    let control_id = required_uuid("control_id", args.control_id)
+        .map(ControlId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.policy_ids.unwrap_or_default();
+    let mut policy_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let policy_id = required_uuid("policy_ids", Some(value))
+            .map(PolicyId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        policy_ids.push(policy_id);
+    }
+
+    let policy_ids = validate_batch("policy_ids", policy_ids)?;
+
+    Ok(CreateControlPolicyMappingsPayload {
+        control_id,
+        policy_ids,
+    })
+}
+
 fn optional_control_ids(
     values: Option<Vec<String>>,
 ) -> Validation<Vec<ControlId>, McpArgumentError> {
@@ -589,6 +677,49 @@ impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
             AttachPolicyToControlsError::PolicyNotFound => not_found(),
             AttachPolicyToControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch policy control attachment repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
+        }
+    }
+}
+
+impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
+    fn from(error: AttachControlToPoliciesError) -> Self {
+        match error {
+            // Unknown and archived ids are reported together in one payload so a
+            // single retry can fix both — see the batch-mapping-tools spec.
+            AttachControlToPoliciesError::InvalidPolicies { unknown, archived } => {
+                let message = "policy_ids contains unknown or archived ids";
+                let unknown = unknown.into_iter().map(Uuid::from).collect::<Vec<_>>();
+                let archived = archived.into_iter().map(Uuid::from).collect::<Vec<_>>();
+                rmcp::ErrorData::invalid_params(
+                    message,
+                    Some(json!({
+                        "problem": {
+                            "code": "batch_rejected",
+                            "message": message,
+                            "field": "policy_ids",
+                            "unknown_ids": unknown,
+                            "archived_ids": archived,
+                        }
+                    })),
+                )
+            }
+            AttachControlToPoliciesError::AlreadyAttached => conflict(
+                ConflictKind::PolicyControlMappingExists.code(),
+                ConflictKind::PolicyControlMappingExists.message(),
+            ),
+            AttachControlToPoliciesError::ControlNotFound => not_found(),
+            AttachControlToPoliciesError::Repository(error) => {
+                tracing::error!(%error, "MCP batch control policy attachment repository failure");
                 rmcp::ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
