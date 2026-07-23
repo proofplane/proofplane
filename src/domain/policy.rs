@@ -4,10 +4,18 @@ use chrono::{DateTime, Utc};
 
 use crate::validation::Validation;
 
-use super::{ids::uuid_id, ControlId, ControlSummary, DomainError, WorkspaceId};
+use uuid::Uuid;
+
+use super::{ids::uuid_id, BatchKey, ControlId, ControlSummary, DomainError, WorkspaceId};
 
 uuid_id!(PolicyId);
 uuid_id!(PolicyDocumentUploadGrantId);
+
+impl BatchKey for PolicyId {
+    fn key(&self) -> Uuid {
+        (*self).into()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
@@ -45,6 +53,12 @@ pub struct UpdatePolicyPayload {
 pub struct CreatePolicyControlMappingsPayload {
     pub policy_id: PolicyId,
     pub control_ids: Vec<ControlId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateControlPolicyMappingsPayload {
+    pub control_id: ControlId,
+    pub policy_ids: Vec<PolicyId>,
 }
 
 pub fn validate_policy_name(value: String) -> Validation<String, DomainError> {

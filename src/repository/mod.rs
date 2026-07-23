@@ -35,7 +35,8 @@ pub use evidence_submissions::{
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{
-    ArchivePolicyResult, AttachPolicyToControlsOutcome, CreatePolicyDocumentResult,
+    ArchivePolicyResult, AttachControlToPoliciesOutcome, AttachPolicyToControlsOutcome,
+    CreatePolicyDocumentResult,
 };
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use workspace_memberships::NewWorkspaceMembership;

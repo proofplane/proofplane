@@ -172,6 +172,10 @@ mod tests {
                 "Attach one active policy to many controls in a single all-or-nothing batch; if any control id is unknown or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
+                "attach_control_to_policies",
+                "Attach one control to many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
+            ),
+            (
                 "create_auditor_access_link",
                 "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
             ),
@@ -476,6 +480,7 @@ mod tests {
                 | "archive_policy"
                 | "attach_policy_to_control"
                 | "attach_policy_to_controls"
+                | "attach_control_to_policies"
                 | "detach_policy_from_control"
                 | "manage_policy_document" => Some("policies"),
                 "create_auditor_access_link"
