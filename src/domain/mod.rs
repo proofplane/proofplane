@@ -59,8 +59,9 @@ pub use oauth::{
 };
 pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};
 pub use policy::{
-    validate_policy_name, validate_unique_policy_control_ids, CreatePolicyPayload, Policy,
-    PolicyControlMapping, PolicyDocumentUploadGrantId, PolicyId, UpdatePolicyPayload,
+    validate_policy_name, validate_unique_policy_control_ids, CreatePolicyControlMappingsPayload,
+    CreatePolicyPayload, Policy, PolicyControlMapping, PolicyDocumentUploadGrantId, PolicyId,
+    UpdatePolicyPayload,
 };
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserId};

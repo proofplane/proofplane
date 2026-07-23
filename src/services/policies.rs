@@ -5,10 +5,14 @@ use thiserror::Error as ThisError;
 use crate::{
     domain::{
         optional_text, validate_policy_name, validate_unique_policy_control_ids, ControlId,
-        CreatePolicyPayload, DomainError, PolicyControlMapping, PolicyId, UpdatePolicyPayload,
+        CreatePolicyControlMappingsPayload, CreatePolicyPayload, DomainError, PolicyControlMapping,
+        PolicyId, UpdatePolicyPayload,
     },
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail},
-    repository::{ArchivePolicyResult, ConflictKind, Error as RepositoryError, Postgres},
+    repository::{
+        ArchivePolicyResult, AttachPolicyToControlsOutcome, ConflictKind, Error as RepositoryError,
+        Postgres,
+    },
     validation::Validation,
 };
 
@@ -40,6 +44,32 @@ impl From<RepositoryError> for PolicyMutationError {
                 Self::MappingExists
             }
             RepositoryError::InvalidPolicyControlReferences => Self::InvalidControlReferences,
+            other => Self::Repository(other),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum AttachPolicyToControlsError {
+    #[error("resource not found")]
+    PolicyNotFound,
+
+    #[error("control_ids contains unknown ids")]
+    UnknownControls(Vec<ControlId>),
+
+    #[error("this control is already attached to the policy")]
+    AlreadyAttached,
+
+    #[error("repository error")]
+    Repository(RepositoryError),
+}
+
+impl From<RepositoryError> for AttachPolicyToControlsError {
+    fn from(error: RepositoryError) -> Self {
+        match error {
+            RepositoryError::Conflict(ConflictKind::PolicyControlMappingExists) => {
+                Self::AlreadyAttached
+            }
             other => Self::Repository(other),
         }
     }
@@ -152,6 +182,33 @@ impl PolicyService {
                 },
             )
             .await?)
+    }
+
+    pub async fn attach_to_controls(
+        &self,
+        connection: AgentConnectionContext,
+        payload: CreatePolicyControlMappingsPayload,
+    ) -> Result<Vec<ControlId>, AttachPolicyToControlsError> {
+        let outcome = self
+            .repository
+            .in_agent_connection_workspace_context(
+                connection.workspace_id,
+                connection.user_id,
+                connection.connection_id,
+                async move |context| context.attach_policy_to_controls(&payload).await,
+            )
+            .await
+            .map_err(AttachPolicyToControlsError::from)?;
+
+        match outcome {
+            AttachPolicyToControlsOutcome::Attached(control_ids) => Ok(control_ids),
+            AttachPolicyToControlsOutcome::PolicyNotFound => {
+                Err(AttachPolicyToControlsError::PolicyNotFound)
+            }
+            AttachPolicyToControlsOutcome::UnknownControls(ids) => {
+                Err(AttachPolicyToControlsError::UnknownControls(ids))
+            }
+        }
     }
 
     pub async fn detach_from_control(

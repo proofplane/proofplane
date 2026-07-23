@@ -34,7 +34,9 @@ pub use evidence_submissions::{
     PendingDocumentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
-pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
+pub use policies::{
+    ArchivePolicyResult, AttachPolicyToControlsOutcome, CreatePolicyDocumentResult,
+};
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use workspace_memberships::NewWorkspaceMembership;
 

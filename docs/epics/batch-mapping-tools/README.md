@@ -19,7 +19,7 @@ Full rationale, SQL sketches, and the error contract live in
 | 003. [Map Control to Evidence](./tickets/003-map-control-to-evidence.md)            | Done   | One control → many evidence, the mirror half.              |
 | 004. [Unmap Evidence from Controls](./tickets/004-unmap-evidence-from-controls.md)  | Done   | One evidence → remove many control mappings.               |
 | 005. [Unmap Control from Evidence](./tickets/005-unmap-control-from-evidence.md)    | Done   | One control → remove many evidence mappings.               |
-| 006. [Attach Policy to Controls](./tickets/006-attach-policy-to-controls.md)        | Todo   | One policy → many controls, no rationale.                  |
+| 006. [Attach Policy to Controls](./tickets/006-attach-policy-to-controls.md)        | Done   | One policy → many controls, no rationale.                  |
 | 007. [Attach Control to Policies](./tickets/007-attach-control-to-policies.md)      | Todo   | One control → many policies, the mirror half.              |
 | 008. [Detach Policy and Control Batches](./tickets/008-detach-policy-control-batches.md) | Todo   | Both removal halves for policy ↔ control.             |
 | 009. [Guide Documentation](./tickets/009-guide-documentation.md)                    | Todo   | Teach agents when to batch and that batches are atomic.    |

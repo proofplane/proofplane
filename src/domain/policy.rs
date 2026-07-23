@@ -41,6 +41,12 @@ pub struct UpdatePolicyPayload {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatePolicyControlMappingsPayload {
+    pub policy_id: PolicyId,
+    pub control_ids: Vec<ControlId>,
+}
+
 pub fn validate_policy_name(value: String) -> Validation<String, DomainError> {
     let value = value.trim().to_owned();
     if value.is_empty() {

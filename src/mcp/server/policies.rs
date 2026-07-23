@@ -14,11 +14,17 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
-    domain::{ControlId, CreatePolicyPayload, PolicyId, UpdatePolicyPayload, WorkspacePermission},
+    domain::{
+        validate_batch, BatchError, ControlId, CreatePolicyControlMappingsPayload,
+        CreatePolicyPayload, PolicyId, UpdatePolicyPayload, WorkspacePermission,
+    },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
-    repository::ArchivePolicyResult,
-    services::{policies::PolicyMutationError, Error as ServiceError},
+    repository::{ArchivePolicyResult, ConflictKind},
+    services::{
+        policies::{AttachPolicyToControlsError, PolicyMutationError},
+        Error as ServiceError,
+    },
     validate,
     validation::Validation,
 };
@@ -238,6 +244,51 @@ impl ProofplaneMcp {
             control_id: control_id.to_string(),
         }))
     }
+
+    #[tool(
+        name = "attach_policy_to_controls",
+        description = "Attach one active policy to many controls in a single all-or-nothing batch; if any control id is unknown or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies."
+    )]
+    async fn attach_policy_to_controls(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(args): Parameters<AttachPolicyToControlsRequest>,
+    ) -> Result<Json<AttachPolicyToControlsResponse>, rmcp::ErrorData> {
+        let payload = parse_attach_policy_to_controls_request(args)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
+        let workspace_id = context.connection.workspace_id;
+        let policy_id = payload.policy_id;
+        let control_ids = self
+            .policies
+            .attach_to_controls(context.agent_connection_context(), payload)
+            .await?;
+
+        let control_id_strings = control_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        AuditEvent::new(
+            "policy_control_mappings.created",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "attach_policy_to_controls",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("policy_id", Uuid::from(policy_id))
+        .metadata("control_ids", json!(control_id_strings))
+        .metadata("count", control_ids.len())
+        .object(AuditObject::new("policy", Uuid::from(policy_id)))
+        .emit();
+
+        Ok(Json(AttachPolicyToControlsResponse {
+            policy_id: policy_id.to_string(),
+            count: control_ids.len(),
+            control_ids: control_id_strings,
+        }))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -384,6 +435,19 @@ struct PolicyControlResponse {
     control_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AttachPolicyToControlsRequest {
+    policy_id: Option<String>,
+    control_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct AttachPolicyToControlsResponse {
+    policy_id: String,
+    count: usize,
+    control_ids: Vec<String>,
+}
+
 fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, rmcp::ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
@@ -438,6 +502,33 @@ fn parse_policy_control_request(
     .map_err(argument_errors)
 }
 
+fn parse_attach_policy_to_controls_request(
+    args: AttachPolicyToControlsRequest,
+) -> Result<CreatePolicyControlMappingsPayload, rmcp::ErrorData> {
+    let policy_id = required_uuid("policy_id", args.policy_id)
+        .map(PolicyId::from)
+        .into_result()
+        .map_err(argument_errors)?;
+
+    let values = args.control_ids.unwrap_or_default();
+    let mut control_ids = Vec::with_capacity(values.len());
+    for value in values {
+        let control_id = required_uuid("control_ids", Some(value))
+            .map(ControlId::from)
+            .into_result()
+            .map_err(argument_errors)?;
+
+        control_ids.push(control_id);
+    }
+
+    let control_ids = validate_batch("control_ids", control_ids)?;
+
+    Ok(CreatePolicyControlMappingsPayload {
+        policy_id,
+        control_ids,
+    })
+}
+
 fn optional_control_ids(
     values: Option<Vec<String>>,
 ) -> Validation<Vec<ControlId>, McpArgumentError> {
@@ -478,6 +569,36 @@ impl From<PolicyMutationError> for rmcp::ErrorData {
                 invalid_field("control_ids", "control_ids contains unknown ids")
             }
             PolicyMutationError::Repository(error) => ServiceError::Repository(error).into(),
+        }
+    }
+}
+
+impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
+    fn from(error: AttachPolicyToControlsError) -> Self {
+        match error {
+            AttachPolicyToControlsError::UnknownControls(ids) => {
+                rmcp::ErrorData::from(BatchError::Unknown {
+                    field: "control_ids",
+                    ids: ids.into_iter().map(Uuid::from).collect(),
+                })
+            }
+            AttachPolicyToControlsError::AlreadyAttached => conflict(
+                ConflictKind::PolicyControlMappingExists.code(),
+                ConflictKind::PolicyControlMappingExists.message(),
+            ),
+            AttachPolicyToControlsError::PolicyNotFound => not_found(),
+            AttachPolicyToControlsError::Repository(error) => {
+                tracing::error!(%error, "MCP batch policy control attachment repository failure");
+                rmcp::ErrorData::internal_error(
+                    "dependency failure",
+                    Some(json!({
+                        "problem": {
+                            "code": "dependency_failed",
+                            "message": "a dependency failed while handling the tool call",
+                        }
+                    })),
+                )
+            }
         }
     }
 }
