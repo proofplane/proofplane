@@ -251,22 +251,30 @@ impl From<BatchError> for rmcp::ErrorData {
                 "field": field,
                 "ids": ids,
             }),
-            BatchError::Archived { field, ids } => json!({
-                "code": "archived_ids",
-                "message": message,
-                "field": field,
-                "ids": ids,
-            }),
-            BatchError::NotMapped { field, ids } => json!({
-                "code": "not_mapped_ids",
-                "message": message,
-                "field": field,
-                "ids": ids,
-            }),
         };
 
         rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
     }
+}
+
+/// Builds the combined `batch_rejected` payload shared by every removal/detach
+/// batch tool. Each `(key, ids)` bucket becomes an `id`-list field under
+/// `problem`, always present (even when empty) so a single retry can fix every
+/// failing id category at once.
+pub(super) fn batch_rejected(
+    field: &'static str,
+    message: &'static str,
+    buckets: Vec<(&'static str, Vec<Uuid>)>,
+) -> rmcp::ErrorData {
+    let mut problem = serde_json::Map::new();
+    problem.insert("code".to_owned(), json!("batch_rejected"));
+    problem.insert("message".to_owned(), json!(message));
+    problem.insert("field".to_owned(), json!(field));
+    for (key, ids) in buckets {
+        problem.insert(key.to_owned(), json!(ids));
+    }
+
+    rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
 }
 
 pub(super) fn not_found() -> rmcp::ErrorData {
@@ -550,40 +558,32 @@ mod tests {
     }
 
     #[test]
-    fn archived_batch_ids_render_their_own_problem_code() {
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        let error = rmcp::ErrorData::from(BatchError::Archived {
-            field: "policy_ids",
-            ids: vec![first, second],
-        });
+    fn batch_rejected_surfaces_every_bucket_at_once() {
+        let unknown = Uuid::new_v4();
+        let archived = Uuid::new_v4();
+        let error = super::batch_rejected(
+            "policy_ids",
+            "policy_ids contains unknown, archived, or not-mapped ids",
+            vec![
+                ("unknown_ids", vec![unknown]),
+                ("archived_ids", vec![archived]),
+                ("not_mapped_ids", vec![]),
+            ],
+        );
 
         assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
         let problem = problem(&error);
-        assert_eq!(problem["code"], "archived_ids");
+        assert_eq!(problem["code"], "batch_rejected");
         assert_eq!(problem["field"], "policy_ids");
         assert_eq!(
-            problem["ids"],
-            serde_json::json!([first.to_string(), second.to_string()])
+            problem["unknown_ids"],
+            serde_json::json!([unknown.to_string()])
         );
-    }
-
-    #[test]
-    fn not_mapped_batch_ids_are_distinct_from_unknown_ids() {
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        let error = rmcp::ErrorData::from(BatchError::NotMapped {
-            field: "control_ids",
-            ids: vec![first, second],
-        });
-
-        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
-        let problem = problem(&error);
-        assert_eq!(problem["code"], "not_mapped_ids");
-        assert_eq!(problem["field"], "control_ids");
         assert_eq!(
-            problem["ids"],
-            serde_json::json!([first.to_string(), second.to_string()])
+            problem["archived_ids"],
+            serde_json::json!([archived.to_string()])
         );
+        // Empty buckets are still present so an agent reads one stable shape.
+        assert_eq!(problem["not_mapped_ids"], serde_json::json!([]));
     }
 }

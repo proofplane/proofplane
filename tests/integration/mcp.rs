@@ -3874,10 +3874,11 @@ async fn mcp_detach_policy_from_controls_rejects_bad_batches_and_removes_nothing
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "control_ids");
+    assert_eq!(unknown.data["problem"]["not_mapped_ids"], json!([]));
     assert_eq!(
-        unknown.data["problem"]["ids"],
+        unknown.data["problem"]["unknown_ids"],
         json!([unknown_id.to_string()])
     );
     assert_eq!(policy_control_mapping_count(&app, policy_id).await, 1);
@@ -3893,10 +3894,33 @@ async fn mcp_detach_policy_from_controls_rejects_bad_batches_and_removes_nothing
             }),
         )
         .await;
-    assert_eq!(not_mapped.data["problem"]["code"], "not_mapped_ids");
+    assert_eq!(not_mapped.data["problem"]["code"], "batch_rejected");
     assert_eq!(not_mapped.data["problem"]["field"], "control_ids");
+    assert_eq!(not_mapped.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        not_mapped.data["problem"]["ids"],
+        not_mapped.data["problem"]["not_mapped_ids"],
+        json!([unmapped_control.to_string()])
+    );
+    assert_eq!(policy_control_mapping_count(&app, policy_id).await, 1);
+
+    // A batch mixing an unknown id and a not-mapped id surfaces both buckets at
+    // once so a single retry can fix everything; nothing is removed.
+    let both = mcp_client
+        .call_tool_error(
+            "detach_policy_from_controls",
+            json!({
+                "policy_id": policy_id,
+                "control_ids": [unknown_id, unmapped_control],
+            }),
+        )
+        .await;
+    assert_eq!(both.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        both.data["problem"]["unknown_ids"],
+        json!([unknown_id.to_string()])
+    );
+    assert_eq!(
+        both.data["problem"]["not_mapped_ids"],
         json!([unmapped_control.to_string()])
     );
     assert_eq!(policy_control_mapping_count(&app, policy_id).await, 1);
@@ -4111,9 +4135,11 @@ async fn mcp_detach_control_from_policies_rejects_bad_batches_and_removes_nothin
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "policy_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["archived_ids"], json!([]));
+    assert_eq!(unknown.data["problem"]["not_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -4128,8 +4154,8 @@ async fn mcp_detach_control_from_policies_rejects_bad_batches_and_removes_nothin
         2
     );
 
-    // An archived policy takes precedence over a merely-unmapped one, so a batch
-    // holding both is rejected as archived and nothing is removed.
+    // An archived policy and a merely-unmapped one are surfaced together in one
+    // payload, in their own buckets, and nothing is removed.
     let archived = mcp_client
         .call_tool_error(
             "detach_control_from_policies",
@@ -4139,11 +4165,16 @@ async fn mcp_detach_control_from_policies_rejects_bad_batches_and_removes_nothin
             }),
         )
         .await;
-    assert_eq!(archived.data["problem"]["code"], "archived_ids");
+    assert_eq!(archived.data["problem"]["code"], "batch_rejected");
     assert_eq!(archived.data["problem"]["field"], "policy_ids");
+    assert_eq!(archived.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        archived.data["problem"]["ids"],
+        archived.data["problem"]["archived_ids"],
         json!([archived_policy.to_string()])
+    );
+    assert_eq!(
+        archived.data["problem"]["not_mapped_ids"],
+        json!([unmapped_policy.to_string()])
     );
     assert_eq!(
         policy_control_mapping_count_for_control(&app, control_id).await,
@@ -4161,10 +4192,41 @@ async fn mcp_detach_control_from_policies_rejects_bad_batches_and_removes_nothin
             }),
         )
         .await;
-    assert_eq!(not_mapped.data["problem"]["code"], "not_mapped_ids");
+    assert_eq!(not_mapped.data["problem"]["code"], "batch_rejected");
     assert_eq!(not_mapped.data["problem"]["field"], "policy_ids");
+    assert_eq!(not_mapped.data["problem"]["unknown_ids"], json!([]));
+    assert_eq!(not_mapped.data["problem"]["archived_ids"], json!([]));
     assert_eq!(
-        not_mapped.data["problem"]["ids"],
+        not_mapped.data["problem"]["not_mapped_ids"],
+        json!([unmapped_policy.to_string()])
+    );
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        2
+    );
+
+    // All three buckets surfaced at once from a single call: an unknown id, an
+    // archived policy, and an active-but-unmapped policy.
+    let all_buckets = mcp_client
+        .call_tool_error(
+            "detach_control_from_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [unknown_id, archived_policy, unmapped_policy],
+            }),
+        )
+        .await;
+    assert_eq!(all_buckets.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        all_buckets.data["problem"]["unknown_ids"],
+        json!([unknown_id.to_string()])
+    );
+    assert_eq!(
+        all_buckets.data["problem"]["archived_ids"],
+        json!([archived_policy.to_string()])
+    );
+    assert_eq!(
+        all_buckets.data["problem"]["not_mapped_ids"],
         json!([unmapped_policy.to_string()])
     );
     assert_eq!(
@@ -4381,9 +4443,10 @@ async fn mcp_unmap_evidence_from_controls_rejects_bad_batches_and_removes_nothin
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "control_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["not_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -4405,10 +4468,33 @@ async fn mcp_unmap_evidence_from_controls_rejects_bad_batches_and_removes_nothin
             }),
         )
         .await;
-    assert_eq!(not_mapped.data["problem"]["code"], "not_mapped_ids");
+    assert_eq!(not_mapped.data["problem"]["code"], "batch_rejected");
     assert_eq!(not_mapped.data["problem"]["field"], "control_ids");
+    assert_eq!(not_mapped.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        not_mapped.data["problem"]["ids"],
+        not_mapped.data["problem"]["not_mapped_ids"],
+        json!([second_control.to_string()])
+    );
+    assert_eq!(evidence_control_mapping_count(&app, evidence_id).await, 1);
+
+    // A batch mixing an unknown id and a not-mapped id surfaces both buckets at
+    // once so a single retry can fix everything; nothing is removed.
+    let both = mcp_client
+        .call_tool_error(
+            "unmap_evidence_from_controls",
+            json!({
+                "evidence_id": evidence_id,
+                "control_ids": [unknown_a, second_control],
+            }),
+        )
+        .await;
+    assert_eq!(both.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        both.data["problem"]["unknown_ids"],
+        json!([unknown_a.to_string()])
+    );
+    assert_eq!(
+        both.data["problem"]["not_mapped_ids"],
         json!([second_control.to_string()])
     );
     assert_eq!(evidence_control_mapping_count(&app, evidence_id).await, 1);
@@ -4643,9 +4729,10 @@ async fn mcp_unmap_control_from_evidence_rejects_bad_batches_and_removes_nothing
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "evidence_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["not_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -4667,10 +4754,33 @@ async fn mcp_unmap_control_from_evidence_rejects_bad_batches_and_removes_nothing
             }),
         )
         .await;
-    assert_eq!(not_mapped.data["problem"]["code"], "not_mapped_ids");
+    assert_eq!(not_mapped.data["problem"]["code"], "batch_rejected");
     assert_eq!(not_mapped.data["problem"]["field"], "evidence_ids");
+    assert_eq!(not_mapped.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        not_mapped.data["problem"]["ids"],
+        not_mapped.data["problem"]["not_mapped_ids"],
+        json!([unmapped_evidence_id.to_string()])
+    );
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
+
+    // A batch mixing an unknown id and a not-mapped id surfaces both buckets at
+    // once so a single retry can fix everything; nothing is removed.
+    let both = mcp_client
+        .call_tool_error(
+            "unmap_control_from_evidence",
+            json!({
+                "control_id": control_id,
+                "evidence_ids": [unknown_a, unmapped_evidence_id],
+            }),
+        )
+        .await;
+    assert_eq!(both.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        both.data["problem"]["unknown_ids"],
+        json!([unknown_a.to_string()])
+    );
+    assert_eq!(
+        both.data["problem"]["not_mapped_ids"],
         json!([unmapped_evidence_id.to_string()])
     );
     assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);

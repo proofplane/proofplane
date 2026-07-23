@@ -483,26 +483,21 @@ FROM requested r
             )
             .await?;
 
-        let mut unknown = Vec::new();
-        let mut not_mapped = Vec::new();
+        let mut rejection = BatchRejection::default();
         for row in &rows {
             let control_id = row.try_get::<_, Uuid>("control_id")?;
             if !row.try_get::<_, bool>("control_exists")? {
-                unknown.push(control_id);
+                rejection.unknown.push(control_id);
             } else if !row.try_get::<_, bool>("was_removed")? {
-                not_mapped.push(control_id);
+                rejection.not_mapped.push(control_id);
             }
         }
 
         // An id the workspace does not have and an id it has but never mapped
-        // read alike here yet call for opposite corrections, so they stay
-        // separate. Either one rolls the whole batch back.
-        if !unknown.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
-        }
-
-        if !not_mapped.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        // read alike here yet call for opposite corrections, so they are reported
+        // together in one rejection. Any bucket rolls the whole batch back.
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         Ok(Some(payload.control_ids.clone()))
@@ -574,26 +569,21 @@ FROM requested r
             )
             .await?;
 
-        let mut unknown = Vec::new();
-        let mut not_mapped = Vec::new();
+        let mut rejection = BatchRejection::default();
         for row in &rows {
             let evidence_id = row.try_get::<_, Uuid>("evidence_id")?;
             if !row.try_get::<_, bool>("evidence_exists")? {
-                unknown.push(evidence_id);
+                rejection.unknown.push(evidence_id);
             } else if !row.try_get::<_, bool>("was_removed")? {
-                not_mapped.push(evidence_id);
+                rejection.not_mapped.push(evidence_id);
             }
         }
 
         // An id the workspace does not have and an id it has but never mapped
-        // read alike here yet call for opposite corrections, so they stay
-        // separate. Either one rolls the whole batch back.
-        if !unknown.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
-        }
-
-        if !not_mapped.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        // read alike here yet call for opposite corrections, so they are reported
+        // together in one rejection. Any bucket rolls the whole batch back.
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         Ok(Some(payload.evidence_ids.clone()))

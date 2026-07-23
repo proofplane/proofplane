@@ -11,8 +11,8 @@ use crate::{
         FrameworkRequirementId, UpdateControlPayload,
     },
     repository::{
-        BatchRejection, ConflictKind, CreateControlEvidenceMappingsOutcome,
-        CreateEvidenceControlMappingsOutcome, Error as RepositoryError, Postgres,
+        ConflictKind, CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome,
+        Error as RepositoryError, Postgres,
     },
     services::Error,
 };
@@ -97,11 +97,11 @@ pub enum UnmapEvidenceFromControlsError {
     #[error("resource not found")]
     EvidenceNotFound,
 
-    #[error("control_ids contains unknown ids")]
-    UnknownControls(Vec<ControlId>),
-
-    #[error("control_ids contains ids that are not mapped")]
-    NotMapped(Vec<ControlId>),
+    #[error("control_ids contains unknown or not-mapped ids")]
+    Rejected {
+        unknown: Vec<ControlId>,
+        not_mapped: Vec<ControlId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -110,12 +110,14 @@ pub enum UnmapEvidenceFromControlsError {
 impl From<RepositoryError> for UnmapEvidenceFromControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
-                Self::UnknownControls(ids.into_iter().map(ControlId::from).collect())
-            }
-            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
-                Self::NotMapped(ids.into_iter().map(ControlId::from).collect())
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
+                not_mapped: rejection
+                    .not_mapped
+                    .into_iter()
+                    .map(ControlId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -126,11 +128,11 @@ pub enum UnmapControlFromEvidenceError {
     #[error("resource not found")]
     ControlNotFound,
 
-    #[error("evidence_ids contains unknown ids")]
-    UnknownEvidence(Vec<EvidenceId>),
-
-    #[error("evidence_ids contains ids that are not mapped")]
-    NotMapped(Vec<EvidenceId>),
+    #[error("evidence_ids contains unknown or not-mapped ids")]
+    Rejected {
+        unknown: Vec<EvidenceId>,
+        not_mapped: Vec<EvidenceId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -139,12 +141,18 @@ pub enum UnmapControlFromEvidenceError {
 impl From<RepositoryError> for UnmapControlFromEvidenceError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
-                Self::UnknownEvidence(ids.into_iter().map(EvidenceId::from).collect())
-            }
-            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
-                Self::NotMapped(ids.into_iter().map(EvidenceId::from).collect())
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection
+                    .unknown
+                    .into_iter()
+                    .map(EvidenceId::from)
+                    .collect(),
+                not_mapped: rejection
+                    .not_mapped
+                    .into_iter()
+                    .map(EvidenceId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }

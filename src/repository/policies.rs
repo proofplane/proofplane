@@ -520,26 +520,21 @@ FROM requested r
             )
             .await?;
 
-        let mut unknown = Vec::new();
-        let mut not_mapped = Vec::new();
+        let mut rejection = BatchRejection::default();
         for row in &rows {
             let control_id = row.try_get::<_, Uuid>("control_id")?;
             if !row.try_get::<_, bool>("control_exists")? {
-                unknown.push(control_id);
+                rejection.unknown.push(control_id);
             } else if !row.try_get::<_, bool>("was_removed")? {
-                not_mapped.push(control_id);
+                rejection.not_mapped.push(control_id);
             }
         }
 
         // An id the workspace does not have and an id it has but never mapped
-        // read alike here yet call for opposite corrections, so they stay
-        // separate. Either one rolls the whole batch back.
-        if !unknown.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
-        }
-
-        if !not_mapped.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        // read alike here yet call for opposite corrections, so they are reported
+        // together in one rejection. Any bucket rolls the whole batch back.
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         Ok(Some(payload.control_ids.clone()))
@@ -619,33 +614,23 @@ FROM requested r
             )
             .await?;
 
-        let mut unknown = Vec::new();
-        let mut archived = Vec::new();
-        let mut not_mapped = Vec::new();
+        let mut rejection = BatchRejection::default();
         for row in &rows {
             let policy_id = row.try_get::<_, Uuid>("policy_id")?;
             if !row.try_get::<_, bool>("policy_exists")? {
-                unknown.push(policy_id);
+                rejection.unknown.push(policy_id);
             } else if row.try_get::<_, bool>("policy_archived")? {
-                archived.push(policy_id);
+                rejection.archived.push(policy_id);
             } else if !row.try_get::<_, bool>("was_removed")? {
-                not_mapped.push(policy_id);
+                rejection.not_mapped.push(policy_id);
             }
         }
 
         // Unknown, archived, and not-mapped ids read alike here but each calls
-        // for a different correction, so they stay separate and are reported in
-        // precedence order. Any of them rolls the whole batch back.
-        if !unknown.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::UnknownIds(unknown)));
-        }
-
-        if !archived.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::Archived(archived)));
-        }
-
-        if !not_mapped.is_empty() {
-            return Err(Error::BatchRejected(BatchRejection::NotMapped(not_mapped)));
+        // for a different correction, so they are reported together in one
+        // rejection. Any bucket rolls the whole batch back.
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         Ok(Some(payload.policy_ids.clone()))

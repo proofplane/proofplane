@@ -134,6 +134,19 @@ send an agent hunting for a control it can plainly see in `list_controls`. The
 removal statement classifies both cases in the same pass that deletes — see the
 Implementation shape revision below.)_
 
+_(Revised during ticket 008 — the distinction above stands, but every removal/detach
+tool now reports **all** its failing-id categories together in one `batch_rejected`
+payload rather than one standalone code at a time. The payload carries an
+`unknown_ids` and a `not_mapped_ids` list (and, for `detach_control_from_policies`
+whose counterparts are policies, an `archived_ids` list), each always present so the
+shape is stable, with at least one non-empty. This mirrors `attach_control_to_policies`
+(ticket 007), which already reports `unknown_ids` + `archived_ids` together, and it
+lets one corrected retry fix a batch that failed several ways at once — the earlier
+precedence-ordered standalone `not_mapped_ids`/`archived_ids` codes are gone. The
+per-category classification in the delete pass is unchanged; only how the buckets are
+surfaced changed. Create tools keep their single standalone `unknown_ids` code — they
+have only one failure category.)_
+
 ### Batch size
 
 Cap at **50 items** per call, validated before any database work. The cap exists

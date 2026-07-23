@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, conflict, domain_errors, format_datetime,
-        not_found, parse_uuid_arg, required_uuid,
+        argument_errors, authorize_token_workspace, batch_rejected, conflict, domain_errors,
+        format_datetime, not_found, parse_uuid_arg, required_uuid,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
@@ -854,18 +854,20 @@ fn parse_unmap_control_from_evidence_request(
 impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
     fn from(error: UnmapControlFromEvidenceError) -> Self {
         match error {
-            UnmapControlFromEvidenceError::UnknownEvidence(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "evidence_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            UnmapControlFromEvidenceError::NotMapped(ids) => {
-                rmcp::ErrorData::from(BatchError::NotMapped {
-                    field: "evidence_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
+            UnmapControlFromEvidenceError::Rejected {
+                unknown,
+                not_mapped,
+            } => batch_rejected(
+                "evidence_ids",
+                "evidence_ids contains unknown or not-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "not_mapped_ids",
+                        not_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
+            ),
             UnmapControlFromEvidenceError::ControlNotFound => not_found(),
             UnmapControlFromEvidenceError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control evidence unmapping repository failure");
@@ -886,18 +888,20 @@ impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
 impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
     fn from(error: UnmapEvidenceFromControlsError) -> Self {
         match error {
-            UnmapEvidenceFromControlsError::UnknownControls(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            UnmapEvidenceFromControlsError::NotMapped(ids) => {
-                rmcp::ErrorData::from(BatchError::NotMapped {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
+            UnmapEvidenceFromControlsError::Rejected {
+                unknown,
+                not_mapped,
+            } => batch_rejected(
+                "control_ids",
+                "control_ids contains unknown or not-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "not_mapped_ids",
+                        not_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
+            ),
             UnmapEvidenceFromControlsError::EvidenceNotFound => not_found(),
             UnmapEvidenceFromControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch evidence control unmapping repository failure");

@@ -13,7 +13,7 @@ use crate::{
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail},
     repository::{
         ArchivePolicyResult, AttachControlToPoliciesOutcome, AttachPolicyToControlsOutcome,
-        BatchRejection, ConflictKind, Error as RepositoryError, Postgres,
+        ConflictKind, Error as RepositoryError, Postgres,
     },
     validation::Validation,
 };
@@ -111,11 +111,11 @@ pub enum DetachPolicyFromControlsError {
     #[error("resource not found")]
     PolicyNotFound,
 
-    #[error("control_ids contains unknown ids")]
-    UnknownControls(Vec<ControlId>),
-
-    #[error("control_ids contains ids that are not mapped")]
-    NotMapped(Vec<ControlId>),
+    #[error("control_ids contains unknown or not-mapped ids")]
+    Rejected {
+        unknown: Vec<ControlId>,
+        not_mapped: Vec<ControlId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -124,12 +124,14 @@ pub enum DetachPolicyFromControlsError {
 impl From<RepositoryError> for DetachPolicyFromControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
-                Self::UnknownControls(ids.into_iter().map(ControlId::from).collect())
-            }
-            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
-                Self::NotMapped(ids.into_iter().map(ControlId::from).collect())
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
+                not_mapped: rejection
+                    .not_mapped
+                    .into_iter()
+                    .map(ControlId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -140,14 +142,12 @@ pub enum DetachControlFromPoliciesError {
     #[error("resource not found")]
     ControlNotFound,
 
-    #[error("policy_ids contains unknown ids")]
-    UnknownPolicies(Vec<PolicyId>),
-
-    #[error("policy_ids contains archived ids")]
-    ArchivedPolicies(Vec<PolicyId>),
-
-    #[error("policy_ids contains ids that are not mapped")]
-    NotMapped(Vec<PolicyId>),
+    #[error("policy_ids contains unknown, archived, or not-mapped ids")]
+    Rejected {
+        unknown: Vec<PolicyId>,
+        archived: Vec<PolicyId>,
+        not_mapped: Vec<PolicyId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -156,15 +156,15 @@ pub enum DetachControlFromPoliciesError {
 impl From<RepositoryError> for DetachControlFromPoliciesError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(BatchRejection::UnknownIds(ids)) => {
-                Self::UnknownPolicies(ids.into_iter().map(PolicyId::from).collect())
-            }
-            RepositoryError::BatchRejected(BatchRejection::Archived(ids)) => {
-                Self::ArchivedPolicies(ids.into_iter().map(PolicyId::from).collect())
-            }
-            RepositoryError::BatchRejected(BatchRejection::NotMapped(ids)) => {
-                Self::NotMapped(ids.into_iter().map(PolicyId::from).collect())
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(PolicyId::from).collect(),
+                archived: rejection.archived.into_iter().map(PolicyId::from).collect(),
+                not_mapped: rejection
+                    .not_mapped
+                    .into_iter()
+                    .map(PolicyId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }

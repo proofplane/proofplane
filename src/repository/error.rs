@@ -5,11 +5,17 @@ use crate::domain::DomainError;
 
 use super::constraints::ConflictKind;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BatchRejection {
-    UnknownIds(Vec<Uuid>),
-    Archived(Vec<Uuid>),
-    NotMapped(Vec<Uuid>),
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BatchRejection {
+    pub unknown: Vec<Uuid>,
+    pub archived: Vec<Uuid>,
+    pub not_mapped: Vec<Uuid>,
+}
+
+impl BatchRejection {
+    pub fn is_empty(&self) -> bool {
+        self.unknown.is_empty() && self.archived.is_empty() && self.not_mapped.is_empty()
+    }
 }
 
 #[derive(Debug, Error)]

@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, domain_errors, format_datetime, invalid_field,
-        not_found, required_uuid, McpArgumentError,
+        argument_errors, authorize_token_workspace, batch_rejected, domain_errors, format_datetime,
+        invalid_field, not_found, required_uuid, McpArgumentError,
     },
     ProofplaneMcp,
 };
@@ -868,23 +868,17 @@ impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
         match error {
             // Unknown and archived ids are reported together in one payload so a
             // single retry can fix both — see the batch-mapping-tools spec.
-            AttachControlToPoliciesError::InvalidPolicies { unknown, archived } => {
-                let message = "policy_ids contains unknown or archived ids";
-                let unknown = unknown.into_iter().map(Uuid::from).collect::<Vec<_>>();
-                let archived = archived.into_iter().map(Uuid::from).collect::<Vec<_>>();
-                rmcp::ErrorData::invalid_params(
-                    message,
-                    Some(json!({
-                        "problem": {
-                            "code": "batch_rejected",
-                            "message": message,
-                            "field": "policy_ids",
-                            "unknown_ids": unknown,
-                            "archived_ids": archived,
-                        }
-                    })),
-                )
-            }
+            AttachControlToPoliciesError::InvalidPolicies { unknown, archived } => batch_rejected(
+                "policy_ids",
+                "policy_ids contains unknown or archived ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "archived_ids",
+                        archived.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
+            ),
             AttachControlToPoliciesError::AlreadyAttached => conflict(
                 ConflictKind::PolicyControlMappingExists.code(),
                 ConflictKind::PolicyControlMappingExists.message(),
@@ -909,18 +903,20 @@ impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
 impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
     fn from(error: DetachPolicyFromControlsError) -> Self {
         match error {
-            DetachPolicyFromControlsError::UnknownControls(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            DetachPolicyFromControlsError::NotMapped(ids) => {
-                rmcp::ErrorData::from(BatchError::NotMapped {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
+            DetachPolicyFromControlsError::Rejected {
+                unknown,
+                not_mapped,
+            } => batch_rejected(
+                "control_ids",
+                "control_ids contains unknown or not-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "not_mapped_ids",
+                        not_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
+            ),
             DetachPolicyFromControlsError::PolicyNotFound => not_found(),
             DetachPolicyFromControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch policy control detachment repository failure");
@@ -941,24 +937,25 @@ impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
 impl From<DetachControlFromPoliciesError> for rmcp::ErrorData {
     fn from(error: DetachControlFromPoliciesError) -> Self {
         match error {
-            DetachControlFromPoliciesError::UnknownPolicies(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "policy_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            DetachControlFromPoliciesError::ArchivedPolicies(ids) => {
-                rmcp::ErrorData::from(BatchError::Archived {
-                    field: "policy_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            DetachControlFromPoliciesError::NotMapped(ids) => {
-                rmcp::ErrorData::from(BatchError::NotMapped {
-                    field: "policy_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
+            DetachControlFromPoliciesError::Rejected {
+                unknown,
+                archived,
+                not_mapped,
+            } => batch_rejected(
+                "policy_ids",
+                "policy_ids contains unknown, archived, or not-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "archived_ids",
+                        archived.into_iter().map(Uuid::from).collect(),
+                    ),
+                    (
+                        "not_mapped_ids",
+                        not_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
+            ),
             DetachControlFromPoliciesError::ControlNotFound => not_found(),
             DetachControlFromPoliciesError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control policy detachment repository failure");
