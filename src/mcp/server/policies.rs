@@ -15,14 +15,14 @@ use super::{
 };
 use crate::{
     domain::{
-        validate_batch, BatchError, ControlId, CreateControlPolicyMappingsPayload,
+        validate_batch, ControlId, CreateControlPolicyMappingsPayload,
         CreatePolicyControlMappingsPayload, CreatePolicyPayload,
         DeleteControlPolicyMappingsPayload, DeletePolicyControlMappingsPayload, PolicyId,
         UpdatePolicyPayload, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
-    repository::{ArchivePolicyResult, ConflictKind},
+    repository::ArchivePolicyResult,
     services::{
         policies::{
             AttachControlToPoliciesError, AttachPolicyToControlsError,
@@ -836,15 +836,19 @@ impl From<PolicyMutationError> for rmcp::ErrorData {
 impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
     fn from(error: AttachPolicyToControlsError) -> Self {
         match error {
-            AttachPolicyToControlsError::UnknownControls(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            AttachPolicyToControlsError::AlreadyAttached => conflict(
-                ConflictKind::PolicyControlMappingExists.code(),
-                ConflictKind::PolicyControlMappingExists.message(),
+            AttachPolicyToControlsError::Rejected {
+                unknown,
+                already_mapped,
+            } => batch_rejected(
+                "control_ids",
+                "control_ids contains unknown or already-attached ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "already_mapped_ids",
+                        already_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
             ),
             AttachPolicyToControlsError::PolicyNotFound => not_found(),
             AttachPolicyToControlsError::Repository(error) => {
@@ -866,22 +870,27 @@ impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
 impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
     fn from(error: AttachControlToPoliciesError) -> Self {
         match error {
-            // Unknown and archived ids are reported together in one payload so a
-            // single retry can fix both — see the batch-mapping-tools spec.
-            AttachControlToPoliciesError::InvalidPolicies { unknown, archived } => batch_rejected(
+            // Unknown, archived, and already-attached ids are reported together
+            // in one payload so a single retry can fix them all — see the
+            // batch-mapping-tools spec.
+            AttachControlToPoliciesError::Rejected {
+                unknown,
+                archived,
+                already_mapped,
+            } => batch_rejected(
                 "policy_ids",
-                "policy_ids contains unknown or archived ids",
+                "policy_ids contains unknown, archived, or already-attached ids",
                 vec![
                     ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
                     (
                         "archived_ids",
                         archived.into_iter().map(Uuid::from).collect(),
                     ),
+                    (
+                        "already_mapped_ids",
+                        already_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
                 ],
-            ),
-            AttachControlToPoliciesError::AlreadyAttached => conflict(
-                ConflictKind::PolicyControlMappingExists.code(),
-                ConflictKind::PolicyControlMappingExists.message(),
             ),
             AttachControlToPoliciesError::ControlNotFound => not_found(),
             AttachControlToPoliciesError::Repository(error) => {

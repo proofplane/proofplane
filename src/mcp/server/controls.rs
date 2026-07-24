@@ -8,27 +8,25 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, batch_rejected, conflict, domain_errors,
-        format_datetime, not_found, parse_uuid_arg, required_uuid,
+        argument_errors, authorize_token_workspace, batch_rejected, domain_errors, format_datetime,
+        not_found, parse_uuid_arg, required_uuid,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
 };
 use crate::{
     domain::{
-        duplicate_ids, required_text, validate_batch, BatchError, Control,
-        ControlEvidenceMappingItem, ControlId, CreateControlEvidenceMappingsPayload,
-        CreateControlPayload, CreateEvidenceControlMappingPayload,
-        CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
-        DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
-        EvidenceId, Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId,
-        UpdateControlPayload, WorkspacePermission,
+        duplicate_ids, required_text, validate_batch, Control, ControlEvidenceMappingItem,
+        ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
+        CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
+        DeleteControlEvidenceMappingsPayload, DeleteEvidenceControlMappingsPayload,
+        EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
+        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
     },
     mcp::server::common::McpArgumentError,
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::ConflictKind,
     services::controls::{
         ControlMutationError, MapControlToEvidenceError, MapEvidenceToControlsError,
         UnmapControlFromEvidenceError, UnmapEvidenceFromControlsError,
@@ -922,17 +920,21 @@ impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
 impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
     fn from(error: MapEvidenceToControlsError) -> Self {
         match error {
-            MapEvidenceToControlsError::UnknownControls(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "control_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            MapEvidenceToControlsError::EvidenceNotFound => not_found(),
-            MapEvidenceToControlsError::AlreadyMapped => conflict(
-                ConflictKind::EvidenceControlMappingExists.code(),
-                ConflictKind::EvidenceControlMappingExists.message(),
+            MapEvidenceToControlsError::Rejected {
+                unknown,
+                already_mapped,
+            } => batch_rejected(
+                "control_ids",
+                "control_ids contains unknown or already-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "already_mapped_ids",
+                        already_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
             ),
+            MapEvidenceToControlsError::EvidenceNotFound => not_found(),
             MapEvidenceToControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch evidence control mapping repository failure");
                 rmcp::ErrorData::internal_error(
@@ -952,17 +954,21 @@ impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
 impl From<MapControlToEvidenceError> for rmcp::ErrorData {
     fn from(error: MapControlToEvidenceError) -> Self {
         match error {
-            MapControlToEvidenceError::UnknownEvidence(ids) => {
-                rmcp::ErrorData::from(BatchError::Unknown {
-                    field: "evidence_ids",
-                    ids: ids.into_iter().map(Uuid::from).collect(),
-                })
-            }
-            MapControlToEvidenceError::ControlNotFound => not_found(),
-            MapControlToEvidenceError::AlreadyMapped => conflict(
-                ConflictKind::EvidenceControlMappingExists.code(),
-                ConflictKind::EvidenceControlMappingExists.message(),
+            MapControlToEvidenceError::Rejected {
+                unknown,
+                already_mapped,
+            } => batch_rejected(
+                "evidence_ids",
+                "evidence_ids contains unknown or already-mapped ids",
+                vec![
+                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+                    (
+                        "already_mapped_ids",
+                        already_mapped.into_iter().map(Uuid::from).collect(),
+                    ),
+                ],
             ),
+            MapControlToEvidenceError::ControlNotFound => not_found(),
             MapControlToEvidenceError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control evidence mapping repository failure");
                 rmcp::ErrorData::internal_error(

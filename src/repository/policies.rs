@@ -22,26 +22,9 @@ use crate::{
 };
 
 use super::{
-    constraints::classify_db_error, controls::ids_missing_from, documents::document_from_row,
+    constraints::classify_db_error, controls::ids_present_in, documents::document_from_row,
     BatchRejection, Error,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachPolicyToControlsOutcome {
-    Attached(Vec<ControlId>),
-    PolicyNotFound,
-    UnknownControls(Vec<ControlId>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachControlToPoliciesOutcome {
-    Attached(Vec<PolicyId>),
-    ControlNotFound,
-    InvalidPolicies {
-        unknown: Vec<PolicyId>,
-        archived: Vec<PolicyId>,
-    },
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivePolicyResult {
@@ -297,7 +280,7 @@ RETURNING policy_id, control_id
     pub async fn attach_policy_to_controls(
         &self,
         payload: &CreatePolicyControlMappingsPayload,
-    ) -> Result<AttachPolicyToControlsOutcome, Error> {
+    ) -> Result<Option<Vec<ControlId>>, Error> {
         let workspace_id = Uuid::from(self.workspace_id);
         let policy_id = Uuid::from(payload.policy_id);
 
@@ -316,13 +299,13 @@ WHERE id = $1
             .await?;
 
         if anchor.is_none() {
-            return Ok(AttachPolicyToControlsOutcome::PolicyNotFound);
+            return Ok(None);
         }
 
-        // Check for unknown controls before trying to insert so that we
-        // can see which are the actual IDs that are unknown, instead of
-        // just letting the insert fail giving us no useful information
-        // due to the transaction being rolled back.
+        // Resolve which controls exist in the workspace and which are already
+        // attached to this policy before inserting, so a rejection names every
+        // unknown and every already-attached id at once — a conflicting insert
+        // would abort the transaction and leave us nothing to report.
         let control_ids = payload
             .control_ids
             .iter()
@@ -341,14 +324,31 @@ WHERE id = ANY($1)
                 &[&control_ids, &workspace_id],
             )
             .await?;
+        let existing = self
+            .transaction
+            .query(
+                r#"
+SELECT control_id
+FROM policy_control_mappings
+WHERE policy_id = $1
+  AND control_id = ANY($2)
+"#,
+                &[&policy_id, &control_ids],
+            )
+            .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.control_ids)?
-            .into_iter()
-            .map(ControlId::from)
-            .collect::<Vec<_>>();
-
-        if !unknown.is_empty() {
-            return Ok(AttachPolicyToControlsOutcome::UnknownControls(unknown));
+        let known = ids_present_in(&in_workspace, "id")?;
+        let already = ids_present_in(&existing, "control_id")?;
+        let mut rejection = BatchRejection::default();
+        for id in &control_ids {
+            if !known.contains(id) {
+                rejection.unknown.push(*id);
+            } else if already.contains(id) {
+                rejection.already_mapped.push(*id);
+            }
+        }
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         self.transaction
@@ -362,15 +362,13 @@ SELECT $1, unnest($2::uuid[])
             .await
             .map_err(classify_db_error)?;
 
-        Ok(AttachPolicyToControlsOutcome::Attached(
-            payload.control_ids.clone(),
-        ))
+        Ok(Some(payload.control_ids.clone()))
     }
 
     pub async fn attach_control_to_policies(
         &self,
         payload: &CreateControlPolicyMappingsPayload,
-    ) -> Result<AttachControlToPoliciesOutcome, Error> {
+    ) -> Result<Option<Vec<PolicyId>>, Error> {
         let workspace_id = Uuid::from(self.workspace_id);
         let control_id = Uuid::from(payload.control_id);
 
@@ -388,12 +386,13 @@ WHERE id = $1
             .await?;
 
         if anchor.is_none() {
-            return Ok(AttachControlToPoliciesOutcome::ControlNotFound);
+            return Ok(None);
         }
 
-        // Resolve every requested policy before inserting so an unknown or
-        // archived id can be named precisely; a failing insert would abort the
-        // transaction and leave us no way to report which ids were at fault.
+        // Resolve every requested policy and every existing mapping before
+        // inserting so an unknown, archived, or already-attached id can be named
+        // precisely; a failing insert would abort the transaction and leave us no
+        // way to report which ids were at fault.
         let policy_ids = payload
             .policy_ids
             .iter()
@@ -412,28 +411,41 @@ WHERE id = ANY($1)
                 &[&policy_ids, &workspace_id],
             )
             .await?;
+        let existing = self
+            .transaction
+            .query(
+                r#"
+SELECT policy_id
+FROM policy_control_mappings
+WHERE control_id = $1
+  AND policy_id = ANY($2)
+"#,
+                &[&control_id, &policy_ids],
+            )
+            .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.policy_ids)?
-            .into_iter()
-            .map(PolicyId::from)
-            .collect::<Vec<_>>();
-
-        let archived_uuids = in_workspace
+        let known = ids_present_in(&in_workspace, "id")?;
+        let archived_ids = in_workspace
             .iter()
             .filter(|row| row.try_get::<_, bool>("archived").unwrap_or(false))
             .map(|row| row.try_get::<_, Uuid>("id"))
             .collect::<Result<std::collections::HashSet<_>, _>>()?;
-        // Preserve the caller's request order so the rejection lists archived
-        // ids the way they were written.
-        let archived = payload
-            .policy_ids
-            .iter()
-            .copied()
-            .filter(|id| archived_uuids.contains(&Uuid::from(*id)))
-            .collect::<Vec<_>>();
-
-        if !unknown.is_empty() || !archived.is_empty() {
-            return Ok(AttachControlToPoliciesOutcome::InvalidPolicies { unknown, archived });
+        let already = ids_present_in(&existing, "policy_id")?;
+        // Classify in request order; unknown precedes archived precedes
+        // already-attached for a single id, but every id lands in some bucket so
+        // the whole batch's failures come back in one response.
+        let mut rejection = BatchRejection::default();
+        for id in &policy_ids {
+            if !known.contains(id) {
+                rejection.unknown.push(*id);
+            } else if archived_ids.contains(id) {
+                rejection.archived.push(*id);
+            } else if already.contains(id) {
+                rejection.already_mapped.push(*id);
+            }
+        }
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         self.transaction
@@ -447,9 +459,7 @@ SELECT unnest($1::uuid[]), $2
             .await
             .map_err(classify_db_error)?;
 
-        Ok(AttachControlToPoliciesOutcome::Attached(
-            payload.policy_ids.clone(),
-        ))
+        Ok(Some(payload.policy_ids.clone()))
     }
 
     pub async fn detach_policy_from_controls(

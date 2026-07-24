@@ -10,10 +10,7 @@ use crate::{
         EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
         FrameworkRequirementId, UpdateControlPayload,
     },
-    repository::{
-        ConflictKind, CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome,
-        Error as RepositoryError, Postgres,
-    },
+    repository::{ConflictKind, Error as RepositoryError, Postgres},
     services::Error,
 };
 
@@ -45,11 +42,11 @@ pub enum MapEvidenceToControlsError {
     #[error("resource not found")]
     EvidenceNotFound,
 
-    #[error("control_ids contains unknown ids")]
-    UnknownControls(Vec<ControlId>),
-
-    #[error("this control is already mapped to the evidence")]
-    AlreadyMapped,
+    #[error("control_ids contains unknown or already-mapped ids")]
+    Rejected {
+        unknown: Vec<ControlId>,
+        already_mapped: Vec<ControlId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -58,9 +55,14 @@ pub enum MapEvidenceToControlsError {
 impl From<RepositoryError> for MapEvidenceToControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::Conflict(ConflictKind::EvidenceControlMappingExists) => {
-                Self::AlreadyMapped
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
+                already_mapped: rejection
+                    .already_mapped
+                    .into_iter()
+                    .map(ControlId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -71,11 +73,11 @@ pub enum MapControlToEvidenceError {
     #[error("resource not found")]
     ControlNotFound,
 
-    #[error("evidence_ids contains unknown ids")]
-    UnknownEvidence(Vec<EvidenceId>),
-
-    #[error("this evidence is already mapped to the control")]
-    AlreadyMapped,
+    #[error("evidence_ids contains unknown or already-mapped ids")]
+    Rejected {
+        unknown: Vec<EvidenceId>,
+        already_mapped: Vec<EvidenceId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -84,9 +86,18 @@ pub enum MapControlToEvidenceError {
 impl From<RepositoryError> for MapControlToEvidenceError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::Conflict(ConflictKind::EvidenceControlMappingExists) => {
-                Self::AlreadyMapped
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection
+                    .unknown
+                    .into_iter()
+                    .map(EvidenceId::from)
+                    .collect(),
+                already_mapped: rejection
+                    .already_mapped
+                    .into_iter()
+                    .map(EvidenceId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -267,8 +278,10 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateEvidenceControlMappingsPayload,
     ) -> Result<Vec<ControlId>, MapEvidenceToControlsError> {
-        let outcome = self
-            .repository
+        // A rejected batch arrives as an error so it rolls the transaction back;
+        // `From` turns it into the typed outcome, and `None` means the anchor
+        // evidence was not found.
+        self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
@@ -276,17 +289,8 @@ impl ControlService {
                 async move |context| context.create_evidence_control_mappings(&payload).await,
             )
             .await
-            .map_err(MapEvidenceToControlsError::from)?;
-
-        match outcome {
-            CreateEvidenceControlMappingsOutcome::Created(control_ids) => Ok(control_ids),
-            CreateEvidenceControlMappingsOutcome::EvidenceNotFound => {
-                Err(MapEvidenceToControlsError::EvidenceNotFound)
-            }
-            CreateEvidenceControlMappingsOutcome::UnknownControls(ids) => {
-                Err(MapEvidenceToControlsError::UnknownControls(ids))
-            }
-        }
+            .map_err(MapEvidenceToControlsError::from)?
+            .ok_or(MapEvidenceToControlsError::EvidenceNotFound)
     }
 
     pub async fn map_control_to_evidence(
@@ -294,8 +298,10 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateControlEvidenceMappingsPayload,
     ) -> Result<Vec<EvidenceId>, MapControlToEvidenceError> {
-        let outcome = self
-            .repository
+        // A rejected batch arrives as an error so it rolls the transaction back;
+        // `From` turns it into the typed outcome, and `None` means the anchor
+        // control was not found.
+        self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
@@ -303,17 +309,8 @@ impl ControlService {
                 async move |context| context.create_control_evidence_mappings(&payload).await,
             )
             .await
-            .map_err(MapControlToEvidenceError::from)?;
-
-        match outcome {
-            CreateControlEvidenceMappingsOutcome::Created(evidence_ids) => Ok(evidence_ids),
-            CreateControlEvidenceMappingsOutcome::ControlNotFound => {
-                Err(MapControlToEvidenceError::ControlNotFound)
-            }
-            CreateControlEvidenceMappingsOutcome::UnknownEvidence(ids) => {
-                Err(MapControlToEvidenceError::UnknownEvidence(ids))
-            }
-        }
+            .map_err(MapControlToEvidenceError::from)?
+            .ok_or(MapControlToEvidenceError::ControlNotFound)
     }
 
     pub async fn unmap_evidence_from_controls(

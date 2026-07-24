@@ -245,12 +245,6 @@ impl From<BatchError> for rmcp::ErrorData {
                 "field": field,
                 "ids": ids,
             }),
-            BatchError::Unknown { field, ids } => json!({
-                "code": "unknown_ids",
-                "message": message,
-                "field": field,
-                "ids": ids,
-            }),
         };
 
         rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
@@ -532,25 +526,6 @@ mod tests {
         let problem = problem(&error);
         assert_eq!(problem["code"], "duplicate_ids");
         assert_eq!(problem["field"], "evidence_ids");
-        assert_eq!(
-            problem["ids"],
-            serde_json::json!([first.to_string(), second.to_string()])
-        );
-    }
-
-    #[test]
-    fn unknown_batch_ids_all_appear_in_the_response() {
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        let error = rmcp::ErrorData::from(BatchError::Unknown {
-            field: "control_ids",
-            ids: vec![first, second],
-        });
-
-        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
-        let problem = problem(&error);
-        assert_eq!(problem["code"], "unknown_ids");
-        assert_eq!(problem["field"], "control_ids");
         assert_eq!(
             problem["ids"],
             serde_json::json!([first.to_string(), second.to_string()])

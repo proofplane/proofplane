@@ -11,10 +11,7 @@ use crate::{
         UpdatePolicyPayload,
     },
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail},
-    repository::{
-        ArchivePolicyResult, AttachControlToPoliciesOutcome, AttachPolicyToControlsOutcome,
-        ConflictKind, Error as RepositoryError, Postgres,
-    },
+    repository::{ArchivePolicyResult, ConflictKind, Error as RepositoryError, Postgres},
     validation::Validation,
 };
 
@@ -56,11 +53,11 @@ pub enum AttachPolicyToControlsError {
     #[error("resource not found")]
     PolicyNotFound,
 
-    #[error("control_ids contains unknown ids")]
-    UnknownControls(Vec<ControlId>),
-
-    #[error("this control is already attached to the policy")]
-    AlreadyAttached,
+    #[error("control_ids contains unknown or already-attached ids")]
+    Rejected {
+        unknown: Vec<ControlId>,
+        already_mapped: Vec<ControlId>,
+    },
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -69,9 +66,14 @@ pub enum AttachPolicyToControlsError {
 impl From<RepositoryError> for AttachPolicyToControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::Conflict(ConflictKind::PolicyControlMappingExists) => {
-                Self::AlreadyAttached
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
+                already_mapped: rejection
+                    .already_mapped
+                    .into_iter()
+                    .map(ControlId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -82,14 +84,12 @@ pub enum AttachControlToPoliciesError {
     #[error("resource not found")]
     ControlNotFound,
 
-    #[error("policy_ids contains unknown or archived ids")]
-    InvalidPolicies {
+    #[error("policy_ids contains unknown, archived, or already-attached ids")]
+    Rejected {
         unknown: Vec<PolicyId>,
         archived: Vec<PolicyId>,
+        already_mapped: Vec<PolicyId>,
     },
-
-    #[error("this policy is already attached to the control")]
-    AlreadyAttached,
 
     #[error("repository error")]
     Repository(RepositoryError),
@@ -98,9 +98,15 @@ pub enum AttachControlToPoliciesError {
 impl From<RepositoryError> for AttachControlToPoliciesError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::Conflict(ConflictKind::PolicyControlMappingExists) => {
-                Self::AlreadyAttached
-            }
+            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+                unknown: rejection.unknown.into_iter().map(PolicyId::from).collect(),
+                archived: rejection.archived.into_iter().map(PolicyId::from).collect(),
+                already_mapped: rejection
+                    .already_mapped
+                    .into_iter()
+                    .map(PolicyId::from)
+                    .collect(),
+            },
             other => Self::Repository(other),
         }
     }
@@ -284,8 +290,10 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: CreatePolicyControlMappingsPayload,
     ) -> Result<Vec<ControlId>, AttachPolicyToControlsError> {
-        let outcome = self
-            .repository
+        // A rejected batch arrives as an error so it rolls the transaction back;
+        // `From` turns it into the typed outcome, and `None` means the anchor
+        // policy was not found.
+        self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
@@ -293,17 +301,8 @@ impl PolicyService {
                 async move |context| context.attach_policy_to_controls(&payload).await,
             )
             .await
-            .map_err(AttachPolicyToControlsError::from)?;
-
-        match outcome {
-            AttachPolicyToControlsOutcome::Attached(control_ids) => Ok(control_ids),
-            AttachPolicyToControlsOutcome::PolicyNotFound => {
-                Err(AttachPolicyToControlsError::PolicyNotFound)
-            }
-            AttachPolicyToControlsOutcome::UnknownControls(ids) => {
-                Err(AttachPolicyToControlsError::UnknownControls(ids))
-            }
-        }
+            .map_err(AttachPolicyToControlsError::from)?
+            .ok_or(AttachPolicyToControlsError::PolicyNotFound)
     }
 
     pub async fn attach_control_to_policies(
@@ -311,8 +310,10 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: CreateControlPolicyMappingsPayload,
     ) -> Result<Vec<PolicyId>, AttachControlToPoliciesError> {
-        let outcome = self
-            .repository
+        // A rejected batch arrives as an error so it rolls the transaction back;
+        // `From` turns it into the typed outcome, and `None` means the anchor
+        // control was not found.
+        self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
                 connection.user_id,
@@ -320,17 +321,8 @@ impl PolicyService {
                 async move |context| context.attach_control_to_policies(&payload).await,
             )
             .await
-            .map_err(AttachControlToPoliciesError::from)?;
-
-        match outcome {
-            AttachControlToPoliciesOutcome::Attached(policy_ids) => Ok(policy_ids),
-            AttachControlToPoliciesOutcome::ControlNotFound => {
-                Err(AttachControlToPoliciesError::ControlNotFound)
-            }
-            AttachControlToPoliciesOutcome::InvalidPolicies { unknown, archived } => {
-                Err(AttachControlToPoliciesError::InvalidPolicies { unknown, archived })
-            }
-        }
+            .map_err(AttachControlToPoliciesError::from)?
+            .ok_or(AttachControlToPoliciesError::ControlNotFound)
     }
 
     pub async fn detach_policy_from_controls(

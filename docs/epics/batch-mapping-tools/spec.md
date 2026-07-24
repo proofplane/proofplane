@@ -134,18 +134,27 @@ send an agent hunting for a control it can plainly see in `list_controls`. The
 removal statement classifies both cases in the same pass that deletes — see the
 Implementation shape revision below.)_
 
-_(Revised during ticket 008 — the distinction above stands, but every removal/detach
-tool now reports **all** its failing-id categories together in one `batch_rejected`
-payload rather than one standalone code at a time. The payload carries an
-`unknown_ids` and a `not_mapped_ids` list (and, for `detach_control_from_policies`
-whose counterparts are policies, an `archived_ids` list), each always present so the
-shape is stable, with at least one non-empty. This mirrors `attach_control_to_policies`
-(ticket 007), which already reports `unknown_ids` + `archived_ids` together, and it
-lets one corrected retry fix a batch that failed several ways at once — the earlier
-precedence-ordered standalone `not_mapped_ids`/`archived_ids` codes are gone. The
-per-category classification in the delete pass is unchanged; only how the buckets are
-surfaced changed. Create tools keep their single standalone `unknown_ids` code — they
-have only one failure category.)_
+_(Revised during ticket 008 — **every batch tool, create and removal alike, now
+reports all its failing-id categories together in one `batch_rejected` payload**, so
+a caller learns exactly what failed and why in a single response and one corrected
+retry can fix a batch that failed several ways at once. The payload always carries a
+list per category the tool can produce, each key present (possibly `[]`) with at least
+one non-empty:_
+
+- _create/attach tools: `unknown_ids` + `already_mapped_ids` (plus `archived_ids` for
+  `attach_control_to_policies`, whose counterparts are policies)._
+- _removal/detach tools: `unknown_ids` + `not_mapped_ids` (plus `archived_ids` for
+  `detach_control_from_policies`)._
+
+_This replaced the earlier mix of a standalone `unknown_ids` code plus an opaque
+`*_mapping_exists` conflict on the create side, and standalone
+`not_mapped_ids`/`archived_ids` codes on the removal side — those top-level codes are
+gone; the same names now appear only as keys inside `batch_rejected`. The per-category
+classification is unchanged; only how the buckets are surfaced changed. An
+already-mapped pair is now enumerated (see the Implementation shape revision below for
+how the create path detects it without a conflicting insert). Batch-shape codes
+(`empty_batch`, `batch_too_large`, `duplicate_ids`) are argument validation and stay
+their own codes.)_
 
 ### Batch size
 
@@ -193,6 +202,20 @@ unknown-ID set is still named in full, in request order, before any write.
 its unknown IDs from a short `RETURNING` count only because it inserts against a
 brand-new policy where no duplicate can exist — the evidence↔control halves
 cannot, for the reason above.)_
+
+_(Revised during ticket 008 — **the create/attach batch methods now read existing
+mappings before inserting, too**, so an already-mapped pair is enumerated in
+`already_mapped_ids` rather than surfacing as an opaque `*_mapping_exists` conflict
+that names no ids. Each create batch runs three reads (anchor, counterparts in
+workspace, existing mappings among the requested counterparts), classifies every
+requested id into `unknown` / `already_mapped` (and `archived` for policy
+counterparts), and returns the combined rejection **before** any insert — so the
+insert only ever runs against ids known to be insertable, and the unique-violation
+path is now just a race fallback. Rejections travel as `Error::BatchRejected` on
+both create and removal paths, because `in_agent_connection_workspace_context`
+commits on `Ok`; the repository methods therefore return `Ok(None)` for a missing
+anchor, `Ok(Some(ids))` on success, and `Err(BatchRejected(..))` for an enumerated
+rejection.)_
 
 _(Revised during ticket 004 — **the removal methods do not resolve ids first, and
 must not report a rejection as an `Ok` value.** The read-first order above exists

@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        BatchKey, Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
+        Control, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
         CreateControlPayload, CreateEvidenceControlMappingPayload,
         CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
         DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceId, Framework,
@@ -16,20 +16,6 @@ use crate::{
 };
 
 use super::{constraints::classify_db_error, BatchRejection, Error};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CreateEvidenceControlMappingsOutcome {
-    Created(Vec<ControlId>),
-    EvidenceNotFound,
-    UnknownControls(Vec<ControlId>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CreateControlEvidenceMappingsOutcome {
-    Created(Vec<EvidenceId>),
-    ControlNotFound,
-    UnknownEvidence(Vec<EvidenceId>),
-}
 
 impl Postgres {
     pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
@@ -232,7 +218,7 @@ RETURNING evidence_id, control_id
     pub async fn create_evidence_control_mappings(
         &self,
         payload: &CreateEvidenceControlMappingsPayload,
-    ) -> Result<CreateEvidenceControlMappingsOutcome, Error> {
+    ) -> Result<Option<Vec<ControlId>>, Error> {
         let workspace_id = Uuid::from(self.workspace_id);
         let evidence_id = Uuid::from(payload.evidence_id);
 
@@ -250,7 +236,7 @@ WHERE id = $1
             .await?;
 
         if anchor.is_none() {
-            return Ok(CreateEvidenceControlMappingsOutcome::EvidenceNotFound);
+            return Ok(None);
         }
 
         let control_ids = payload
@@ -258,6 +244,10 @@ WHERE id = $1
             .iter()
             .map(|item| Uuid::from(item.control_id))
             .collect::<Vec<_>>();
+        // Resolve which controls exist in the workspace and which are already
+        // mapped to this evidence, both with plain reads before inserting: a
+        // conflicting insert would abort the transaction and prevent us from
+        // naming every offending id in one response.
         let in_workspace = self
             .transaction
             .query(
@@ -270,16 +260,31 @@ WHERE id = ANY($1)
                 &[&control_ids, &workspace_id],
             )
             .await?;
+        let existing = self
+            .transaction
+            .query(
+                r#"
+SELECT control_id
+FROM evidence_control_mappings
+WHERE evidence_id = $1
+  AND control_id = ANY($2)
+"#,
+                &[&evidence_id, &control_ids],
+            )
+            .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.items)?
-            .into_iter()
-            .map(ControlId::from)
-            .collect::<Vec<_>>();
-
-        if !unknown.is_empty() {
-            return Ok(CreateEvidenceControlMappingsOutcome::UnknownControls(
-                unknown,
-            ));
+        let known = ids_present_in(&in_workspace, "id")?;
+        let already = ids_present_in(&existing, "control_id")?;
+        let mut rejection = BatchRejection::default();
+        for id in &control_ids {
+            if !known.contains(id) {
+                rejection.unknown.push(*id);
+            } else if already.contains(id) {
+                rejection.already_mapped.push(*id);
+            }
+        }
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         let rationales = payload
@@ -299,7 +304,7 @@ FROM unnest($2::uuid[], $3::text[]) AS requested(control_id, rationale)
             .await
             .map_err(classify_db_error)?;
 
-        Ok(CreateEvidenceControlMappingsOutcome::Created(
+        Ok(Some(
             payload.items.iter().map(|item| item.control_id).collect(),
         ))
     }
@@ -307,16 +312,14 @@ FROM unnest($2::uuid[], $3::text[]) AS requested(control_id, rationale)
     /// Inserts a batch of evidence→control mappings for one control anchor — the
     /// mirror of [`create_evidence_control_mappings`](Self::create_evidence_control_mappings).
     ///
-    /// The anchor and every evidence id are resolved with plain reads *before*
-    /// the insert, so an unknown-id rejection reports every offending id (a
-    /// failed insert would abort the whole transaction and prevent further
-    /// queries). The insert then runs against ids already known to exist in the
-    /// workspace; an already-mapped pair raises a unique violation, which rolls
-    /// the batch back.
+    /// The anchor, every evidence id, and every existing mapping are resolved
+    /// with plain reads *before* the insert, so a rejection names every unknown
+    /// and every already-mapped id at once (a conflicting insert would abort the
+    /// whole transaction and prevent further queries).
     pub async fn create_control_evidence_mappings(
         &self,
         payload: &CreateControlEvidenceMappingsPayload,
-    ) -> Result<CreateControlEvidenceMappingsOutcome, Error> {
+    ) -> Result<Option<Vec<EvidenceId>>, Error> {
         let workspace_id = Uuid::from(self.workspace_id);
         let control_id = Uuid::from(payload.control_id);
 
@@ -334,7 +337,7 @@ WHERE id = $1
             .await?;
 
         if anchor.is_none() {
-            return Ok(CreateControlEvidenceMappingsOutcome::ControlNotFound);
+            return Ok(None);
         }
 
         let evidence_ids = payload
@@ -354,16 +357,31 @@ WHERE id = ANY($1)
                 &[&evidence_ids, &workspace_id],
             )
             .await?;
+        let existing = self
+            .transaction
+            .query(
+                r#"
+SELECT evidence_id
+FROM evidence_control_mappings
+WHERE control_id = $1
+  AND evidence_id = ANY($2)
+"#,
+                &[&control_id, &evidence_ids],
+            )
+            .await?;
 
-        let unknown = ids_missing_from(&in_workspace, "id", &payload.items)?
-            .into_iter()
-            .map(EvidenceId::from)
-            .collect::<Vec<_>>();
-
-        if !unknown.is_empty() {
-            return Ok(CreateControlEvidenceMappingsOutcome::UnknownEvidence(
-                unknown,
-            ));
+        let known = ids_present_in(&in_workspace, "id")?;
+        let already = ids_present_in(&existing, "evidence_id")?;
+        let mut rejection = BatchRejection::default();
+        for id in &evidence_ids {
+            if !known.contains(id) {
+                rejection.unknown.push(*id);
+            } else if already.contains(id) {
+                rejection.already_mapped.push(*id);
+            }
+        }
+        if !rejection.is_empty() {
+            return Err(Error::BatchRejected(rejection));
         }
 
         let rationales = payload
@@ -383,7 +401,7 @@ FROM unnest($2::uuid[], $3::text[]) AS requested(evidence_id, rationale)
             .await
             .map_err(classify_db_error)?;
 
-        Ok(CreateControlEvidenceMappingsOutcome::Created(
+        Ok(Some(
             payload.items.iter().map(|item| item.evidence_id).collect(),
         ))
     }
@@ -817,21 +835,13 @@ ORDER BY c.code
 
 /// The requested ids a resolving read did not return, in request order so a
 /// rejection lists them the way the caller wrote them.
-pub(super) fn ids_missing_from<T: BatchKey>(
-    found: &[Row],
-    column: &str,
-    requested: &[T],
-) -> Result<Vec<Uuid>, Error> {
-    let present = found
-        .iter()
+/// Collects the uuid `column` from every row into a set, for membership tests
+/// when classifying a batch's requested ids.
+pub(super) fn ids_present_in(rows: &[Row], column: &str) -> Result<HashSet<Uuid>, Error> {
+    rows.iter()
         .map(|row| row.try_get::<_, Uuid>(column))
-        .collect::<Result<HashSet<_>, _>>()?;
-
-    Ok(requested
-        .iter()
-        .map(BatchKey::key)
-        .filter(|id| !present.contains(id))
-        .collect())
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(Error::from)
 }
 
 fn framework_from_row(row: Row) -> Result<Framework, Error> {

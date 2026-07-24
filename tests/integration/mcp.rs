@@ -2868,8 +2868,9 @@ async fn mcp_map_evidence_to_controls_rejects_bad_batches_and_writes_nothing() {
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
+    assert_eq!(unknown.data["problem"]["already_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -2912,12 +2913,39 @@ async fn mcp_map_evidence_to_controls_rejects_bad_batches_and_writes_nothing() {
             }),
         )
         .await;
+    assert_eq!(already_mapped.data["problem"]["code"], "batch_rejected");
+    assert_eq!(already_mapped.data["problem"]["field"], "control_ids");
+    assert_eq!(already_mapped.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        already_mapped.data["problem"]["code"],
-        "evidence_control_mapping_exists"
+        already_mapped.data["problem"]["already_mapped_ids"],
+        json!([first_control.to_string()])
     );
-    // The successful second_control insert is rolled back with the failing batch,
-    // leaving only the pre-existing mapping.
+    // The would-be second_control insert never happened; nothing changed.
+    assert_eq!(evidence_control_mapping_count(&app, evidence_id).await, 1);
+
+    // A batch mixing an unknown id and an already-mapped id surfaces both buckets
+    // at once so a single retry can fix everything; nothing is written.
+    let mixed = mcp_client
+        .call_tool_error(
+            "map_evidence_to_controls",
+            json!({
+                "evidence_id": evidence_id,
+                "items": [
+                    { "control_id": unknown_a, "rationale": "unknown" },
+                    { "control_id": first_control, "rationale": "already mapped" },
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(mixed.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        mixed.data["problem"]["unknown_ids"],
+        json!([unknown_a.to_string()])
+    );
+    assert_eq!(
+        mixed.data["problem"]["already_mapped_ids"],
+        json!([first_control.to_string()])
+    );
     assert_eq!(evidence_control_mapping_count(&app, evidence_id).await, 1);
 
     let read_only = app
@@ -3130,9 +3158,10 @@ async fn mcp_map_control_to_evidence_rejects_bad_batches_and_writes_nothing() {
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "evidence_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["already_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -3172,12 +3201,39 @@ async fn mcp_map_control_to_evidence_rejects_bad_batches_and_writes_nothing() {
             }),
         )
         .await;
+    assert_eq!(already_mapped.data["problem"]["code"], "batch_rejected");
+    assert_eq!(already_mapped.data["problem"]["field"], "evidence_ids");
+    assert_eq!(already_mapped.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        already_mapped.data["problem"]["code"],
-        "evidence_control_mapping_exists"
+        already_mapped.data["problem"]["already_mapped_ids"],
+        json!([first_evidence_id.to_string()])
     );
-    // The successful second_evidence insert is rolled back with the failing
-    // batch, leaving only the pre-existing mapping.
+    // The would-be second_evidence insert never happened; nothing changed.
+    assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
+
+    // A batch mixing an unknown id and an already-mapped id surfaces both buckets
+    // at once so a single retry can fix everything; nothing is written.
+    let mixed = mcp_client
+        .call_tool_error(
+            "map_control_to_evidence",
+            json!({
+                "control_id": control_id,
+                "items": [
+                    { "evidence_id": unknown_a, "rationale": "unknown" },
+                    { "evidence_id": first_evidence_id, "rationale": "already mapped" },
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(mixed.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        mixed.data["problem"]["unknown_ids"],
+        json!([unknown_a.to_string()])
+    );
+    assert_eq!(
+        mixed.data["problem"]["already_mapped_ids"],
+        json!([first_evidence_id.to_string()])
+    );
     assert_eq!(control_evidence_mapping_count(&app, control_id).await, 1);
 
     let read_only = app
@@ -3359,9 +3415,10 @@ async fn mcp_attach_policy_to_controls_rejects_bad_batches_and_writes_nothing() 
             }),
         )
         .await;
-    assert_eq!(unknown.data["problem"]["code"], "unknown_ids");
+    assert_eq!(unknown.data["problem"]["code"], "batch_rejected");
     assert_eq!(unknown.data["problem"]["field"], "control_ids");
-    let reported = unknown.data["problem"]["ids"]
+    assert_eq!(unknown.data["problem"]["already_mapped_ids"], json!([]));
+    let reported = unknown.data["problem"]["unknown_ids"]
         .as_array()
         .expect("unknown ids array")
         .iter()
@@ -3413,12 +3470,36 @@ async fn mcp_attach_policy_to_controls_rejects_bad_batches_and_writes_nothing() 
             }),
         )
         .await;
+    assert_eq!(already_attached.data["problem"]["code"], "batch_rejected");
+    assert_eq!(already_attached.data["problem"]["field"], "control_ids");
+    assert_eq!(already_attached.data["problem"]["unknown_ids"], json!([]));
     assert_eq!(
-        already_attached.data["problem"]["code"],
-        "policy_control_mapping_exists"
+        already_attached.data["problem"]["already_mapped_ids"],
+        json!([first_control.to_string()])
     );
-    // The successful second_control insert is rolled back with the failing
-    // batch, leaving only the pre-existing mapping.
+    // The would-be second_control insert never happened; nothing changed.
+    assert_eq!(policy_control_mapping_count(&app, policy_id).await, 1);
+
+    // A batch mixing an unknown id and an already-attached id surfaces both
+    // buckets at once so a single retry can fix everything; nothing is written.
+    let mixed = mcp_client
+        .call_tool_error(
+            "attach_policy_to_controls",
+            json!({
+                "policy_id": policy_id,
+                "control_ids": [unknown_id, first_control],
+            }),
+        )
+        .await;
+    assert_eq!(mixed.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        mixed.data["problem"]["unknown_ids"],
+        json!([unknown_id.to_string()])
+    );
+    assert_eq!(
+        mixed.data["problem"]["already_mapped_ids"],
+        json!([first_control.to_string()])
+    );
     assert_eq!(policy_control_mapping_count(&app, policy_id).await, 1);
 
     let read_only = app
@@ -3688,12 +3769,44 @@ async fn mcp_attach_control_to_policies_rejects_bad_batches_and_writes_nothing()
             }),
         )
         .await;
+    assert_eq!(already_attached.data["problem"]["code"], "batch_rejected");
+    assert_eq!(already_attached.data["problem"]["field"], "policy_ids");
+    assert_eq!(already_attached.data["problem"]["unknown_ids"], json!([]));
+    assert_eq!(already_attached.data["problem"]["archived_ids"], json!([]));
     assert_eq!(
-        already_attached.data["problem"]["code"],
-        "policy_control_mapping_exists"
+        already_attached.data["problem"]["already_mapped_ids"],
+        json!([first_policy.to_string()])
     );
-    // The successful second_policy insert is rolled back with the failing
-    // batch, leaving only the pre-existing mapping.
+    // The would-be second_policy insert never happened; nothing changed.
+    assert_eq!(
+        policy_control_mapping_count_for_control(&app, control_id).await,
+        1
+    );
+
+    // Unknown, archived, and already-attached policies all surface together in a
+    // single response; nothing is written.
+    let all_buckets = mcp_client
+        .call_tool_error(
+            "attach_control_to_policies",
+            json!({
+                "control_id": control_id,
+                "policy_ids": [unknown_id, archived_policy, first_policy],
+            }),
+        )
+        .await;
+    assert_eq!(all_buckets.data["problem"]["code"], "batch_rejected");
+    assert_eq!(
+        all_buckets.data["problem"]["unknown_ids"],
+        json!([unknown_id.to_string()])
+    );
+    assert_eq!(
+        all_buckets.data["problem"]["archived_ids"],
+        json!([archived_policy.to_string()])
+    );
+    assert_eq!(
+        all_buckets.data["problem"]["already_mapped_ids"],
+        json!([first_policy.to_string()])
+    );
     assert_eq!(
         policy_control_mapping_count_for_control(&app, control_id).await,
         1
