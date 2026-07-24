@@ -7,6 +7,7 @@ use crate::{
     routes::request_context::RequestId,
     services::agent_connections::AgentConnectionContext,
 };
+use rmcp::ErrorData;
 use serde_json::json;
 
 pub const SESSION_ID_HEADER: &str = "mcp-session-id";
@@ -22,7 +23,7 @@ impl McpRequestContext {
     pub fn authorize_connection(
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
-    ) -> Result<Self, rmcp::ErrorData> {
+    ) -> Result<Self, ErrorData> {
         let connection = workspace_principal(extensions)?;
         let request_id = extensions
             .get::<RequestId>()
@@ -43,7 +44,7 @@ impl McpRequestContext {
         extensions: &http::Extensions,
         headers: &http::HeaderMap,
         required_permission: WorkspacePermission,
-    ) -> Result<Self, rmcp::ErrorData> {
+    ) -> Result<Self, ErrorData> {
         let context = Self::authorize_connection(extensions, headers)?;
 
         if !context.connection.permissions.has(required_permission) {
@@ -58,7 +59,7 @@ impl McpRequestContext {
         headers: &http::HeaderMap,
         workspace_id: WorkspaceId,
         required_permission: WorkspacePermission,
-    ) -> Result<Self, rmcp::ErrorData> {
+    ) -> Result<Self, ErrorData> {
         let context = Self::authorize_connection(extensions, headers)?;
 
         if context.connection.workspace_id != workspace_id
@@ -82,21 +83,19 @@ impl McpRequestContext {
     }
 }
 
-fn workspace_principal(
-    extensions: &http::Extensions,
-) -> Result<AgentConnectionContext, rmcp::ErrorData> {
+fn workspace_principal(extensions: &http::Extensions) -> Result<AgentConnectionContext, ErrorData> {
     match extensions.get::<McpPrincipal>() {
         Some(McpPrincipal::AgentConnection(connection)) => Ok(*connection),
         None => Err(internal_context_error()),
     }
 }
 
-fn internal_context_error() -> rmcp::ErrorData {
-    rmcp::ErrorData::internal_error("request context unavailable", None)
+fn internal_context_error() -> ErrorData {
+    ErrorData::internal_error("request context unavailable", None)
 }
 
-fn not_found() -> rmcp::ErrorData {
-    rmcp::ErrorData::resource_not_found(
+fn not_found() -> ErrorData {
+    ErrorData::resource_not_found(
         "resource not found",
         Some(json!({
             "problem": {

@@ -290,9 +290,6 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: CreatePolicyControlMappingsPayload,
     ) -> Result<Vec<ControlId>, AttachPolicyToControlsError> {
-        // A rejected batch arrives as an error so it rolls the transaction back;
-        // `From` turns it into the typed outcome, and `None` means the anchor
-        // policy was not found.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
@@ -310,9 +307,6 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: CreateControlPolicyMappingsPayload,
     ) -> Result<Vec<PolicyId>, AttachControlToPoliciesError> {
-        // A rejected batch arrives as an error so it rolls the transaction back;
-        // `From` turns it into the typed outcome, and `None` means the anchor
-        // control was not found.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
@@ -330,8 +324,6 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: DeletePolicyControlMappingsPayload,
     ) -> Result<Vec<ControlId>, DetachPolicyFromControlsError> {
-        // A rejected batch arrives as an error because that is what rolls the
-        // deletes back; `From` turns it back into the typed outcome.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
@@ -349,8 +341,6 @@ impl PolicyService {
         connection: AgentConnectionContext,
         payload: DeleteControlPolicyMappingsPayload,
     ) -> Result<Vec<PolicyId>, DetachControlFromPoliciesError> {
-        // A rejected batch arrives as an error because that is what rolls the
-        // deletes back; `From` turns it back into the typed outcome.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,

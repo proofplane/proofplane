@@ -1,6 +1,9 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, model::ErrorCode, schemars, schemars::JsonSchema,
-    service::RequestContext, tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    model::ErrorCode,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -44,7 +47,7 @@ impl ProofplaneMcp {
     async fn list_frameworks(
         &self,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ListFrameworksResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListFrameworksResponse>, ErrorData> {
         authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let frameworks = self.controls.list_frameworks().await?;
 
@@ -61,7 +64,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<FrameworkRequirementsRequest>,
-    ) -> Result<Json<ListFrameworkRequirementsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListFrameworkRequirementsResponse>, ErrorData> {
         authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let framework_id =
             parse_uuid_arg("framework_id", args.framework_id).map(FrameworkId::from)?;
@@ -85,7 +88,7 @@ impl ProofplaneMcp {
     async fn list_controls(
         &self,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ListControlsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListControlsResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let controls = self
             .controls
@@ -105,7 +108,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<GetControlRequest>,
-    ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
+    ) -> Result<Json<ControlResponseDTO>, ErrorData> {
         let control_id = parse_get_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let control = self
@@ -125,7 +128,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateControlRequest>,
-    ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
+    ) -> Result<Json<ControlResponseDTO>, ErrorData> {
         let payload = parse_create_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -158,7 +161,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ReplaceControlRequest>,
-    ) -> Result<Json<ControlResponseDTO>, rmcp::ErrorData> {
+    ) -> Result<Json<ControlResponseDTO>, ErrorData> {
         let (control_id, payload) = parse_replace_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -192,7 +195,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceArg>,
-    ) -> Result<Json<ListEvidenceControlMappingsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListEvidenceControlMappingsResponse>, ErrorData> {
         let evidence_id = parse_evidence_arg(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let mappings = self
@@ -214,7 +217,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<MapEvidenceToControlRequest>,
-    ) -> Result<Json<EvidenceControlMappingResponseDTO>, rmcp::ErrorData> {
+    ) -> Result<Json<EvidenceControlMappingResponseDTO>, ErrorData> {
         let payload = parse_map_evidence_to_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -252,7 +255,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<MapEvidenceToControlsRequest>,
-    ) -> Result<Json<MapEvidenceToControlsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<MapEvidenceToControlsResponse>, ErrorData> {
         let payload = parse_map_evidence_to_controls_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -297,7 +300,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<MapControlToEvidenceRequest>,
-    ) -> Result<Json<MapControlToEvidenceResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<MapControlToEvidenceResponse>, ErrorData> {
         let payload = parse_map_control_to_evidence_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -342,7 +345,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<UnmapEvidenceFromControlsRequest>,
-    ) -> Result<Json<UnmapEvidenceFromControlsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<UnmapEvidenceFromControlsResponse>, ErrorData> {
         let payload = parse_unmap_evidence_from_controls_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -387,7 +390,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<UnmapControlFromEvidenceRequest>,
-    ) -> Result<Json<UnmapControlFromEvidenceResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<UnmapControlFromEvidenceResponse>, ErrorData> {
         let payload = parse_unmap_control_from_evidence_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -432,7 +435,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<RemoveEvidenceControlMappingRequest>,
-    ) -> Result<Json<RemoveEvidenceControlMappingResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<RemoveEvidenceControlMappingResponse>, ErrorData> {
         let (evidence_id, control_id) = parse_remove_evidence_control_mapping_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -712,7 +715,7 @@ struct RemoveEvidenceControlMappingResponse {
 
 fn parse_map_evidence_to_control_request(
     args: MapEvidenceToControlRequest,
-) -> Result<CreateEvidenceControlMappingPayload, rmcp::ErrorData> {
+) -> Result<CreateEvidenceControlMappingPayload, ErrorData> {
     let (evidence_id, control_id) = validate! {
         evidence_id <- required_uuid("evidence_id", args.evidence_id)
             .map(EvidenceId::from),
@@ -735,7 +738,7 @@ fn parse_map_evidence_to_control_request(
 
 fn parse_map_evidence_to_controls_request(
     args: MapEvidenceToControlsRequest,
-) -> Result<CreateEvidenceControlMappingsPayload, rmcp::ErrorData> {
+) -> Result<CreateEvidenceControlMappingsPayload, ErrorData> {
     let evidence_id = required_uuid("evidence_id", args.evidence_id)
         .map(EvidenceId::from)
         .into_result()
@@ -766,7 +769,7 @@ fn parse_map_evidence_to_controls_request(
 
 fn parse_map_control_to_evidence_request(
     args: MapControlToEvidenceRequest,
-) -> Result<CreateControlEvidenceMappingsPayload, rmcp::ErrorData> {
+) -> Result<CreateControlEvidenceMappingsPayload, ErrorData> {
     let control_id = required_uuid("control_id", args.control_id)
         .map(ControlId::from)
         .into_result()
@@ -797,7 +800,7 @@ fn parse_map_control_to_evidence_request(
 
 fn parse_unmap_evidence_from_controls_request(
     args: UnmapEvidenceFromControlsRequest,
-) -> Result<DeleteEvidenceControlMappingsPayload, rmcp::ErrorData> {
+) -> Result<DeleteEvidenceControlMappingsPayload, ErrorData> {
     let evidence_id = required_uuid("evidence_id", args.evidence_id)
         .map(EvidenceId::from)
         .into_result()
@@ -824,7 +827,7 @@ fn parse_unmap_evidence_from_controls_request(
 
 fn parse_unmap_control_from_evidence_request(
     args: UnmapControlFromEvidenceRequest,
-) -> Result<DeleteControlEvidenceMappingsPayload, rmcp::ErrorData> {
+) -> Result<DeleteControlEvidenceMappingsPayload, ErrorData> {
     let control_id = required_uuid("control_id", args.control_id)
         .map(ControlId::from)
         .into_result()
@@ -849,7 +852,7 @@ fn parse_unmap_control_from_evidence_request(
     })
 }
 
-impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
+impl From<UnmapControlFromEvidenceError> for ErrorData {
     fn from(error: UnmapControlFromEvidenceError) -> Self {
         match error {
             UnmapControlFromEvidenceError::Rejected {
@@ -869,7 +872,7 @@ impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
             UnmapControlFromEvidenceError::ControlNotFound => not_found(),
             UnmapControlFromEvidenceError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control evidence unmapping repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -883,7 +886,7 @@ impl From<UnmapControlFromEvidenceError> for rmcp::ErrorData {
     }
 }
 
-impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
+impl From<UnmapEvidenceFromControlsError> for ErrorData {
     fn from(error: UnmapEvidenceFromControlsError) -> Self {
         match error {
             UnmapEvidenceFromControlsError::Rejected {
@@ -903,7 +906,7 @@ impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
             UnmapEvidenceFromControlsError::EvidenceNotFound => not_found(),
             UnmapEvidenceFromControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch evidence control unmapping repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -917,7 +920,7 @@ impl From<UnmapEvidenceFromControlsError> for rmcp::ErrorData {
     }
 }
 
-impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
+impl From<MapEvidenceToControlsError> for ErrorData {
     fn from(error: MapEvidenceToControlsError) -> Self {
         match error {
             MapEvidenceToControlsError::Rejected {
@@ -937,7 +940,7 @@ impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
             MapEvidenceToControlsError::EvidenceNotFound => not_found(),
             MapEvidenceToControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch evidence control mapping repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -951,7 +954,7 @@ impl From<MapEvidenceToControlsError> for rmcp::ErrorData {
     }
 }
 
-impl From<MapControlToEvidenceError> for rmcp::ErrorData {
+impl From<MapControlToEvidenceError> for ErrorData {
     fn from(error: MapControlToEvidenceError) -> Self {
         match error {
             MapControlToEvidenceError::Rejected {
@@ -971,7 +974,7 @@ impl From<MapControlToEvidenceError> for rmcp::ErrorData {
             MapControlToEvidenceError::ControlNotFound => not_found(),
             MapControlToEvidenceError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control evidence mapping repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -985,7 +988,7 @@ impl From<MapControlToEvidenceError> for rmcp::ErrorData {
     }
 }
 
-fn parse_get_control_request(args: GetControlRequest) -> Result<ControlId, rmcp::ErrorData> {
+fn parse_get_control_request(args: GetControlRequest) -> Result<ControlId, ErrorData> {
     validate! {
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
         => control_id,
@@ -996,7 +999,7 @@ fn parse_get_control_request(args: GetControlRequest) -> Result<ControlId, rmcp:
 
 fn parse_create_control_request(
     args: CreateControlRequest,
-) -> Result<CreateControlPayload, rmcp::ErrorData> {
+) -> Result<CreateControlPayload, ErrorData> {
     let framework_requirement_ids = validate! {
         framework_requirement_ids <- required_uuid_array(
             "framework_requirement_ids",
@@ -1026,7 +1029,7 @@ fn parse_create_control_request(
 
 fn parse_replace_control_request(
     args: ReplaceControlRequest,
-) -> Result<(ControlId, UpdateControlPayload), rmcp::ErrorData> {
+) -> Result<(ControlId, UpdateControlPayload), ErrorData> {
     let (control_id, framework_requirement_ids) = validate! {
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
         framework_requirement_ids <- required_uuid_array(
@@ -1092,7 +1095,7 @@ fn required_uuid_array(
 
 fn parse_remove_evidence_control_mapping_request(
     args: RemoveEvidenceControlMappingRequest,
-) -> Result<(EvidenceId, ControlId), rmcp::ErrorData> {
+) -> Result<(EvidenceId, ControlId), ErrorData> {
     validate! {
         evidence_id <- required_uuid("evidence_id", args.evidence_id)
             .map(EvidenceId::from),
@@ -1103,10 +1106,10 @@ fn parse_remove_evidence_control_mapping_request(
     .map_err(argument_errors)
 }
 
-impl From<ControlMutationError> for rmcp::ErrorData {
+impl From<ControlMutationError> for ErrorData {
     fn from(error: ControlMutationError) -> Self {
         match error {
-            ControlMutationError::CodeTaken => rmcp::ErrorData::new(
+            ControlMutationError::CodeTaken => ErrorData::new(
                 ErrorCode(-32000),
                 "a control with this code already exists in the workspace",
                 Some(json!({
@@ -1117,7 +1120,7 @@ impl From<ControlMutationError> for rmcp::ErrorData {
                 })),
             ),
             ControlMutationError::InvalidFrameworkRequirementReferences => {
-                rmcp::ErrorData::invalid_params(
+                ErrorData::invalid_params(
                     "tool argument validation failed",
                     Some(json!({
                         "problem": {
@@ -1133,7 +1136,7 @@ impl From<ControlMutationError> for rmcp::ErrorData {
             }
             ControlMutationError::Repository(error) => {
                 tracing::error!(%error, "MCP control mutation repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -1153,10 +1156,11 @@ mod tests {
         parse_create_control_request, parse_replace_control_request, ControlDTO,
         ReplaceControlRequest,
     };
+    use rmcp::ErrorData;
     use serde_json::json;
     use uuid::Uuid;
 
-    fn field_issue_names(error: &rmcp::ErrorData) -> Vec<String> {
+    fn field_issue_names(error: &ErrorData) -> Vec<String> {
         error.data.as_ref().expect("error data")["problem"]["field_issues"]
             .as_array()
             .expect("field issues")

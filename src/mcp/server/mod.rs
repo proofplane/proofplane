@@ -16,7 +16,7 @@ use rmcp::{
         ReadResourceResult, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
-    tool_handler, RoleServer, ServerHandler,
+    tool_handler, ErrorData, RoleServer, ServerHandler,
 };
 
 use crate::{
@@ -136,7 +136,7 @@ impl ServerHandler for ProofplaneMcp {
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+    ) -> Result<ListResourcesResult, ErrorData> {
         authorize_connection(&context)?;
         Ok(resources::list_doc_resources())
     }
@@ -145,7 +145,7 @@ impl ServerHandler for ProofplaneMcp {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    ) -> Result<ReadResourceResult, ErrorData> {
         authorize_connection(&context)?;
         resources::read_doc_resource(&request.uri)
     }

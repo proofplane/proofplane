@@ -1,6 +1,9 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, model::ErrorCode, schemars, schemars::JsonSchema,
-    service::RequestContext, tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    model::ErrorCode,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -43,7 +46,7 @@ impl ProofplaneMcp {
     async fn list_policies(
         &self,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ListPoliciesResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListPoliciesResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let policies = self
             .policies
@@ -65,7 +68,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<PolicyRequest>,
-    ) -> Result<Json<PolicyDetailResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<PolicyDetailResponse>, ErrorData> {
         let policy_id = parse_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let policy = self
@@ -92,7 +95,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreatePolicyRequest>,
-    ) -> Result<Json<PolicyDetailResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<PolicyDetailResponse>, ErrorData> {
         let payload = parse_create_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let policy = self
@@ -118,7 +121,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<UpdatePolicyRequest>,
-    ) -> Result<Json<PolicyDetailResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<PolicyDetailResponse>, ErrorData> {
         let (policy_id, payload) = parse_update_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let policy = self
@@ -145,7 +148,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<PolicyRequest>,
-    ) -> Result<Json<ArchivePolicyResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ArchivePolicyResponse>, ErrorData> {
         let policy_id = parse_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let result = self
@@ -161,7 +164,7 @@ impl ProofplaneMcp {
             return Err(match result {
                 ArchivePolicyResult::NotFound => not_found(),
                 ArchivePolicyResult::DocumentInProgress => policy_document_in_progress(),
-                ArchivePolicyResult::Archived { .. } => rmcp::ErrorData::internal_error(
+                ArchivePolicyResult::Archived { .. } => ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -194,7 +197,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<PolicyControlRequest>,
-    ) -> Result<Json<PolicyControlResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<PolicyControlResponse>, ErrorData> {
         let (policy_id, control_id) = parse_policy_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let mapping = self
@@ -225,7 +228,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<PolicyControlRequest>,
-    ) -> Result<Json<PolicyControlResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<PolicyControlResponse>, ErrorData> {
         let (policy_id, control_id) = parse_policy_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let detached = self
@@ -258,7 +261,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<AttachPolicyToControlsRequest>,
-    ) -> Result<Json<AttachPolicyToControlsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<AttachPolicyToControlsResponse>, ErrorData> {
         let payload = parse_attach_policy_to_controls_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -303,7 +306,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<AttachControlToPoliciesRequest>,
-    ) -> Result<Json<AttachControlToPoliciesResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<AttachControlToPoliciesResponse>, ErrorData> {
         let payload = parse_attach_control_to_policies_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -348,7 +351,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<DetachPolicyFromControlsRequest>,
-    ) -> Result<Json<DetachPolicyFromControlsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<DetachPolicyFromControlsResponse>, ErrorData> {
         let payload = parse_detach_policy_from_controls_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -393,7 +396,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<DetachControlFromPoliciesRequest>,
-    ) -> Result<Json<DetachControlFromPoliciesResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<DetachControlFromPoliciesResponse>, ErrorData> {
         let payload = parse_detach_control_from_policies_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
@@ -627,7 +630,7 @@ struct DetachControlFromPoliciesResponse {
     policy_ids: Vec<String>,
 }
 
-fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, rmcp::ErrorData> {
+fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
         => policy_id,
@@ -638,7 +641,7 @@ fn parse_policy_request(args: PolicyRequest) -> Result<PolicyId, rmcp::ErrorData
 
 fn parse_create_policy_request(
     args: CreatePolicyRequest,
-) -> Result<CreatePolicyPayload, rmcp::ErrorData> {
+) -> Result<CreatePolicyPayload, ErrorData> {
     let control_ids = optional_control_ids(args.control_ids)
         .into_result()
         .map_err(argument_errors)?;
@@ -652,7 +655,7 @@ fn parse_create_policy_request(
 
 fn parse_update_policy_request(
     args: UpdatePolicyRequest,
-) -> Result<(PolicyId, UpdatePolicyPayload), rmcp::ErrorData> {
+) -> Result<(PolicyId, UpdatePolicyPayload), ErrorData> {
     let policy_id = validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
         => policy_id,
@@ -671,7 +674,7 @@ fn parse_update_policy_request(
 
 fn parse_policy_control_request(
     args: PolicyControlRequest,
-) -> Result<(PolicyId, ControlId), rmcp::ErrorData> {
+) -> Result<(PolicyId, ControlId), ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
         control_id <- required_uuid("control_id", args.control_id).map(ControlId::from),
@@ -683,7 +686,7 @@ fn parse_policy_control_request(
 
 fn parse_attach_policy_to_controls_request(
     args: AttachPolicyToControlsRequest,
-) -> Result<CreatePolicyControlMappingsPayload, rmcp::ErrorData> {
+) -> Result<CreatePolicyControlMappingsPayload, ErrorData> {
     let policy_id = required_uuid("policy_id", args.policy_id)
         .map(PolicyId::from)
         .into_result()
@@ -710,7 +713,7 @@ fn parse_attach_policy_to_controls_request(
 
 fn parse_attach_control_to_policies_request(
     args: AttachControlToPoliciesRequest,
-) -> Result<CreateControlPolicyMappingsPayload, rmcp::ErrorData> {
+) -> Result<CreateControlPolicyMappingsPayload, ErrorData> {
     let control_id = required_uuid("control_id", args.control_id)
         .map(ControlId::from)
         .into_result()
@@ -737,7 +740,7 @@ fn parse_attach_control_to_policies_request(
 
 fn parse_detach_policy_from_controls_request(
     args: DetachPolicyFromControlsRequest,
-) -> Result<DeletePolicyControlMappingsPayload, rmcp::ErrorData> {
+) -> Result<DeletePolicyControlMappingsPayload, ErrorData> {
     let policy_id = required_uuid("policy_id", args.policy_id)
         .map(PolicyId::from)
         .into_result()
@@ -764,7 +767,7 @@ fn parse_detach_policy_from_controls_request(
 
 fn parse_detach_control_from_policies_request(
     args: DetachControlFromPoliciesRequest,
-) -> Result<DeleteControlPolicyMappingsPayload, rmcp::ErrorData> {
+) -> Result<DeleteControlPolicyMappingsPayload, ErrorData> {
     let control_id = required_uuid("control_id", args.control_id)
         .map(ControlId::from)
         .into_result()
@@ -772,6 +775,11 @@ fn parse_detach_control_from_policies_request(
 
     let values = args.policy_ids.unwrap_or_default();
     let mut policy_ids = Vec::with_capacity(values.len());
+    // TODO: This loop makes it so that we can't really use `validate!`
+    // for the validation of this input. It's a pattern across all the
+    // batch payloads. I think we can refactor this using functional
+    // patterns to make it so that we can do this in one of the
+    // applicative function calls in `validate!`.
     for value in values {
         let policy_id = required_uuid("policy_ids", Some(value))
             .map(PolicyId::from)
@@ -813,7 +821,7 @@ fn optional_control_ids(
     }
 }
 
-impl From<PolicyMutationError> for rmcp::ErrorData {
+impl From<PolicyMutationError> for ErrorData {
     fn from(error: PolicyMutationError) -> Self {
         match error {
             PolicyMutationError::Validation(errors) => domain_errors(errors),
@@ -833,7 +841,7 @@ impl From<PolicyMutationError> for rmcp::ErrorData {
     }
 }
 
-impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
+impl From<AttachPolicyToControlsError> for ErrorData {
     fn from(error: AttachPolicyToControlsError) -> Self {
         match error {
             AttachPolicyToControlsError::Rejected {
@@ -853,7 +861,7 @@ impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
             AttachPolicyToControlsError::PolicyNotFound => not_found(),
             AttachPolicyToControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch policy control attachment repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -867,12 +875,9 @@ impl From<AttachPolicyToControlsError> for rmcp::ErrorData {
     }
 }
 
-impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
+impl From<AttachControlToPoliciesError> for ErrorData {
     fn from(error: AttachControlToPoliciesError) -> Self {
         match error {
-            // Unknown, archived, and already-attached ids are reported together
-            // in one payload so a single retry can fix them all — see the
-            // batch-mapping-tools spec.
             AttachControlToPoliciesError::Rejected {
                 unknown,
                 archived,
@@ -895,7 +900,7 @@ impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
             AttachControlToPoliciesError::ControlNotFound => not_found(),
             AttachControlToPoliciesError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control policy attachment repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -909,7 +914,7 @@ impl From<AttachControlToPoliciesError> for rmcp::ErrorData {
     }
 }
 
-impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
+impl From<DetachPolicyFromControlsError> for ErrorData {
     fn from(error: DetachPolicyFromControlsError) -> Self {
         match error {
             DetachPolicyFromControlsError::Rejected {
@@ -929,7 +934,7 @@ impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
             DetachPolicyFromControlsError::PolicyNotFound => not_found(),
             DetachPolicyFromControlsError::Repository(error) => {
                 tracing::error!(%error, "MCP batch policy control detachment repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -943,7 +948,7 @@ impl From<DetachPolicyFromControlsError> for rmcp::ErrorData {
     }
 }
 
-impl From<DetachControlFromPoliciesError> for rmcp::ErrorData {
+impl From<DetachControlFromPoliciesError> for ErrorData {
     fn from(error: DetachControlFromPoliciesError) -> Self {
         match error {
             DetachControlFromPoliciesError::Rejected {
@@ -968,7 +973,7 @@ impl From<DetachControlFromPoliciesError> for rmcp::ErrorData {
             DetachControlFromPoliciesError::ControlNotFound => not_found(),
             DetachControlFromPoliciesError::Repository(error) => {
                 tracing::error!(%error, "MCP batch control policy detachment repository failure");
-                rmcp::ErrorData::internal_error(
+                ErrorData::internal_error(
                     "dependency failure",
                     Some(json!({
                         "problem": {
@@ -982,8 +987,8 @@ impl From<DetachControlFromPoliciesError> for rmcp::ErrorData {
     }
 }
 
-fn conflict(code: &'static str, message: &'static str) -> rmcp::ErrorData {
-    rmcp::ErrorData::new(
+fn conflict(code: &'static str, message: &'static str) -> ErrorData {
+    ErrorData::new(
         ErrorCode(-32000),
         message,
         Some(json!({
@@ -995,7 +1000,7 @@ fn conflict(code: &'static str, message: &'static str) -> rmcp::ErrorData {
     )
 }
 
-fn policy_document_in_progress() -> rmcp::ErrorData {
+fn policy_document_in_progress() -> ErrorData {
     conflict(
         "policy_document_in_progress",
         "policy cannot be archived while its document is being processed",

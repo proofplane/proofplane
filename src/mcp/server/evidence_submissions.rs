@@ -1,6 +1,8 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +31,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceArg>,
-    ) -> Result<Json<ListEvidenceSubmissionsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListEvidenceSubmissionsResponse>, ErrorData> {
         let evidence_id = parse_evidence_arg(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
@@ -54,7 +56,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<GetEvidenceSubmissionRequest>,
-    ) -> Result<Json<EvidenceSubmissionResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<EvidenceSubmissionResponse>, ErrorData> {
         let submission_id = parse_evidence_submission_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
@@ -75,7 +77,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceArg>,
-    ) -> Result<Json<EvidenceSubmissionResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<EvidenceSubmissionResponse>, ErrorData> {
         let evidence_id = parse_evidence_arg(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidenceSubmissions)?;
@@ -183,7 +185,7 @@ impl From<Document> for EvidenceDocumentResponseDTO {
 
 pub(super) fn parse_evidence_submission_request(
     args: GetEvidenceSubmissionRequest,
-) -> Result<EvidenceSubmissionId, rmcp::ErrorData> {
+) -> Result<EvidenceSubmissionId, ErrorData> {
     validate! {
         submission_id <- required_uuid("submission_id", args.submission_id)
             .map(EvidenceSubmissionId::from),

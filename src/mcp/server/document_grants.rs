@@ -1,8 +1,10 @@
 use uuid::Uuid;
 
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +35,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ManageEvidenceSubmissionsRequest>,
-    ) -> Result<Json<ManageEvidenceSubmissionsResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ManageEvidenceSubmissionsResponse>, ErrorData> {
         let (evidence_id, coverage) = parse_manage_submissions_request(args)?;
         let context =
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
@@ -94,7 +96,7 @@ impl From<IssuedUploadGrant> for ManageEvidenceSubmissionsResponse {
 
 fn parse_manage_submissions_request(
     args: ManageEvidenceSubmissionsRequest,
-) -> Result<(EvidenceId, CoverageWindow), rmcp::ErrorData> {
+) -> Result<(EvidenceId, CoverageWindow), ErrorData> {
     let (evidence_id, valid_from, valid_until) = validate! {
         evidence_id <- required_uuid("evidence_id", args.evidence_id).map(EvidenceId::from),
         valid_from <- required_timestamp("valid_from", args.valid_from),
@@ -110,13 +112,13 @@ fn parse_manage_submissions_request(
     Ok((evidence_id, coverage))
 }
 
-impl From<UploadGrantError> for rmcp::ErrorData {
+impl From<UploadGrantError> for ErrorData {
     fn from(error: UploadGrantError) -> Self {
         match error {
             UploadGrantError::Unavailable => not_found(),
             UploadGrantError::Internal => {
                 tracing::error!(%error, "MCP document upload grant failure");
-                rmcp::ErrorData::internal_error("internal error", None)
+                ErrorData::internal_error("internal error", None)
             }
             UploadGrantError::Repository(repository_error) => {
                 ServiceError::from(repository_error).into()
@@ -128,9 +130,9 @@ impl From<UploadGrantError> for rmcp::ErrorData {
 #[cfg(test)]
 mod tests {
     use super::{parse_manage_submissions_request, ManageEvidenceSubmissionsRequest};
-    use rmcp::model::ErrorCode;
+    use rmcp::{model::ErrorCode, ErrorData};
 
-    fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
+    fn field_issues(error: &ErrorData) -> Vec<(String, String)> {
         error.data.as_ref().expect("error data")["problem"]["field_issues"]
             .as_array()
             .expect("field issues")

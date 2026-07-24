@@ -278,9 +278,6 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateEvidenceControlMappingsPayload,
     ) -> Result<Vec<ControlId>, MapEvidenceToControlsError> {
-        // A rejected batch arrives as an error so it rolls the transaction back;
-        // `From` turns it into the typed outcome, and `None` means the anchor
-        // evidence was not found.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,
@@ -298,9 +295,6 @@ impl ControlService {
         connection: AgentConnectionContext,
         payload: CreateControlEvidenceMappingsPayload,
     ) -> Result<Vec<EvidenceId>, MapControlToEvidenceError> {
-        // A rejected batch arrives as an error so it rolls the transaction back;
-        // `From` turns it into the typed outcome, and `None` means the anchor
-        // control was not found.
         self.repository
             .in_agent_connection_workspace_context(
                 connection.workspace_id,

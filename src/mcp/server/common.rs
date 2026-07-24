@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use rmcp::{model::ErrorCode, service::RequestContext, RoleServer};
+use rmcp::{model::ErrorCode, service::RequestContext, ErrorData, RoleServer};
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -29,22 +29,22 @@ pub(super) enum McpArgumentError {
 pub(super) fn authorize_token_workspace(
     ctx: &RequestContext<RoleServer>,
     permission: WorkspacePermission,
-) -> Result<McpRequestContext, rmcp::ErrorData> {
+) -> Result<McpRequestContext, ErrorData> {
     let parts = ctx
         .extensions
         .get::<http::request::Parts>()
-        .ok_or_else(|| rmcp::ErrorData::internal_error("request context unavailable", None))?;
+        .ok_or_else(|| ErrorData::internal_error("request context unavailable", None))?;
 
     McpRequestContext::authorize_token_workspace(&parts.extensions, &parts.headers, permission)
 }
 
 pub(super) fn authorize_connection(
     ctx: &RequestContext<RoleServer>,
-) -> Result<McpRequestContext, rmcp::ErrorData> {
+) -> Result<McpRequestContext, ErrorData> {
     let parts = ctx
         .extensions
         .get::<http::request::Parts>()
-        .ok_or_else(|| rmcp::ErrorData::internal_error("request context unavailable", None))?;
+        .ok_or_else(|| ErrorData::internal_error("request context unavailable", None))?;
 
     McpRequestContext::authorize_connection(&parts.extensions, &parts.headers)
 }
@@ -52,7 +52,7 @@ pub(super) fn authorize_connection(
 pub(super) fn parse_uuid_arg(
     field: &'static str,
     value: Option<String>,
-) -> Result<Uuid, rmcp::ErrorData> {
+) -> Result<Uuid, ErrorData> {
     required_uuid(field, value)
         .into_result()
         .map_err(argument_errors)
@@ -94,21 +94,21 @@ pub(super) fn required_timestamp(
     }
 }
 
-pub(super) fn argument_errors(errors: Vec<McpArgumentError>) -> rmcp::ErrorData {
+pub(super) fn argument_errors(errors: Vec<McpArgumentError>) -> ErrorData {
     let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
 
     field_errors(issues)
 }
 
-pub(super) fn invalid_field(field: &'static str, message: impl Into<String>) -> rmcp::ErrorData {
+pub(super) fn invalid_field(field: &'static str, message: impl Into<String>) -> ErrorData {
     field_errors(vec![FieldIssue {
         field,
         message: message.into(),
     }])
 }
 
-fn field_errors(issues: Vec<FieldIssue>) -> rmcp::ErrorData {
-    rmcp::ErrorData::invalid_params(
+fn field_errors(issues: Vec<FieldIssue>) -> ErrorData {
+    ErrorData::invalid_params(
         "tool argument validation failed",
         Some(json!({
             "problem": {
@@ -120,10 +120,10 @@ fn field_errors(issues: Vec<FieldIssue>) -> rmcp::ErrorData {
     )
 }
 
-pub(super) fn domain_errors(errors: Vec<DomainError>) -> rmcp::ErrorData {
+pub(super) fn domain_errors(errors: Vec<DomainError>) -> ErrorData {
     let issues: Vec<_> = errors.into_iter().map(FieldIssue::from).collect();
 
-    rmcp::ErrorData::invalid_params(
+    ErrorData::invalid_params(
         "tool argument validation failed",
         Some(json!({
             "problem": {
@@ -219,7 +219,7 @@ impl From<DomainError> for FieldIssue {
     }
 }
 
-impl From<BatchError> for rmcp::ErrorData {
+impl From<BatchError> for ErrorData {
     fn from(error: BatchError) -> Self {
         let message = error.to_string();
         let problem = match error {
@@ -247,7 +247,7 @@ impl From<BatchError> for rmcp::ErrorData {
             }),
         };
 
-        rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
+        ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
     }
 }
 
@@ -259,7 +259,7 @@ pub(super) fn batch_rejected(
     field: &'static str,
     message: &'static str,
     buckets: Vec<(&'static str, Vec<Uuid>)>,
-) -> rmcp::ErrorData {
+) -> ErrorData {
     let mut problem = serde_json::Map::new();
     problem.insert("code".to_owned(), json!("batch_rejected"));
     problem.insert("message".to_owned(), json!(message));
@@ -268,11 +268,11 @@ pub(super) fn batch_rejected(
         problem.insert(key.to_owned(), json!(ids));
     }
 
-    rmcp::ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
+    ErrorData::invalid_params(message, Some(json!({ "problem": problem })))
 }
 
-pub(super) fn not_found() -> rmcp::ErrorData {
-    rmcp::ErrorData::resource_not_found(
+pub(super) fn not_found() -> ErrorData {
+    ErrorData::resource_not_found(
         "resource not found",
         Some(json!({
             "problem": {
@@ -283,8 +283,8 @@ pub(super) fn not_found() -> rmcp::ErrorData {
     )
 }
 
-pub(super) fn conflict(code: &'static str, message: &'static str) -> rmcp::ErrorData {
-    rmcp::ErrorData::new(
+pub(super) fn conflict(code: &'static str, message: &'static str) -> ErrorData {
+    ErrorData::new(
         ErrorCode(-32000),
         message,
         Some(json!({
@@ -296,14 +296,14 @@ pub(super) fn conflict(code: &'static str, message: &'static str) -> rmcp::Error
     )
 }
 
-impl From<ServiceError> for rmcp::ErrorData {
+impl From<ServiceError> for ErrorData {
     fn from(error: ServiceError) -> Self {
         if let ServiceError::Repository(RepositoryError::Conflict(kind)) = error {
             return repository_conflict(kind);
         }
 
         tracing::error!(%error, "MCP service failure");
-        rmcp::ErrorData::internal_error(
+        ErrorData::internal_error(
             "dependency failure",
             Some(json!({
                 "problem": {
@@ -315,7 +315,7 @@ impl From<ServiceError> for rmcp::ErrorData {
     }
 }
 
-fn repository_conflict(kind: ConflictKind) -> rmcp::ErrorData {
+fn repository_conflict(kind: ConflictKind) -> ErrorData {
     conflict(kind.code(), kind.message())
 }
 
@@ -330,10 +330,10 @@ mod tests {
         BatchError, FieldIssue, McpArgumentError,
     };
     use crate::domain::DomainError;
-    use rmcp::model::ErrorCode;
+    use rmcp::{model::ErrorCode, ErrorData};
     use uuid::Uuid;
 
-    fn field_issues(error: &rmcp::ErrorData) -> Vec<(String, String)> {
+    fn field_issues(error: &ErrorData) -> Vec<(String, String)> {
         error.data.as_ref().expect("error data")["problem"]["field_issues"]
             .as_array()
             .expect("field issues")
@@ -483,13 +483,13 @@ mod tests {
         );
     }
 
-    fn problem(error: &rmcp::ErrorData) -> &serde_json::Value {
+    fn problem(error: &ErrorData) -> &serde_json::Value {
         &error.data.as_ref().expect("error data")["problem"]
     }
 
     #[test]
     fn empty_batch_renders_its_own_problem_code() {
-        let error = rmcp::ErrorData::from(BatchError::Empty {
+        let error = ErrorData::from(BatchError::Empty {
             field: "control_ids",
         });
 
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn oversized_batch_reports_the_limit_and_the_received_count() {
-        let error = rmcp::ErrorData::from(BatchError::TooLarge {
+        let error = ErrorData::from(BatchError::TooLarge {
             field: "control_ids",
             maximum: 50,
             received: 51,
@@ -518,7 +518,7 @@ mod tests {
     fn duplicate_batch_ids_all_appear_in_the_response() {
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
-        let error = rmcp::ErrorData::from(BatchError::Duplicates {
+        let error = ErrorData::from(BatchError::Duplicates {
             field: "evidence_ids",
             ids: vec![first, second],
         });
