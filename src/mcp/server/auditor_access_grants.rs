@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
+    mcp::server::common::McpArgumentError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::{
         auditor_access_grants::{
@@ -26,6 +27,7 @@ use crate::{
         Error as ServiceError,
     },
     validate,
+    validation::Validation,
 };
 
 #[tool_router(router = auditor_access_grants_tool_router, vis = "pub(super)")]
@@ -188,8 +190,8 @@ fn parse_create_request(
     let email = args.email.filter(|value| !value.trim().is_empty());
     let (auditor_email, expires_at, period_start, period_end) = validate! {
         auditor_email <- match email {
-            Some(email) => crate::validation::Validation::valid(email),
-            None => crate::validation::Validation::invalid(super::common::McpArgumentError::Missing {
+            Some(email) => Validation::valid(email),
+            None => Validation::invalid(McpArgumentError::Missing {
                 field: "email",
             }),
         },

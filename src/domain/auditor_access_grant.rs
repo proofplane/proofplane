@@ -6,9 +6,6 @@ use super::{ids::uuid_id, AgentConnectionId, DomainError, UserId, WorkspaceId};
 
 uuid_id!(AuditorAccessGrantId);
 
-/// The window of evidence coverage an auditor grant exposes. Owns its ordering
-/// invariant so no caller can construct an inverted period, mirroring
-/// `CoverageWindow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditReviewPeriod {
     pub start: DateTime<Utc>,
