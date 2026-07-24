@@ -67,12 +67,18 @@ impl RawAppConfig {}
 #[derive(Debug, Deserialize)]
 pub(super) struct RawMailConfig {
     adapter: String,
+    #[serde(default)]
+    api_key: Option<SecretString>,
+    #[serde(default)]
+    from: Option<String>,
 }
 
 impl Default for RawMailConfig {
     fn default() -> Self {
         Self {
             adapter: "disabled".to_owned(),
+            api_key: None,
+            from: None,
         }
     }
 }
@@ -86,9 +92,18 @@ impl RawMailConfig {
             "local_stdout" => Validation::valid(MailConfig {
                 adapter: MailAdapterConfig::LocalStdout,
             }),
+            "resend" => validate! {
+                api_key <- secret_value(
+                    self.api_key.unwrap_or_else(|| SecretString::from(""))
+                ).at("mail.api_key"),
+                from <- string_value(self.from.unwrap_or_default()).at("mail.from"),
+                => MailConfig {
+                    adapter: MailAdapterConfig::Resend { api_key, from },
+                },
+            },
             _ => Validation::invalid(ConfigFieldError::new(
                 "mail.adapter",
-                "must be disabled or local_stdout",
+                "must be disabled, local_stdout, or resend",
             )),
         }
     }

@@ -105,6 +105,273 @@ async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_
 }
 
 #[tokio::test]
+async fn mail_failure_returns_retryable_responses_without_invalidating_previous_otp() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    app.server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
+        .json(&json!({ "token": invite_token }))
+        .await
+        .assert_status_ok();
+    let delivered_code = app.sent_mail()[0].code.clone();
+
+    app.set_mail_delivery_failure(true);
+    let api_failure = app
+        .server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
+        .json(&json!({ "token": invite_token }))
+        .await;
+    api_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let error = api_failure.json::<Value>();
+    assert_eq!(error["error"]["code"], "mail_unavailable");
+    assert_eq!(
+        error["error"]["message"],
+        "verification email could not be sent; try again"
+    );
+    assert_eq!(error["error"]["details"], json!([]));
+
+    let browser_failure = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await;
+    browser_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body = html_body(&browser_failure);
+    assert!(body.contains("We couldn&#39;t send the verification code. Please try again."));
+    assert!(body.contains("Send verification code"));
+    assert!(!body.contains("name=\"resend\""));
+
+    let remaining_otps = app
+        .postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            "SELECT count(*)::bigint AS count FROM auditor_access_otps WHERE grant_id = $1",
+            &[&Uuid::from(grant.grant.id)],
+        )
+        .await
+        .expect("OTP count reads")
+        .get::<_, i64>("count");
+    assert_eq!(remaining_otps, 1);
+
+    app.set_mail_delivery_failure(false);
+    app.server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
+        .json(&json!({ "token": invite_token, "code": delivered_code }))
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn browser_resend_replaces_the_previous_code_and_shows_send_again_link() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    let initial = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await;
+    initial.assert_status_ok();
+    let initial_body = html_body(&initial);
+    assert!(initial_body.contains("class=\"panel form-panel\""));
+    assert!(initial_body.contains("class=\"resend-action\""));
+    assert!(initial_body.contains("name=\"resend\" value=\"true\""));
+    assert!(initial_body.contains("class=\"link-button\""));
+    assert!(initial_body.contains(">Resend code</button>"));
+    assert!(!initial_body.contains("New code sent."));
+    assert!(!initial_body.contains("class=\"resend-success-icon\""));
+    let previous_code = app.sent_mail()[0].code.clone();
+
+    let resend = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token), ("resend", "true")])
+        .await;
+    resend.assert_status_ok();
+    assert_eq!(app.sent_mail().len(), 2);
+    let resend_body = html_body(&resend);
+    assert!(resend_body.contains(
+        "class=\"resend-confirmation\" role=\"status\" aria-live=\"polite\">New code sent."
+    ));
+    assert!(resend_body.contains("class=\"resend-success-icon\" aria-hidden=\"true\">✓</span>"));
+    assert!(resend_body.contains(">Send again</button>"));
+    assert!(
+        resend_body
+            .find(">Send again</button>")
+            .expect("send again link")
+            < resend_body
+                .find("class=\"resend-success-icon\"")
+                .expect("success checkmark")
+    );
+    assert!(!resend_body.contains("Code sent. Check the intended auditor inbox."));
+    assert!(resend_body.contains("class=\"panel form-panel\""));
+
+    let previous = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", previous_code.as_str())])
+        .await;
+    previous.assert_status(StatusCode::NOT_FOUND);
+
+    let newest_code = app.sent_mail()[1].code.clone();
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", newest_code.as_str())])
+        .await
+        .assert_status(StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn browser_resend_rate_limit_keeps_the_verification_card_and_link() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await
+        .assert_status_ok();
+    for _ in 0..2 {
+        app.server()
+            .post(&format!(
+                "/auditor-access/{workspace_id}/otp/request/browser"
+            ))
+            .form(&[("token", invite_token), ("resend", "true")])
+            .await
+            .assert_status_ok();
+    }
+
+    let limited = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token), ("resend", "true")])
+        .await;
+    limited.assert_status(StatusCode::CONFLICT);
+    assert_eq!(app.sent_mail().len(), 3);
+    let body = html_body(&limited);
+    assert!(
+        body.contains("Too many code requests. Use the latest code or wait before trying again.")
+    );
+    assert!(body.contains("class=\"panel form-panel\""));
+    assert!(body.contains(">Resend code</button>"));
+}
+
+#[tokio::test]
+async fn failed_browser_resend_keeps_the_previous_code_usable() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await
+        .assert_status_ok();
+    let delivered_code = app.sent_mail()[0].code.clone();
+
+    app.set_mail_delivery_failure(true);
+    let failed = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token), ("resend", "true")])
+        .await;
+    failed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body = html_body(&failed);
+    assert!(body.contains("We couldn&#39;t send a new code. Your previous code may still work."));
+    assert!(body.contains("class=\"panel form-panel\""));
+    assert!(body.contains(">Resend code</button>"));
+    assert_eq!(app.sent_mail().len(), 1);
+
+    app.set_mail_delivery_failure(false);
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", delivered_code.as_str())])
+        .await
+        .assert_status(StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn invalid_and_expired_browser_codes_keep_the_resend_link() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    app.server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await
+        .assert_status_ok();
+
+    let invalid = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", "000000")])
+        .await;
+    invalid.assert_status(StatusCode::NOT_FOUND);
+    let invalid_body = html_body(&invalid);
+    assert!(invalid_body.contains("That code could not be verified."));
+    assert!(invalid_body.contains(">Resend code</button>"));
+
+    app.postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .execute(
+            "UPDATE auditor_access_otps SET created_at = now() - interval '2 seconds', expires_at = now() - interval '1 second' WHERE grant_id = $1",
+            &[&Uuid::from(grant.grant.id)],
+        )
+        .await
+        .expect("OTP expires");
+    let delivered_code = app.sent_mail()[0].code.clone();
+    let expired = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/verify/browser"
+        ))
+        .form(&[("token", invite_token), ("code", delivered_code.as_str())])
+        .await;
+    expired.assert_status(StatusCode::NOT_FOUND);
+    let expired_body = html_body(&expired);
+    assert!(expired_body.contains("That code could not be verified."));
+    assert!(expired_body.contains(">Resend code</button>"));
+}
+
+#[tokio::test]
 async fn wrong_reused_rate_limited_and_invalid_invites_do_not_create_sessions() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
@@ -1146,6 +1413,7 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     let request_body = html_body(&request);
     assert!(request_body.contains("Code sent"));
     assert!(request_body.contains("Verification code"));
+    assert!(request_body.contains(">Resend code</button>"));
 
     let code = app.sent_mail()[0].code.clone();
     let verify = app
