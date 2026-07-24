@@ -631,8 +631,10 @@ async fn download_document(
         } => {
             let downloaded = state
                 .downloads
-                .download_for_workspace(
+                .download_for_workspace_within_period(
                     session.workspace_id,
+                    session.period_start,
+                    session.period_end,
                     submission_id.into(),
                     document_id.into(),
                 )

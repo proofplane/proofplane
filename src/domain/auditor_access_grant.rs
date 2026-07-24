@@ -15,6 +15,8 @@ pub struct AuditorAccessGrant {
     pub created_via_agent_connection_id: AgentConnectionId,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
@@ -24,4 +26,6 @@ pub struct CreateAuditorAccessGrantPayload {
     pub secret_digest: AuditorInviteSecretDigest,
     pub auditor_email: String,
     pub expires_at: DateTime<Utc>,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
 }

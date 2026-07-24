@@ -22,6 +22,8 @@ pub struct AuditorSession {
     pub workspace_id: WorkspaceId,
     pub auditor_email: String,
     pub expires_at: DateTime<Utc>,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_used_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,

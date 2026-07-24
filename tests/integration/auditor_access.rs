@@ -550,6 +550,138 @@ async fn auditor_session_downloads_uploaded_document_with_safe_headers_and_audit
 }
 
 #[tokio::test]
+async fn portal_read_model_includes_only_submissions_overlapping_grant_period() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let control_id = app.control_id("workspace", "PP-AC-01");
+    // Grant scoped to February 2026 only.
+    let grant = create_grant_with_period(
+        &app,
+        workspace_id,
+        "2026-02-01T00:00:00Z",
+        "2026-02-28T23:59:59Z",
+    )
+    .await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    let evidence = app
+        .create_evidence(workspace_id, &evidence_body("Access review evidence"))
+        .await;
+    let evidence_id = uuid_field(&evidence["id"]);
+    insert_control_mapping(&app, evidence_id, control_id, "Access reviews.").await;
+
+    // Wholly inside the period.
+    submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-02-05T00:00:00Z",
+        "2026-02-10T23:59:59Z",
+        "inside.txt",
+        b"inside",
+    )
+    .await;
+    // Straddles the start boundary (valid_until lands inside the period).
+    submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-01-15T00:00:00Z",
+        "2026-02-05T23:59:59Z",
+        "straddle.txt",
+        b"straddle",
+    )
+    .await;
+    // Entirely after the period.
+    submit_evidence_file(
+        &app,
+        workspace_id,
+        evidence_id,
+        "2026-05-01T00:00:00Z",
+        "2026-05-10T23:59:59Z",
+        "outside.txt",
+        b"outside",
+    )
+    .await;
+
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
+    let response = app
+        .server()
+        .get("/auditor-access/portal/data")
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={raw_session}"),
+        )
+        .await;
+    response.assert_status_ok();
+    let serialized = serde_json::to_string(&response.json::<Value>()).expect("portal serializes");
+
+    assert!(
+        serialized.contains("inside.txt"),
+        "in-period submission appears"
+    );
+    assert!(
+        serialized.contains("straddle.txt"),
+        "boundary-overlapping submission appears"
+    );
+    assert!(
+        !serialized.contains("outside.txt"),
+        "submission outside the grant period is concealed"
+    );
+}
+
+#[tokio::test]
+async fn auditor_download_of_submission_outside_grant_period_is_concealed() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_submission(&app, workspace_id).await;
+    // Document coverage window is 2026-01-01..2026-03-31 (see upload_document).
+    let document = upload_document(&app, workspace_id, evidence_id, "packet.txt", b"secret").await;
+    let submission_id = uuid_field(&document["submission_id"]);
+    let document_id = uuid_field(&document["id"]);
+    finalize_document(&app, workspace_id, submission_id, document_id).await;
+    let path = auditor_download_path(submission_id, document_id);
+
+    // A grant whose period does not overlap the document window must 404, even with valid IDs.
+    let out_of_range = create_grant_with_period(
+        &app,
+        workspace_id,
+        "2027-01-01T00:00:00Z",
+        "2027-12-31T23:59:59Z",
+    )
+    .await;
+    let out_of_range_session =
+        verified_session_cookie(&app, workspace_id, out_of_range.raw_secret.expose_secret()).await;
+    app.server()
+        .get(&path)
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={out_of_range_session}"),
+        )
+        .await
+        .assert_status_not_found();
+
+    // A grant whose period overlaps the window serves the same document, proving the IDs are valid.
+    let in_range = create_grant_with_period(
+        &app,
+        workspace_id,
+        "2026-01-01T00:00:00Z",
+        "2026-12-31T23:59:59Z",
+    )
+    .await;
+    let in_range_session =
+        verified_session_cookie(&app, workspace_id, in_range.raw_secret.expose_secret()).await;
+    app.server()
+        .get(&path)
+        .add_header(
+            "Cookie",
+            format!("proofplane_auditor_session={in_range_session}"),
+        )
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
 async fn auditor_session_downloads_uploaded_policy_document_with_safe_headers_and_audit() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
@@ -1568,12 +1700,30 @@ async fn auditor_app() -> TestApp {
 }
 
 async fn create_grant(app: &TestApp, workspace_id: Uuid) -> IssuedAuditorAccessGrant {
+    // Wide default period overlapping every fixture submission window (2026-01-01..2026-03-31).
+    create_grant_with_period(
+        app,
+        workspace_id,
+        "2026-01-01T00:00:00Z",
+        "2026-12-31T23:59:59Z",
+    )
+    .await
+}
+
+async fn create_grant_with_period(
+    app: &TestApp,
+    workspace_id: Uuid,
+    period_start: &str,
+    period_end: &str,
+) -> IssuedAuditorAccessGrant {
     AuditorAccessGrantService::new(app.postgres_arc())
         .create(
             &agent_connection_context(app, workspace_id),
             CreateAuditorAccessGrantRequest {
                 auditor_email: "auditor@example.com".to_owned(),
                 expires_at: None,
+                period_start: period_start.parse::<DateTime<Utc>>().expect("period_start"),
+                period_end: period_end.parse::<DateTime<Utc>>().expect("period_end"),
             },
         )
         .await

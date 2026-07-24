@@ -34,7 +34,9 @@ impl AuditorPortalReadModelService {
         let (mut controls, policies) = self
             .repository
             .in_workspace_context_read(session.workspace_id, async |context| {
-                let controls = context.auditor_portal_controls().await?;
+                let controls = context
+                    .auditor_portal_controls(session.period_start, session.period_end)
+                    .await?;
                 let policies = context.auditor_portal_policies().await?;
                 Ok((controls, policies))
             })

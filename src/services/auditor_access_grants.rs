@@ -43,6 +43,8 @@ pub enum AuditorAccessGrantError {
 pub struct CreateAuditorAccessGrantRequest {
     pub auditor_email: String,
     pub expires_at: Option<DateTime<Utc>>,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
 }
 
 #[derive(Debug)]
@@ -69,6 +71,13 @@ impl AuditorAccessGrantService {
                 "expires_at must be in the future",
             ));
         }
+        let period_start = request.period_start;
+        let period_end = request.period_end;
+        if period_end < period_start {
+            return Err(AuditorAccessGrantError::Invalid(
+                "period_end must be on or after period_start",
+            ));
+        }
 
         let issued = generate_auditor_invite_secret().map_err(AuditorAccessGrantError::Secret)?;
         let grant_id = AuditorAccessGrantId::from(Uuid::new_v4());
@@ -85,6 +94,8 @@ impl AuditorAccessGrantService {
                             secret_digest: issued.digest,
                             auditor_email,
                             expires_at,
+                            period_start,
+                            period_end,
                         })
                         .await
                 },

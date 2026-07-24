@@ -313,10 +313,13 @@ CREATE TABLE auditor_access_grants (
     created_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
     CHECK (auditor_email = lower(trim(auditor_email))),
     CHECK (position('@' IN auditor_email) > 1),
     CHECK (expires_at > created_at),
+    CHECK (period_end >= period_start),
     CHECK (revoked_at IS NULL OR revoked_at >= created_at)
 );
 

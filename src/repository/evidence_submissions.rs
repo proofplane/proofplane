@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
@@ -461,6 +462,56 @@ WHERE a.workspace_id = $1
                     &Uuid::from(self.workspace_id),
                     &Uuid::from(evidence_submission_id),
                     &Uuid::from(evidence_document_id),
+                ],
+            )
+            .await?;
+
+        rows.iter()
+            .next()
+            .map(document_download_candidate_from_row)
+            .transpose()
+    }
+
+    pub async fn get_document_for_download_grant_within_period(
+        &self,
+        evidence_submission_id: EvidenceSubmissionId,
+        evidence_document_id: DocumentId,
+        period_start: DateTime<Utc>,
+        period_end: DateTime<Utc>,
+    ) -> Result<Option<DocumentDownloadCandidate>, Error> {
+        let rows = &self
+            .client
+            .query(
+                r#"
+SELECT
+    a.workspace_id,
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
+    a.filename,
+    a.content_type,
+    a.content_length,
+    a.object_key,
+    a.checksum_sha256,
+    a.checksum_crc32c,
+    a.created_by_user_id,
+    a.upload_status,
+    a.created_at
+FROM documents a
+JOIN evidence_submissions s ON s.id = a.owner_id
+WHERE a.workspace_id = $1
+  AND a.owner_type = 'evidence_submission'
+  AND s.id = $2
+  AND a.id = $3
+  AND a.archived = false
+  AND s.valid_from <= $5
+  AND s.valid_until >= $4
+"#,
+                &[
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(evidence_submission_id),
+                    &Uuid::from(evidence_document_id),
+                    &period_start,
+                    &period_end,
                 ],
             )
             .await?;

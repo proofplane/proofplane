@@ -25,6 +25,8 @@ async fn create_persists_metadata_and_digest_without_raw_secret() {
             CreateAuditorAccessGrantRequest {
                 auditor_email: " Auditor@Example.COM ".to_owned(),
                 expires_at: None,
+                period_start: Utc::now() - Duration::days(90),
+                period_end: Utc::now(),
             },
         )
         .await
@@ -77,11 +79,66 @@ async fn ordinary_read_token_cannot_create_grant() {
             CreateAuditorAccessGrantRequest {
                 auditor_email: "auditor@example.com".to_owned(),
                 expires_at: None,
+                period_start: Utc::now() - Duration::days(90),
+                period_end: Utc::now(),
             },
         )
         .await;
 
     assert!(matches!(result, Err(AuditorAccessGrantError::Denied)));
+}
+
+#[tokio::test]
+async fn create_rejects_period_end_before_period_start() {
+    let app = auditor_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let service = AuditorAccessGrantService::new(app.postgres_arc());
+
+    let result = service
+        .create(
+            &agent_connection_context(&app, workspace_id, WorkspacePermission::ALL),
+            CreateAuditorAccessGrantRequest {
+                auditor_email: "auditor@example.com".to_owned(),
+                expires_at: None,
+                period_start: Utc::now(),
+                period_end: Utc::now() - Duration::days(1),
+            },
+        )
+        .await;
+
+    assert!(matches!(result, Err(AuditorAccessGrantError::Invalid(_))));
+}
+
+#[tokio::test]
+async fn create_persists_audit_period() {
+    let app = auditor_grant_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let service = AuditorAccessGrantService::new(app.postgres_arc());
+    let period_start = Utc::now() - Duration::days(90);
+    let period_end = Utc::now();
+
+    let issued = service
+        .create(
+            &agent_connection_context(&app, workspace_id, WorkspacePermission::ALL),
+            CreateAuditorAccessGrantRequest {
+                auditor_email: "auditor@example.com".to_owned(),
+                expires_at: None,
+                period_start,
+                period_end,
+            },
+        )
+        .await
+        .expect("auditor grant creates");
+
+    // Round-tripped through TIMESTAMPTZ (microsecond precision), so compare loosely.
+    assert!(
+        (issued.grant.period_start - period_start)
+            .num_seconds()
+            .abs()
+            < 1
+    );
+    assert!((issued.grant.period_end - period_end).num_seconds().abs() < 1);
+    assert!(issued.grant.period_end >= issued.grant.period_start);
 }
 
 #[tokio::test]
@@ -209,6 +266,8 @@ async fn create_grant(
             CreateAuditorAccessGrantRequest {
                 auditor_email: "auditor@example.com".to_owned(),
                 expires_at: None,
+                period_start: Utc::now() - Duration::days(90),
+                period_end: Utc::now(),
             },
         )
         .await

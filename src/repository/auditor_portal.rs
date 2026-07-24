@@ -60,7 +60,11 @@ ORDER BY lower(p.name), p.id, lower(c.code), c.id
         auditor_portal_policies_from_rows(rows)
     }
 
-    pub async fn auditor_portal_controls(&self) -> Result<Vec<AuditorPortalControl>, Error> {
+    pub async fn auditor_portal_controls(
+        &self,
+        period_start: DateTime<Utc>,
+        period_end: DateTime<Utc>,
+    ) -> Result<Vec<AuditorPortalControl>, Error> {
         let mut controls = self
             .list_controls()
             .await?
@@ -72,7 +76,9 @@ ORDER BY lower(p.name), p.id, lower(c.code), c.id
             .enumerate()
             .map(|(index, control)| (control.id, index))
             .collect::<HashMap<_, _>>();
-        let submissions_by_evidence = self.auditor_portal_submissions_by_evidence().await?;
+        let submissions_by_evidence = self
+            .auditor_portal_submissions_by_evidence(period_start, period_end)
+            .await?;
         let mappings = self.auditor_portal_evidence_mappings().await?;
 
         for mapping in mappings {
@@ -135,6 +141,8 @@ ORDER BY c.code, c.id, e.title, e.id
 
     async fn auditor_portal_submissions_by_evidence(
         &self,
+        period_start: DateTime<Utc>,
+        period_end: DateTime<Utc>,
     ) -> Result<HashMap<EvidenceId, Vec<AuditorPortalSubmission>>, Error> {
         let rows = self
             .client
@@ -159,9 +167,11 @@ JOIN documents a ON a.owner_id = s.id
     AND a.workspace_id = e.workspace_id
     AND a.archived = false
 WHERE e.workspace_id = $1
+  AND s.valid_from <= $3
+  AND s.valid_until >= $2
 ORDER BY s.evidence_id, s.received_at DESC, s.id DESC
 "#,
-                &[&Uuid::from(self.workspace_id)],
+                &[&Uuid::from(self.workspace_id), &period_start, &period_end],
             )
             .await?;
 

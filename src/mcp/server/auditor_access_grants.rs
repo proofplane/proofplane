@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::{
     common::{
         argument_errors, authorize_token_workspace, format_datetime, invalid_field, not_found,
-        optional_timestamp, required_uuid,
+        optional_timestamp, required_timestamp, required_uuid,
     },
     ProofplaneMcp,
 };
@@ -32,7 +32,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "create_auditor_access_link",
-        description = "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires."
+        description = "Create a bearer-secret browser link that lets the named auditor review compliance evidence whose coverage window overlaps the audit period from period_start to period_end, and cannot see or download anything outside it, until the grant expires."
     )]
     async fn create_auditor_access_link(
         &self,
@@ -113,6 +113,8 @@ impl ProofplaneMcp {
 struct CreateAuditorAccessLinkRequest {
     email: Option<String>,
     expires_at: Option<String>,
+    period_start: Option<String>,
+    period_end: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -161,6 +163,8 @@ struct AuditorAccessGrantResponse {
     auditor_email: String,
     created_at: String,
     expires_at: String,
+    period_start: String,
+    period_end: String,
     revoked_at: Option<String>,
 }
 
@@ -171,6 +175,8 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
             auditor_email: grant.auditor_email,
             created_at: format_datetime(grant.created_at),
             expires_at: format_datetime(grant.expires_at),
+            period_start: format_datetime(grant.period_start),
+            period_end: format_datetime(grant.period_end),
             revoked_at: grant.revoked_at.map(format_datetime),
         }
     }
@@ -188,9 +194,13 @@ fn parse_create_request(
             }),
         },
         expires_at <- optional_timestamp("expires_at", args.expires_at),
+        period_start <- required_timestamp("period_start", args.period_start),
+        period_end <- required_timestamp("period_end", args.period_end),
         => CreateAuditorAccessGrantRequest {
             auditor_email,
             expires_at,
+            period_start,
+            period_end,
         },
     }
     .into_result()
@@ -213,6 +223,8 @@ impl From<AuditorAccessGrantError> for ErrorData {
             AuditorAccessGrantError::Invalid(message) => {
                 let field = if message.starts_with("expires_at") {
                     "expires_at"
+                } else if message.starts_with("period_end") || message.starts_with("period_start") {
+                    "period_end"
                 } else {
                     "email"
                 };
@@ -247,6 +259,8 @@ fn emit_auditor_grant_audit(
     .request_id(context.request_id.0)
     .metadata("auditor_email", &grant.auditor_email)
     .metadata("expires_at", format_datetime(grant.expires_at))
+    .metadata("period_start", format_datetime(grant.period_start))
+    .metadata("period_end", format_datetime(grant.period_end))
     .object(AuditObject::new("auditor_access_grant", grant.id.into()))
     .emit();
 }
