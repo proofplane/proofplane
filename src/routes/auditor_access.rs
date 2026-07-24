@@ -65,12 +65,20 @@ struct InviteQuery {
 #[derive(Debug, Deserialize)]
 struct BrowserInviteForm {
     token: String,
+    #[serde(default)]
+    resend: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct BrowserVerifyForm {
     token: String,
     code: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BrowserResendState {
+    Available,
+    Sent,
 }
 
 #[derive(Debug, Serialize)]
@@ -210,7 +218,16 @@ async fn request_otp_browser(
                 workspace_id,
                 token,
                 &grant.auditor_email,
-                Some("Code sent. Check the intended auditor inbox."),
+                if payload.resend {
+                    None
+                } else {
+                    Some("Code sent. Check the intended auditor inbox.")
+                },
+                if payload.resend {
+                    BrowserResendState::Sent
+                } else {
+                    BrowserResendState::Available
+                },
             ))
             .into_response())
         }
@@ -221,21 +238,29 @@ async fn request_otp_browser(
                 token,
                 &grant.auditor_email,
                 Some("Too many code requests. Use the latest code or wait before trying again."),
+                BrowserResendState::Available,
             )),
         )
             .into_response()),
         Err(AuditorAccessSessionError::Mail(error)) => {
             tracing::warn!(%error, "auditor OTP mail delivery unavailable");
-            Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_invite_page(
+            let page = if payload.resend {
+                render_verify_page(
+                    workspace_id,
+                    token,
+                    &grant.auditor_email,
+                    Some("We couldn't send a new code. Your previous code may still work."),
+                    BrowserResendState::Available,
+                )
+            } else {
+                render_invite_page(
                     workspace_id,
                     token,
                     &grant.auditor_email,
                     Some("We couldn't send the verification code. Please try again."),
-                )),
-            )
-                .into_response())
+                )
+            };
+            Ok((StatusCode::SERVICE_UNAVAILABLE, Html(page)).into_response())
         }
         Err(error) => Err(session_error(error)),
     }
@@ -308,6 +333,7 @@ async fn verify_otp_browser(
                     token,
                     &grant.auditor_email,
                     Some("That code could not be verified. Request a new code if it expired."),
+                    BrowserResendState::Available,
                 )),
             )
                 .into_response());
@@ -821,6 +847,7 @@ fn render_verify_page(
     token: &str,
     auditor_email: &str,
     message: Option<&str>,
+    resend_state: BrowserResendState,
 ) -> String {
     render_shell(
         "Enter auditor code",
@@ -836,12 +863,41 @@ fn render_verify_page(
 <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{{6}}" maxlength="6" required>
 <button type="submit">Open portal</button>
 </form>
+{}
 </main>"#,
             escape_html(auditor_email),
             notice(message),
             workspace_id,
             escape_html(token),
+            render_resend_action(workspace_id, token, resend_state),
         ),
+    )
+}
+
+fn render_resend_action(workspace_id: Uuid, token: &str, state: BrowserResendState) -> String {
+    let (class_name, confirmation, button_label) = match state {
+        BrowserResendState::Available => ("resend-action", "", "Resend code"),
+        BrowserResendState::Sent => (
+            "resend-action sent",
+            r#"<span class="resend-confirmation" role="status" aria-live="polite">New code sent.</span>"#,
+            "Send again",
+        ),
+    };
+    let success_icon = match state {
+        BrowserResendState::Available => "",
+        BrowserResendState::Sent => {
+            r#"<span class="resend-success-icon" aria-hidden="true">✓</span>"#
+        }
+    };
+
+    format!(
+        r#"<div class="{}">{}<form method="post" action="/auditor-access/{}/otp/request/browser"><input type="hidden" name="token" value="{}"><input type="hidden" name="resend" value="true"><button class="link-button" type="submit">{}</button></form>{}</div>"#,
+        class_name,
+        confirmation,
+        workspace_id,
+        escape_html(token),
+        button_label,
+        success_icon,
     )
 }
 
@@ -1493,6 +1549,38 @@ p {{ color: var(--muted); line-height: 1.55; }}
   border-radius: 8px;
 }}
 .form-panel {{ display: grid; gap: 14px; margin-top: 24px; padding: 24px; }}
+.resend-action {{
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}}
+.resend-action form {{ margin: 0; }}
+.resend-success-icon {{
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1;
+  animation: resend-success-icon 2500ms cubic-bezier(.25, 1, .5, 1) forwards;
+}}
+@keyframes resend-success-icon {{
+  0%, 72% {{ opacity: 1; transform: scale(1); }}
+  100% {{ opacity: 0; transform: scale(.8); }}
+}}
+.link-button {{
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 8px 0;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}}
+.link-button:hover {{ background: transparent; color: var(--ink); }}
 .notice {{
   border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
   background: oklch(27% 0.03 170);
@@ -1740,6 +1828,7 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 
 @media (prefers-reduced-motion: reduce) {{
   *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; }}
+  .resend-success-icon {{ animation: none; }}
 }}
 </style>
 </head>
