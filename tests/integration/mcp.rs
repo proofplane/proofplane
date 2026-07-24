@@ -166,7 +166,17 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
     let raw_token = token.raw_token.clone();
 
     let (
-        (known, policies, unknown, resources, resource, policy_resource, bad_resource, denied),
+        (
+            known,
+            policies,
+            controls,
+            unknown,
+            resources,
+            resource,
+            policy_resource,
+            bad_resource,
+            denied,
+        ),
         audit_logs,
     ) = capture_audit_logs(|request_id| {
         let raw_token = raw_token.clone();
@@ -177,6 +187,12 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
                 .await;
             let policies = client
                 .call_tool("get_proofplane_guide", json!({"topic": "policies"}))
+                .await;
+            let controls = client
+                .call_tool(
+                    "get_proofplane_guide",
+                    json!({"topic": "controls-and-mappings"}),
+                )
                 .await;
             let unknown = client
                 .call_tool("get_proofplane_guide", json!({"topic": "unknown-topic"}))
@@ -191,6 +207,7 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
             (
                 known,
                 policies,
+                controls,
                 unknown,
                 resources,
                 resource,
@@ -232,6 +249,12 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
         "manage_policy_document",
         "File bytes never pass through MCP or the model",
         "call `get_policy`",
+        "attach_policy_to_controls",
+        "attach_control_to_policies",
+        "detach_policy_from_controls",
+        "detach_control_from_policies",
+        "all-or-nothing",
+        "50 items",
     ] {
         assert!(
             policy_markdown.contains(expected),
@@ -242,6 +265,25 @@ async fn guide_is_callable_by_a_valid_connection_with_zero_permissions() {
         assert!(
             !policy_markdown.to_ascii_lowercase().contains(forbidden),
             "policy guide omits {forbidden:?}"
+        );
+    }
+
+    assert_eq!(controls["topic"], "controls-and-mappings");
+    assert_eq!(controls["title"], "Controls and Mappings");
+    let controls_markdown = controls["markdown"]
+        .as_str()
+        .expect("controls guide markdown is text");
+    for expected in [
+        "map_evidence_to_controls",
+        "map_control_to_evidence",
+        "unmap_evidence_from_controls",
+        "unmap_control_from_evidence",
+        "all-or-nothing",
+        "50 items",
+    ] {
+        assert!(
+            controls_markdown.contains(expected),
+            "controls guide contains {expected:?}"
         );
     }
 
