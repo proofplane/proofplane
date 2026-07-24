@@ -66,7 +66,7 @@ pub enum AttachPolicyToControlsError {
 impl From<RepositoryError> for AttachPolicyToControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchMapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
                 already_mapped: rejection
                     .already_mapped
@@ -98,7 +98,7 @@ pub enum AttachControlToPoliciesError {
 impl From<RepositoryError> for AttachControlToPoliciesError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchMapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(PolicyId::from).collect(),
                 archived: rejection.archived.into_iter().map(PolicyId::from).collect(),
                 already_mapped: rejection
@@ -130,7 +130,7 @@ pub enum DetachPolicyFromControlsError {
 impl From<RepositoryError> for DetachPolicyFromControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchUnmapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
                 not_mapped: rejection
                     .not_mapped
@@ -162,7 +162,7 @@ pub enum DetachControlFromPoliciesError {
 impl From<RepositoryError> for DetachControlFromPoliciesError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchUnmapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(PolicyId::from).collect(),
                 archived: rejection.archived.into_iter().map(PolicyId::from).collect(),
                 not_mapped: rejection

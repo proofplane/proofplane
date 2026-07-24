@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     constraints::classify_db_error, controls::ids_present_in, documents::document_from_row,
-    BatchRejection, Error,
+    BatchMapRejection, BatchUnmapRejection, Error,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,7 +339,7 @@ WHERE policy_id = $1
 
         let known = ids_present_in(&in_workspace, "id")?;
         let already = ids_present_in(&existing, "control_id")?;
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchMapRejection::default();
         for id in &control_ids {
             if !known.contains(id) {
                 rejection.unknown.push(*id);
@@ -348,7 +348,7 @@ WHERE policy_id = $1
             }
         }
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchMapRejected(rejection));
         }
 
         self.transaction
@@ -434,7 +434,7 @@ WHERE control_id = $1
         // Classify in request order; unknown precedes archived precedes
         // already-attached for a single id, but every id lands in some bucket so
         // the whole batch's failures come back in one response.
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchMapRejection::default();
         for id in &policy_ids {
             if !known.contains(id) {
                 rejection.unknown.push(*id);
@@ -445,7 +445,7 @@ WHERE control_id = $1
             }
         }
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchMapRejected(rejection));
         }
 
         self.transaction
@@ -530,7 +530,7 @@ FROM requested r
             )
             .await?;
 
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchUnmapRejection::default();
         for row in &rows {
             let control_id = row.try_get::<_, Uuid>("control_id")?;
             if !row.try_get::<_, bool>("control_exists")? {
@@ -544,7 +544,7 @@ FROM requested r
         // read alike here yet call for opposite corrections, so they are reported
         // together in one rejection. Any bucket rolls the whole batch back.
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchUnmapRejected(rejection));
         }
 
         Ok(Some(payload.control_ids.clone()))
@@ -624,7 +624,7 @@ FROM requested r
             )
             .await?;
 
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchUnmapRejection::default();
         for row in &rows {
             let policy_id = row.try_get::<_, Uuid>("policy_id")?;
             if !row.try_get::<_, bool>("policy_exists")? {
@@ -640,7 +640,7 @@ FROM requested r
         // for a different correction, so they are reported together in one
         // rejection. Any bucket rolls the whole batch back.
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchUnmapRejected(rejection));
         }
 
         Ok(Some(payload.policy_ids.clone()))

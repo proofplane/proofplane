@@ -27,7 +27,7 @@ pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
 pub use constraints::ConflictKind;
 pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
 pub use documents::TypedDocumentUploadWork;
-pub use error::{BatchRejection, Error};
+pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{
     ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
     PendingDocumentUploadWork,

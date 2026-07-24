@@ -15,7 +15,7 @@ use crate::{
     repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
-use super::{constraints::classify_db_error, BatchRejection, Error};
+use super::{constraints::classify_db_error, BatchMapRejection, BatchUnmapRejection, Error};
 
 impl Postgres {
     pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
@@ -275,7 +275,7 @@ WHERE evidence_id = $1
 
         let known = ids_present_in(&in_workspace, "id")?;
         let already = ids_present_in(&existing, "control_id")?;
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchMapRejection::default();
         for id in &control_ids {
             if !known.contains(id) {
                 rejection.unknown.push(*id);
@@ -284,7 +284,7 @@ WHERE evidence_id = $1
             }
         }
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchMapRejected(rejection));
         }
 
         let rationales = payload
@@ -372,7 +372,7 @@ WHERE control_id = $1
 
         let known = ids_present_in(&in_workspace, "id")?;
         let already = ids_present_in(&existing, "evidence_id")?;
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchMapRejection::default();
         for id in &evidence_ids {
             if !known.contains(id) {
                 rejection.unknown.push(*id);
@@ -381,7 +381,7 @@ WHERE control_id = $1
             }
         }
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchMapRejected(rejection));
         }
 
         let rationales = payload
@@ -501,7 +501,7 @@ FROM requested r
             )
             .await?;
 
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchUnmapRejection::default();
         for row in &rows {
             let control_id = row.try_get::<_, Uuid>("control_id")?;
             if !row.try_get::<_, bool>("control_exists")? {
@@ -515,7 +515,7 @@ FROM requested r
         // read alike here yet call for opposite corrections, so they are reported
         // together in one rejection. Any bucket rolls the whole batch back.
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchUnmapRejected(rejection));
         }
 
         Ok(Some(payload.control_ids.clone()))
@@ -587,7 +587,7 @@ FROM requested r
             )
             .await?;
 
-        let mut rejection = BatchRejection::default();
+        let mut rejection = BatchUnmapRejection::default();
         for row in &rows {
             let evidence_id = row.try_get::<_, Uuid>("evidence_id")?;
             if !row.try_get::<_, bool>("evidence_exists")? {
@@ -601,7 +601,7 @@ FROM requested r
         // read alike here yet call for opposite corrections, so they are reported
         // together in one rejection. Any bucket rolls the whole batch back.
         if !rejection.is_empty() {
-            return Err(Error::BatchRejected(rejection));
+            return Err(Error::BatchUnmapRejected(rejection));
         }
 
         Ok(Some(payload.evidence_ids.clone()))

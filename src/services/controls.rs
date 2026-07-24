@@ -55,7 +55,7 @@ pub enum MapEvidenceToControlsError {
 impl From<RepositoryError> for MapEvidenceToControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchMapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
                 already_mapped: rejection
                     .already_mapped
@@ -86,7 +86,7 @@ pub enum MapControlToEvidenceError {
 impl From<RepositoryError> for MapControlToEvidenceError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchMapRejected(rejection) => Self::Rejected {
                 unknown: rejection
                     .unknown
                     .into_iter()
@@ -121,7 +121,7 @@ pub enum UnmapEvidenceFromControlsError {
 impl From<RepositoryError> for UnmapEvidenceFromControlsError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchUnmapRejected(rejection) => Self::Rejected {
                 unknown: rejection.unknown.into_iter().map(ControlId::from).collect(),
                 not_mapped: rejection
                     .not_mapped
@@ -152,7 +152,7 @@ pub enum UnmapControlFromEvidenceError {
 impl From<RepositoryError> for UnmapControlFromEvidenceError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::BatchRejected(rejection) => Self::Rejected {
+            RepositoryError::BatchUnmapRejected(rejection) => Self::Rejected {
                 unknown: rejection
                     .unknown
                     .into_iter()
