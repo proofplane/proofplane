@@ -105,6 +105,70 @@ async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_
 }
 
 #[tokio::test]
+async fn mail_failure_returns_retryable_responses_without_invalidating_previous_otp() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    let invite_token = grant.raw_secret.expose_secret();
+
+    app.server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
+        .json(&json!({ "token": invite_token }))
+        .await
+        .assert_status_ok();
+    let delivered_code = app.sent_mail()[0].code.clone();
+
+    app.set_mail_delivery_failure(true);
+    let api_failure = app
+        .server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
+        .json(&json!({ "token": invite_token }))
+        .await;
+    api_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let error = api_failure.json::<Value>();
+    assert_eq!(error["error"]["code"], "mail_unavailable");
+    assert_eq!(
+        error["error"]["message"],
+        "verification email could not be sent; try again"
+    );
+    assert_eq!(error["error"]["details"], json!([]));
+
+    let browser_failure = app
+        .server()
+        .post(&format!(
+            "/auditor-access/{workspace_id}/otp/request/browser"
+        ))
+        .form(&[("token", invite_token)])
+        .await;
+    browser_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body = html_body(&browser_failure);
+    assert!(body.contains("We couldn&#39;t send the verification code. Please try again."));
+    assert!(body.contains("Send verification code"));
+    assert!(!body.contains("resend"));
+
+    let remaining_otps = app
+        .postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            "SELECT count(*)::bigint AS count FROM auditor_access_otps WHERE grant_id = $1",
+            &[&Uuid::from(grant.grant.id)],
+        )
+        .await
+        .expect("OTP count reads")
+        .get::<_, i64>("count");
+    assert_eq!(remaining_otps, 1);
+
+    app.set_mail_delivery_failure(false);
+    app.server()
+        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
+        .json(&json!({ "token": invite_token, "code": delivered_code }))
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
 async fn wrong_reused_rate_limited_and_invalid_invites_do_not_create_sessions() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");

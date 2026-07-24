@@ -74,6 +74,18 @@ RETURNING {OTP_COLUMNS}
         auditor_otp_from_row(&row)
     }
 
+    pub async fn delete_auditor_otp(&self, id: AuditorAccessOtpId) -> Result<bool, Error> {
+        let client = self.get().await?;
+        let deleted = client
+            .execute(
+                "DELETE FROM auditor_access_otps WHERE id = $1",
+                &[&Uuid::from(id)],
+            )
+            .await?;
+
+        Ok(deleted > 0)
+    }
+
     pub async fn verify_auditor_otp_and_create_session(
         &self,
         grant_id: AuditorAccessGrantId,

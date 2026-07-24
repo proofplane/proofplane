@@ -130,15 +130,16 @@ pub struct UploadsConfig {
     pub max_document_bytes: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct MailConfig {
     pub adapter: MailAdapterConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum MailAdapterConfig {
     Disabled,
     LocalStdout,
+    Resend { api_key: SecretString, from: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,7 +334,10 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
-        assert_eq!(config.mail.adapter, MailAdapterConfig::LocalStdout);
+        assert!(matches!(
+            config.mail.adapter,
+            MailAdapterConfig::LocalStdout
+        ));
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert!(
             config.mcp.allowed_hosts.is_empty(),
@@ -346,6 +350,67 @@ mod tests {
             "local-upload-grant-001"
         );
         assert_eq!(config.paseto.upload_grant.keys.len(), 1);
+    }
+
+    #[test]
+    fn resend_mail_config_loads_and_redacts_api_key() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let resend = base.replace(
+            "mail:\n  adapter: \"local_stdout\"",
+            r#"mail:
+  adapter: "resend"
+  api_key: "re_unique_test_secret"
+  from: "Proofplane <noreply@notify.proofplane.app>""#,
+        );
+        assert_ne!(base, resend, "mail config replacement anchor matched");
+        let path = write_temp_config(&resend);
+
+        let config = load_from_path(&path).expect("Resend config loads");
+
+        match &config.mail.adapter {
+            MailAdapterConfig::Resend { api_key, from } => {
+                assert_eq!(api_key.expose_secret(), "re_unique_test_secret");
+                assert_eq!(from, "Proofplane <noreply@notify.proofplane.app>");
+                let debug = format!("{:?}", config.mail);
+                assert!(!debug.contains(api_key.expose_secret()));
+                assert!(debug.contains("Secret"));
+            }
+            _ => panic!("Resend adapter is configured"),
+        }
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resend_mail_config_requires_api_key_and_sender() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let resend = base.replace(
+            "mail:\n  adapter: \"local_stdout\"",
+            "mail:\n  adapter: \"resend\"",
+        );
+        assert_ne!(base, resend, "mail config replacement anchor matched");
+        let path = write_temp_config(&resend);
+
+        let error = load_from_path(&path).expect_err("incomplete Resend config is invalid");
+
+        assert_validation_paths(error, &["mail.api_key", "mail.from"]);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resend_mail_config_rejects_blank_api_key_and_sender() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let resend = base.replace(
+            "mail:\n  adapter: \"local_stdout\"",
+            "mail:\n  adapter: \"resend\"\n  api_key: \"   \"\n  from: \"   \"",
+        );
+        assert_ne!(base, resend, "mail config replacement anchor matched");
+        let path = write_temp_config(&resend);
+
+        let error = load_from_path(&path).expect_err("blank Resend config is invalid");
+
+        assert_validation_paths(error, &["mail.api_key", "mail.from"]);
+        let _ = fs::remove_file(path);
     }
 
     #[test]

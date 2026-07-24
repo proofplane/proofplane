@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditorAccessGrant, AuditorAccessOtpId, AuditorSession, AuditorSessionId},
-    mailer::{MailError, SharedMailAdapter},
+    mailer::{AuditorOtpMail, MailError, SharedMailAdapter},
     repository::{NewAuditorAccessOtp, NewAuditorSession, Postgres},
 };
 
@@ -56,17 +56,27 @@ impl AuditorAccessSessionService {
         }
 
         let code = generate_otp_code()?;
+        let otp_id = AuditorAccessOtpId::from(Uuid::new_v4());
         self.repository
             .create_auditor_otp(NewAuditorAccessOtp {
-                id: AuditorAccessOtpId::from(Uuid::new_v4()),
+                id: otp_id,
                 grant_id: grant.id,
                 code_digest: digest(&code),
                 expires_at: Utc::now() + chrono::Duration::minutes(OTP_TTL_MINUTES),
             })
             .await?;
-        self.mailer
-            .send_auditor_otp(&grant.auditor_email, &code)
-            .await?;
+        if let Err(error) = self
+            .mailer
+            .send_auditor_otp(&AuditorOtpMail {
+                id: Uuid::from(otp_id),
+                auditor_email: &grant.auditor_email,
+                code: &code,
+            })
+            .await
+        {
+            self.repository.delete_auditor_otp(otp_id).await?;
+            return Err(error.into());
+        }
 
         Ok(())
     }

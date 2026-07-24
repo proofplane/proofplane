@@ -631,6 +631,10 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
         self.mailer.sent()
     }
 
+    pub fn set_mail_delivery_failure(&self, fail: bool) {
+        self.mailer.set_delivery_failure(fail);
+    }
+
     fn mcp_app(&self) -> Router {
         self.mcp_app_with_auth0_verifier(Arc::new(FakeMcpTokenVerifier))
     }

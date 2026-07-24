@@ -224,6 +224,19 @@ async fn request_otp_browser(
             )),
         )
             .into_response()),
+        Err(AuditorAccessSessionError::Mail(error)) => {
+            tracing::warn!(%error, "auditor OTP mail delivery unavailable");
+            Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_invite_page(
+                    workspace_id,
+                    token,
+                    &grant.auditor_email,
+                    Some("We couldn't send the verification code. Please try again."),
+                )),
+            )
+                .into_response())
+        }
         Err(error) => Err(session_error(error)),
     }
 }
@@ -1879,7 +1892,13 @@ fn session_error(error: AuditorAccessSessionError) -> ApiError {
             code: "auditor_otp_rate_limited",
             message: "too many OTP requests".to_owned(),
         },
-        AuditorAccessSessionError::Mail(_) => ApiError::Internal,
+        AuditorAccessSessionError::Mail(error) => {
+            tracing::warn!(%error, "auditor OTP mail delivery unavailable");
+            ApiError::ServiceUnavailable {
+                code: "mail_unavailable",
+                message: "verification email could not be sent; try again".to_owned(),
+            }
+        }
         AuditorAccessSessionError::Random => ApiError::Internal,
         AuditorAccessSessionError::Repository(error) => {
             tracing::error!(%error, "auditor access session repository failure");
