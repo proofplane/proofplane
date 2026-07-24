@@ -1,6 +1,8 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -31,7 +33,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<ManagePolicyDocumentRequest>,
-    ) -> Result<Json<ManagePolicyDocumentResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ManagePolicyDocumentResponse>, ErrorData> {
         let policy_id = parse_policy_document_grant_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let grant = self
@@ -84,7 +86,7 @@ impl From<IssuedPolicyUploadGrant> for ManagePolicyDocumentResponse {
 
 fn parse_policy_document_grant_request(
     args: ManagePolicyDocumentRequest,
-) -> Result<PolicyId, rmcp::ErrorData> {
+) -> Result<PolicyId, ErrorData> {
     validate! {
         policy_id <- required_uuid("policy_id", args.policy_id).map(PolicyId::from),
         => policy_id,
@@ -93,13 +95,13 @@ fn parse_policy_document_grant_request(
     .map_err(argument_errors)
 }
 
-impl From<PolicyUploadGrantError> for rmcp::ErrorData {
+impl From<PolicyUploadGrantError> for ErrorData {
     fn from(error: PolicyUploadGrantError) -> Self {
         match error {
             PolicyUploadGrantError::Unavailable => not_found(),
             PolicyUploadGrantError::Internal => {
                 tracing::error!(%error, "MCP policy document upload grant failure");
-                rmcp::ErrorData::internal_error("internal error", None)
+                ErrorData::internal_error("internal error", None)
             }
             PolicyUploadGrantError::Repository(repository_error) => {
                 ServiceError::from(repository_error).into()

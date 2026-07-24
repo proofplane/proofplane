@@ -1,6 +1,8 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -36,7 +38,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateAuditorAccessLinkRequest>,
-    ) -> Result<Json<CreateAuditorAccessLinkResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<CreateAuditorAccessLinkResponse>, ErrorData> {
         let request = parse_create_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
         let workspace_id = context.connection.workspace_id;
@@ -66,7 +68,7 @@ impl ProofplaneMcp {
     async fn list_auditor_access_links(
         &self,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ListAuditorAccessLinksResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListAuditorAccessLinksResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
         let grants = self.auditor_access_grants.list(&context.connection).await?;
 
@@ -86,7 +88,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<RevokeAuditorAccessLinkRequest>,
-    ) -> Result<Json<RevokeAuditorAccessLinkResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<RevokeAuditorAccessLinkResponse>, ErrorData> {
         let grant_id = parse_revoke_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
         let grant = self
@@ -176,7 +178,7 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
 
 fn parse_create_request(
     args: CreateAuditorAccessLinkRequest,
-) -> Result<CreateAuditorAccessGrantRequest, rmcp::ErrorData> {
+) -> Result<CreateAuditorAccessGrantRequest, ErrorData> {
     let email = args.email.filter(|value| !value.trim().is_empty());
     validate! {
         auditor_email <- match email {
@@ -197,14 +199,14 @@ fn parse_create_request(
 
 fn parse_revoke_request(
     args: RevokeAuditorAccessLinkRequest,
-) -> Result<AuditorAccessGrantId, rmcp::ErrorData> {
+) -> Result<AuditorAccessGrantId, ErrorData> {
     required_uuid("grant_id", args.grant_id)
         .map(AuditorAccessGrantId::from)
         .into_result()
         .map_err(argument_errors)
 }
 
-impl From<AuditorAccessGrantError> for rmcp::ErrorData {
+impl From<AuditorAccessGrantError> for ErrorData {
     fn from(error: AuditorAccessGrantError) -> Self {
         match error {
             AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
@@ -218,7 +220,7 @@ impl From<AuditorAccessGrantError> for rmcp::ErrorData {
             }
             AuditorAccessGrantError::Secret(error) => {
                 tracing::error!(%error, "MCP auditor access grant secret failure");
-                rmcp::ErrorData::internal_error("internal error", None)
+                ErrorData::internal_error("internal error", None)
             }
             AuditorAccessGrantError::Repository(error) => ServiceError::from(error).into(),
         }

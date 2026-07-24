@@ -1,5 +1,8 @@
-use rmcp::model::{
-    Annotated, ListResourcesResult, RawResource, ReadResourceResult, Resource, ResourceContents,
+use rmcp::{
+    model::{
+        Annotated, ListResourcesResult, RawResource, ReadResourceResult, Resource, ResourceContents,
+    },
+    ErrorData,
 };
 
 use super::common::not_found;
@@ -12,7 +15,7 @@ pub(super) fn list_doc_resources() -> ListResourcesResult {
     ListResourcesResult::with_all_items(TOPICS.iter().map(resource_metadata).collect())
 }
 
-pub(super) fn read_doc_resource(uri: &str) -> Result<ReadResourceResult, rmcp::ErrorData> {
+pub(super) fn read_doc_resource(uri: &str) -> Result<ReadResourceResult, ErrorData> {
     let topic = TOPICS
         .iter()
         .find(|topic| doc_uri(topic.topic) == uri)

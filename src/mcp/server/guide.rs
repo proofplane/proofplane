@@ -1,6 +1,8 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +23,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<GetProofplaneGuideRequest>,
-    ) -> Result<Json<GetProofplaneGuideResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<GetProofplaneGuideResponse>, ErrorData> {
         authorize_connection(&ctx)?;
 
         Ok(Json(guide_response(args.topic.as_deref())))

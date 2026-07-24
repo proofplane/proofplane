@@ -1,6 +1,8 @@
 use rmcp::{
-    handler::server::wrapper::Parameters, schemars, schemars::JsonSchema, service::RequestContext,
-    tool, tool_router, Json, RoleServer,
+    handler::server::wrapper::Parameters,
+    schemars::{self, JsonSchema},
+    service::RequestContext,
+    tool, tool_router, ErrorData, Json, RoleServer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +33,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<CreateEvidence>,
-    ) -> Result<Json<GetEvidenceResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<GetEvidenceResponse>, ErrorData> {
         let payload = parse_create_evidence(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidence)?;
         let workspace_id = context.connection.workspace_id;
@@ -65,7 +67,7 @@ impl ProofplaneMcp {
     async fn list_evidence(
         &self,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<Json<ListEvidenceResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<ListEvidenceResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidence)?;
         let evidence = self
             .evidence
@@ -85,7 +87,7 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<EvidenceArg>,
-    ) -> Result<Json<GetEvidenceResponse>, rmcp::ErrorData> {
+    ) -> Result<Json<GetEvidenceResponse>, ErrorData> {
         let evidence_id = parse_evidence_arg(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidence)?;
         let evidence = self
@@ -149,7 +151,7 @@ impl From<Evidence> for EvidenceResponseDTO {
     }
 }
 
-pub(super) fn parse_evidence_arg(args: EvidenceArg) -> Result<EvidenceId, rmcp::ErrorData> {
+pub(super) fn parse_evidence_arg(args: EvidenceArg) -> Result<EvidenceId, ErrorData> {
     validate! {
         evidence_id <- required_uuid("evidence_id", args.evidence_id)
             .map(EvidenceId::from),
@@ -159,7 +161,7 @@ pub(super) fn parse_evidence_arg(args: EvidenceArg) -> Result<EvidenceId, rmcp::
     .map_err(argument_errors)
 }
 
-fn parse_create_evidence(args: CreateEvidence) -> Result<CreateEvidencePayload, rmcp::ErrorData> {
+fn parse_create_evidence(args: CreateEvidence) -> Result<CreateEvidencePayload, ErrorData> {
     validate! {
         title <- required_text("title", args.title.unwrap_or_default()),
         description <- required_text("description", args.description.unwrap_or_default()),

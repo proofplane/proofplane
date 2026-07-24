@@ -25,19 +25,15 @@ mod workspaces;
 
 pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
 pub use constraints::ConflictKind;
-pub use controls::{CreateControlEvidenceMappingsOutcome, CreateEvidenceControlMappingsOutcome};
 pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
 pub use documents::TypedDocumentUploadWork;
-pub use error::{BatchRejection, Error};
+pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{
     ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
     PendingDocumentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
-pub use policies::{
-    ArchivePolicyResult, AttachControlToPoliciesOutcome, AttachPolicyToControlsOutcome,
-    CreatePolicyDocumentResult,
-};
+pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use workspace_memberships::NewWorkspaceMembership;
 

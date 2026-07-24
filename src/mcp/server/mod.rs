@@ -16,7 +16,7 @@ use rmcp::{
         ReadResourceResult, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
-    tool_handler, RoleServer, ServerHandler,
+    tool_handler, ErrorData, RoleServer, ServerHandler,
 };
 
 use crate::{
@@ -136,7 +136,7 @@ impl ServerHandler for ProofplaneMcp {
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+    ) -> Result<ListResourcesResult, ErrorData> {
         authorize_connection(&context)?;
         Ok(resources::list_doc_resources())
     }
@@ -145,7 +145,7 @@ impl ServerHandler for ProofplaneMcp {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    ) -> Result<ReadResourceResult, ErrorData> {
         authorize_connection(&context)?;
         resources::read_doc_resource(&request.uri)
     }
@@ -174,6 +174,14 @@ mod tests {
             (
                 "attach_control_to_policies",
                 "Attach one control to many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or already attached the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
+            ),
+            (
+                "detach_policy_from_controls",
+                "Remove the mappings between one active policy and many controls in a single all-or-nothing batch; if any control id is unknown or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
+            ),
+            (
+                "detach_control_from_policies",
+                "Remove the mappings between one control and many active policies in a single all-or-nothing batch; if any policy id is unknown, archived, or not currently mapped the whole batch is rejected; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "create_auditor_access_link",
@@ -482,6 +490,8 @@ mod tests {
                 | "attach_policy_to_controls"
                 | "attach_control_to_policies"
                 | "detach_policy_from_control"
+                | "detach_policy_from_controls"
+                | "detach_control_from_policies"
                 | "manage_policy_document" => Some("policies"),
                 "create_auditor_access_link"
                 | "list_auditor_access_links"
