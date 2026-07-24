@@ -10,8 +10,8 @@ use crate::{
         generate_auditor_invite_secret, parse_auditor_invite_secret, OpaqueTokenError,
     },
     domain::{
-        AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload, WorkspaceId,
-        WorkspacePermission,
+        AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId,
+        CreateAuditorAccessGrantPayload, WorkspaceId, WorkspacePermission,
     },
     repository::Postgres,
 };
@@ -31,8 +31,10 @@ pub enum AuditorAccessGrantError {
     Unavailable,
     #[error("auditor access grant request is denied")]
     Denied,
-    #[error("auditor access grant request is invalid")]
-    Invalid(&'static str),
+    #[error("expires_at must be in the future")]
+    ExpiresAtInPast,
+    #[error("auditor_email is invalid")]
+    InvalidEmail,
     #[error("auditor access grant secret failed")]
     Secret(#[source] OpaqueTokenError),
     #[error("repository error")]
@@ -43,6 +45,7 @@ pub enum AuditorAccessGrantError {
 pub struct CreateAuditorAccessGrantRequest {
     pub auditor_email: String,
     pub expires_at: Option<DateTime<Utc>>,
+    pub period: AuditReviewPeriod,
 }
 
 #[derive(Debug)]
@@ -65,10 +68,9 @@ impl AuditorAccessGrantService {
         let auditor_email = normalize_email(&request.auditor_email)?;
         let expires_at = request.expires_at.unwrap_or_else(default_expires_at);
         if expires_at <= Utc::now() {
-            return Err(AuditorAccessGrantError::Invalid(
-                "expires_at must be in the future",
-            ));
+            return Err(AuditorAccessGrantError::ExpiresAtInPast);
         }
+        let period = request.period;
 
         let issued = generate_auditor_invite_secret().map_err(AuditorAccessGrantError::Secret)?;
         let grant_id = AuditorAccessGrantId::from(Uuid::new_v4());
@@ -85,6 +87,7 @@ impl AuditorAccessGrantService {
                             secret_digest: issued.digest,
                             auditor_email,
                             expires_at,
+                            period,
                         })
                         .await
                 },
@@ -151,10 +154,10 @@ fn authorize(connection: &AgentConnectionContext) -> Result<(), AuditorAccessGra
 fn normalize_email(value: &str) -> Result<String, AuditorAccessGrantError> {
     let email = value.trim().to_ascii_lowercase();
     let Some((local, domain)) = email.split_once('@') else {
-        return Err(AuditorAccessGrantError::Invalid("auditor_email is invalid"));
+        return Err(AuditorAccessGrantError::InvalidEmail);
     };
     if local.is_empty() || domain.is_empty() || domain.contains('@') {
-        return Err(AuditorAccessGrantError::Invalid("auditor_email is invalid"));
+        return Err(AuditorAccessGrantError::InvalidEmail);
     }
 
     Ok(email)
@@ -181,7 +184,7 @@ mod tests {
         for value in ["", "auditor", "@example.com", "auditor@", "a@b@c"] {
             assert!(matches!(
                 normalize_email(value),
-                Err(AuditorAccessGrantError::Invalid(_))
+                Err(AuditorAccessGrantError::InvalidEmail)
             ));
         }
     }

@@ -187,6 +187,10 @@ impl From<DomainError> for FieldIssue {
                 field: "valid_until",
                 message: "valid_until must be greater than or equal to valid_from".to_owned(),
             },
+            DomainError::InvalidAuditReviewPeriod => Self {
+                field: "period_end",
+                message: "period_end must be greater than or equal to period_start".to_owned(),
+            },
             DomainError::DuplicatePermission { permission } => Self {
                 field: "permissions",
                 message: format!("permissions contains duplicate value {permission}"),

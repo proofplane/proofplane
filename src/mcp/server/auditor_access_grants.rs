@@ -11,13 +11,14 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, format_datetime, invalid_field, not_found,
-        optional_timestamp, required_uuid,
+        argument_errors, authorize_token_workspace, domain_errors, format_datetime, invalid_field,
+        not_found, optional_timestamp, required_timestamp, required_uuid,
     },
     ProofplaneMcp,
 };
 use crate::{
-    domain::{AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
+    domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
+    mcp::server::common::McpArgumentError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::{
         auditor_access_grants::{
@@ -26,13 +27,14 @@ use crate::{
         Error as ServiceError,
     },
     validate,
+    validation::Validation,
 };
 
 #[tool_router(router = auditor_access_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
     #[tool(
         name = "create_auditor_access_link",
-        description = "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires."
+        description = "Create a bearer-secret browser link that lets the named auditor review compliance evidence whose coverage window overlaps the audit period from period_start to period_end, and cannot see or download anything outside it, until the grant expires."
     )]
     async fn create_auditor_access_link(
         &self,
@@ -113,6 +115,8 @@ impl ProofplaneMcp {
 struct CreateAuditorAccessLinkRequest {
     email: Option<String>,
     expires_at: Option<String>,
+    period_start: Option<String>,
+    period_end: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -161,6 +165,8 @@ struct AuditorAccessGrantResponse {
     auditor_email: String,
     created_at: String,
     expires_at: String,
+    period_start: String,
+    period_end: String,
     revoked_at: Option<String>,
 }
 
@@ -171,6 +177,8 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
             auditor_email: grant.auditor_email,
             created_at: format_datetime(grant.created_at),
             expires_at: format_datetime(grant.expires_at),
+            period_start: format_datetime(grant.period.start),
+            period_end: format_datetime(grant.period.end),
             revoked_at: grant.revoked_at.map(format_datetime),
         }
     }
@@ -180,21 +188,29 @@ fn parse_create_request(
     args: CreateAuditorAccessLinkRequest,
 ) -> Result<CreateAuditorAccessGrantRequest, ErrorData> {
     let email = args.email.filter(|value| !value.trim().is_empty());
-    validate! {
+    let (auditor_email, expires_at, period_start, period_end) = validate! {
         auditor_email <- match email {
-            Some(email) => crate::validation::Validation::valid(email),
-            None => crate::validation::Validation::invalid(super::common::McpArgumentError::Missing {
+            Some(email) => Validation::valid(email),
+            None => Validation::invalid(McpArgumentError::Missing {
                 field: "email",
             }),
         },
         expires_at <- optional_timestamp("expires_at", args.expires_at),
-        => CreateAuditorAccessGrantRequest {
-            auditor_email,
-            expires_at,
-        },
+        period_start <- required_timestamp("period_start", args.period_start),
+        period_end <- required_timestamp("period_end", args.period_end),
+        => (auditor_email, expires_at, period_start, period_end),
     }
     .into_result()
-    .map_err(argument_errors)
+    .map_err(argument_errors)?;
+
+    let period = AuditReviewPeriod::new(period_start, period_end)
+        .map_err(|error| domain_errors(vec![error]))?;
+
+    Ok(CreateAuditorAccessGrantRequest {
+        auditor_email,
+        expires_at,
+        period,
+    })
 }
 
 fn parse_revoke_request(
@@ -210,13 +226,11 @@ impl From<AuditorAccessGrantError> for ErrorData {
     fn from(error: AuditorAccessGrantError) -> Self {
         match error {
             AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
-            AuditorAccessGrantError::Invalid(message) => {
-                let field = if message.starts_with("expires_at") {
-                    "expires_at"
-                } else {
-                    "email"
-                };
-                invalid_field(field, message)
+            AuditorAccessGrantError::ExpiresAtInPast => {
+                invalid_field("expires_at", "expires_at must be in the future")
+            }
+            AuditorAccessGrantError::InvalidEmail => {
+                invalid_field("email", "auditor_email is invalid")
             }
             AuditorAccessGrantError::Secret(error) => {
                 tracing::error!(%error, "MCP auditor access grant secret failure");
@@ -247,6 +261,8 @@ fn emit_auditor_grant_audit(
     .request_id(context.request_id.0)
     .metadata("auditor_email", &grant.auditor_email)
     .metadata("expires_at", format_datetime(grant.expires_at))
+    .metadata("period_start", format_datetime(grant.period.start))
+    .metadata("period_end", format_datetime(grant.period.end))
     .object(AuditObject::new("auditor_access_grant", grant.id.into()))
     .emit();
 }

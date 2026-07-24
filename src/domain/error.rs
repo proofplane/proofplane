@@ -26,6 +26,9 @@ pub enum DomainError {
     #[error("valid_until must be greater than or equal to valid_from")]
     InvalidCoverageWindow,
 
+    #[error("period_end must be greater than or equal to period_start")]
+    InvalidAuditReviewPeriod,
+
     #[error("document filename must not be empty")]
     EmptyDocumentFilename,
 

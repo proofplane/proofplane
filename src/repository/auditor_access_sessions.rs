@@ -3,13 +3,14 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AuditorAccessGrantId, AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
+    AuditReviewPeriod, AuditorAccessGrantId, AuditorAccessOtp, AuditorAccessOtpId, AuditorSession,
+    AuditorSessionId,
 };
 
 use super::{Error, Postgres};
 
 const OTP_COLUMNS: &str = "id, grant_id, expires_at, consumed_at, failed_attempt_count, created_at";
-const SESSION_COLUMNS: &str = "s.id, s.grant_id, g.workspace_id, s.auditor_email, s.expires_at, s.revoked_at, s.last_used_at, s.created_at";
+const SESSION_COLUMNS: &str = "s.id, s.grant_id, g.workspace_id, s.auditor_email, s.expires_at, g.period_start, g.period_end, s.revoked_at, s.last_used_at, s.created_at";
 
 pub struct NewAuditorAccessOtp {
     pub id: AuditorAccessOtpId,
@@ -232,6 +233,7 @@ fn auditor_session_from_row(row: &Row) -> Result<AuditorSession, Error> {
         workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
         auditor_email: row.try_get("auditor_email")?,
         expires_at: row.try_get("expires_at")?,
+        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
         revoked_at: row.try_get("revoked_at")?,
         last_used_at: row.try_get("last_used_at")?,
         created_at: row.try_get("created_at")?,

@@ -265,6 +265,53 @@ impl DocumentDownloadService {
         })
     }
 
+    pub async fn download_for_workspace_within_period(
+        &self,
+        workspace_id: WorkspaceId,
+        period_start: DateTime<Utc>,
+        period_end: DateTime<Utc>,
+        submission_id: EvidenceSubmissionId,
+        document_id: DocumentId,
+    ) -> Result<WorkspaceDownloadedDocument, DownloadError> {
+        let candidate = self
+            .repository
+            .in_workspace_context_read(workspace_id, async move |context| {
+                context
+                    .get_document_for_download_grant_within_period(
+                        submission_id,
+                        document_id,
+                        period_start,
+                        period_end,
+                    )
+                    .await
+            })
+            .await?
+            .ok_or(DownloadError::NotFound)?;
+
+        match candidate.document.upload_status {
+            DocumentUploadStatus::Uploaded => {}
+            _ => return Err(DownloadError::NotFound),
+        }
+
+        let key = finalized_object_key(&candidate)?;
+        let object = self
+            .object_store
+            .get_object(&key)
+            .await
+            .map_err(storage_download_error)?;
+        validate_metadata(&candidate.document, &object.metadata)?;
+
+        Ok(WorkspaceDownloadedDocument {
+            document: candidate.document,
+            object,
+            audit: WorkspaceDownloadAuditContext {
+                workspace_id,
+                submission_id,
+                document_id,
+            },
+        })
+    }
+
     pub async fn download_policy_for_workspace(
         &self,
         workspace_id: WorkspaceId,

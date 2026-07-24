@@ -185,7 +185,7 @@ mod tests {
             ),
             (
                 "create_auditor_access_link",
-                "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
+                "Create a bearer-secret browser link that lets the named auditor review compliance evidence whose coverage window overlaps the audit period from period_start to period_end, and cannot see or download anything outside it, until the grant expires.",
             ),
             (
                 "create_control",

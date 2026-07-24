@@ -22,7 +22,7 @@ pub use agent_connection::{
     NewPendingAgentConnection, UserAgentConnection,
 };
 pub use auditor_access_grant::{
-    AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
+    AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
 };
 pub use auditor_access_session::{
     AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,

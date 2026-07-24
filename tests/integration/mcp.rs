@@ -601,7 +601,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "create_auditor_access_link",
-            "Create a bearer-secret browser link that lets the named auditor review compliance evidence until the grant expires.",
+            "Create a bearer-secret browser link that lets the named auditor review compliance evidence whose coverage window overlaps the audit period from period_start to period_end, and cannot see or download anything outside it, until the grant expires.",
         ),
         (
             "list_auditor_access_links",
@@ -782,6 +782,14 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
     assert_schema_has_property(
         &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
         "expires_at",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
+        "period_start",
+    );
+    assert_schema_has_property(
+        &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
+        "period_end",
     );
     assert_schema_has_property(
         &find_tool(&tool_list, "revoke_auditor_access_link")["inputSchema"],
@@ -985,6 +993,8 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "auditor_email",
         "created_at",
         "expires_at",
+        "period_start",
+        "period_end",
         "revoked_at",
     ] {
         assert_schema_has_property(
@@ -1544,7 +1554,9 @@ async fn mcp_auditor_link_tools_create_list_revoke_and_audit_without_secrets() {
                     "create_auditor_access_link",
                     json!({
                         "email": " Auditor@Example.COM ",
-                        "expires_at": "2099-01-01T00:00:00Z"
+                        "expires_at": "2099-01-01T00:00:00Z",
+                        "period_start": "2026-01-01T00:00:00Z",
+                        "period_end": "2026-03-31T23:59:59Z"
                     }),
                 )
                 .await
@@ -1565,6 +1577,8 @@ async fn mcp_auditor_link_tools_create_list_revoke_and_audit_without_secrets() {
     assert_eq!(grant["auditor_email"], "auditor@example.com");
     assert!(grant["created_at"].as_str().is_some());
     assert_eq!(grant["expires_at"], "2099-01-01T00:00:00.000Z");
+    assert_eq!(grant["period_start"], "2026-01-01T00:00:00.000Z");
+    assert_eq!(grant["period_end"], "2026-03-31T23:59:59.000Z");
     assert!(grant["revoked_at"].is_null());
     assert_eq!(created["url_secret_type"], "bearer_secret");
     assert_eq!(created["intended_use"], "auditor_browser_access");
@@ -1587,6 +1601,8 @@ async fn mcp_auditor_link_tools_create_list_revoke_and_audit_without_secrets() {
     let create_metadata = audit_metadata(&create_logs[0]);
     assert_eq!(create_metadata["auditor_email"], "auditor@example.com");
     assert_eq!(create_metadata["expires_at"], "2099-01-01T00:00:00.000Z");
+    assert_eq!(create_metadata["period_start"], "2026-01-01T00:00:00.000Z");
+    assert_eq!(create_metadata["period_end"], "2026-03-31T23:59:59.000Z");
     assert!(!create_logs[0].to_string().contains(url));
     assert!(!create_logs[0].to_string().contains(invite_token));
 
@@ -1650,7 +1666,11 @@ async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
     let invalid_email = mcp_client
         .call_tool_error(
             "create_auditor_access_link",
-            json!({ "email": "not-an-email" }),
+            json!({
+                "email": "not-an-email",
+                "period_start": "2026-01-01T00:00:00Z",
+                "period_end": "2026-03-31T23:59:59Z",
+            }),
         )
         .await;
     assert_eq!(invalid_email.data["problem"]["code"], "validation_failed");
@@ -1659,7 +1679,12 @@ async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
     let invalid_expiry_timestamp = mcp_client
         .call_tool_error(
             "create_auditor_access_link",
-            json!({ "email": "auditor@example.com", "expires_at": "tomorrow" }),
+            json!({
+                "email": "auditor@example.com",
+                "expires_at": "tomorrow",
+                "period_start": "2026-01-01T00:00:00Z",
+                "period_end": "2026-03-31T23:59:59Z",
+            }),
         )
         .await;
     assert_eq!(
@@ -1674,11 +1699,41 @@ async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
     let past_expiry = mcp_client
         .call_tool_error(
             "create_auditor_access_link",
-            json!({ "email": "auditor@example.com", "expires_at": "2000-01-01T00:00:00Z" }),
+            json!({
+                "email": "auditor@example.com",
+                "expires_at": "2000-01-01T00:00:00Z",
+                "period_start": "2026-01-01T00:00:00Z",
+                "period_end": "2026-03-31T23:59:59Z",
+            }),
         )
         .await;
     assert_eq!(past_expiry.data["problem"]["code"], "validation_failed");
     assert_eq!(field_issue_names(&past_expiry.data), ["expires_at"]);
+
+    let missing_period = mcp_client
+        .call_tool_error(
+            "create_auditor_access_link",
+            json!({ "email": "auditor@example.com" }),
+        )
+        .await;
+    assert_eq!(missing_period.data["problem"]["code"], "validation_failed");
+    assert_eq!(
+        field_issue_names(&missing_period.data),
+        ["period_start", "period_end"]
+    );
+
+    let inverted_period = mcp_client
+        .call_tool_error(
+            "create_auditor_access_link",
+            json!({
+                "email": "auditor@example.com",
+                "period_start": "2026-03-31T23:59:59Z",
+                "period_end": "2026-01-01T00:00:00Z",
+            }),
+        )
+        .await;
+    assert_eq!(inverted_period.data["problem"]["code"], "validation_failed");
+    assert_eq!(field_issue_names(&inverted_period.data), ["period_end"]);
 
     let invalid_grant_id = mcp_client
         .call_tool_error(
@@ -1695,7 +1750,11 @@ async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
     let created = mcp_client
         .call_tool(
             "create_auditor_access_link",
-            json!({ "email": "auditor@example.com" }),
+            json!({
+                "email": "auditor@example.com",
+                "period_start": "2026-01-01T00:00:00Z",
+                "period_end": "2026-03-31T23:59:59Z",
+            }),
         )
         .await;
     let grant_id = uuid_from(&created["grant"]["id"]);
@@ -1735,7 +1794,11 @@ async fn mcp_auditor_link_tools_validate_and_conceal_denied_access() {
             read_only_client
                 .call_tool_error(
                     "create_auditor_access_link",
-                    json!({ "email": "auditor@example.com" }),
+                    json!({
+                        "email": "auditor@example.com",
+                        "period_start": "2026-01-01T00:00:00Z",
+                        "period_end": "2026-03-31T23:59:59Z",
+                    }),
                 )
                 .await
                 .data

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::{
     authentication::opaque_token::AuditorInviteSecretDigest,
     domain::{
-        AgentConnectionId, AuditorAccessGrant, AuditorAccessGrantId,
+        AgentConnectionId, AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId,
         CreateAuditorAccessGrantPayload, WorkspaceId,
     },
     repository::WorkspaceTransactionContext,
@@ -12,7 +12,7 @@ use crate::{
 
 use super::{Error, Postgres};
 
-const AUDITOR_ACCESS_GRANT_COLUMNS: &str = "id, workspace_id, auditor_email, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, revoked_at";
+const AUDITOR_ACCESS_GRANT_COLUMNS: &str = "id, workspace_id, auditor_email, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
 
 impl WorkspaceTransactionContext<'_> {
     pub async fn create_auditor_access_grant(
@@ -33,9 +33,11 @@ INSERT INTO auditor_access_grants (
     secret_digest,
     created_by_user_id,
     created_via_agent_connection_id,
-    expires_at
+    expires_at,
+    period_start,
+    period_end
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
 "#
                 ),
@@ -47,6 +49,8 @@ RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
                     &Uuid::from(self.user_id),
                     &agent_connection_id,
                     &grant.expires_at,
+                    &grant.period.start,
+                    &grant.period.end,
                 ],
             )
             .await?;
@@ -145,6 +149,7 @@ fn auditor_access_grant_from_row(row: &Row) -> Result<AuditorAccessGrant, Error>
             .map(AgentConnectionId::from)?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
+        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
         revoked_at: row.try_get("revoked_at")?,
     })
 }
