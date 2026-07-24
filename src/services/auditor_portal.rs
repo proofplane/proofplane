@@ -35,7 +35,7 @@ impl AuditorPortalReadModelService {
             .repository
             .in_workspace_context_read(session.workspace_id, async |context| {
                 let controls = context
-                    .auditor_portal_controls(session.period_start, session.period_end)
+                    .auditor_portal_controls(session.period.start, session.period.end)
                     .await?;
                 let policies = context.auditor_portal_policies().await?;
                 Ok((controls, policies))

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::{
     authentication::opaque_token::AuditorInviteSecretDigest,
     domain::{
-        AgentConnectionId, AuditorAccessGrant, AuditorAccessGrantId,
+        AgentConnectionId, AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId,
         CreateAuditorAccessGrantPayload, WorkspaceId,
     },
     repository::WorkspaceTransactionContext,
@@ -49,8 +49,8 @@ RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
                     &Uuid::from(self.user_id),
                     &agent_connection_id,
                     &grant.expires_at,
-                    &grant.period_start,
-                    &grant.period_end,
+                    &grant.period.start,
+                    &grant.period.end,
                 ],
             )
             .await?;
@@ -149,8 +149,7 @@ fn auditor_access_grant_from_row(row: &Row) -> Result<AuditorAccessGrant, Error>
             .map(AgentConnectionId::from)?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
-        period_start: row.try_get("period_start")?,
-        period_end: row.try_get("period_end")?,
+        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
         revoked_at: row.try_get("revoked_at")?,
     })
 }

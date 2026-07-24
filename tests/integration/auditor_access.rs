@@ -3,7 +3,9 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream;
 use proofplane::{
-    domain::{CreatePolicyPayload, PolicyId, WorkspacePermission, WorkspacePermissions},
+    domain::{
+        AuditReviewPeriod, CreatePolicyPayload, PolicyId, WorkspacePermission, WorkspacePermissions,
+    },
     mailer::DisabledMailAdapter,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     repository::CreatePolicyDocumentResult,
@@ -1722,8 +1724,11 @@ async fn create_grant_with_period(
             CreateAuditorAccessGrantRequest {
                 auditor_email: "auditor@example.com".to_owned(),
                 expires_at: None,
-                period_start: period_start.parse::<DateTime<Utc>>().expect("period_start"),
-                period_end: period_end.parse::<DateTime<Utc>>().expect("period_end"),
+                period: AuditReviewPeriod::new(
+                    period_start.parse::<DateTime<Utc>>().expect("period_start"),
+                    period_end.parse::<DateTime<Utc>>().expect("period_end"),
+                )
+                .expect("valid period"),
             },
         )
         .await

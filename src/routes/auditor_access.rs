@@ -633,8 +633,8 @@ async fn download_document(
                 .downloads
                 .download_for_workspace_within_period(
                     session.workspace_id,
-                    session.period_start,
-                    session.period_end,
+                    session.period.start,
+                    session.period.end,
                     submission_id.into(),
                     document_id.into(),
                 )
@@ -1860,7 +1860,12 @@ fn grant_error(error: AuditorAccessGrantError) -> ApiError {
     match error {
         AuditorAccessGrantError::Unavailable => ApiError::NotFound,
         AuditorAccessGrantError::Denied => ApiError::NotFound,
-        AuditorAccessGrantError::Invalid(message) => ApiError::BadRequest(vec![message.to_owned()]),
+        AuditorAccessGrantError::ExpiresAtInPast => {
+            ApiError::BadRequest(vec!["expires_at must be in the future".to_owned()])
+        }
+        AuditorAccessGrantError::InvalidEmail => {
+            ApiError::BadRequest(vec!["auditor_email is invalid".to_owned()])
+        }
         AuditorAccessGrantError::Secret(_) | AuditorAccessGrantError::Repository(_) => {
             ApiError::Internal
         }

@@ -11,13 +11,13 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, format_datetime, invalid_field, not_found,
-        optional_timestamp, required_timestamp, required_uuid,
+        argument_errors, authorize_token_workspace, domain_errors, format_datetime, invalid_field,
+        not_found, optional_timestamp, required_timestamp, required_uuid,
     },
     ProofplaneMcp,
 };
 use crate::{
-    domain::{AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
+    domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     services::{
         auditor_access_grants::{
@@ -175,8 +175,8 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
             auditor_email: grant.auditor_email,
             created_at: format_datetime(grant.created_at),
             expires_at: format_datetime(grant.expires_at),
-            period_start: format_datetime(grant.period_start),
-            period_end: format_datetime(grant.period_end),
+            period_start: format_datetime(grant.period.start),
+            period_end: format_datetime(grant.period.end),
             revoked_at: grant.revoked_at.map(format_datetime),
         }
     }
@@ -186,7 +186,7 @@ fn parse_create_request(
     args: CreateAuditorAccessLinkRequest,
 ) -> Result<CreateAuditorAccessGrantRequest, ErrorData> {
     let email = args.email.filter(|value| !value.trim().is_empty());
-    validate! {
+    let (auditor_email, expires_at, period_start, period_end) = validate! {
         auditor_email <- match email {
             Some(email) => crate::validation::Validation::valid(email),
             None => crate::validation::Validation::invalid(super::common::McpArgumentError::Missing {
@@ -196,15 +196,19 @@ fn parse_create_request(
         expires_at <- optional_timestamp("expires_at", args.expires_at),
         period_start <- required_timestamp("period_start", args.period_start),
         period_end <- required_timestamp("period_end", args.period_end),
-        => CreateAuditorAccessGrantRequest {
-            auditor_email,
-            expires_at,
-            period_start,
-            period_end,
-        },
+        => (auditor_email, expires_at, period_start, period_end),
     }
     .into_result()
-    .map_err(argument_errors)
+    .map_err(argument_errors)?;
+
+    let period = AuditReviewPeriod::new(period_start, period_end)
+        .map_err(|error| domain_errors(vec![error]))?;
+
+    Ok(CreateAuditorAccessGrantRequest {
+        auditor_email,
+        expires_at,
+        period,
+    })
 }
 
 fn parse_revoke_request(
@@ -220,15 +224,11 @@ impl From<AuditorAccessGrantError> for ErrorData {
     fn from(error: AuditorAccessGrantError) -> Self {
         match error {
             AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
-            AuditorAccessGrantError::Invalid(message) => {
-                let field = if message.starts_with("expires_at") {
-                    "expires_at"
-                } else if message.starts_with("period_end") || message.starts_with("period_start") {
-                    "period_end"
-                } else {
-                    "email"
-                };
-                invalid_field(field, message)
+            AuditorAccessGrantError::ExpiresAtInPast => {
+                invalid_field("expires_at", "expires_at must be in the future")
+            }
+            AuditorAccessGrantError::InvalidEmail => {
+                invalid_field("email", "auditor_email is invalid")
             }
             AuditorAccessGrantError::Secret(error) => {
                 tracing::error!(%error, "MCP auditor access grant secret failure");
@@ -259,8 +259,8 @@ fn emit_auditor_grant_audit(
     .request_id(context.request_id.0)
     .metadata("auditor_email", &grant.auditor_email)
     .metadata("expires_at", format_datetime(grant.expires_at))
-    .metadata("period_start", format_datetime(grant.period_start))
-    .metadata("period_end", format_datetime(grant.period_end))
+    .metadata("period_start", format_datetime(grant.period.start))
+    .metadata("period_end", format_datetime(grant.period.end))
     .object(AuditObject::new("auditor_access_grant", grant.id.into()))
     .emit();
 }

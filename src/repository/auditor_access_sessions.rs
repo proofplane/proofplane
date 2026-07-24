@@ -3,7 +3,8 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    AuditorAccessGrantId, AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
+    AuditReviewPeriod, AuditorAccessGrantId, AuditorAccessOtp, AuditorAccessOtpId, AuditorSession,
+    AuditorSessionId,
 };
 
 use super::{Error, Postgres};
@@ -232,8 +233,7 @@ fn auditor_session_from_row(row: &Row) -> Result<AuditorSession, Error> {
         workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
         auditor_email: row.try_get("auditor_email")?,
         expires_at: row.try_get("expires_at")?,
-        period_start: row.try_get("period_start")?,
-        period_end: row.try_get("period_end")?,
+        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
         revoked_at: row.try_get("revoked_at")?,
         last_used_at: row.try_get("last_used_at")?,
         created_at: row.try_get("created_at")?,
