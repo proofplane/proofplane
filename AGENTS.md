@@ -9,10 +9,10 @@ adapters in `authentication`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
 and `seed`).
 
-Unit tests are colocated with source modules. Docker-backed integration tests
-live under `tests/integration/`, with shared setup in `support.rs`. Database
-migrations belong in `migrations/`. API fixtures and project design notes live
-in `docs/`.
+Unit tests are colocated with source modules. The Docker-backed integration
+suite lives under `tests/integration-v2/`, with shared setup in `support/`.
+Database migrations belong in `migrations/`. API fixtures and project design
+notes live in `docs/`.
 
 ## Build, Test, and Development Commands
 
@@ -25,10 +25,11 @@ in `docs/`.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
   setup.
-- `cargo test --test integration worker_handlers`: run a focused integration
-  test module.
+- `cargo test --test integration-v2 evidence_document_uploads`: run a focused
+  integration-v2 test module.
 
-Docker must be available for integration tests because they use Testcontainers.
+Docker must be available for integration-v2 tests because they use
+Testcontainers.
 
 ## Coding Style & Naming Conventions
 
@@ -59,10 +60,14 @@ not add aggregate-specific eligibility or relationship queries.
 
 Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,
 transaction, HTTP, worker coordination, and dependency-boundary behavior in
-`tests/integration/`. Name tests after observable outcomes, such as
+`tests/integration-v2/`. Name tests after observable outcomes, such as
 `malicious_scan_marks_document_contains_virus`. There is no numeric coverage
 threshold; changes should cover success, failure, and rollback paths appropriate
 to their risk.
+
+The integration-v2 suite is black-box: no database handle, no in-process
+services, no request helpers on `TestApp`, and setup arranged inline in the test
+body. **Read `tests/integration-v2/README.md` before adding to it.**
 
 ## Commit & Pull Request Guidelines
 

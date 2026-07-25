@@ -231,16 +231,17 @@ That runs:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 
-The integration tests use Docker-backed Testcontainers for Postgres and ClamAV,
-so Docker must be available for the full test suite.
+The integration-v2 tests use Docker-backed Testcontainers for Postgres and the
+deltio Pub/Sub emulator, so Docker must be available for the full test suite.
+ClamAV behavior is provided by an in-process fake clamd server.
 
 Useful focused commands:
 
 ```bash
-cargo test --test integration request_auth
-cargo test --test integration mcp
-cargo test --test integration agent_connection_repository
-cargo test --test integration evidence_submissions
+cargo test --test integration-v2 oauth
+cargo test --test integration-v2 mcp::authentication
+cargo test --test integration-v2 agent_connections
+cargo test --test integration-v2 mcp::evidence
 ```
 
 ## Repository Notes

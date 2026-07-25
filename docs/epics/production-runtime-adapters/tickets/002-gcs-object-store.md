@@ -17,8 +17,8 @@ production documents use the same logical object contract as local storage.
 - [ ] Given the CI GCS test bucket, when the shared object-store contract runs,
   then upload, head, read, copy, delete, prefix isolation, and checksums pass
   against the real GCS implementation.
-- [ ] Given local development without Google credentials, when integration tests
-  run, then they use filesystem storage and do not attempt GCS access.
+- [ ] Given local development without Google credentials, when integration-v2
+  tests run, then they use filesystem storage and do not attempt GCS access.
 
 **Tasks**
 

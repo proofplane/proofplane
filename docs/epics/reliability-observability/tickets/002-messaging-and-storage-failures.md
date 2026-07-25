@@ -4,7 +4,8 @@
 
 **Summary** - Complete public-boundary failure coverage for outbox publishing,
 the API-owned quarantine upload, scanner delivery, and production adapters.
-Worker-owned finalization failures already have concrete integration coverage.
+Worker-owned finalization failures already have concrete integration-v2
+coverage.
 
 **Acceptance criteria**
 
@@ -29,12 +30,12 @@ Worker-owned finalization failures already have concrete integration coverage.
   processes the message, then retry and terminal behavior follows the existing
   delivery contract.
 - [ ] Given existing concrete worker rollback tests, when this ships, then they
-  remain integration tests against Postgres.
+  remain integration-v2 tests against Postgres.
 
 **Tasks**
 
 - [ ] Extend Pub/Sub interruption/recovery coverage.
-- [ ] Add the missing API quarantine-write failure integration test.
+- [ ] Add the missing API quarantine-write failure integration-v2 test.
 - [ ] Pass `worker.retry_attempts` into the finalization handler and use
   `Retryable::retry_with_attempts` around `mark_document_uploaded`.
 - [ ] Test database-update success after a transient local retry and retryable
@@ -42,7 +43,7 @@ Worker-owned finalization failures already have concrete integration coverage.
 - [ ] Preserve the existing worker finalization copy-failure and best-effort
   quarantine-delete coverage.
 - [ ] Add focused GCS credential/error-mapping tests without requiring local
-  cloud access; keep real GCS success-path integration coverage in CI.
+  cloud access; keep real GCS success-path integration-v2 coverage in CI.
 - [ ] Reuse existing scanner/finalization fixtures and close uncovered paths.
 
 **Notes**
