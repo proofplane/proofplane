@@ -2,7 +2,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use jwtk::Claims;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use url::Url;
 
 use uuid::Uuid;
 
@@ -32,6 +34,47 @@ pub struct VerifiedMcpClaims {
     pub workspace_id: Option<WorkspaceId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAuditorIdentity {
+    pub subject: String,
+    pub email: String,
+    pub email_verified: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditorIdentityExchange {
+    pub authorization_code: SecretString,
+    pub redirect_uri: Url,
+    pub pkce_verifier: SecretString,
+    pub expected_nonce: SecretString,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuditorIdentityProviderError {
+    #[error("auditor identity was rejected")]
+    Rejected(#[source] VerifyError),
+    #[error("auditor identity provider is unavailable")]
+    Unavailable(#[source] VerifyError),
+}
+
+impl From<VerifyError> for AuditorIdentityProviderError {
+    fn from(error: VerifyError) -> Self {
+        if error.is_token_rejection() {
+            Self::Rejected(error)
+        } else {
+            Self::Unavailable(error)
+        }
+    }
+}
+
+#[async_trait]
+pub trait AuditorIdentityProvider: Send + Sync {
+    async fn exchange_and_verify(
+        &self,
+        exchange: AuditorIdentityExchange,
+    ) -> Result<VerifiedAuditorIdentity, AuditorIdentityProviderError>;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
     #[error("token is malformed or its signature is invalid")]
@@ -48,6 +91,12 @@ pub enum VerifyError {
     AudienceMismatch,
     #[error("token subject is missing")]
     MissingSubject,
+    #[error("token email is missing")]
+    MissingEmail,
+    #[error("token email is not verified")]
+    EmailNotVerified,
+    #[error("token nonce does not match the authentication transaction")]
+    NonceMismatch,
     #[error("client-credentials identities are not accepted")]
     MachineIdentity,
     #[error("token authorized client is missing")]
@@ -199,14 +248,7 @@ impl ClaimsPolicy for McpPolicy {
             return Err(VerifyError::MachineIdentity);
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| VerifyError::InvalidLifetime)?;
-        let issued_at = claims.iat.ok_or(VerifyError::InvalidLifetime)?;
-        let expires_at = claims.exp.ok_or(VerifyError::InvalidLifetime)?;
-        if issued_at > now + ISSUED_AT_LEEWAY || expires_at <= issued_at {
-            return Err(VerifyError::InvalidLifetime);
-        }
+        validate_lifetime(claims)?;
 
         let client_id = claims
             .extra
@@ -247,12 +289,115 @@ impl ClaimsPolicy for McpPolicy {
     }
 }
 
+fn validate_lifetime<T>(claims: &Claims<T>) -> Result<(), VerifyError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| VerifyError::InvalidLifetime)?;
+    let issued_at = claims.iat.ok_or(VerifyError::InvalidLifetime)?;
+    let expires_at = claims.exp.ok_or(VerifyError::InvalidLifetime)?;
+    if issued_at > now + ISSUED_AT_LEEWAY || expires_at <= issued_at || expires_at <= now {
+        return Err(VerifyError::InvalidLifetime);
+    }
+
+    Ok(())
+}
+
 fn optional_uuid_claim(value: &Option<String>) -> Result<Option<Uuid>, VerifyError> {
     value
         .as_deref()
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| VerifyError::InvalidConnectionClaims)
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct AuditorExtraClaims {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    email_verified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nonce: Option<String>,
+}
+
+struct VerifiedAuditorClaims {
+    identity: VerifiedAuditorIdentity,
+    nonce: String,
+}
+
+struct AuditorPolicy;
+
+impl ClaimsPolicy for AuditorPolicy {
+    type ExtraClaims = AuditorExtraClaims;
+    type Output = VerifiedAuditorClaims;
+
+    fn validate(
+        &self,
+        claims: &Claims<Self::ExtraClaims>,
+        subject: String,
+    ) -> Result<Self::Output, VerifyError> {
+        validate_lifetime(claims)?;
+
+        if subject.trim().is_empty() {
+            return Err(VerifyError::MissingSubject);
+        }
+        let email = claims
+            .extra
+            .email
+            .as_deref()
+            .filter(|email| !email.trim().is_empty())
+            .ok_or(VerifyError::MissingEmail)?
+            .to_owned();
+        if claims.extra.email_verified != Some(true) {
+            return Err(VerifyError::EmailNotVerified);
+        }
+        let nonce = claims
+            .extra
+            .nonce
+            .as_deref()
+            .filter(|nonce| !nonce.trim().is_empty())
+            .ok_or(VerifyError::NonceMismatch)?
+            .to_owned();
+
+        Ok(VerifiedAuditorClaims {
+            identity: VerifiedAuditorIdentity {
+                subject,
+                email,
+                email_verified: true,
+            },
+            nonce,
+        })
+    }
+}
+
+pub struct Auth0AuditorTokenVerifier {
+    verifier: Auth0Verifier<AuditorPolicy>,
+}
+
+impl Auth0AuditorTokenVerifier {
+    pub fn new(config: &Auth0Config) -> Self {
+        Self {
+            verifier: Auth0Verifier {
+                verifier: JwksVerifier::remote(config.jwks_url.to_string()),
+                issuer: config.issuer.to_string(),
+                audience: config.auditor_portal.client_id.clone(),
+                policy: AuditorPolicy,
+            },
+        }
+    }
+
+    pub async fn verify(
+        &self,
+        token: &str,
+        expected_nonce: &SecretString,
+    ) -> Result<VerifiedAuditorIdentity, VerifyError> {
+        let claims = self.verifier.verify(token).await?;
+        if claims.nonce != expected_nonce.expose_secret() {
+            return Err(VerifyError::NonceMismatch);
+        }
+
+        Ok(claims.identity)
+    }
 }
 
 pub struct Auth0TokenVerifier {
@@ -321,6 +466,8 @@ mod tests {
     const API_AUDIENCE: &str = "https://api.proofplane.com";
     const MCP_AUDIENCE: &str = "https://mcp.proofplane.com/mcp";
     const CLIENT: &str = "client-123";
+    const AUDITOR_CLIENT: &str = "auditor-client-123";
+    const AUDITOR_NONCE: &str = "auditor-nonce-123";
 
     fn signing_material() -> (JwksVerifier, WithKid<RsaPrivateKey>) {
         let private_key =
@@ -363,6 +510,21 @@ mod tests {
         )
     }
 
+    fn auditor_fixture() -> (Auth0AuditorTokenVerifier, WithKid<RsaPrivateKey>) {
+        let (jwks, signing_key) = signing_material();
+        (
+            Auth0AuditorTokenVerifier {
+                verifier: Auth0Verifier {
+                    verifier: jwks,
+                    issuer: ISSUER.to_owned(),
+                    audience: AUDITOR_CLIENT.to_owned(),
+                    policy: AuditorPolicy,
+                },
+            },
+            signing_key,
+        )
+    }
+
     fn user_claims(
         issuer: &str,
         audience: &str,
@@ -391,6 +553,21 @@ mod tests {
             .add_aud(MCP_AUDIENCE)
             .set_iat_now()
             .set_exp_from_now(Duration::from_secs(3600));
+        claims
+    }
+
+    fn auditor_claims() -> HeaderAndClaims<AuditorExtraClaims> {
+        let mut claims = HeaderAndClaims::with_claims(AuditorExtraClaims {
+            email: Some("auditor@example.com".to_owned()),
+            email_verified: Some(true),
+            nonce: Some(AUDITOR_NONCE.to_owned()),
+        });
+        claims
+            .set_iss(ISSUER)
+            .set_sub("email|auditor")
+            .add_aud(AUDITOR_CLIENT)
+            .set_iat_now()
+            .set_exp_from_now(Duration::from_secs(180));
         claims
     }
 
@@ -442,6 +619,186 @@ mod tests {
             .expect("token verifies");
         assert_eq!(verified.email, None);
         assert_eq!(verified.name, None);
+    }
+
+    #[tokio::test]
+    async fn auditor_policy_returns_verified_identity_for_expected_nonce() {
+        let (verifier, signing_key) = auditor_fixture();
+        let token = sign_with(&signing_key, auditor_claims());
+
+        let identity = verifier
+            .verify(&token, &SecretString::from(AUDITOR_NONCE))
+            .await
+            .expect("auditor token verifies");
+
+        assert_eq!(
+            identity,
+            VerifiedAuditorIdentity {
+                subject: "email|auditor".to_owned(),
+                email: "auditor@example.com".to_owned(),
+                email_verified: true,
+            }
+        );
+    }
+
+    #[test]
+    fn auditor_verifier_uses_the_dedicated_client_audience() {
+        let config =
+            crate::config::load_from_path("config/local.yaml").expect("local config loads");
+        let verifier = Auth0AuditorTokenVerifier::new(&config.auth0);
+
+        assert_eq!(
+            verifier.verifier.audience,
+            config.auth0.auditor_portal.client_id
+        );
+        assert_eq!(verifier.verifier.issuer, config.auth0.issuer.as_str());
+    }
+
+    #[test]
+    fn auditor_exchange_debug_output_redacts_protocol_secrets() {
+        let exchange = AuditorIdentityExchange {
+            authorization_code: SecretString::from("unique-authorization-code"),
+            redirect_uri: Url::parse("https://api.proofplane.com/auditor-access/auth0/callback")
+                .expect("redirect URI parses"),
+            pkce_verifier: SecretString::from("unique-pkce-verifier"),
+            expected_nonce: SecretString::from("unique-expected-nonce"),
+        };
+        let debug = format!("{exchange:?}");
+
+        assert!(!debug.contains("unique-authorization-code"));
+        assert!(!debug.contains("unique-pkce-verifier"));
+        assert!(!debug.contains("unique-expected-nonce"));
+        assert!(debug.contains("Secret"));
+    }
+
+    #[tokio::test]
+    async fn auditor_policy_rejects_invalid_algorithm_signature_issuer_and_audience() {
+        let (verifier, signing_key) = auditor_fixture();
+        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+
+        let hmac_key = HmacKey::generate(HmacAlgorithm::HS256).expect("hmac key generates");
+        let hmac_with_kid = WithKid::new(signing_key.kid().to_owned(), hmac_key);
+        let mut claims = auditor_claims();
+        let token = sign(&mut claims, &hmac_with_kid).expect("HS256 token signs");
+        assert!(matches!(
+            verifier.verify(&token, &expected_nonce).await,
+            Err(VerifyError::InvalidToken)
+        ));
+
+        let valid = sign_with(&signing_key, auditor_claims());
+        assert!(matches!(
+            verifier
+                .verify(&tamper_signature(&valid), &expected_nonce)
+                .await,
+            Err(VerifyError::InvalidToken)
+        ));
+        assert!(matches!(
+            verifier.verify("not-a-token", &expected_nonce).await,
+            Err(VerifyError::InvalidToken)
+        ));
+
+        let mut missing_issuer = auditor_claims();
+        missing_issuer.claims_mut().iss = None;
+        assert!(matches!(
+            verifier
+                .verify(&sign_with(&signing_key, missing_issuer), &expected_nonce)
+                .await,
+            Err(VerifyError::MissingIssuer)
+        ));
+
+        let mut wrong_issuer = auditor_claims();
+        wrong_issuer.set_iss("https://other.example/");
+        assert!(matches!(
+            verifier
+                .verify(&sign_with(&signing_key, wrong_issuer), &expected_nonce)
+                .await,
+            Err(VerifyError::IssuerMismatch)
+        ));
+
+        let mut wrong_audience = auditor_claims();
+        wrong_audience.claims_mut().aud = Default::default();
+        wrong_audience.add_aud("other-client");
+        assert!(matches!(
+            verifier
+                .verify(&sign_with(&signing_key, wrong_audience), &expected_nonce)
+                .await,
+            Err(VerifyError::AudienceMismatch)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auditor_policy_rejects_invalid_lifetime_and_identity_claims() {
+        let (verifier, signing_key) = auditor_fixture();
+        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+        let mut missing_iat = auditor_claims();
+        missing_iat.claims_mut().iat = None;
+        let mut missing_exp = auditor_claims();
+        missing_exp.claims_mut().exp = None;
+        let mut future_iat = auditor_claims();
+        future_iat.claims_mut().iat = Some(now + Duration::from_secs(60));
+        let mut invalid_order = auditor_claims();
+        invalid_order.claims_mut().exp = invalid_order.claims().iat;
+
+        for claims in [missing_iat, missing_exp, future_iat, invalid_order] {
+            assert!(matches!(
+                verifier
+                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .await,
+                Err(VerifyError::InvalidLifetime | VerifyError::Expired)
+            ));
+        }
+
+        for subject in [None, Some(""), Some("   ")] {
+            let mut claims = auditor_claims();
+            claims.claims_mut().sub = subject.map(str::to_owned);
+            assert!(matches!(
+                verifier
+                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .await,
+                Err(VerifyError::MissingSubject)
+            ));
+        }
+
+        for email in [None, Some(""), Some("   ")] {
+            let mut claims = auditor_claims();
+            claims.claims_mut().extra.email = email.map(str::to_owned);
+            assert!(matches!(
+                verifier
+                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .await,
+                Err(VerifyError::MissingEmail)
+            ));
+        }
+
+        for email_verified in [None, Some(false)] {
+            let mut claims = auditor_claims();
+            claims.claims_mut().extra.email_verified = email_verified;
+            assert!(matches!(
+                verifier
+                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .await,
+                Err(VerifyError::EmailNotVerified)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn auditor_policy_rejects_missing_or_mismatched_nonce() {
+        let (verifier, signing_key) = auditor_fixture();
+        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+
+        for nonce in [None, Some(""), Some("other-nonce")] {
+            let mut claims = auditor_claims();
+            claims.claims_mut().extra.nonce = nonce.map(str::to_owned);
+            assert!(matches!(
+                verifier
+                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .await,
+                Err(VerifyError::NonceMismatch)
+            ));
+        }
     }
 
     #[tokio::test]
@@ -683,7 +1040,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_policies_classify_unavailable_jwks_as_dependency_failure() {
+    async fn all_policies_classify_unavailable_jwks_as_dependency_failure() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
@@ -717,6 +1074,39 @@ mod tests {
         assert!(matches!(
             mcp_verifier.verify(&token).await,
             Err(VerifyError::JwksUnavailable)
+        ));
+
+        let (_, auditor_key) = signing_material();
+        let auditor_verifier = Auth0AuditorTokenVerifier {
+            verifier: Auth0Verifier {
+                verifier: JwksVerifier::remote(format!("http://{address}/jwks")),
+                issuer: ISSUER.to_owned(),
+                audience: AUDITOR_CLIENT.to_owned(),
+                policy: AuditorPolicy,
+            },
+        };
+        let token = sign_with(&auditor_key, auditor_claims());
+        assert!(matches!(
+            auditor_verifier
+                .verify(&token, &SecretString::from(AUDITOR_NONCE))
+                .await,
+            Err(VerifyError::JwksUnavailable)
+        ));
+    }
+
+    #[test]
+    fn only_jwks_failures_are_classified_as_unavailable() {
+        assert!(!VerifyError::JwksUnavailable.is_token_rejection());
+        assert!(VerifyError::InvalidToken.is_token_rejection());
+        assert!(VerifyError::EmailNotVerified.is_token_rejection());
+        assert!(VerifyError::NonceMismatch.is_token_rejection());
+        assert!(matches!(
+            AuditorIdentityProviderError::from(VerifyError::JwksUnavailable),
+            AuditorIdentityProviderError::Unavailable(VerifyError::JwksUnavailable)
+        ));
+        assert!(matches!(
+            AuditorIdentityProviderError::from(VerifyError::InvalidToken),
+            AuditorIdentityProviderError::Rejected(VerifyError::InvalidToken)
         ));
     }
 }

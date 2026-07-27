@@ -23,6 +23,11 @@ auth0:
     client_id: "local-proofplane-oauth-client"
     client_secret: "local-proofplane-oauth-client-secret-change-me"
     callback_path: "/oauth/auth0/callback"
+  auditor_portal:
+    client_id: "local-proofplane-auditor-client"
+    client_secret: "local-proofplane-auditor-client-secret-change-me"
+    callback_path: "/auditor-access/auth0/callback"
+    connection: "email"
 
 paseto:
   download:

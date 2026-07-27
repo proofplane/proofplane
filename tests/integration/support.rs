@@ -33,11 +33,12 @@ use proofplane::{
         UserAuthenticator,
     },
     config::{
-        AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat,
-        MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
-        PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig,
-        PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig,
-        PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+        AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
+        LogFormat, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
+        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+        PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
+        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
+        WorkerConfig,
     },
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, CoverageWindow, CreateEvidencePayload,
@@ -1152,6 +1153,22 @@ fn config(
                 client_id: "integration-auth0-client".to_owned(),
                 client_secret: SecretString::from("integration-auth0-secret"),
                 callback_path: "/oauth/auth0/callback".to_owned(),
+            },
+            auditor_portal: Auth0AuditorPortalConfig {
+                client_id: "integration-auditor-client".to_owned(),
+                client_secret: SecretString::from("integration-auditor-secret"),
+                callback_path: "/auditor-access/auth0/callback".to_owned(),
+                callback_url: url::Url::parse("http://127.0.0.1:0/auditor-access/auth0/callback")
+                    .expect("auditor callback URL parses"),
+                connection: "email".to_owned(),
+                authorization_endpoint: url::Url::parse(
+                    "https://proofplane-integration.us.auth0.com/authorize",
+                )
+                .expect("auditor authorization endpoint parses"),
+                token_endpoint: url::Url::parse(
+                    "https://proofplane-integration.us.auth0.com/oauth/token",
+                )
+                .expect("auditor token endpoint parses"),
             },
         },
         paseto: PasetoConfig {

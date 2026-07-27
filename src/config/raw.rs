@@ -8,16 +8,16 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        gcs_credentials_mode, nonzero_u16, nonzero_u64, nonzero_usize, optional_url,
-        parse_log_format, paseto_download_key, path_string, postgres_connection_string,
-        public_api_base_url as validate_public_api_base_url, secret_value, string_url,
-        string_value, ConfigValidationExt,
+        auditor_callback_path, auditor_connection, gcs_credentials_mode, nonzero_u16, nonzero_u64,
+        nonzero_usize, optional_url, parse_log_format, paseto_download_key, path_string,
+        postgres_connection_string, public_api_base_url as validate_public_api_base_url,
+        secret_value, string_url, string_value, ConfigValidationExt,
     },
-    Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig, HealthConfig, MailAdapterConfig,
-    MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
+    HealthConfig, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +121,8 @@ pub(super) struct RawAuth0Config {
     audience: String,
     jwks_url: String,
     upstream_oauth: RawAuth0UpstreamOAuthConfig,
+    #[serde(default)]
+    auditor_portal: RawAuth0AuditorPortalConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,18 +132,76 @@ pub(super) struct RawAuth0UpstreamOAuthConfig {
     callback_path: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct RawAuth0AuditorPortalConfig {
+    #[serde(default)]
+    client_id: String,
+    #[serde(default)]
+    client_secret: Option<SecretString>,
+    #[serde(default)]
+    callback_path: String,
+    #[serde(default)]
+    connection: String,
+}
+
+pub(super) struct UnresolvedAuth0Config {
+    issuer: url::Url,
+    audience: String,
+    jwks_url: url::Url,
+    upstream_oauth: Auth0UpstreamOAuthConfig,
+    auditor_portal: UnresolvedAuth0AuditorPortalConfig,
+}
+
+struct UnresolvedAuth0AuditorPortalConfig {
+    client_id: String,
+    client_secret: SecretString,
+    callback_path: String,
+    connection: String,
+}
+
+impl UnresolvedAuth0Config {
+    pub(super) fn resolve(self, public_api_base_url: &url::Url) -> Auth0Config {
+        let mut callback_url = public_api_base_url.clone();
+        callback_url.set_path(&self.auditor_portal.callback_path);
+
+        let mut authorization_endpoint = self.issuer.clone();
+        authorization_endpoint.set_path("/authorize");
+
+        let mut token_endpoint = self.issuer.clone();
+        token_endpoint.set_path("/oauth/token");
+
+        Auth0Config {
+            issuer: self.issuer,
+            audience: self.audience,
+            jwks_url: self.jwks_url,
+            upstream_oauth: self.upstream_oauth,
+            auditor_portal: Auth0AuditorPortalConfig {
+                client_id: self.auditor_portal.client_id,
+                client_secret: self.auditor_portal.client_secret,
+                callback_path: self.auditor_portal.callback_path,
+                callback_url,
+                connection: self.auditor_portal.connection,
+                authorization_endpoint,
+                token_endpoint,
+            },
+        }
+    }
+}
+
 impl RawAuth0Config {
-    pub(super) fn validate(self) -> Validation<Auth0Config, ConfigFieldError> {
+    pub(super) fn validate(self) -> Validation<UnresolvedAuth0Config, ConfigFieldError> {
         validate! {
             issuer <- string_url(self.issuer).at("auth0.issuer"),
             audience <- string_value(self.audience).at("auth0.audience"),
             jwks_url <- string_url(self.jwks_url).at("auth0.jwks_url"),
             upstream_oauth <- self.upstream_oauth.validate(),
-            => Auth0Config {
+            auditor_portal <- self.auditor_portal.validate(),
+            => UnresolvedAuth0Config {
                 issuer,
                 audience,
                 jwks_url,
                 upstream_oauth,
+                auditor_portal,
             },
         }
     }
@@ -159,6 +219,28 @@ impl RawAuth0UpstreamOAuthConfig {
                 client_id,
                 client_secret,
                 callback_path,
+            },
+        }
+    }
+}
+
+impl RawAuth0AuditorPortalConfig {
+    fn validate(self) -> Validation<UnresolvedAuth0AuditorPortalConfig, ConfigFieldError> {
+        validate! {
+            client_id <- string_value(self.client_id).at("auth0.auditor_portal.client_id"),
+            client_secret <- secret_value(
+                self.client_secret.unwrap_or_else(|| SecretString::from(""))
+            )
+                .at("auth0.auditor_portal.client_secret"),
+            callback_path <- auditor_callback_path(self.callback_path)
+                .at("auth0.auditor_portal.callback_path"),
+            connection <- auditor_connection(self.connection)
+                .at("auth0.auditor_portal.connection"),
+            => UnresolvedAuth0AuditorPortalConfig {
+                client_id,
+                client_secret,
+                callback_path,
+                connection,
             },
         }
     }

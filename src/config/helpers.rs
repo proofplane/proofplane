@@ -140,6 +140,34 @@ pub(super) fn path_string(value: String) -> Result<String, String> {
     }
 }
 
+pub(super) fn auditor_callback_path(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+    if !value.starts_with("/auditor-access/")
+        || value.starts_with("//")
+        || value.contains("//")
+        || value.contains(['?', '#', '%', '\\'])
+        || value
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_'))
+    {
+        return Err("must be an unencoded path within the `/auditor-access/` namespace".to_owned());
+    }
+
+    Ok(value)
+}
+
+pub(super) fn auditor_connection(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+    if value == "email" {
+        Ok(value)
+    } else {
+        Err("must be `email`".to_owned())
+    }
+}
+
 pub(super) fn trim_required(value: String) -> Result<String, String> {
     if value.trim().is_empty() {
         Err("must not be empty".into())

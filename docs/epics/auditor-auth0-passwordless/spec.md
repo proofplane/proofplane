@@ -302,6 +302,10 @@ custom OTP verification.
 
 ## Revisions
 
+- 2026-07-27: Implemented the identity foundation with startup-resolved
+  auditor endpoints, nonce-aware ID-token verification, secret-safe exchange
+  inputs, and a six-digit, three-minute Auth0 passwordless policy documented in
+  the environment runbook.
 - 2026-07-24: Initial spec. Chose Auth0 Passwordless Email with hosted Universal
   Login, grant-bound Authorization Code Flow with PKCE, a separate auditor
   identity boundary, and retained Proofplane authorization and sessions.
