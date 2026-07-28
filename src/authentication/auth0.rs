@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use jwtk::Claims;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use url::Url;
 
@@ -12,7 +12,8 @@ use crate::{
     authentication::jwks::JwksVerifier,
     config::Auth0Config,
     domain::{
-        canonical_permissions, AgentConnectionId, DomainError, WorkspaceId, WorkspacePermission,
+        canonical_permissions, AgentConnectionId, DomainError, Sha256Digest, WorkspaceId,
+        WorkspacePermission,
     },
 };
 
@@ -46,7 +47,7 @@ pub struct AuditorIdentityExchange {
     pub authorization_code: SecretString,
     pub redirect_uri: Url,
     pub pkce_verifier: SecretString,
-    pub expected_nonce: SecretString,
+    pub expected_nonce_digest: Sha256Digest,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -389,10 +390,10 @@ impl Auth0AuditorTokenVerifier {
     pub async fn verify(
         &self,
         token: &str,
-        expected_nonce: &SecretString,
+        expected_nonce_digest: Sha256Digest,
     ) -> Result<VerifiedAuditorIdentity, VerifyError> {
         let claims = self.verifier.verify(token).await?;
-        if claims.nonce != expected_nonce.expose_secret() {
+        if Sha256Digest::digest(claims.nonce.as_bytes()) != expected_nonce_digest {
             return Err(VerifyError::NonceMismatch);
         }
 
@@ -627,7 +628,7 @@ mod tests {
         let token = sign_with(&signing_key, auditor_claims());
 
         let identity = verifier
-            .verify(&token, &SecretString::from(AUDITOR_NONCE))
+            .verify(&token, Sha256Digest::digest(AUDITOR_NONCE.as_bytes()))
             .await
             .expect("auditor token verifies");
 
@@ -661,39 +662,39 @@ mod tests {
             redirect_uri: Url::parse("https://api.proofplane.com/auditor-access/auth0/callback")
                 .expect("redirect URI parses"),
             pkce_verifier: SecretString::from("unique-pkce-verifier"),
-            expected_nonce: SecretString::from("unique-expected-nonce"),
+            expected_nonce_digest: Sha256Digest::digest(b"unique-expected-nonce"),
         };
         let debug = format!("{exchange:?}");
 
         assert!(!debug.contains("unique-authorization-code"));
         assert!(!debug.contains("unique-pkce-verifier"));
         assert!(!debug.contains("unique-expected-nonce"));
-        assert!(debug.contains("Secret"));
+        assert!(debug.contains("[redacted]"));
     }
 
     #[tokio::test]
     async fn auditor_policy_rejects_invalid_algorithm_signature_issuer_and_audience() {
         let (verifier, signing_key) = auditor_fixture();
-        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+        let expected_nonce = Sha256Digest::digest(AUDITOR_NONCE.as_bytes());
 
         let hmac_key = HmacKey::generate(HmacAlgorithm::HS256).expect("hmac key generates");
         let hmac_with_kid = WithKid::new(signing_key.kid().to_owned(), hmac_key);
         let mut claims = auditor_claims();
         let token = sign(&mut claims, &hmac_with_kid).expect("HS256 token signs");
         assert!(matches!(
-            verifier.verify(&token, &expected_nonce).await,
+            verifier.verify(&token, expected_nonce).await,
             Err(VerifyError::InvalidToken)
         ));
 
         let valid = sign_with(&signing_key, auditor_claims());
         assert!(matches!(
             verifier
-                .verify(&tamper_signature(&valid), &expected_nonce)
+                .verify(&tamper_signature(&valid), expected_nonce)
                 .await,
             Err(VerifyError::InvalidToken)
         ));
         assert!(matches!(
-            verifier.verify("not-a-token", &expected_nonce).await,
+            verifier.verify("not-a-token", expected_nonce).await,
             Err(VerifyError::InvalidToken)
         ));
 
@@ -701,7 +702,7 @@ mod tests {
         missing_issuer.claims_mut().iss = None;
         assert!(matches!(
             verifier
-                .verify(&sign_with(&signing_key, missing_issuer), &expected_nonce)
+                .verify(&sign_with(&signing_key, missing_issuer), expected_nonce)
                 .await,
             Err(VerifyError::MissingIssuer)
         ));
@@ -710,7 +711,7 @@ mod tests {
         wrong_issuer.set_iss("https://other.example/");
         assert!(matches!(
             verifier
-                .verify(&sign_with(&signing_key, wrong_issuer), &expected_nonce)
+                .verify(&sign_with(&signing_key, wrong_issuer), expected_nonce)
                 .await,
             Err(VerifyError::IssuerMismatch)
         ));
@@ -720,7 +721,7 @@ mod tests {
         wrong_audience.add_aud("other-client");
         assert!(matches!(
             verifier
-                .verify(&sign_with(&signing_key, wrong_audience), &expected_nonce)
+                .verify(&sign_with(&signing_key, wrong_audience), expected_nonce)
                 .await,
             Err(VerifyError::AudienceMismatch)
         ));
@@ -729,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn auditor_policy_rejects_invalid_lifetime_and_identity_claims() {
         let (verifier, signing_key) = auditor_fixture();
-        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+        let expected_nonce = Sha256Digest::digest(AUDITOR_NONCE.as_bytes());
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 
         let mut missing_iat = auditor_claims();
@@ -744,7 +745,7 @@ mod tests {
         for claims in [missing_iat, missing_exp, future_iat, invalid_order] {
             assert!(matches!(
                 verifier
-                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .verify(&sign_with(&signing_key, claims), expected_nonce)
                     .await,
                 Err(VerifyError::InvalidLifetime | VerifyError::Expired)
             ));
@@ -755,7 +756,7 @@ mod tests {
             claims.claims_mut().sub = subject.map(str::to_owned);
             assert!(matches!(
                 verifier
-                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .verify(&sign_with(&signing_key, claims), expected_nonce)
                     .await,
                 Err(VerifyError::MissingSubject)
             ));
@@ -766,7 +767,7 @@ mod tests {
             claims.claims_mut().extra.email = email.map(str::to_owned);
             assert!(matches!(
                 verifier
-                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .verify(&sign_with(&signing_key, claims), expected_nonce)
                     .await,
                 Err(VerifyError::MissingEmail)
             ));
@@ -777,7 +778,7 @@ mod tests {
             claims.claims_mut().extra.email_verified = email_verified;
             assert!(matches!(
                 verifier
-                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .verify(&sign_with(&signing_key, claims), expected_nonce)
                     .await,
                 Err(VerifyError::EmailNotVerified)
             ));
@@ -787,14 +788,14 @@ mod tests {
     #[tokio::test]
     async fn auditor_policy_rejects_missing_or_mismatched_nonce() {
         let (verifier, signing_key) = auditor_fixture();
-        let expected_nonce = SecretString::from(AUDITOR_NONCE);
+        let expected_nonce = Sha256Digest::digest(AUDITOR_NONCE.as_bytes());
 
         for nonce in [None, Some(""), Some("other-nonce")] {
             let mut claims = auditor_claims();
             claims.claims_mut().extra.nonce = nonce.map(str::to_owned);
             assert!(matches!(
                 verifier
-                    .verify(&sign_with(&signing_key, claims), &expected_nonce)
+                    .verify(&sign_with(&signing_key, claims), expected_nonce)
                     .await,
                 Err(VerifyError::NonceMismatch)
             ));
@@ -1088,7 +1089,7 @@ mod tests {
         let token = sign_with(&auditor_key, auditor_claims());
         assert!(matches!(
             auditor_verifier
-                .verify(&token, &SecretString::from(AUDITOR_NONCE))
+                .verify(&token, Sha256Digest::digest(AUDITOR_NONCE.as_bytes()))
                 .await,
             Err(VerifyError::JwksUnavailable)
         ));

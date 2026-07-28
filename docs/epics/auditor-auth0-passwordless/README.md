@@ -15,7 +15,7 @@ live in [spec.md](./spec.md). Hosted-login appearance and behavior live in
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Auth0 Auditor Identity Foundation](./tickets/001-auth0-auditor-identity-foundation.md) | Done | Add dedicated client configuration, claims verification, adapter boundaries, and the environment runbook. |
-| 002. [Grant-Bound Authentication Transactions](./tickets/002-grant-bound-auth-transactions.md) | Todo | Persist one-use state, nonce, and PKCE material and construct secure authorization starts. |
+| 002. [Grant-Bound Authentication Transactions](./tickets/002-grant-bound-auth-transactions.md) | Done | Persist one-use state, nonce, and PKCE material and construct secure authorization starts. |
 | 003. [Hosted Auditor Login Cutover](./tickets/003-hosted-auditor-login-cutover.md) | Todo | Complete callbacks, issue local sessions, and switch the browser journey to branded Universal Login. |
 | 004. [Custom OTP Retirement](./tickets/004-custom-otp-retirement.md) | Todo | Remove obsolete OTP routes, persistence, mail delivery, configuration, and tests after the cutover settles. |
 

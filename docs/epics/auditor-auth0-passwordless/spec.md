@@ -302,6 +302,11 @@ custom OTP verification.
 
 ## Revisions
 
+- 2026-07-27: Implemented grant-bound authentication transactions with
+  digest-only state and nonce persistence, atomic one-use claims,
+  opportunistic same-grant cleanup, and exact Auth0 authorization URL
+  construction. The auditor verifier now hashes the returned ID-token nonce
+  before comparing it with the stored digest.
 - 2026-07-27: Implemented the identity foundation with startup-resolved
   auditor endpoints, nonce-aware ID-token verification, secret-safe exchange
   inputs, and a six-digit, three-minute Auth0 passwordless policy documented in

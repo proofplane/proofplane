@@ -28,6 +28,7 @@ use crate::{
     services::{
         auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
+        auditor_auth_transactions::AuditorAuthTransactionService,
         auditor_portal::AuditorPortalReadModelService,
         document_downloads::{DocumentDownloadService, DownloadError},
     },
@@ -40,6 +41,7 @@ const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 #[derive(Clone)]
 pub struct AuditorAccessState {
     pub grants: AuditorAccessGrantService,
+    pub auth_transactions: AuditorAuthTransactionService,
     pub sessions: AuditorAccessSessionService,
     pub portal: AuditorPortalReadModelService,
     pub downloads: DocumentDownloadService,

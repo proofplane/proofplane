@@ -34,6 +34,7 @@ use crate::{
         agent_connections::AgentConnectionService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
+        auditor_auth_transactions::AuditorAuthTransactionService,
         auditor_portal::AuditorPortalReadModelService,
         client_resolver::ClientResolver,
         controls::ControlService,
@@ -195,6 +196,10 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let secure_auditor_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let auditor_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
+    let auditor_auth_transactions = AuditorAuthTransactionService::new(
+        dependencies.postgres.clone(),
+        dependencies.config.auth0.auditor_portal.clone(),
+    );
     let auditor_sessions = AuditorAccessSessionService::new(
         dependencies.postgres.clone(),
         dependencies
@@ -247,6 +252,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         ))
         .merge(auditor_access::router(AuditorAccessState {
             grants: auditor_grants,
+            auth_transactions: auditor_auth_transactions,
             sessions: auditor_sessions,
             portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
             downloads: document_download_service,

@@ -2,6 +2,7 @@ mod agent_connection_repository;
 mod agent_connections;
 mod auditor_access;
 mod auditor_access_grants;
+mod auditor_auth_transactions;
 mod dequeuer_pubsub;
 mod document_downloads;
 mod document_upload_grants;
