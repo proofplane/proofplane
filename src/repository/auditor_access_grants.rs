@@ -60,6 +60,32 @@ RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
 }
 
 impl Postgres {
+    pub async fn get_active_auditor_access_grant_by_id(
+        &self,
+        grant_id: AuditorAccessGrantId,
+    ) -> Result<Option<AuditorAccessGrant>, Error> {
+        let client = self.get().await?;
+        let rows = client
+            .query(
+                &format!(
+                    r#"
+SELECT {AUDITOR_ACCESS_GRANT_COLUMNS}
+FROM auditor_access_grants
+WHERE id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+"#
+                ),
+                &[&Uuid::from(grant_id)],
+            )
+            .await?;
+
+        rows.into_iter()
+            .next()
+            .map(|row| auditor_access_grant_from_row(&row))
+            .transpose()
+    }
+
     pub async fn list_auditor_access_grants(
         &self,
         workspace_id: WorkspaceId,

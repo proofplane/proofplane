@@ -2,7 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     authentication::{
-        auth0::{TokenVerifier, VerifiedClaims},
+        auth0::{
+            Auth0AuditorIdentityProvider, SharedAuditorIdentityProvider, TokenVerifier,
+            VerifiedClaims,
+        },
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
@@ -12,7 +15,6 @@ use crate::{
         UserAuthenticator,
     },
     config::AppConfig,
-    mailer::SharedMailAdapter,
     object_storage::FilesystemObjectStore,
     repository::Postgres,
     routes::{
@@ -34,6 +36,8 @@ use crate::{
         agent_connections::AgentConnectionService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
+        auditor_auth_transactions::AuditorAuthTransactionService,
+        auditor_authentication::AuditorAuthenticationService,
         auditor_portal::AuditorPortalReadModelService,
         client_resolver::ClientResolver,
         controls::ControlService,
@@ -63,7 +67,7 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub object_store: Arc<FilesystemObjectStore>,
     pub metrics: PrometheusHandle,
     pub user_authenticator: UserAuthenticator<V>,
-    pub mail_adapter: Option<SharedMailAdapter>,
+    pub auditor_identity_provider: Option<SharedAuditorIdentityProvider>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -195,11 +199,22 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let secure_auditor_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let auditor_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
-    let auditor_sessions = AuditorAccessSessionService::new(
+    let auditor_auth_transactions = AuditorAuthTransactionService::new(
         dependencies.postgres.clone(),
-        dependencies
-            .mail_adapter
-            .unwrap_or_else(|| crate::mailer::from_config(&dependencies.config.mail.adapter)),
+        dependencies.config.auth0.auditor_portal.clone(),
+    );
+    let auditor_sessions = AuditorAccessSessionService::new(dependencies.postgres.clone());
+    let auditor_identity_provider = dependencies.auditor_identity_provider.unwrap_or_else(|| {
+        Arc::new(Auth0AuditorIdentityProvider::new(
+            &dependencies.config.auth0,
+        ))
+    });
+    let auditor_authentication = AuditorAuthenticationService::new(
+        dependencies.postgres.clone(),
+        auditor_auth_transactions.clone(),
+        auditor_sessions.clone(),
+        auditor_identity_provider,
+        dependencies.config.auth0.auditor_portal.clone(),
     );
 
     Ok(Router::new()
@@ -247,6 +262,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         ))
         .merge(auditor_access::router(AuditorAccessState {
             grants: auditor_grants,
+            auth_transactions: auditor_auth_transactions,
+            authentication: auditor_authentication,
             sessions: auditor_sessions,
             portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
             downloads: document_download_service,

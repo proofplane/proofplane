@@ -7,6 +7,7 @@ use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 mod agent_connections;
 mod auditor_access_grants;
 mod auditor_access_sessions;
+mod auditor_auth_transactions;
 mod auditor_portal;
 pub mod constraints;
 mod controls;
@@ -23,7 +24,8 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
-pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
+pub use auditor_access_sessions::NewAuditorSession;
+pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
 pub use constraints::ConflictKind;
 pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
 pub use documents::TypedDocumentUploadWork;

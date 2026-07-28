@@ -25,7 +25,6 @@ pub struct AppConfig {
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
-    pub mail: MailConfig,
     pub observability: ObservabilityConfig,
     pub worker: WorkerConfig,
     pub mcp: McpConfig,
@@ -59,6 +58,7 @@ pub struct Auth0Config {
     pub audience: String,
     pub jwks_url: Url,
     pub upstream_oauth: Auth0UpstreamOAuthConfig,
+    pub auditor_portal: Auth0AuditorPortalConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +66,17 @@ pub struct Auth0UpstreamOAuthConfig {
     pub client_id: String,
     pub client_secret: SecretString,
     pub callback_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Auth0AuditorPortalConfig {
+    pub client_id: String,
+    pub client_secret: SecretString,
+    pub callback_path: String,
+    pub callback_url: Url,
+    pub connection: String,
+    pub authorization_endpoint: Url,
+    pub token_endpoint: Url,
 }
 
 #[derive(Debug, Clone)]
@@ -128,18 +139,6 @@ pub struct GcsObjectStorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadsConfig {
     pub max_document_bytes: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct MailConfig {
-    pub adapter: MailAdapterConfig,
-}
-
-#[derive(Debug, Clone)]
-pub enum MailAdapterConfig {
-    Disabled,
-    LocalStdout,
-    Resend { api_key: SecretString, from: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,25 +267,26 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
-        mail <- raw.mail.unwrap_or_default().validate(),
         observability <- raw.observability.validate(),
         worker <- raw.worker.validate(),
         mcp <- raw.mcp.validate(),
         health <- raw.health.validate(),
-        => AppConfig {
-            server,
-            postgres,
-            pubsub,
-            auth0,
-            paseto,
-            object_storage,
-            scanner,
-            uploads,
-            mail,
-            observability,
-            worker,
-            mcp,
-            health,
+        => {
+            let auth0 = auth0.resolve(&server.public_api_base_url);
+            AppConfig {
+                server,
+                postgres,
+                pubsub,
+                auth0,
+                paseto,
+                object_storage,
+                scanner,
+                uploads,
+                observability,
+                worker,
+                mcp,
+                health,
+            }
         },
     }
 }
@@ -334,10 +334,6 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
-        assert!(matches!(
-            config.mail.adapter,
-            MailAdapterConfig::LocalStdout
-        ));
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert!(
             config.mcp.allowed_hosts.is_empty(),
@@ -350,67 +346,18 @@ mod tests {
             "local-upload-grant-001"
         );
         assert_eq!(config.paseto.upload_grant.keys.len(), 1);
-    }
-
-    #[test]
-    fn resend_mail_config_loads_and_redacts_api_key() {
-        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
-        let resend = base.replace(
-            "mail:\n  adapter: \"local_stdout\"",
-            r#"mail:
-  adapter: "resend"
-  api_key: "re_unique_test_secret"
-  from: "Proofplane <noreply@notify.proofplane.app>""#,
+        assert_eq!(
+            config.auth0.auditor_portal.callback_url.as_str(),
+            "http://127.0.0.1:3000/auditor-access/auth0/callback"
         );
-        assert_ne!(base, resend, "mail config replacement anchor matched");
-        let path = write_temp_config(&resend);
-
-        let config = load_from_path(&path).expect("Resend config loads");
-
-        match &config.mail.adapter {
-            MailAdapterConfig::Resend { api_key, from } => {
-                assert_eq!(api_key.expose_secret(), "re_unique_test_secret");
-                assert_eq!(from, "Proofplane <noreply@notify.proofplane.app>");
-                let debug = format!("{:?}", config.mail);
-                assert!(!debug.contains(api_key.expose_secret()));
-                assert!(debug.contains("Secret"));
-            }
-            _ => panic!("Resend adapter is configured"),
-        }
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resend_mail_config_requires_api_key_and_sender() {
-        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
-        let resend = base.replace(
-            "mail:\n  adapter: \"local_stdout\"",
-            "mail:\n  adapter: \"resend\"",
+        assert_eq!(
+            config.auth0.auditor_portal.authorization_endpoint.as_str(),
+            "https://dev-ctgrkbdrbodz4azi.us.auth0.com/authorize"
         );
-        assert_ne!(base, resend, "mail config replacement anchor matched");
-        let path = write_temp_config(&resend);
-
-        let error = load_from_path(&path).expect_err("incomplete Resend config is invalid");
-
-        assert_validation_paths(error, &["mail.api_key", "mail.from"]);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resend_mail_config_rejects_blank_api_key_and_sender() {
-        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
-        let resend = base.replace(
-            "mail:\n  adapter: \"local_stdout\"",
-            "mail:\n  adapter: \"resend\"\n  api_key: \"   \"\n  from: \"   \"",
+        assert_eq!(
+            config.auth0.auditor_portal.token_endpoint.as_str(),
+            "https://dev-ctgrkbdrbodz4azi.us.auth0.com/oauth/token"
         );
-        assert_ne!(base, resend, "mail config replacement anchor matched");
-        let path = write_temp_config(&resend);
-
-        let error = load_from_path(&path).expect_err("blank Resend config is invalid");
-
-        assert_validation_paths(error, &["mail.api_key", "mail.from"]);
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -517,6 +464,11 @@ auth0:
     client_id: ""
     client_secret: ""
     callback_path: "callback"
+  auditor_portal:
+    client_id: ""
+    client_secret: ""
+    callback_path: "../callback"
+    connection: "sms"
 paseto:
   download:
     active_key_id: ""
@@ -582,6 +534,10 @@ health:
                 assert!(paths.contains(&"auth0.upstream_oauth.client_id"));
                 assert!(paths.contains(&"auth0.upstream_oauth.client_secret"));
                 assert!(paths.contains(&"auth0.upstream_oauth.callback_path"));
+                assert!(paths.contains(&"auth0.auditor_portal.client_id"));
+                assert!(paths.contains(&"auth0.auditor_portal.client_secret"));
+                assert!(paths.contains(&"auth0.auditor_portal.callback_path"));
+                assert!(paths.contains(&"auth0.auditor_portal.connection"));
                 assert!(paths.contains(&"paseto.download.active_key_id"));
                 assert!(paths.contains(&"paseto.download.keys[0].id"));
                 assert!(paths.contains(&"paseto.download.keys[0].secret"));
@@ -640,6 +596,94 @@ health:
         assert!(!debug.contains(config.paseto.download.keys[0].secret.expose_secret()));
         assert!(!debug.contains(config.paseto.upload_grant.keys[0].secret.expose_secret()));
         assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn auditor_auth0_secret_is_redacted() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.auth0.auditor_portal);
+
+        assert!(!debug.contains(config.auth0.auditor_portal.client_secret.expose_secret()));
+        assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn auditor_auth0_validation_errors_do_not_expose_the_secret() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let unique_secret = "auditor-secret-that-must-not-appear";
+        let modified = base
+            .replace(
+                "local-proofplane-auditor-client-secret-change-me",
+                unique_secret,
+            )
+            .replace(
+                "/auditor-access/auth0/callback",
+                "/auditor-access/../oauth/callback",
+            );
+        let path = write_temp_config(&modified);
+
+        let error = load_from_path(&path).expect_err("unsafe callback is invalid");
+        assert!(!format!("{error:?}").contains(unique_secret));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn auditor_auth0_config_reports_missing_fields_individually() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+
+        for (field, expected_path) in [
+            (
+                "    client_id: \"local-proofplane-auditor-client\"\n",
+                "auth0.auditor_portal.client_id",
+            ),
+            (
+                "    client_secret: \"local-proofplane-auditor-client-secret-change-me\"\n",
+                "auth0.auditor_portal.client_secret",
+            ),
+            (
+                "    callback_path: \"/auditor-access/auth0/callback\"\n",
+                "auth0.auditor_portal.callback_path",
+            ),
+            (
+                "    connection: \"email\"\n",
+                "auth0.auditor_portal.connection",
+            ),
+        ] {
+            let modified = base.replacen(field, "", 1);
+            assert_ne!(base, modified, "auditor config field anchor matched");
+            let path = write_temp_config(&modified);
+            let error = load_from_path(&path).expect_err("missing auditor field is invalid");
+            assert_validation_paths(error, &[expected_path]);
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn auditor_callback_rejects_malformed_or_escaping_paths() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+
+        for callback in [
+            "",
+            "/oauth/auth0/callback",
+            "//evil.example/callback",
+            "/auditor-access/../oauth/callback",
+            "/auditor-access/%2e%2e/oauth/callback",
+            "/auditor-access/auth0/callback?next=/oauth",
+            "/auditor-access/auth0/callback#fragment",
+            "/auditor-access/auth0\\callback",
+        ] {
+            let yaml_callback = callback.replace('\\', "\\\\");
+            let modified = base.replace(
+                "    callback_path: \"/auditor-access/auth0/callback\"",
+                &format!("    callback_path: \"{yaml_callback}\""),
+            );
+            assert_ne!(base, modified, "auditor callback anchor matched");
+            let path = write_temp_config(&modified);
+            let error = load_from_path(&path).expect_err("unsafe auditor callback is invalid");
+            assert_validation_paths(error, &["auth0.auditor_portal.callback_path"]);
+            let _ = fs::remove_file(path);
+        }
     }
 
     #[test]

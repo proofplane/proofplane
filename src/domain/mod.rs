@@ -1,6 +1,7 @@
 mod agent_connection;
 mod auditor_access_grant;
 mod auditor_access_session;
+mod auditor_auth_transaction;
 mod auditor_portal;
 mod batch;
 mod controls;
@@ -24,9 +25,8 @@ pub use agent_connection::{
 pub use auditor_access_grant::{
     AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
 };
-pub use auditor_access_session::{
-    AuditorAccessOtp, AuditorAccessOtpId, AuditorSession, AuditorSessionId,
-};
+pub use auditor_access_session::{AuditorSession, AuditorSessionId};
+pub use auditor_auth_transaction::AuditorAuthTransactionId;
 pub use auditor_portal::{
     AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
     AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,

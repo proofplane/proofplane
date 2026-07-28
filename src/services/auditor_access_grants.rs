@@ -151,7 +151,7 @@ fn authorize(connection: &AgentConnectionContext) -> Result<(), AuditorAccessGra
     }
 }
 
-fn normalize_email(value: &str) -> Result<String, AuditorAccessGrantError> {
+pub(crate) fn normalize_email(value: &str) -> Result<String, AuditorAccessGrantError> {
     let email = value.trim().to_ascii_lowercase();
     let Some((local, domain)) = email.split_once('@') else {
         return Err(AuditorAccessGrantError::InvalidEmail);

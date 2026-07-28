@@ -3,6 +3,8 @@ use thiserror::Error;
 pub mod agent_connections;
 pub mod auditor_access_grants;
 pub mod auditor_access_sessions;
+pub mod auditor_auth_transactions;
+pub mod auditor_authentication;
 pub mod auditor_portal;
 pub mod cimd;
 pub mod client_resolver;
