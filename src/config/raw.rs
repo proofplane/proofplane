@@ -14,10 +14,10 @@ use super::{
         secret_value, string_url, string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
-    HealthConfig, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
-    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
+    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+    ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +30,6 @@ pub(super) struct RawAppConfig {
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) scanner: RawScannerConfig,
     pub(super) uploads: RawUploadsConfig,
-    #[serde(default)]
-    pub(super) mail: Option<RawMailConfig>,
     pub(super) observability: RawObservabilityConfig,
     pub(super) worker: RawWorkerConfig,
     pub(super) mcp: RawMcpConfig,
@@ -63,51 +61,6 @@ impl RawScannerConfig {
 }
 
 impl RawAppConfig {}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawMailConfig {
-    adapter: String,
-    #[serde(default)]
-    api_key: Option<SecretString>,
-    #[serde(default)]
-    from: Option<String>,
-}
-
-impl Default for RawMailConfig {
-    fn default() -> Self {
-        Self {
-            adapter: "disabled".to_owned(),
-            api_key: None,
-            from: None,
-        }
-    }
-}
-
-impl RawMailConfig {
-    pub(super) fn validate(self) -> Validation<MailConfig, ConfigFieldError> {
-        match self.adapter.as_str() {
-            "disabled" => Validation::valid(MailConfig {
-                adapter: MailAdapterConfig::Disabled,
-            }),
-            "local_stdout" => Validation::valid(MailConfig {
-                adapter: MailAdapterConfig::LocalStdout,
-            }),
-            "resend" => validate! {
-                api_key <- secret_value(
-                    self.api_key.unwrap_or_else(|| SecretString::from(""))
-                ).at("mail.api_key"),
-                from <- string_value(self.from.unwrap_or_default()).at("mail.from"),
-                => MailConfig {
-                    adapter: MailAdapterConfig::Resend { api_key, from },
-                },
-            },
-            _ => Validation::invalid(ConfigFieldError::new(
-                "mail.adapter",
-                "must be disabled, local_stdout, or resend",
-            )),
-        }
-    }
-}
 
 pub(super) fn validate_postgres_connection_string(
     value: SecretString,

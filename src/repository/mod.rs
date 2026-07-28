@@ -24,7 +24,7 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
-pub use auditor_access_sessions::{NewAuditorAccessOtp, NewAuditorSession};
+pub use auditor_access_sessions::NewAuditorSession;
 pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
 pub use constraints::ConflictKind;
 pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};

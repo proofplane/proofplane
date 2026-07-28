@@ -5,7 +5,6 @@ pub mod dequeuer;
 pub mod domain;
 pub mod errors;
 pub mod handlers;
-pub mod mailer;
 pub mod mcp;
 pub mod migrations;
 pub mod object_storage;

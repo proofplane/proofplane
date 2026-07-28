@@ -58,9 +58,6 @@ scanner:
 uploads:
   max_document_bytes: 26214400
 
-mail:
-  adapter: "local_stdout"
-
 observability:
   log_format: "pretty"
   default_filter: "debug"

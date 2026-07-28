@@ -1,12 +1,15 @@
-use axum::http::{header::SET_COOKIE, StatusCode};
+use axum::http::{
+    header::{LOCATION, SET_COOKIE},
+    StatusCode,
+};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream;
 use proofplane::{
+    authentication::auth0::VerifiedAuditorIdentity,
     domain::{
         AuditReviewPeriod, CreatePolicyPayload, PolicyId, WorkspacePermission, WorkspacePermissions,
     },
-    mailer::DisabledMailAdapter,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     repository::CreatePolicyDocumentResult,
     routes::request_context::REQUEST_ID_HEADER,
@@ -28,404 +31,283 @@ use uuid::Uuid;
 use super::support::{capture_audit_logs, cc61_id, submit_evidence_file, TestApp};
 
 #[tokio::test]
-async fn valid_invite_otp_creates_digest_only_session_cookie_and_audits_without_secrets() {
+async fn hosted_login_creates_auth0_session_and_emits_secret_free_lifecycle_events() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret().to_owned();
+    let users_before = table_count(&app, "users").await;
 
-    let request = app
+    let invitation = app
         .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&serde_json::json!({ "token": invite_token }));
-    let (response, request_logs) = capture_audit_logs(|request_id| async move {
-        request
+        .get(&format!(
+            "/auditor-access/{workspace_id}?token={invite_token}"
+        ))
+        .await;
+    invitation.assert_status_ok();
+    let invitation_body = html_body(&invitation);
+    assert!(invitation_body.contains("Proofplane will verify this email"));
+    assert!(invitation_body.contains(&format!("action=\"/auditor-access/{workspace_id}/login\"")));
+    assert!(invitation_body.contains(">Continue</button>"));
+    assert!(!invitation_body.contains("/otp/"));
+    assert!(!invitation_body.contains("verification code"));
+
+    let start_request = app
+        .server()
+        .post(&format!("/auditor-access/{workspace_id}/login"))
+        .form(&[("token", invite_token.as_str())]);
+    let (start, start_logs) = capture_audit_logs(|request_id| async move {
+        start_request
             .add_header(REQUEST_ID_HEADER, request_id.to_string())
             .await
     })
     .await;
-    response.assert_status_ok();
-    assert_eq!(app.sent_mail().len(), 1);
-    assert_eq!(app.sent_mail()[0].auditor_email, "auditor@example.com");
-    let otp = app.sent_mail()[0].code.clone();
+    start.assert_status(StatusCode::SEE_OTHER);
+    let authorization_url = url::Url::parse(
+        start
+            .headers()
+            .get(LOCATION)
+            .expect("authorization location")
+            .to_str()
+            .expect("location is ASCII"),
+    )
+    .expect("authorization URL parses");
+    let parameters = authorization_url
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::HashMap<_, _>>();
+    let callback_state = parameters.get("state").expect("state parameter").clone();
 
-    let request = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&serde_json::json!({ "token": invite_token, "code": otp }));
-    let (response, verify_logs) = capture_audit_logs(|request_id| async move {
-        request
+    let callback_request = app.server().get(&format!(
+        "/auditor-access/auth0/callback?code=unique-authorization-code&state={callback_state}"
+    ));
+    let (callback, callback_logs) = capture_audit_logs(|request_id| async move {
+        callback_request
             .add_header(REQUEST_ID_HEADER, request_id.to_string())
             .await
     })
     .await;
-    response.assert_status_ok();
-    let set_cookie = response
+    callback.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(
+        callback.headers().get(LOCATION).expect("portal location"),
+        "/auditor-access/portal"
+    );
+    let set_cookie = callback
         .headers()
         .get(SET_COOKIE)
         .expect("session cookie set")
         .to_str()
         .expect("cookie is ASCII");
-    assert!(set_cookie.contains("proofplane_auditor_session="));
-    assert!(set_cookie.contains("HttpOnly"));
-    assert!(set_cookie.contains("Secure"));
-    assert!(set_cookie.contains("SameSite=Lax"));
-    assert!(set_cookie.contains("Path=/auditor-access"));
-    assert!(set_cookie.contains("Max-Age=604800"));
     let raw_session = cookie_value(set_cookie);
 
-    let session =
-        AuditorAccessSessionService::new(app.postgres_arc(), Arc::new(DisabledMailAdapter))
-            .load_session(raw_session)
-            .await
-            .expect("session loads");
+    let session = AuditorAccessSessionService::new(app.postgres_arc())
+        .load_session(raw_session)
+        .await
+        .expect("Auth0 session loads");
+    assert_eq!(session.auth0_subject, "email|auditor");
     assert_eq!(session.auditor_email, "auditor@example.com");
+    assert_eq!(table_count(&app, "users").await, users_before);
 
-    let row = app
-        .postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .query_one(
-            "SELECT octet_length(session_digest) AS digest_length, encode(session_digest, 'hex') AS digest_hex FROM auditor_sessions",
-            &[],
-        )
-        .await
-        .expect("session row reads");
-    assert_eq!(row.get::<_, i32>("digest_length"), 32);
-    assert!(!row.get::<_, String>("digest_hex").contains(raw_session));
-
-    let logs = serde_json::to_string(&(request_logs, verify_logs)).expect("logs serialize");
-    assert!(logs.contains("auditor_access_otp.requested"));
-    assert!(logs.contains("auditor_access_otp.verified"));
-    assert!(logs.contains("auditor_access_session.created"));
-    assert!(!logs.contains(&invite_token));
-    assert!(!logs.contains(&otp));
-    assert!(!logs.contains(raw_session));
-}
-
-#[tokio::test]
-async fn mail_failure_returns_retryable_responses_without_invalidating_previous_otp() {
-    let app = auditor_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let grant = create_grant(&app, workspace_id).await;
-    let invite_token = grant.raw_secret.expose_secret();
-
-    app.server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&json!({ "token": invite_token }))
-        .await
-        .assert_status_ok();
-    let delivered_code = app.sent_mail()[0].code.clone();
-
-    app.set_mail_delivery_failure(true);
-    let api_failure = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&json!({ "token": invite_token }))
-        .await;
-    api_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    let error = api_failure.json::<Value>();
-    assert_eq!(error["error"]["code"], "mail_unavailable");
+    let exchanges = app.auditor_identity_exchanges();
+    assert_eq!(exchanges.len(), 1);
     assert_eq!(
-        error["error"]["message"],
-        "verification email could not be sent; try again"
+        exchanges[0].authorization_code.expose_secret(),
+        "unique-authorization-code"
     );
-    assert_eq!(error["error"]["details"], json!([]));
+    assert_eq!(
+        exchanges[0].redirect_uri.as_str(),
+        parameters
+            .get("redirect_uri")
+            .expect("authorization redirect URI")
+    );
+    assert_eq!(exchanges[0].pkce_verifier.expose_secret().len(), 43);
 
-    let browser_failure = app
+    let logs = serde_json::to_string(&(start_logs, callback_logs)).expect("logs serialize");
+    assert!(logs.contains("auditor_access_auth.started"));
+    assert!(logs.contains("auditor_access_auth.completed"));
+    assert!(logs.contains("auditor_access_session.created"));
+    for secret in [
+        invite_token.as_str(),
+        callback_state.as_str(),
+        "unique-authorization-code",
+        "auditor@example.com",
+        raw_session,
+        exchanges[0].pkce_verifier.expose_secret(),
+    ] {
+        assert!(!logs.contains(secret), "logs exclude {secret}");
+    }
+}
+
+#[tokio::test]
+async fn hosted_login_rejects_mismatch_and_replay_without_creating_a_session() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    app.set_auditor_identity(VerifiedAuditorIdentity {
+        subject: "email|other".to_owned(),
+        email: "other@example.com".to_owned(),
+        email_verified: true,
+    });
+    let state = start_auth0_login(&app, workspace_id, grant.raw_secret.expose_secret()).await;
+
+    let rejected = app
         .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=rejected-code&state={state}"
         ))
-        .form(&[("token", invite_token)])
         .await;
-    browser_failure.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    let body = html_body(&browser_failure);
-    assert!(body.contains("We couldn&#39;t send the verification code. Please try again."));
-    assert!(body.contains("Send verification code"));
-    assert!(!body.contains("name=\"resend\""));
+    rejected.assert_status(StatusCode::BAD_REQUEST);
+    assert!(html_body(&rejected).contains("We couldn&#39;t verify this access request"));
 
-    let remaining_otps = app
-        .postgres()
-        .get()
+    let replay = app
+        .server()
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=replayed-code&state={state}"
+        ))
+        .await;
+    replay.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(app.auditor_identity_exchanges().len(), 1);
+    assert_eq!(table_count(&app, "auditor_sessions").await, 0);
+
+    let unverified_grant = create_grant(&app, workspace_id).await;
+    app.set_auditor_identity(VerifiedAuditorIdentity {
+        subject: "email|auditor".to_owned(),
+        email: "auditor@example.com".to_owned(),
+        email_verified: false,
+    });
+    let unverified_state = start_auth0_login(
+        &app,
+        workspace_id,
+        unverified_grant.raw_secret.expose_secret(),
+    )
+    .await;
+    app.server()
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=unverified-code&state={unverified_state}"
+        ))
         .await
-        .expect("connection opens")
-        .query_one(
-            "SELECT count(*)::bigint AS count FROM auditor_access_otps WHERE grant_id = $1",
-            &[&Uuid::from(grant.grant.id)],
+        .assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(table_count(&app, "auditor_sessions").await, 0);
+}
+
+#[tokio::test]
+async fn hosted_login_maps_provider_outage_and_invalid_callbacks_to_coarse_pages() {
+    let app = auditor_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let grant = create_grant(&app, workspace_id).await;
+    app.set_auditor_identity_unavailable();
+    let state = start_auth0_login(&app, workspace_id, grant.raw_secret.expose_secret()).await;
+
+    let unavailable = app
+        .server()
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=provider-code&state={state}"
+        ))
+        .await;
+    unavailable.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let unavailable_body = html_body(&unavailable);
+    assert!(unavailable_body.contains("Email verification is temporarily unavailable"));
+    assert!(!unavailable_body.contains("provider-code"));
+
+    let rejected_grant = create_grant(&app, workspace_id).await;
+    app.set_auditor_identity_rejected();
+    let rejected_state = start_auth0_login(
+        &app,
+        workspace_id,
+        rejected_grant.raw_secret.expose_secret(),
+    )
+    .await;
+    app.server()
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=rejected-code&state={rejected_state}"
+        ))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    let revoked_grant = create_grant(&app, workspace_id).await;
+    app.set_auditor_identity(VerifiedAuditorIdentity {
+        subject: "email|auditor".to_owned(),
+        email: "auditor@example.com".to_owned(),
+        email_verified: true,
+    });
+    let revoked_state =
+        start_auth0_login(&app, workspace_id, revoked_grant.raw_secret.expose_secret()).await;
+    AuditorAccessGrantService::new(app.postgres_arc())
+        .revoke(
+            &agent_connection_context(&app, workspace_id),
+            revoked_grant.grant.id,
         )
         .await
-        .expect("OTP count reads")
-        .get::<_, i64>("count");
-    assert_eq!(remaining_otps, 1);
-
-    app.set_mail_delivery_failure(false);
+        .expect("grant revokes");
     app.server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&json!({ "token": invite_token, "code": delivered_code }))
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=revoked-code&state={revoked_state}"
+        ))
         .await
-        .assert_status_ok();
+        .assert_status(StatusCode::NOT_FOUND);
+
+    for path in [
+        "/auditor-access/auth0/callback",
+        "/auditor-access/auth0/callback?code=only-code",
+        "/auditor-access/auth0/callback?state=only-state",
+        "/auditor-access/auth0/callback?error=access_denied",
+    ] {
+        let response = app.server().get(path).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert!(html_body(&response).contains("Return to your invitation and try again."));
+    }
 }
 
 #[tokio::test]
-async fn browser_resend_replaces_the_previous_code_and_shows_send_again_link() {
+async fn hosted_login_allows_only_one_concurrent_callback_to_create_a_session() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
-    let invite_token = grant.raw_secret.expose_secret();
+    let state = start_auth0_login(&app, workspace_id, grant.raw_secret.expose_secret()).await;
+    let path = format!("/auditor-access/auth0/callback?code=concurrent-code&state={state}");
 
-    let initial = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token)])
-        .await;
-    initial.assert_status_ok();
-    let initial_body = html_body(&initial);
-    assert!(initial_body.contains("class=\"panel form-panel\""));
-    assert!(initial_body.contains("class=\"resend-action\""));
-    assert!(initial_body.contains("name=\"resend\" value=\"true\""));
-    assert!(initial_body.contains("class=\"link-button\""));
-    assert!(initial_body.contains(">Resend code</button>"));
-    assert!(!initial_body.contains("New code sent."));
-    assert!(!initial_body.contains("class=\"resend-success-icon\""));
-    let previous_code = app.sent_mail()[0].code.clone();
-
-    let resend = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token), ("resend", "true")])
-        .await;
-    resend.assert_status_ok();
-    assert_eq!(app.sent_mail().len(), 2);
-    let resend_body = html_body(&resend);
-    assert!(resend_body.contains(
-        "class=\"resend-confirmation\" role=\"status\" aria-live=\"polite\">New code sent."
-    ));
-    assert!(resend_body.contains("class=\"resend-success-icon\" aria-hidden=\"true\">✓</span>"));
-    assert!(resend_body.contains(">Send again</button>"));
-    assert!(
-        resend_body
-            .find(">Send again</button>")
-            .expect("send again link")
-            < resend_body
-                .find("class=\"resend-success-icon\"")
-                .expect("success checkmark")
+    let (left, right) = tokio::join!(app.server().get(&path), app.server().get(&path));
+    let statuses = [left.status_code(), right.status_code()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::SEE_OTHER)
+            .count(),
+        1,
+        "callback statuses: {statuses:?}"
     );
-    assert!(!resend_body.contains("Code sent. Check the intended auditor inbox."));
-    assert!(resend_body.contains("class=\"panel form-panel\""));
-
-    let previous = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", previous_code.as_str())])
-        .await;
-    previous.assert_status(StatusCode::NOT_FOUND);
-
-    let newest_code = app.sent_mail()[1].code.clone();
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", newest_code.as_str())])
-        .await
-        .assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::BAD_REQUEST)
+            .count(),
+        1
+    );
+    assert_eq!(table_count(&app, "auditor_sessions").await, 1);
+    assert_eq!(app.auditor_identity_exchanges().len(), 1);
 }
 
 #[tokio::test]
-async fn browser_resend_rate_limit_keeps_the_verification_card_and_link() {
+async fn removed_otp_endpoints_cannot_create_sessions() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
 
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token)])
-        .await
-        .assert_status_ok();
-    for _ in 0..2 {
+    for path in [
+        format!("/auditor-access/{workspace_id}/otp/request"),
+        format!("/auditor-access/{workspace_id}/otp/verify"),
+        format!("/auditor-access/{workspace_id}/otp/request/browser"),
+        format!("/auditor-access/{workspace_id}/otp/verify/browser"),
+    ] {
         app.server()
-            .post(&format!(
-                "/auditor-access/{workspace_id}/otp/request/browser"
-            ))
-            .form(&[("token", invite_token), ("resend", "true")])
+            .post(&path)
+            .json(&json!({ "token": invite_token, "code": "123456" }))
             .await
-            .assert_status_ok();
+            .assert_status_not_found();
     }
 
-    let limited = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token), ("resend", "true")])
-        .await;
-    limited.assert_status(StatusCode::CONFLICT);
-    assert_eq!(app.sent_mail().len(), 3);
-    let body = html_body(&limited);
-    assert!(
-        body.contains("Too many code requests. Use the latest code or wait before trying again.")
-    );
-    assert!(body.contains("class=\"panel form-panel\""));
-    assert!(body.contains(">Resend code</button>"));
-}
-
-#[tokio::test]
-async fn failed_browser_resend_keeps_the_previous_code_usable() {
-    let app = auditor_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let grant = create_grant(&app, workspace_id).await;
-    let invite_token = grant.raw_secret.expose_secret();
-
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token)])
-        .await
-        .assert_status_ok();
-    let delivered_code = app.sent_mail()[0].code.clone();
-
-    app.set_mail_delivery_failure(true);
-    let failed = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token), ("resend", "true")])
-        .await;
-    failed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    let body = html_body(&failed);
-    assert!(body.contains("We couldn&#39;t send a new code. Your previous code may still work."));
-    assert!(body.contains("class=\"panel form-panel\""));
-    assert!(body.contains(">Resend code</button>"));
-    assert_eq!(app.sent_mail().len(), 1);
-
-    app.set_mail_delivery_failure(false);
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", delivered_code.as_str())])
-        .await
-        .assert_status(StatusCode::SEE_OTHER);
-}
-
-#[tokio::test]
-async fn invalid_and_expired_browser_codes_keep_the_resend_link() {
-    let app = auditor_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let grant = create_grant(&app, workspace_id).await;
-    let invite_token = grant.raw_secret.expose_secret();
-
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token)])
-        .await
-        .assert_status_ok();
-
-    let invalid = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", "000000")])
-        .await;
-    invalid.assert_status(StatusCode::NOT_FOUND);
-    let invalid_body = html_body(&invalid);
-    assert!(invalid_body.contains("That code could not be verified."));
-    assert!(invalid_body.contains(">Resend code</button>"));
-
-    app.postgres()
-        .get()
-        .await
-        .expect("connection opens")
-        .execute(
-            "UPDATE auditor_access_otps SET created_at = now() - interval '2 seconds', expires_at = now() - interval '1 second' WHERE grant_id = $1",
-            &[&Uuid::from(grant.grant.id)],
-        )
-        .await
-        .expect("OTP expires");
-    let delivered_code = app.sent_mail()[0].code.clone();
-    let expired = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", delivered_code.as_str())])
-        .await;
-    expired.assert_status(StatusCode::NOT_FOUND);
-    let expired_body = html_body(&expired);
-    assert!(expired_body.contains("That code could not be verified."));
-    assert!(expired_body.contains(">Resend code</button>"));
-}
-
-#[tokio::test]
-async fn wrong_reused_rate_limited_and_invalid_invites_do_not_create_sessions() {
-    let app = auditor_app().await;
-    let workspace_id = app.workspace_id("workspace");
-    let other_workspace_id = app.workspace_id("other");
-    let grant = create_grant(&app, workspace_id).await;
-    let invite_token = grant.raw_secret.expose_secret();
-
-    for _ in 0..3 {
-        app.server()
-            .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-            .json(&serde_json::json!({ "token": invite_token }))
-            .await
-            .assert_status_ok();
-    }
-    let rate_limited = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&serde_json::json!({ "token": invite_token }))
-        .await;
-    assert_eq!(rate_limited.status_code(), StatusCode::CONFLICT);
-
-    let wrong = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&serde_json::json!({ "token": invite_token, "code": "000000" }))
-        .await;
-    assert_eq!(wrong.status_code(), StatusCode::NOT_FOUND);
-
-    let code = app.sent_mail().last().expect("OTP sent").code.clone();
-    app.server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&serde_json::json!({ "token": invite_token, "code": code }))
-        .await
-        .assert_status_ok();
-    let reused = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&serde_json::json!({ "token": invite_token, "code": code }))
-        .await;
-    assert_eq!(reused.status_code(), StatusCode::NOT_FOUND);
-
-    let invalid = app
-        .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&serde_json::json!({ "token": "not-a-token" }))
-        .await;
-    assert_eq!(invalid.status_code(), StatusCode::NOT_FOUND);
-    let cross_workspace = app
-        .server()
-        .post(&format!("/auditor-access/{other_workspace_id}/otp/request"))
-        .json(&serde_json::json!({ "token": invite_token }))
-        .await;
-    assert_eq!(cross_workspace.status_code(), StatusCode::NOT_FOUND);
-    assert_eq!(app.sent_mail().len(), 3);
+    assert_eq!(table_count(&app, "auditor_sessions").await, 0);
 }
 
 #[tokio::test]
@@ -434,8 +316,7 @@ async fn logout_and_grant_revocation_invalidate_existing_session() {
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let session_service =
-        AuditorAccessSessionService::new(app.postgres_arc(), Arc::new(DisabledMailAdapter));
+    let session_service = AuditorAccessSessionService::new(app.postgres_arc());
 
     let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
     app.server()
@@ -1298,11 +1179,10 @@ async fn auditor_download_rejects_logged_out_tampered_expired_and_grant_revoked_
     assert!(!String::from_utf8_lossy(logged_out.as_bytes().as_ref()).contains("session"));
 
     let expired_session = verified_session_cookie(&app, workspace_id, invite_token).await;
-    let loaded_session =
-        AuditorAccessSessionService::new(app.postgres_arc(), Arc::new(DisabledMailAdapter))
-            .load_session(&expired_session)
-            .await
-            .expect("session loads");
+    let loaded_session = AuditorAccessSessionService::new(app.postgres_arc())
+        .load_session(&expired_session)
+        .await
+        .expect("session loads");
     app.postgres()
         .get()
         .await
@@ -1382,7 +1262,7 @@ async fn auditor_download_metadata_mismatch_is_internal_without_public_storage_d
 }
 
 #[tokio::test]
-async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
+async fn browser_invite_auth0_and_portal_flow_renders_read_only_graph() {
     let app = auditor_app().await;
     let workspace_id = app.workspace_id("workspace");
     let control_id = app.control_id("workspace", "PP-AC-01");
@@ -1398,30 +1278,15 @@ async fn browser_invite_otp_and_portal_flow_renders_read_only_graph() {
     invite.assert_status_ok();
     let invite_body = html_body(&invite);
     assert!(invite_body.contains("Verify access for auditor@example.com"));
-    assert!(invite_body.contains("Send verification code"));
+    assert!(invite_body.contains(">Continue</button>"));
     assert!(!invite_body.contains("Access reviews"));
 
-    let request = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token)])
-        .await;
-    request.assert_status_ok();
-    assert_eq!(app.sent_mail().len(), 1);
-    let request_body = html_body(&request);
-    assert!(request_body.contains("Code sent"));
-    assert!(request_body.contains("Verification code"));
-    assert!(request_body.contains(">Resend code</button>"));
-
-    let code = app.sent_mail()[0].code.clone();
+    let state = start_auth0_login(&app, workspace_id, invite_token).await;
     let verify = app
         .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=portal-code&state={state}"
         ))
-        .form(&[("token", invite_token), ("code", code.as_str())])
         .await;
     verify.assert_status(StatusCode::SEE_OTHER);
     assert_eq!(verify.header("location"), "/auditor-access/portal");
@@ -1542,7 +1407,7 @@ async fn browser_policy_catalog_details_and_control_sections_are_read_only_and_s
     let standalone_control_id = app.control_id("workspace", "PP-STANDALONE");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
 
     let alpha_policy_id = create_policy(
         &app,
@@ -1758,7 +1623,7 @@ async fn browser_policy_pages_render_empty_and_conceal_unavailable_resources() {
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
 
     let catalog = app
         .server()
@@ -1802,7 +1667,7 @@ async fn browser_unavailable_states_do_not_leak_workspace_data() {
     let workspace_id = app.workspace_id("workspace");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
 
     let invalid_invite = app
         .server()
@@ -1854,7 +1719,7 @@ async fn browser_portal_escapes_untrusted_content() {
     let control_id = app.control_id("workspace", "PP-AC-01");
     let grant = create_grant(&app, workspace_id).await;
     let invite_token = grant.raw_secret.expose_secret();
-    let raw_session = verified_browser_session_cookie(&app, workspace_id, invite_token).await;
+    let raw_session = verified_session_cookie(&app, workspace_id, invite_token).await;
 
     let request = app
         .create_evidence(
@@ -1899,48 +1764,12 @@ async fn browser_portal_escapes_untrusted_content() {
 }
 
 async fn verified_session_cookie(app: &TestApp, workspace_id: Uuid, invite_token: &str) -> String {
-    app.server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/request"))
-        .json(&serde_json::json!({ "token": invite_token }))
-        .await
-        .assert_status_ok();
-    let code = app.sent_mail().last().expect("OTP sent").code.clone();
+    let state = start_auth0_login(app, workspace_id, invite_token).await;
     let response = app
         .server()
-        .post(&format!("/auditor-access/{workspace_id}/otp/verify"))
-        .json(&serde_json::json!({ "token": invite_token, "code": code }))
-        .await;
-    response.assert_status_ok();
-    cookie_value(
-        response
-            .headers()
-            .get(SET_COOKIE)
-            .expect("cookie set")
-            .to_str()
-            .expect("cookie is ASCII"),
-    )
-    .to_owned()
-}
-
-async fn verified_browser_session_cookie(
-    app: &TestApp,
-    workspace_id: Uuid,
-    invite_token: &str,
-) -> String {
-    app.server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
+        .get(&format!(
+            "/auditor-access/auth0/callback?code=verified-helper-code&state={state}"
         ))
-        .form(&[("token", invite_token)])
-        .await
-        .assert_status_ok();
-    let code = app.sent_mail().last().expect("OTP sent").code.clone();
-    let response = app
-        .server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token), ("code", code.as_str())])
         .await;
     response.assert_status(StatusCode::SEE_OTHER);
     cookie_value(
@@ -1952,6 +1781,46 @@ async fn verified_browser_session_cookie(
             .expect("cookie is ASCII"),
     )
     .to_owned()
+}
+
+async fn start_auth0_login(app: &TestApp, workspace_id: Uuid, invite_token: &str) -> String {
+    let response = app
+        .server()
+        .post(&format!("/auditor-access/{workspace_id}/login"))
+        .form(&[("token", invite_token)])
+        .await;
+    response.assert_status(StatusCode::SEE_OTHER);
+    let authorization_url = url::Url::parse(
+        response
+            .headers()
+            .get(LOCATION)
+            .expect("authorization location")
+            .to_str()
+            .expect("location is ASCII"),
+    )
+    .expect("authorization URL parses");
+    authorization_url
+        .query_pairs()
+        .find_map(|(name, value)| (name == "state").then(|| value.into_owned()))
+        .expect("authorization state")
+}
+
+async fn table_count(app: &TestApp, table: &str) -> i64 {
+    assert!(
+        matches!(table, "users" | "auditor_sessions"),
+        "table is allowlisted"
+    );
+    app.postgres()
+        .get()
+        .await
+        .expect("count connection opens")
+        .query_one(
+            &format!("SELECT count(*)::bigint AS count FROM {table}"),
+            &[],
+        )
+        .await
+        .expect("table count reads")
+        .get("count")
 }
 
 async fn auditor_app() -> TestApp {

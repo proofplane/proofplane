@@ -81,7 +81,7 @@ async fn run() -> Result<(), Error> {
         object_store,
         metrics,
         user_authenticator,
-        mail_adapter: None,
+        auditor_identity_provider: None,
     };
 
     let app = create_app(deps)?;

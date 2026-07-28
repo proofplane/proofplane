@@ -25,7 +25,11 @@ use proofplane::services::{
 use proofplane::{
     app::{create_app, AppDependencies},
     authentication::{
-        auth0::{TokenVerifier, VerifiedClaims, VerifiedMcpClaims, VerifyError},
+        auth0::{
+            AuditorIdentityExchange, AuditorIdentityProvider, AuditorIdentityProviderError,
+            SharedAuditorIdentityProvider, TokenVerifier, VerifiedAuditorIdentity, VerifiedClaims,
+            VerifiedMcpClaims, VerifyError,
+        },
         paseto::{
             DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
             PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
@@ -34,18 +38,16 @@ use proofplane::{
     },
     config::{
         AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-        LogFormat, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
-        ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-        PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
-        PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
-        WorkerConfig,
+        LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
+        PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+        PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+        ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
     },
     domain::{
         AgentAuthorizationTransactionId, AgentConnectionId, CoverageWindow, CreateEvidencePayload,
         CreateWorkspacePayload, EvidenceStatus, NewPendingAgentConnection, ProvisionUserPayload,
         UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions, WorkspaceRole,
     },
-    mailer::CapturingMailAdapter,
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     repository::{NewWorkspaceMembership, Postgres},
     routes::authentication::AUTHORIZATION_HEADER,
@@ -289,7 +291,59 @@ pub struct TestApp {
     home_workspace_id: Uuid,
     workspace_ids: HashMap<String, Uuid>,
     control_ids: HashMap<String, HashMap<String, Uuid>>,
-    mailer: Arc<CapturingMailAdapter>,
+    auditor_identity_provider: Arc<FakeAuditorIdentityProvider>,
+}
+
+#[derive(Clone)]
+enum FakeAuditorIdentityOutcome {
+    Verified(VerifiedAuditorIdentity),
+    Rejected,
+    Unavailable,
+}
+
+pub struct FakeAuditorIdentityProvider {
+    outcome: StdMutex<FakeAuditorIdentityOutcome>,
+    exchanges: StdMutex<Vec<AuditorIdentityExchange>>,
+}
+
+impl Default for FakeAuditorIdentityProvider {
+    fn default() -> Self {
+        Self {
+            outcome: StdMutex::new(FakeAuditorIdentityOutcome::Verified(
+                VerifiedAuditorIdentity {
+                    subject: "email|auditor".to_owned(),
+                    email: "auditor@example.com".to_owned(),
+                    email_verified: true,
+                },
+            )),
+            exchanges: StdMutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl AuditorIdentityProvider for FakeAuditorIdentityProvider {
+    async fn exchange_and_verify(
+        &self,
+        exchange: AuditorIdentityExchange,
+    ) -> Result<VerifiedAuditorIdentity, AuditorIdentityProviderError> {
+        self.exchanges
+            .lock()
+            .expect("fake auditor exchange lock")
+            .push(exchange);
+        match self
+            .outcome
+            .lock()
+            .expect("fake auditor outcome lock")
+            .clone()
+        {
+            FakeAuditorIdentityOutcome::Verified(identity) => Ok(identity),
+            FakeAuditorIdentityOutcome::Rejected => Err(AuditorIdentityProviderError::Rejected),
+            FakeAuditorIdentityOutcome::Unavailable => {
+                Err(AuditorIdentityProviderError::Unavailable)
+            }
+        }
+    }
 }
 
 impl TestApp {
@@ -356,7 +410,7 @@ impl TestApp {
         let recorder = PrometheusBuilder::new().build_recorder();
         let user_authenticator =
             UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone());
-        let mailer = Arc::new(CapturingMailAdapter::default());
+        let auditor_identity_provider = Arc::new(FakeAuditorIdentityProvider::default());
 
         let dependencies = AppDependencies {
             config: app_config.clone(),
@@ -364,7 +418,9 @@ impl TestApp {
             object_store: object_store.clone(),
             metrics: recorder.handle(),
             user_authenticator,
-            mail_adapter: Some(mailer.clone()),
+            auditor_identity_provider: Some(
+                auditor_identity_provider.clone() as SharedAuditorIdentityProvider
+            ),
         };
 
         let mut server = TestServer::new(create_app(dependencies).expect("app builds"));
@@ -411,7 +467,7 @@ impl TestApp {
             home_workspace_id,
             workspace_ids,
             control_ids,
-            mailer,
+            auditor_identity_provider,
         }
     }
 
@@ -628,12 +684,36 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
         format!("Bearer {}", self.api_token)
     }
 
-    pub fn sent_mail(&self) -> Vec<proofplane::mailer::CapturedOtp> {
-        self.mailer.sent()
+    pub fn set_auditor_identity(&self, identity: VerifiedAuditorIdentity) {
+        *self
+            .auditor_identity_provider
+            .outcome
+            .lock()
+            .expect("fake auditor outcome lock") = FakeAuditorIdentityOutcome::Verified(identity);
     }
 
-    pub fn set_mail_delivery_failure(&self, fail: bool) {
-        self.mailer.set_delivery_failure(fail);
+    pub fn set_auditor_identity_rejected(&self) {
+        *self
+            .auditor_identity_provider
+            .outcome
+            .lock()
+            .expect("fake auditor outcome lock") = FakeAuditorIdentityOutcome::Rejected;
+    }
+
+    pub fn set_auditor_identity_unavailable(&self) {
+        *self
+            .auditor_identity_provider
+            .outcome
+            .lock()
+            .expect("fake auditor outcome lock") = FakeAuditorIdentityOutcome::Unavailable;
+    }
+
+    pub fn auditor_identity_exchanges(&self) -> Vec<AuditorIdentityExchange> {
+        self.auditor_identity_provider
+            .exchanges
+            .lock()
+            .expect("fake auditor exchange lock")
+            .clone()
     }
 
     fn mcp_app(&self) -> Router {
@@ -1207,9 +1287,6 @@ fn config(
             scan_timeout_ms: 30000,
         },
         uploads: UploadsConfig { max_document_bytes },
-        mail: MailConfig {
-            adapter: MailAdapterConfig::Disabled,
-        },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,
             default_filter: "info".to_owned(),

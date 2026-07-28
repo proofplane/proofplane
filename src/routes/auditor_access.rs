@@ -28,7 +28,8 @@ use crate::{
     services::{
         auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
-        auditor_auth_transactions::AuditorAuthTransactionService,
+        auditor_auth_transactions::{AuditorAuthTransactionError, AuditorAuthTransactionService},
+        auditor_authentication::{AuditorAuthenticationError, AuditorAuthenticationService},
         auditor_portal::AuditorPortalReadModelService,
         document_downloads::{DocumentDownloadService, DownloadError},
     },
@@ -42,6 +43,7 @@ const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 pub struct AuditorAccessState {
     pub grants: AuditorAccessGrantService,
     pub auth_transactions: AuditorAuthTransactionService,
+    pub authentication: AuditorAuthenticationService,
     pub sessions: AuditorAccessSessionService,
     pub portal: AuditorPortalReadModelService,
     pub downloads: DocumentDownloadService,
@@ -54,33 +56,15 @@ struct InvitePayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct VerifyPayload {
-    token: String,
-    code: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct InviteQuery {
     token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct BrowserInviteForm {
-    token: String,
-    #[serde(default)]
-    resend: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct BrowserVerifyForm {
-    token: String,
-    code: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BrowserResendState {
-    Available,
-    Sent,
+struct Auth0CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,22 +98,8 @@ pub fn router(state: AuditorAccessState) -> Router {
             get(download_document),
         )
         .route("/auditor-access/{workspace_id}", get(open_invite))
-        .route(
-            "/auditor-access/{workspace_id}/otp/request",
-            post(request_otp),
-        )
-        .route(
-            "/auditor-access/{workspace_id}/otp/verify",
-            post(verify_otp),
-        )
-        .route(
-            "/auditor-access/{workspace_id}/otp/request/browser",
-            post(request_otp_browser),
-        )
-        .route(
-            "/auditor-access/{workspace_id}/otp/verify/browser",
-            post(verify_otp_browser),
-        )
+        .route("/auditor-access/{workspace_id}/login", post(start_login))
+        .route("/auditor-access/auth0/callback", get(auth0_callback))
         .route("/auditor-access/logout", post(logout))
         .with_state(state)
 }
@@ -163,201 +133,117 @@ async fn open_invite(
     .into_response())
 }
 
-async fn request_otp(
+async fn start_login(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
     Path(workspace_id): Path<Uuid>,
-    Json(payload): Json<InvitePayload>,
-) -> Result<Json<StatusResponse>, ApiError> {
-    let grant = state
-        .grants
-        .load_for_use(workspace_id.into(), &payload.token)
-        .await
-        .map_err(grant_error)?;
-    state
-        .sessions
-        .request_otp(&grant)
-        .await
-        .map_err(session_error)?;
-    audit(
-        "auditor_access_otp.requested",
-        "request_auditor_access_otp",
-        request_id.0,
-        workspace_id,
-        Uuid::from(grant.id),
-        &grant.auditor_email,
-    );
-
-    Ok(Json(StatusResponse { status: "sent" }))
-}
-
-async fn request_otp_browser(
-    State(state): State<AuditorAccessState>,
-    Extension(request_id): Extension<RequestId>,
-    Path(workspace_id): Path<Uuid>,
-    Form(payload): Form<BrowserInviteForm>,
+    Form(payload): Form<InvitePayload>,
 ) -> Result<Response, ApiError> {
     let token = payload.token.trim();
     let grant = match state.grants.load_for_use(workspace_id.into(), token).await {
         Ok(grant) => grant,
         Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
+            audit_auth_start_failed(request_id.0, "grant_unavailable", AuditOutcome::Denied);
             return Ok(unavailable_response());
         }
-        Err(error) => return Err(grant_error(error)),
+        Err(error) => {
+            audit_auth_start_failed(request_id.0, "grant_persistence", AuditOutcome::Failure);
+            return Err(grant_error(error));
+        }
+    };
+    let start = match state.auth_transactions.start(&grant).await {
+        Ok(start) => start,
+        Err(AuditorAuthTransactionError::Unavailable) => {
+            audit_auth_start_failed(request_id.0, "grant_unavailable", AuditOutcome::Denied);
+            return Ok(unavailable_response());
+        }
+        Err(error) => {
+            audit_auth_start_failed(
+                request_id.0,
+                "transaction_unavailable",
+                AuditOutcome::Failure,
+            );
+            tracing::error!(%error, "auditor authentication start failed");
+            return Err(ApiError::Internal);
+        }
     };
 
-    match state.sessions.request_otp(&grant).await {
-        Ok(()) => {
-            audit(
-                "auditor_access_otp.requested",
-                "request_auditor_access_otp",
-                request_id.0,
-                workspace_id,
-                Uuid::from(grant.id),
-                &grant.auditor_email,
-            );
-            Ok(Html(render_verify_page(
-                workspace_id,
-                token,
-                &grant.auditor_email,
-                if payload.resend {
-                    None
-                } else {
-                    Some("Code sent. Check the intended auditor inbox.")
-                },
-                if payload.resend {
-                    BrowserResendState::Sent
-                } else {
-                    BrowserResendState::Available
-                },
-            ))
-            .into_response())
-        }
-        Err(AuditorAccessSessionError::RateLimited) => Ok((
-            StatusCode::CONFLICT,
-            Html(render_verify_page(
-                workspace_id,
-                token,
-                &grant.auditor_email,
-                Some("Too many code requests. Use the latest code or wait before trying again."),
-                BrowserResendState::Available,
-            )),
-        )
-            .into_response()),
-        Err(AuditorAccessSessionError::Mail(error)) => {
-            tracing::warn!(%error, "auditor OTP mail delivery unavailable");
-            let page = if payload.resend {
-                render_verify_page(
-                    workspace_id,
-                    token,
-                    &grant.auditor_email,
-                    Some("We couldn't send a new code. Your previous code may still work."),
-                    BrowserResendState::Available,
-                )
-            } else {
-                render_invite_page(
-                    workspace_id,
-                    token,
-                    &grant.auditor_email,
-                    Some("We couldn't send the verification code. Please try again."),
-                )
-            };
-            Ok((StatusCode::SERVICE_UNAVAILABLE, Html(page)).into_response())
-        }
-        Err(error) => Err(session_error(error)),
-    }
-}
-
-async fn verify_otp(
-    State(state): State<AuditorAccessState>,
-    Extension(request_id): Extension<RequestId>,
-    Path(workspace_id): Path<Uuid>,
-    Json(payload): Json<VerifyPayload>,
-) -> Result<Response, ApiError> {
-    let grant = state
-        .grants
-        .load_for_use(workspace_id.into(), &payload.token)
-        .await
-        .map_err(grant_error)?;
-    let created = state
-        .sessions
-        .verify_otp(&grant, payload.code.trim())
-        .await
-        .map_err(session_error)?;
-    audit(
-        "auditor_access_otp.verified",
-        "verify_auditor_access_otp",
+    audit_auth_started(
         request_id.0,
         workspace_id,
         Uuid::from(grant.id),
-        &grant.auditor_email,
-    );
-    audit(
-        "auditor_access_session.created",
-        "create_auditor_access_session",
-        request_id.0,
-        workspace_id,
-        Uuid::from(created.session.id),
-        &grant.auditor_email,
+        Uuid::from(start.transaction_id),
     );
 
-    let mut response =
-        (StatusCode::OK, Json(StatusResponse { status: "verified" })).into_response();
-    response.headers_mut().insert(
-        SET_COOKIE,
-        HeaderValue::from_str(&session_cookie(&created.raw_session, state.secure_cookie))
-            .map_err(|_| ApiError::Internal)?,
-    );
+    let location =
+        HeaderValue::from_str(start.redirect_url().as_str()).map_err(|_| ApiError::Internal)?;
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(LOCATION, location);
     Ok(response)
 }
 
-async fn verify_otp_browser(
+async fn auth0_callback(
     State(state): State<AuditorAccessState>,
     Extension(request_id): Extension<RequestId>,
-    Path(workspace_id): Path<Uuid>,
-    Form(payload): Form<BrowserVerifyForm>,
+    query: Result<Query<Auth0CallbackQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
-    let token = payload.token.trim();
-    let grant = match state.grants.load_for_use(workspace_id.into(), token).await {
-        Ok(grant) => grant,
-        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
-            return Ok(unavailable_response());
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => {
+            audit_auth_failed(request_id.0, "invalid_callback");
+            return Ok(authentication_rejected_response());
         }
-        Err(error) => return Err(grant_error(error)),
     };
-    let created = match state.sessions.verify_otp(&grant, payload.code.trim()).await {
-        Ok(created) => created,
-        Err(AuditorAccessSessionError::Unavailable) => {
-            return Ok((
-                StatusCode::NOT_FOUND,
-                Html(render_verify_page(
-                    workspace_id,
-                    token,
-                    &grant.auditor_email,
-                    Some("That code could not be verified. Request a new code if it expired."),
-                    BrowserResendState::Available,
-                )),
-            )
-                .into_response());
+    if query.error.is_some() {
+        if let Some(callback_state) = query.state.as_deref() {
+            let _ = state.auth_transactions.claim(callback_state).await;
         }
-        Err(error) => return Err(session_error(error)),
+        audit_auth_failed(request_id.0, "provider_rejected");
+        return Ok(authentication_rejected_response());
+    }
+    let Some(code) = query.code.filter(|value| !value.trim().is_empty()) else {
+        if let Some(callback_state) = query.state.as_deref() {
+            let _ = state.auth_transactions.claim(callback_state).await;
+        }
+        audit_auth_failed(request_id.0, "invalid_callback");
+        return Ok(authentication_rejected_response());
+    };
+    let Some(callback_state) = query.state.filter(|value| !value.trim().is_empty()) else {
+        audit_auth_failed(request_id.0, "invalid_callback");
+        return Ok(authentication_rejected_response());
     };
 
-    audit(
-        "auditor_access_otp.verified",
-        "verify_auditor_access_otp",
+    let completed = match state.authentication.complete(&callback_state, &code).await {
+        Ok(completed) => completed,
+        Err(AuditorAuthenticationError::Rejected) => {
+            audit_auth_failed(request_id.0, "rejected");
+            return Ok(authentication_rejected_response());
+        }
+        Err(AuditorAuthenticationError::GrantUnavailable) => {
+            audit_auth_failed(request_id.0, "grant_unavailable");
+            return Ok(unavailable_response());
+        }
+        Err(AuditorAuthenticationError::ProviderUnavailable) => {
+            audit_auth_failed(request_id.0, "provider_unavailable");
+            return Ok(authentication_unavailable_response());
+        }
+        Err(AuditorAuthenticationError::PersistenceUnavailable) => {
+            audit_auth_failed(request_id.0, "persistence_unavailable");
+            return Ok(authentication_unavailable_response());
+        }
+    };
+
+    audit_auth_completed(
         request_id.0,
-        workspace_id,
-        Uuid::from(grant.id),
-        &grant.auditor_email,
+        Uuid::from(completed.grant.workspace_id),
+        Uuid::from(completed.transaction_id),
+        &completed.identity.subject,
     );
-    audit(
-        "auditor_access_session.created",
-        "create_auditor_access_session",
+    audit_auth_session_created(
         request_id.0,
-        workspace_id,
-        Uuid::from(created.session.id),
-        &grant.auditor_email,
+        Uuid::from(completed.grant.workspace_id),
+        Uuid::from(completed.created.session.id),
+        &completed.identity.subject,
     );
 
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -366,8 +252,11 @@ async fn verify_otp_browser(
         .insert(LOCATION, HeaderValue::from_static("/auditor-access/portal"));
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&session_cookie(&created.raw_session, state.secure_cookie))
-            .map_err(|_| ApiError::Internal)?,
+        HeaderValue::from_str(&session_cookie(
+            &completed.created.raw_session,
+            state.secure_cookie,
+        ))
+        .map_err(|_| ApiError::Internal)?,
     );
     Ok(response)
 }
@@ -829,11 +718,11 @@ fn render_invite_page(
             r#"<main class="narrow">
 <p class="eyebrow">Auditor verification</p>
 <h1>Verify access for {}</h1>
-<p class="lede">Proofplane will send a single-use code to this email before opening the read-only evidence portal.</p>
+<p class="lede">Proofplane will verify this email before opening the read-only evidence portal.</p>
 {}
-<form class="panel form-panel" method="post" action="/auditor-access/{}/otp/request/browser">
+<form class="panel form-panel" method="post" action="/auditor-access/{}/login">
 <input type="hidden" name="token" value="{}">
-<button type="submit">Send verification code</button>
+<button type="submit">Continue</button>
 </form>
 </main>"#,
             escape_html(auditor_email),
@@ -841,65 +730,6 @@ fn render_invite_page(
             workspace_id,
             escape_html(token),
         ),
-    )
-}
-
-fn render_verify_page(
-    workspace_id: Uuid,
-    token: &str,
-    auditor_email: &str,
-    message: Option<&str>,
-    resend_state: BrowserResendState,
-) -> String {
-    render_shell(
-        "Enter auditor code",
-        &format!(
-            r#"<main class="narrow">
-<p class="eyebrow">Code required</p>
-<h1>Enter the code sent to {}</h1>
-<p class="lede">Codes expire after 10 minutes. A successful check creates a seven-day browser session for this portal only.</p>
-{}
-<form class="panel form-panel" method="post" action="/auditor-access/{}/otp/verify/browser">
-<input type="hidden" name="token" value="{}">
-<label for="code">Verification code</label>
-<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{{6}}" maxlength="6" required>
-<button type="submit">Open portal</button>
-</form>
-{}
-</main>"#,
-            escape_html(auditor_email),
-            notice(message),
-            workspace_id,
-            escape_html(token),
-            render_resend_action(workspace_id, token, resend_state),
-        ),
-    )
-}
-
-fn render_resend_action(workspace_id: Uuid, token: &str, state: BrowserResendState) -> String {
-    let (class_name, confirmation, button_label) = match state {
-        BrowserResendState::Available => ("resend-action", "", "Resend code"),
-        BrowserResendState::Sent => (
-            "resend-action sent",
-            r#"<span class="resend-confirmation" role="status" aria-live="polite">New code sent.</span>"#,
-            "Send again",
-        ),
-    };
-    let success_icon = match state {
-        BrowserResendState::Available => "",
-        BrowserResendState::Sent => {
-            r#"<span class="resend-success-icon" aria-hidden="true">✓</span>"#
-        }
-    };
-
-    format!(
-        r#"<div class="{}">{}<form method="post" action="/auditor-access/{}/otp/request/browser"><input type="hidden" name="token" value="{}"><input type="hidden" name="resend" value="true"><button class="link-button" type="submit">{}</button></form>{}</div>"#,
-        class_name,
-        confirmation,
-        workspace_id,
-        escape_html(token),
-        button_label,
-        success_icon,
     )
 }
 
@@ -1551,38 +1381,6 @@ p {{ color: var(--muted); line-height: 1.55; }}
   border-radius: 8px;
 }}
 .form-panel {{ display: grid; gap: 14px; margin-top: 24px; padding: 24px; }}
-.resend-action {{
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 5px;
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 0.875rem;
-}}
-.resend-action form {{ margin: 0; }}
-.resend-success-icon {{
-  color: var(--accent);
-  font-size: 1rem;
-  font-weight: 800;
-  line-height: 1;
-  animation: resend-success-icon 2500ms cubic-bezier(.25, 1, .5, 1) forwards;
-}}
-@keyframes resend-success-icon {{
-  0%, 72% {{ opacity: 1; transform: scale(1); }}
-  100% {{ opacity: 0; transform: scale(.8); }}
-}}
-.link-button {{
-  min-height: 44px;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  padding: 8px 0;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}}
-.link-button:hover {{ background: transparent; color: var(--ink); }}
 .notice {{
   border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
   background: oklch(27% 0.03 170);
@@ -1830,7 +1628,6 @@ main.portal {{ width: min(1280px, calc(100% - 48px)); padding: 28px 0 64px; }}
 
 @media (prefers-reduced-motion: reduce) {{
   *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; }}
-  .resend-success-icon {{ animation: none; }}
 }}
 </style>
 </head>
@@ -1856,6 +1653,36 @@ fn unavailable_page() -> String {
 
 fn unavailable_response() -> Response {
     (StatusCode::NOT_FOUND, Html(unavailable_page())).into_response()
+}
+
+fn authentication_rejected_response() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Html(render_shell(
+            "Auditor verification failed",
+            r#"<main class="narrow">
+<p class="eyebrow">Verification failed</p>
+<h1>We couldn&#39;t verify this access request</h1>
+<p class="lede">Return to your invitation and try again.</p>
+</main>"#,
+        )),
+    )
+        .into_response()
+}
+
+fn authentication_unavailable_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Html(render_shell(
+            "Auditor verification unavailable",
+            r#"<main class="narrow">
+<p class="eyebrow">Verification unavailable</p>
+<h1>Email verification is temporarily unavailable</h1>
+<p class="lede">Please try again from your invitation.</p>
+</main>"#,
+        )),
+    )
+        .into_response()
 }
 
 fn notice(message: Option<&str>) -> String {
@@ -1921,6 +1748,97 @@ fn audit(
     .emit();
 }
 
+fn audit_auth_started(request_id: Uuid, workspace_id: Uuid, grant_id: Uuid, transaction_id: Uuid) {
+    AuditEvent::new(
+        "auditor_access_auth.started",
+        AuditOutcome::Success,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "start_auditor_authentication",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id)
+    .metadata("transaction_id", transaction_id)
+    .object(AuditObject::new("auditor_access_grant", grant_id))
+    .emit();
+}
+
+fn audit_auth_start_failed(request_id: Uuid, category: &'static str, outcome: AuditOutcome) {
+    AuditEvent::new(
+        "auditor_access_auth.started",
+        outcome,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "start_auditor_authentication",
+    )
+    .request_id(request_id)
+    .metadata("failure_category", category)
+    .emit();
+}
+
+fn audit_auth_completed(
+    request_id: Uuid,
+    workspace_id: Uuid,
+    transaction_id: Uuid,
+    auth0_subject: &str,
+) {
+    AuditEvent::new(
+        "auditor_access_auth.completed",
+        AuditOutcome::Success,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "complete_auditor_authentication",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id)
+    .metadata("auth0_subject", auth0_subject)
+    .object(AuditObject::new("auditor_auth_transaction", transaction_id))
+    .emit();
+}
+
+fn audit_auth_session_created(
+    request_id: Uuid,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    auth0_subject: &str,
+) {
+    AuditEvent::new(
+        "auditor_access_session.created",
+        AuditOutcome::Success,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "create_auditor_access_session",
+    )
+    .workspace_id(workspace_id)
+    .request_id(request_id)
+    .metadata("auth0_subject", auth0_subject)
+    .object(AuditObject::new("auditor_access_session", session_id))
+    .emit();
+}
+
+fn audit_auth_failed(request_id: Uuid, category: &'static str) {
+    AuditEvent::new(
+        "auditor_access_auth.completed",
+        AuditOutcome::Failure,
+        AuditActor::System {
+            name: "auditor_browser",
+        },
+        AuditClientType::Rest,
+        "complete_auditor_authentication",
+    )
+    .request_id(request_id)
+    .metadata("failure_category", category)
+    .emit();
+}
+
 fn audit_portal_read(request_id: Uuid, workspace_id: Uuid, session_id: Uuid, auditor_email: &str) {
     AuditEvent::new(
         "auditor_portal.read",
@@ -1979,17 +1897,6 @@ fn grant_error(error: AuditorAccessGrantError) -> ApiError {
 fn session_error(error: AuditorAccessSessionError) -> ApiError {
     match error {
         AuditorAccessSessionError::Unavailable => ApiError::NotFound,
-        AuditorAccessSessionError::RateLimited => ApiError::Conflict {
-            code: "auditor_otp_rate_limited",
-            message: "too many OTP requests".to_owned(),
-        },
-        AuditorAccessSessionError::Mail(error) => {
-            tracing::warn!(%error, "auditor OTP mail delivery unavailable");
-            ApiError::ServiceUnavailable {
-                code: "mail_unavailable",
-                message: "verification email could not be sent; try again".to_owned(),
-            }
-        }
         AuditorAccessSessionError::Random => ApiError::Internal,
         AuditorAccessSessionError::Repository(error) => {
             tracing::error!(%error, "auditor access session repository failure");

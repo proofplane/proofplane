@@ -195,18 +195,15 @@ whether state, code, email, grant, or token validation caused the rejection.
 
 Keep the existing random, digest-only auditor session cookie, seven-day
 lifetime, grant revocation checks, last-used tracking, and portal authorization.
-Add the Auth0 subject to newly authenticated sessions:
+Every auditor session records the Auth0 subject:
 
 ```sql
-ALTER TABLE auditor_sessions
-    ADD COLUMN auth0_subject TEXT
-    CHECK (auth0_subject IS NULL OR btrim(auth0_subject) <> '');
+auth0_subject TEXT NOT NULL
+    CHECK (btrim(auth0_subject) <> '')
 ```
 
-The nullable migration preserves sessions issued by the old OTP flow during
-their remaining lifetime. New session creation requires a non-blank Auth0
-subject. After the maximum legacy session lifetime has elapsed, a later cleanup
-may make the column required if useful.
+The baseline schema requires a nonblank subject. There is no nullable legacy
+session state because the local database is reset for this cutover.
 
 Explicit logout revokes the Proofplane auditor session as it does today. Do not
 invoke tenant-wide Auth0 logout because that could disrupt a management-plane
@@ -220,21 +217,20 @@ Preserve:
 - the invitation URL and high-entropy invitation-token format;
 - the read-only portal paths and authorization behavior;
 - the auditor session cookie name, attributes, and seven-day lifetime;
-- grant expiry, revocation, review-period scope, and audit provenance; and
-- active legacy auditor sessions during rollout.
+- grant expiry, revocation, review-period scope, and audit provenance.
 
 Replace:
 
-- `POST /auditor-access/{workspace_id}/otp/request/browser` with the login start;
-- `POST /auditor-access/{workspace_id}/otp/verify/browser` with the Auth0
-  callback; and
+- the invitation page's browser action with
+  `POST /auditor-access/{workspace_id}/login`;
+- the primary browser verification completion with the Auth0 callback; and
 - Proofplane-rendered code and resend screens with branded Auth0 Universal
   Login.
 
-Remove the JSON OTP request and verification endpoints. There is no non-browser
-compatibility shim because accepting a Proofplane-verified OTP would preserve
-the authentication path this epic is removing. This is an intentional contract
-change and must be called out in release notes.
+The old JSON and browser OTP endpoints are removed in the cutover and return
+the normal not-found response. There is no compatibility shim because accepting
+a Proofplane-verified OTP would preserve the authentication path this epic is
+removing.
 
 ## Failure And Observability Contract
 
@@ -262,22 +258,11 @@ not replace Proofplane's grant and session audit events.
 
 ## Migration And Cutover
 
-Use additive migrations because `V001` may already be applied:
-
-1. Add `auditor_auth_transactions` and nullable `auditor_sessions.auth0_subject`
-   while leaving the OTP schema and routes operational.
-2. Configure and validate the Auth0 auditor application in each environment.
-3. Deploy the Auth0 start and callback flow and switch the invitation page.
-4. Confirm all API instances use the new flow.
-5. After at least ten minutes, remove the obsolete OTP routes, services,
-   repository methods, table, mail adapter, Resend configuration, and tests in
-   a separate cleanup change.
-
-In-flight OTPs may be invalidated at the UI cutover and can be restarted from
-their still-valid invitation. Existing local auditor sessions remain valid and
-revocable. Rollback before cleanup can restore the old UI; rollback after the
-OTP schema is removed requires redeploying the Auth0 flow rather than reviving
-custom OTP verification.
+Reset the local database and run the revised baseline plus the authentication
+transaction migration. The baseline requires `auditor_sessions.auth0_subject`
+and contains no OTP table. Configure the Auth0 application before exercising
+auditor invitations. Rollback means reverting the code and resetting the local
+database again; there is no custom-OTP compatibility boundary.
 
 ## Test Contract
 
@@ -296,12 +281,22 @@ custom OTP verification.
   digest-only session and cookie.
 - Prove auditors are never provisioned into `users`.
 - Preserve portal authorization, review-period filtering, grant revocation,
-  logout, active legacy sessions, and audit-log secret exclusion.
+  logout, and audit-log secret exclusion.
 - Use a fake auditor identity-provider adapter in integration tests; production
   tests must not depend on a live Auth0 tenant.
 
 ## Revisions
 
+- 2026-07-27: Folded custom OTP retirement into the hosted-login cutover because
+  the local database is resettable and no auditor sessions require
+  compatibility. The baseline now requires nonblank Auth0 subjects and omits
+  the OTP table; OTP routes, services, repository behavior, mail delivery, and
+  Resend configuration are removed.
+- 2026-07-27: Implemented the hosted-login cutover with the production code
+  exchange, one-use callback orchestration, exact normalized email binding,
+  required Auth0 subjects on local sessions, coarse rejected/unavailable browser
+  outcomes, secret-free lifecycle audits, and fake-provider integration
+  coverage.
 - 2026-07-27: Implemented grant-bound authentication transactions with
   digest-only state and nonce persistence, atomic one-use claims,
   opportunistic same-grant cleanup, and exact Auth0 authorization URL
