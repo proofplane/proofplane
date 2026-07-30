@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     agent_connections::AgentConnectionContext,
-    documents::{delete_staged_document, stage_document},
+    documents::{delete_staged_document, stage_evidence_document},
 };
 use bytes::Bytes;
 use futures_core::Stream;
@@ -34,8 +34,16 @@ impl Clone for EvidenceSubmissionService {
     }
 }
 
+pub struct StageEvidenceDocumentInput<S> {
+    pub evidence_submission_id: EvidenceSubmissionId,
+    pub filename: String,
+    pub content_type: String,
+    pub max_bytes: usize,
+    pub chunks: S,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadEvidenceDocumentPayload {
+pub struct StagedEvidenceDocument {
     pub evidence_submission_id: EvidenceSubmissionId,
     pub filename: String,
     pub content_type: String,
@@ -110,29 +118,26 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn upload_document<S>(
+    pub async fn stage_document<S>(
         &self,
         connection: &AgentConnectionContext,
-        submission_id: EvidenceSubmissionId,
-        filename: String,
-        content_type: String,
-        chunks: S,
-    ) -> Result<UploadEvidenceDocumentPayload, Error>
+        input: StageEvidenceDocumentInput<S>,
+    ) -> Result<StagedEvidenceDocument, Error>
     where
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
-        let staged = stage_document(
+        let staged = stage_evidence_document(
             &self.object_store,
             connection.workspace_id,
-            DocumentOwner::EvidenceSubmission(submission_id),
-            Uuid::new_v4(),
-            filename,
-            content_type,
-            chunks,
+            input.evidence_submission_id,
+            input.filename,
+            input.content_type,
+            input.max_bytes,
+            input.chunks,
         )
         .await?;
-        Ok(UploadEvidenceDocumentPayload {
-            evidence_submission_id: submission_id,
+        Ok(StagedEvidenceDocument {
+            evidence_submission_id: input.evidence_submission_id,
             filename: staged.filename,
             content_type: staged.content_type,
             content_length: staged.content_length,
@@ -153,7 +158,7 @@ impl EvidenceSubmissionService {
         submission_id: EvidenceSubmissionId,
         evidence_id: EvidenceId,
         coverage: CoverageWindow,
-        payload: UploadEvidenceDocumentPayload,
+        payload: StagedEvidenceDocument,
     ) -> Result<Option<Document>, Error> {
         let object_key = payload.object_key.clone();
         let submission_payload = CreateEvidenceSubmissionPayload {

@@ -12,7 +12,7 @@ Full rationale, contracts, schema, and decisions live in
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Transport-Neutral Evidence Ingestion](./tickets/001-transport-neutral-evidence-ingestion.md) | Todo | Extract reusable streaming ingestion without changing browser uploads. |
+| 001. [Transport-Neutral Evidence Ingestion](./tickets/001-transport-neutral-evidence-ingestion.md) | Done | Extract reusable streaming ingestion without changing browser uploads. |
 | 002. [Machine Upload Grants](./tickets/002-machine-upload-grants.md) | Todo | Persist and issue one-file, agent-attributed upload authority. |
 | 003. [Machine Streaming Endpoint](./tickets/003-machine-streaming-endpoint.md) | Todo | Accept raw HTTP streams and create pending submissions. |
 | 004. [Idempotent Upload Completion](./tickets/004-idempotent-upload-completion.md) | Todo | Make retries, races, rollback, and cleanup deterministic. |

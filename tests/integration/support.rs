@@ -99,17 +99,19 @@ pub async fn submit_evidence_file(
     )
     .expect("coverage window is valid");
     let bytes = Bytes::copy_from_slice(content);
-    let mut payload = service
-        .upload_document(
+    let payload = service
+        .stage_document(
             &connection,
-            submission_id.into(),
-            filename.to_owned(),
-            "text/plain".to_owned(),
-            stream::once(async move { Ok(bytes) }),
+            proofplane::services::evidence_submissions::StageEvidenceDocumentInput {
+                evidence_submission_id: submission_id.into(),
+                filename: filename.to_owned(),
+                content_type: "text/plain".to_owned(),
+                max_bytes: app.app_config.uploads.max_document_bytes,
+                chunks: stream::once(async move { Ok(bytes) }),
+            },
         )
         .await
         .expect("document object uploads");
-    payload.checksum_crc32c = crc32c_base64(content);
     let document = service
         .create_submission(
             &connection,
@@ -840,6 +842,11 @@ impl TestAppBuilder {
 
     pub fn with_clamav(mut self) -> Self {
         self.clamav = true;
+        self
+    }
+
+    pub fn with_max_document_bytes(mut self, max_document_bytes: usize) -> Self {
+        self.max_document_bytes = max_document_bytes;
         self
     }
 
