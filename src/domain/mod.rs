@@ -50,7 +50,8 @@ pub use evidence::{
     CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
 };
 pub use evidence_submission::{
-    CoverageWindow, CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
+    AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrantId, CoverageWindow,
+    CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
 };
 pub use oauth::{

@@ -17,6 +17,9 @@ use futures_util::stream;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::services::{
     agent_connections::{digest_secret, AgentConnectionContext},
+    agent_evidence_upload_grants::{
+        AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+    },
     document_downloads::DocumentDownloadService,
     document_upload_grants::DocumentUploadGrantService,
     evidence::EvidenceService,
@@ -31,6 +34,7 @@ use proofplane::{
             VerifiedMcpClaims, VerifyError,
         },
         paseto::{
+            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
             PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
         },
@@ -578,6 +582,25 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
                 &self.app_config.paseto.upload_grant,
             )
             .expect("upload grant decryptor initializes"),
+        )
+    }
+
+    pub fn agent_evidence_upload_grant_service(&self) -> AgentEvidenceUploadGrantService {
+        let issuer = self.app_config.server.public_api_base_url.clone();
+        AgentEvidenceUploadGrantService::new(
+            self.postgres.clone(),
+            AgentEvidenceUploadGrantEncryptor::from_config(
+                issuer.clone(),
+                AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent evidence upload grant encryptor initializes"),
+            AgentEvidenceUploadGrantDecryptor::from_config(
+                issuer,
+                AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent evidence upload grant decryptor initializes"),
         )
     }
 

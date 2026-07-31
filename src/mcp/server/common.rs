@@ -219,6 +219,18 @@ impl From<DomainError> for FieldIssue {
                 field: "filename",
                 message: "document filename must not be . or ..".to_owned(),
             },
+            DomainError::InvalidDocumentContentType => Self {
+                field: "content_type",
+                message: "content_type must be a valid HTTP media type".to_owned(),
+            },
+            DomainError::DocumentContentLengthTooLarge { maximum } => Self {
+                field: "content_length",
+                message: format!("content_length must be at most {maximum} bytes"),
+            },
+            DomainError::InvalidDocumentSha256Checksum => Self {
+                field: "checksum_sha256",
+                message: "checksum_sha256 must be 64 lowercase hexadecimal characters".to_owned(),
+            },
         }
     }
 }

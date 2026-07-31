@@ -101,10 +101,11 @@ non-empty, syntactically valid media type that can also be represented in an
 HTTP `Content-Type` header. When supplied, `checksum_sha256` is exactly 64
 lowercase hexadecimal characters.
 
-The tool requires `write_evidence_submissions`. Missing, archived,
-cross-workspace, or otherwise unavailable evidence uses the same concealed
-not-found result as existing submission-write tools. Preparation persists the
-grant before returning:
+The tool requires `write_evidence_submissions`. Missing or cross-workspace
+evidence uses the same concealed not-found result as existing submission-write
+tools. Evidence does not have an archived state; active, paused, and retired
+evidence remain eligible, matching existing submission behavior. Preparation
+persists the grant before returning:
 
 ```json
 {
@@ -279,7 +280,8 @@ outbox creation, object cleanup, and the scanner handoff.
 End-to-end coverage includes:
 
 - successful preparation, transfer, polling, scan, and finalization;
-- missing permission and missing, archived, or cross-workspace evidence;
+- missing permission and missing or cross-workspace evidence, plus unchanged
+  eligibility for active, paused, and retired evidence;
 - invalid, expired, mismatched, and replayed credentials;
 - missing or mismatched headers, body limit, actual-length mismatch, and
   checksum mismatch;
@@ -302,6 +304,10 @@ Runtime code added or refactored by this epic must not use `.expect(...)`.
 
 ## Revisions
 
+- 2026-07-31: Reconciled evidence eligibility with the shipped domain model.
+  Evidence has active, paused, and retired states rather than an archived state,
+  and machine grant issuance preserves the existing all-status submission
+  behavior.
 - 2026-07-29: Initial spec created from the agent-native evidence upload
   handoff. Chose a Proofplane streaming endpoint and a distinct one-file
   machine grant while preserving the human browser flow.
