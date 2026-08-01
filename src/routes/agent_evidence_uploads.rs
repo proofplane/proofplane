@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::{
     domain::{AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId},
     object_storage::StorageError,
+    observability::agent_evidence_uploads::{record_attempt, AgentEvidenceUploadAttemptResult},
     routes::{error::ApiError, request_context::RequestId},
     services::{
         agent_evidence_upload_grants::AgentEvidenceUploadGrantError,
@@ -52,17 +53,17 @@ async fn upload(
 ) -> Result<Response, ApiError> {
     let upload_id = Uuid::parse_str(&raw_upload_id)
         .map(AgentEvidenceUploadGrantId::from)
-        .map_err(|_| unavailable())?;
-    let credential = upload_credential(&headers).ok_or_else(unavailable)?;
+        .map_err(|_| unavailable_attempt())?;
+    let credential = upload_credential(&headers).ok_or_else(unavailable_attempt)?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| validation_error("content-type header is required"))?;
+        .ok_or_else(|| validation_attempt("content-type header is required"))?;
     let content_length = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| validation_error("valid content-length header is required"))?;
+        .ok_or_else(|| validation_attempt("valid content-length header is required"))?;
     let chunks = body.into_data_stream().map(|chunk| {
         chunk.map_err(|_| StorageError::StreamRead {
             message: "request body stream failed".to_owned(),
@@ -147,4 +148,14 @@ fn validation_error(message: &'static str) -> ApiError {
 
 fn unavailable() -> ApiError {
     ApiError::NotFound
+}
+
+fn unavailable_attempt() -> ApiError {
+    record_attempt(AgentEvidenceUploadAttemptResult::Unavailable);
+    unavailable()
+}
+
+fn validation_attempt(message: &'static str) -> ApiError {
+    record_attempt(AgentEvidenceUploadAttemptResult::ValidationRejected);
+    validation_error(message)
 }

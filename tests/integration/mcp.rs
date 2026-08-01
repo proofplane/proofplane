@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum_test::multipart::{MultipartForm, Part};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{Duration, Utc};
 use proofplane::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
@@ -9,10 +10,12 @@ use proofplane::{
         WorkspaceId, WorkspacePermission,
     },
     mcp::SESSION_ID_HEADER,
+    repository::OutboxMessage,
     routes::{
         protected_resource_metadata::PROTECTED_RESOURCE_METADATA_ENDPOINT,
         request_context::REQUEST_ID_HEADER,
     },
+    worker::{DOCUMENT_FINALIZATION_REQUESTED, DOCUMENT_SCAN_REQUESTED},
 };
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo, JsonObject, ReadResourceRequestParams},
@@ -594,11 +597,11 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         ),
         (
             "manage_evidence_submissions",
-            "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Use this when a human will upload in a browser: create a short-lived bearer-secret URL for one or more evidence files in a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "prepare_evidence_submission_upload",
-            "Prepare a short-lived bearer-secret HTTP PUT descriptor for a trusted runtime to transfer one evidence file without sending file bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "manage_policy_document",
@@ -1577,9 +1580,10 @@ async fn mcp_manage_evidence_submissions_validates_and_conceals_denied_access() 
 }
 
 #[tokio::test]
-async fn mcp_prepares_machine_upload_then_transfers_and_polls_pending_submission() {
+async fn mcp_machine_upload_runs_from_preparation_through_scan_and_finalization() {
     let app = TestApp::builder()
         .without_default_auth()
+        .with_clamav()
         .with_max_document_bytes(1024)
         .workspace("workspace", "MCP machine upload workspace")
         .with_default_membership()
@@ -1592,21 +1596,31 @@ async fn mcp_prepares_machine_upload_then_transfers_and_polls_pending_submission
     let evidence_id = uuid_from(&evidence["id"]);
     let content = b"agent-native evidence";
     let mcp_server = app.mcp_http_server();
-    let mcp_client = McpClient::connect(&mcp_server, app.api_token()).await;
-
-    let prepared = mcp_client
-        .call_tool(
-            "prepare_evidence_submission_upload",
-            json!({
-                "evidence_id": evidence_id,
-                "valid_from": "2026-01-01T00:00:00Z",
-                "valid_until": "2026-03-31T23:59:59Z",
-                "filename": "access-review.pdf",
-                "content_type": "application/pdf",
-                "content_length": content.len(),
-            }),
-        )
-        .await;
+    let token = app.api_token().to_owned();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+    let (prepared, issuance_logs) = capture_audit_logs(|request_id| {
+        let mcp_server = &mcp_server;
+        let token = token.clone();
+        async move {
+            McpClient::connect_with_request_id(mcp_server, &token, request_id)
+                .await
+                .call_tool(
+                    "prepare_evidence_submission_upload",
+                    json!({
+                        "evidence_id": evidence_id,
+                        "valid_from": "2026-01-01T00:00:00Z",
+                        "valid_until": "2026-03-31T23:59:59Z",
+                        "filename": "access-review.pdf",
+                        "content_type": "application/pdf",
+                        "content_length": content.len(),
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
 
     assert_eq!(
         prepared
@@ -1655,6 +1669,46 @@ async fn mcp_prepares_machine_upload_then_transfers_and_polls_pending_submission
             .expect("submission ID is a string"),
     )
     .expect("submission ID is a UUID");
+    assert_eq!(issuance_logs.len(), 1);
+    assert_audit_event(
+        &issuance_logs[0],
+        ExpectedAuditEvent {
+            event_name: "agent_evidence_upload_grant.issued",
+            operation: "prepare_evidence_submission_upload",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "agent_evidence_upload_grant",
+            object_id: upload_id,
+        },
+    );
+    assert_eq!(
+        audit_metadata(&issuance_logs[0]),
+        json!({
+            "evidence_id": evidence_id.to_string(),
+            "evidence_submission_id": submission_id.to_string(),
+        })
+    );
+    let serialized_issuance = issuance_logs[0].to_string();
+    for forbidden in [
+        prepared["upload"]["authorization"]
+            .as_str()
+            .expect("authorization"),
+        "access-review.pdf",
+        "application/pdf",
+    ] {
+        assert!(!serialized_issuance.contains(forbidden));
+    }
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics
+        .contains("proofplane_agent_evidence_upload_grants_total{result=\"issued\"} 1"));
+    assert!(!rendered_metrics.contains(
+        prepared["upload"]["authorization"]
+            .as_str()
+            .expect("authorization")
+    ));
+    assert!(!rendered_metrics.contains("access-review.pdf"));
     assert_eq!(
         prepared["upload"]["url"],
         format!("https://api.proofplane.test/agent-evidence-uploads/{upload_id}")
@@ -1723,6 +1777,7 @@ WHERE id = $1
         submission_id.to_string()
     );
 
+    let mcp_client = McpClient::connect(&mcp_server, app.api_token()).await;
     let polled = mcp_client
         .call_tool(
             "get_evidence_submission",
@@ -1731,6 +1786,37 @@ WHERE id = $1
         .await;
     assert_eq!(polled["submission"]["id"], submission_id.to_string());
     assert_eq!(polled["document"]["upload_status"], "pending");
+
+    let document_id = uuid_from(&polled["document"]["id"]);
+    let worker = app.worker_server().await;
+    let scan_message =
+        machine_upload_outbox_message(&app, DOCUMENT_SCAN_REQUESTED, &document_id.to_string())
+            .await;
+    deliver_worker_message(&worker, &scan_message).await;
+
+    let finalizing = mcp_client
+        .call_tool(
+            "get_evidence_submission",
+            json!({ "submission_id": submission_id }),
+        )
+        .await;
+    assert_eq!(finalizing["document"]["upload_status"], "finalizing");
+
+    let finalization_message = machine_upload_outbox_message(
+        &app,
+        DOCUMENT_FINALIZATION_REQUESTED,
+        &document_id.to_string(),
+    )
+    .await;
+    deliver_worker_message(&worker, &finalization_message).await;
+
+    let uploaded = mcp_client
+        .call_tool(
+            "get_evidence_submission",
+            json!({ "submission_id": submission_id }),
+        )
+        .await;
+    assert_eq!(uploaded["document"]["upload_status"], "uploaded");
 }
 
 #[tokio::test]
@@ -1757,6 +1843,9 @@ async fn mcp_machine_upload_preparation_validates_and_conceals_unavailable_evide
     );
     let server = app.mcp_http_server();
     let mcp_client = McpClient::connect(&server, app.api_token()).await;
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
 
     let missing = mcp_client
         .call_tool_error("prepare_evidence_submission_upload", json!({}))
@@ -1866,6 +1955,12 @@ async fn mcp_machine_upload_preparation_validates_and_conceals_unavailable_evide
         .expect("machine grant count loads")
         .get::<_, i64>(0);
     assert_eq!(grant_count, 0);
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains(
+        "proofplane_agent_evidence_upload_grants_total{result=\"validation_rejected\"} 3"
+    ));
+    assert!(rendered_metrics
+        .contains("proofplane_agent_evidence_upload_grants_total{result=\"unavailable\"} 3"));
 }
 
 #[tokio::test]
@@ -5921,6 +6016,46 @@ fn requirement_codes(list: &Value) -> Vec<&str> {
         .iter()
         .map(|item| item["code"].as_str().expect("requirement code"))
         .collect()
+}
+
+async fn machine_upload_outbox_message(
+    app: &TestApp,
+    event_type: &str,
+    aggregate_id: &str,
+) -> OutboxMessage {
+    let mut messages = app
+        .postgres()
+        .list_due_outbox_messages(Utc::now() + Duration::seconds(1), 20)
+        .await
+        .expect("machine upload outbox messages list")
+        .into_iter()
+        .filter(|message| message.event_type == event_type && message.aggregate_id == aggregate_id)
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1, "expected one machine upload message");
+    messages.remove(0)
+}
+
+async fn deliver_worker_message(worker: &axum_test::TestServer, message: &OutboxMessage) {
+    let data = json!({
+        "event_type": message.event_type,
+        "aggregate_type": message.aggregate_type,
+        "aggregate_id": message.aggregate_id,
+        "request_id": message.request_id,
+        "payload": message.payload,
+    });
+    let envelope = json!({
+        "message": {
+            "messageId": format!("outbox-{}", message.id),
+            "data": STANDARD.encode(data.to_string()),
+        },
+        "deliveryAttempt": 1,
+    });
+
+    worker
+        .post("/pubsub/messages")
+        .json(&envelope)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }
 
 fn uuid_from(value: &Value) -> Uuid {

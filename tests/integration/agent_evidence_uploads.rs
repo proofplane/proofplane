@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
-use super::support::{capture_logs, TestApp};
+use super::support::{capture_audit_logs, capture_logs, TestApp};
 
 #[tokio::test]
 async fn valid_machine_stream_creates_pending_submission_and_scan_work() {
@@ -32,18 +32,28 @@ async fn valid_machine_stream_creates_pending_submission_and_scan_work() {
         )
         .await
         .expect("machine upload grant issues");
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
 
-    let response = app
-        .server()
-        .put(&format!("/agent-evidence-uploads/{}", issued.grant.id()))
-        .add_header(
-            "authorization",
-            format!("Proofplane-Upload {}", issued.credential.expose_secret()),
-        )
-        .add_header("content-type", "application/pdf")
-        .add_header("content-length", content.len().to_string())
-        .bytes(content.as_slice().into())
-        .await;
+    let (response, completion_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        let issued = &issued;
+        async move {
+            app.server()
+                .put(&format!("/agent-evidence-uploads/{}", issued.grant.id()))
+                .add_header("x-request-id", request_id.to_string())
+                .add_header(
+                    "authorization",
+                    format!("Proofplane-Upload {}", issued.credential.expose_secret()),
+                )
+                .add_header("content-type", "application/pdf")
+                .add_header("content-length", content.len().to_string())
+                .bytes(content.as_slice().into())
+                .await
+        }
+    })
+    .await;
 
     response.assert_status(StatusCode::CREATED);
     let body: Value = response.json();
@@ -56,6 +66,55 @@ async fn valid_machine_stream_creates_pending_submission_and_scan_work() {
         .as_str()
         .and_then(|value| Uuid::parse_str(value).ok())
         .expect("document ID is returned");
+    assert_eq!(completion_logs.len(), 1);
+    let audit = &completion_logs[0]["fields"];
+    assert_eq!(audit["event_name"], "agent_evidence_upload.completed");
+    assert_eq!(audit["outcome"], "success");
+    assert_eq!(audit["actor_type"], "agent_connection");
+    assert_eq!(audit["user_id"], app.user_id().to_string());
+    assert_eq!(audit["agent_connection_id"], app.api_token_id().to_string());
+    assert_eq!(audit["client_type"], "rest");
+    assert_eq!(audit["operation"], "upload_agent_evidence");
+    assert_eq!(audit["workspace_id"], workspace_id.to_string());
+    assert_eq!(audit["object_type"], "agent_evidence_upload_grant");
+    assert_eq!(audit["object_id"], issued.grant.id().to_string());
+    assert_eq!(
+        serde_json::from_str::<Value>(audit["metadata"].as_str().expect("audit metadata"))
+            .expect("audit metadata parses"),
+        json!({
+            "evidence_document_id": document_id.to_string(),
+            "evidence_id": evidence_id.to_string(),
+            "evidence_submission_id": issued.grant.submission_id().to_string(),
+            "lifecycle_status": "pending",
+        })
+    );
+    let serialized_audit = completion_logs[0].to_string();
+    let content_checksum = sha256(content);
+    for forbidden in [
+        issued.credential.expose_secret(),
+        "access-review.pdf",
+        "application/pdf",
+        &content_checksum,
+    ] {
+        assert!(!serialized_audit.contains(forbidden));
+    }
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("proofplane_agent_evidence_upload_attempts_total"));
+    assert!(rendered_metrics.contains("result=\"created\""));
+    assert!(rendered_metrics.contains("proofplane_agent_evidence_upload_received_bytes_total"));
+    assert!(rendered_metrics.contains(&format!(" {}\n", content.len())));
+    let workspace_id_string = workspace_id.to_string();
+    let evidence_id_string = evidence_id.to_string();
+    for forbidden in [
+        issued.credential.expose_secret(),
+        "access-review.pdf",
+        "application/pdf",
+        &content_checksum,
+        &workspace_id_string,
+        &evidence_id_string,
+    ] {
+        assert!(!rendered_metrics.contains(forbidden));
+    }
 
     let row = app
         .postgres()
@@ -193,7 +252,27 @@ async fn matching_retry_returns_the_original_upload_without_duplicate_work() {
         .await
         .expect("document status advances");
 
-    let replayed = upload_request(&app, &issued, content).await;
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+    let (replayed, replay_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        let issued = &issued;
+        async move {
+            app.server()
+                .put(&format!("/agent-evidence-uploads/{}", issued.grant.id()))
+                .add_header("x-request-id", request_id.to_string())
+                .add_header(
+                    "authorization",
+                    format!("Proofplane-Upload {}", issued.credential.expose_secret()),
+                )
+                .add_header("content-type", "application/pdf")
+                .add_header("content-length", content.len().to_string())
+                .bytes(content.as_slice().into())
+                .await
+        }
+    })
+    .await;
 
     replayed.assert_status(StatusCode::OK);
     let replayed_body: Value = replayed.json();
@@ -203,6 +282,10 @@ async fn matching_retry_returns_the_original_upload_without_duplicate_work() {
     );
     assert_eq!(replayed_body["document_id"], created_body["document_id"]);
     assert_eq!(replayed_body["upload_status"], "finalizing");
+    assert!(replay_logs.is_empty());
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("proofplane_agent_evidence_upload_attempts_total"));
+    assert!(rendered_metrics.contains("result=\"replayed\""));
 
     assert_single_upload_work(&app, issued.grant.id().into()).await;
     assert_eq!(files_under(app.object_storage_root()).len(), 2);
@@ -228,6 +311,9 @@ async fn concurrent_matching_uploads_converge_on_one_durable_result() {
     let barrier = Arc::new(Barrier::new(2));
     let upload_id = issued.grant.id();
     let credential = issued.credential.expose_secret().to_owned();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
 
     let upload = |request_id, barrier: Arc<Barrier>| {
         let service = service.clone();
@@ -249,10 +335,13 @@ async fn concurrent_matching_uploads_converge_on_one_durable_result() {
         }
     };
 
-    let (left, right) = tokio::join!(
-        upload(Uuid::new_v4(), barrier.clone()),
-        upload(Uuid::new_v4(), barrier),
-    );
+    let ((left, right), completion_logs) = capture_audit_logs(|request_id| async move {
+        tokio::join!(
+            upload(request_id, barrier.clone()),
+            upload(request_id, barrier),
+        )
+    })
+    .await;
     let left = left.expect("left upload resolves");
     let right = right.expect("right upload resolves");
     assert!(matches!(
@@ -267,6 +356,14 @@ async fn concurrent_matching_uploads_converge_on_one_durable_result() {
     ));
     assert_eq!(left.result().submission_id, right.result().submission_id);
     assert_eq!(left.result().document.id(), right.result().document.id());
+    assert_eq!(completion_logs.len(), 1);
+    assert_eq!(
+        completion_logs[0]["fields"]["event_name"],
+        "agent_evidence_upload.completed"
+    );
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("result=\"created\""));
+    assert!(rendered_metrics.contains("result=\"concurrency_lost\""));
 
     assert_single_upload_work(&app, issued.grant.id().into()).await;
     assert_eq!(files_under(app.object_storage_root()).len(), 2);
@@ -290,6 +387,9 @@ async fn unavailable_machine_authority_always_returns_the_concealed_response() {
         .expect("machine upload grant issues");
     let path = format!("/agent-evidence-uploads/{}", issued.grant.id());
     let token = issued.credential.expose_secret();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
 
     let missing = app
         .server()
@@ -366,6 +466,9 @@ async fn unavailable_machine_authority_always_returns_the_concealed_response() {
     }
     assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
     assert!(files_under(app.object_storage_root()).is_empty());
+    assert!(metrics
+        .render()
+        .contains("proofplane_agent_evidence_upload_attempts_total{result=\"unavailable\"} 6"));
 }
 
 #[tokio::test]
@@ -386,6 +489,28 @@ async fn metadata_mismatches_do_not_complete_the_grant_and_a_valid_retry_succeed
         .expect("machine upload grant issues");
     let path = format!("/agent-evidence-uploads/{}", issued.grant.id());
     let authorization = format!("Proofplane-Upload {}", issued.credential.expose_secret());
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let missing_type = app
+        .server()
+        .put(&path)
+        .add_header("authorization", &authorization)
+        .add_header("content-length", content.len().to_string())
+        .bytes(content.as_slice().into())
+        .await;
+    missing_type.assert_status_bad_request();
+
+    let invalid_length = app
+        .server()
+        .put(&path)
+        .add_header("authorization", &authorization)
+        .add_header("content-type", "application/pdf")
+        .add_header("content-length", "invalid")
+        .bytes(content.as_slice().into())
+        .await;
+    invalid_length.assert_status_bad_request();
 
     let wrong_type = app
         .server()
@@ -441,6 +566,16 @@ async fn metadata_mismatches_do_not_complete_the_grant_and_a_valid_retry_succeed
         .bytes(content.as_slice().into())
         .await;
     retry.assert_status(StatusCode::CREATED);
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains(
+        "proofplane_agent_evidence_upload_attempts_total{result=\"validation_rejected\"} 6"
+    ));
+    assert!(rendered_metrics
+        .contains("proofplane_agent_evidence_upload_attempts_total{result=\"created\"} 1"));
+    let expected_received_bytes = short_body.len() + content.len() + content.len();
+    assert!(rendered_metrics.contains(&format!(
+        "proofplane_agent_evidence_upload_received_bytes_total {expected_received_bytes}"
+    )));
 }
 
 #[tokio::test]
@@ -466,6 +601,9 @@ async fn configured_limit_rejects_declared_upload_without_durable_or_staged_stat
         .await
         .expect("machine upload grant issues");
 
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
     let response = upload_request(&app, &issued, content).await;
 
     response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
@@ -502,6 +640,9 @@ async fn configured_limit_rejects_declared_upload_without_durable_or_staged_stat
     streamed_oversize.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
     assert_upload_incomplete(&app, permitted_grant.grant.submission_id().into()).await;
     assert!(files_under(app.object_storage_root()).is_empty());
+    assert!(metrics.render().contains(
+        "proofplane_agent_evidence_upload_attempts_total{result=\"validation_rejected\"} 2"
+    ));
 }
 
 #[tokio::test]
@@ -542,9 +683,30 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_scan_outbox();
         .await
         .expect("failure trigger installs");
 
-    let response = upload_request(&app, &issued, content).await;
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+    let (response, failure_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        let issued = &issued;
+        async move {
+            app.server()
+                .put(&format!("/agent-evidence-uploads/{}", issued.grant.id()))
+                .add_header("x-request-id", request_id.to_string())
+                .add_header(
+                    "authorization",
+                    format!("Proofplane-Upload {}", issued.credential.expose_secret()),
+                )
+                .add_header("content-type", "application/pdf")
+                .add_header("content-length", content.len().to_string())
+                .bytes(content.as_slice().into())
+                .await
+        }
+    })
+    .await;
 
     response.assert_status_internal_server_error();
+    assert!(failure_logs.is_empty());
     assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
     assert!(files_under(app.object_storage_root()).is_empty());
 
@@ -557,6 +719,9 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_scan_outbox();
         .expect("failure trigger drops");
     let retry = upload_request(&app, &issued, content).await;
     retry.assert_status(StatusCode::CREATED);
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("result=\"database_failed\""));
+    assert!(rendered_metrics.contains("result=\"created\""));
 }
 
 #[tokio::test]
@@ -582,6 +747,9 @@ async fn interrupted_stream_leaves_the_grant_retryable_and_removes_partial_stora
             payload_too_large: false,
         }),
     ]);
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
 
     let result = app
         .agent_evidence_upload_service()
@@ -598,6 +766,7 @@ async fn interrupted_stream_leaves_the_grant_retryable_and_removes_partial_stora
     assert!(result.is_err());
     assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
     assert!(files_under(app.object_storage_root()).is_empty());
+    assert!(metrics.render().contains("result=\"stream_failed\""));
 
     let retry = upload_request(&app, &issued, content).await;
     retry.assert_status(StatusCode::CREATED);
@@ -772,11 +941,15 @@ async fn storage_failure_returns_stable_error_without_completing_the_grant() {
     fs::write(app.object_storage_root().join("objects"), b"blocked")
         .expect("object directory is blocked by a file");
 
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
     let response = upload_request(&app, &issued, content).await;
 
     response.assert_status_internal_server_error();
     assert_eq!(response.json::<Value>()["error"]["code"], "internal_error");
     assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
+    assert!(metrics.render().contains("result=\"storage_failed\""));
 }
 
 async fn upload_app() -> TestApp {

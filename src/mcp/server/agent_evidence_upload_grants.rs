@@ -6,6 +6,7 @@ use rmcp::{
 };
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{
     common::{
@@ -16,6 +17,10 @@ use super::{
 };
 use crate::{
     domain::{AgentEvidenceUploadDeclaration, CoverageWindow, EvidenceId, WorkspacePermission},
+    observability::{
+        agent_evidence_uploads::{record_grant, AgentEvidenceUploadGrantResult},
+        audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    },
     services::{
         agent_evidence_upload_grants::{
             AgentEvidenceUploadGrantError, IssuedAgentEvidenceUploadGrant,
@@ -32,7 +37,7 @@ const AUTHORIZATION_SCHEME: &str = "Proofplane-Upload";
 impl ProofplaneMcp {
     #[tool(
         name = "prepare_evidence_submission_upload",
-        description = "Prepare a short-lived bearer-secret HTTP PUT descriptor for a trusted runtime to transfer one evidence file without sending file bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn prepare_evidence_submission_upload(
         &self,
@@ -40,10 +45,22 @@ impl ProofplaneMcp {
         Parameters(args): Parameters<PrepareEvidenceSubmissionUploadRequest>,
     ) -> Result<Json<PrepareEvidenceSubmissionUploadResponse>, ErrorData> {
         let (evidence_id, coverage, declaration) =
-            parse_prepare_upload_request(args, self.max_document_bytes)?;
+            match parse_prepare_upload_request(args, self.max_document_bytes) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    record_grant(AgentEvidenceUploadGrantResult::ValidationRejected);
+                    return Err(error);
+                }
+            };
         let context =
-            authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
-        let issued = self
+            match authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions) {
+                Ok(context) => context,
+                Err(error) => {
+                    record_grant(authorization_error_result(&error));
+                    return Err(error);
+                }
+            };
+        let issued = match self
             .agent_evidence_upload_grants
             .issue(
                 &context.agent_connection_context(),
@@ -51,7 +68,38 @@ impl ProofplaneMcp {
                 coverage,
                 declaration,
             )
-            .await?;
+            .await
+        {
+            Ok(issued) => issued,
+            Err(error @ AgentEvidenceUploadGrantError::Unavailable) => {
+                record_grant(AgentEvidenceUploadGrantResult::Unavailable);
+                return Err(error.into());
+            }
+            Err(error) => {
+                record_grant(AgentEvidenceUploadGrantResult::Failed);
+                return Err(error.into());
+            }
+        };
+        record_grant(AgentEvidenceUploadGrantResult::Issued);
+        AuditEvent::new(
+            "agent_evidence_upload_grant.issued",
+            AuditOutcome::Success,
+            context.audit_actor(),
+            AuditClientType::Mcp,
+            "prepare_evidence_submission_upload",
+        )
+        .workspace_id(context.connection.workspace_id.into())
+        .request_id(context.request_id.0)
+        .metadata("evidence_id", Uuid::from(issued.grant.evidence_id()))
+        .metadata(
+            "evidence_submission_id",
+            Uuid::from(issued.grant.submission_id()),
+        )
+        .object(AuditObject::new(
+            "agent_evidence_upload_grant",
+            issued.grant.id().into(),
+        ))
+        .emit();
         let url = self
             .public_api_base_url
             .join(&format!("agent-evidence-uploads/{}", issued.grant.id()))
@@ -65,6 +113,14 @@ impl ProofplaneMcp {
             url,
             self.max_document_bytes,
         )))
+    }
+}
+
+fn authorization_error_result(error: &ErrorData) -> AgentEvidenceUploadGrantResult {
+    if error.code == rmcp::model::ErrorCode::INTERNAL_ERROR {
+        AgentEvidenceUploadGrantResult::Failed
+    } else {
+        AgentEvidenceUploadGrantResult::Unavailable
     }
 }
 
@@ -184,7 +240,10 @@ mod tests {
     use rmcp::ErrorData;
     use uuid::Uuid;
 
-    use super::{parse_prepare_upload_request, PrepareEvidenceSubmissionUploadRequest};
+    use super::{
+        authorization_error_result, parse_prepare_upload_request, AgentEvidenceUploadGrantResult,
+        PrepareEvidenceSubmissionUploadRequest,
+    };
 
     fn request() -> PrepareEvidenceSubmissionUploadRequest {
         PrepareEvidenceSubmissionUploadRequest {
@@ -275,5 +334,20 @@ mod tests {
                 "checksum_sha256",
             ]
         );
+    }
+
+    #[test]
+    fn authorization_metrics_distinguish_concealment_from_missing_context() {
+        let unavailable = ErrorData::resource_not_found("resource not found", None);
+        let internal = ErrorData::internal_error("internal error", None);
+
+        assert!(matches!(
+            authorization_error_result(&unavailable),
+            AgentEvidenceUploadGrantResult::Unavailable
+        ));
+        assert!(matches!(
+            authorization_error_result(&internal),
+            AgentEvidenceUploadGrantResult::Failed
+        ));
     }
 }

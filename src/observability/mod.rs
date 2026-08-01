@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::config::{LogFormat, ObservabilityConfig};
 
+pub(crate) mod agent_evidence_uploads;
 pub mod audit;
 
 pub const RUST_LOG: &str = "RUST_LOG";

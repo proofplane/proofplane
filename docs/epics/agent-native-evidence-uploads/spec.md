@@ -299,10 +299,16 @@ credential, URL, headers, filename, media type, checksum, object key, or bytes.
 Rejected, rolled-back, interrupted, duplicate, and losing attempts must not
 emit false success events.
 
-Metrics use only stable low-cardinality labels such as operation and coarse
-result. Required signals cover grant issuance, upload attempts, received
-bytes, validation rejection, completion, idempotent replay, concurrency loss,
-storage/database failure, and cleanup failure. IDs, raw paths, metadata,
+Metrics use the established `proofplane_` prefix and only bounded result
+labels. `proofplane_agent_evidence_upload_grants_total{result}` records
+`issued`, `validation_rejected`, `unavailable`, and `failed` preparation
+outcomes. `proofplane_agent_evidence_upload_attempts_total{result}` records
+`created`, `replayed`, `concurrency_lost`, `validation_rejected`, `unavailable`,
+`stream_failed`, `storage_failed`, and `database_failed` transfer outcomes.
+`proofplane_agent_evidence_upload_received_bytes_total` counts bytes after a
+stream is staged, including a complete stream later rejected for metadata
+mismatch. Cleanup failures remain visible through
+`proofplane_cleanup_total{operation,result}`. IDs, raw paths, metadata,
 credentials, and error strings are forbidden labels.
 
 ## Validation Strategy
@@ -334,11 +340,17 @@ Runtime code added or refactored by this epic must not use `.expect(...)`.
 - Direct-to-GCS or other provider-specific presigned uploads.
 - Generic MCP client attachment-transfer extensions.
 - Resumable or multi-part machine transfers.
-- Machine uploads for policy documents.
+- Machine uploads for policy documents are promoted to the sibling
+  [Agent-Native Policy Document Uploads epic](../agent-native-policy-document-uploads/README.md).
 - Download authority derived from a machine upload grant.
 
 ## Revisions
 
+- 2026-08-01: Promoted policy document machine uploads from deferred work to a
+  sibling epic so the shipped evidence scope remains intact while shared
+  transfer mechanics can be reused.
+- 2026-08-01: Recorded the shipped machine-upload audit fields, bounded metric
+  families, and the repository-standard `proofplane_` metric prefix.
 - 2026-07-31: Reconciled evidence eligibility with the shipped domain model.
   Evidence has active, paused, and retired states rather than an archived state,
   and machine grant issuance preserves the existing all-status submission

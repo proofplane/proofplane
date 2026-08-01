@@ -29,7 +29,7 @@ use crate::{
 impl ProofplaneMcp {
     #[tool(
         name = "manage_evidence_submissions",
-        description = "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence."
+        description = "Use this when a human will upload in a browser: create a short-lived bearer-secret URL for one or more evidence files in a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence."
     )]
     async fn manage_evidence_submissions(
         &self,

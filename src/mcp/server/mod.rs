@@ -270,11 +270,11 @@ mod tests {
             ),
             (
                 "manage_evidence_submissions",
-                "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Use this when a human will upload in a browser: create a short-lived bearer-secret URL for one or more evidence files in a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "prepare_evidence_submission_upload",
-                "Prepare a short-lived bearer-secret HTTP PUT descriptor for a trusted runtime to transfer one evidence file without sending file bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "manage_policy_document",
