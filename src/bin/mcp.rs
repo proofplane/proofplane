@@ -4,6 +4,7 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::paseto::{
+        AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
         DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
         PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
         UploadGrantEncryptor,
@@ -88,6 +89,16 @@ async fn run() -> Result<(), Error> {
         "proofplane-document-upload-grant",
         &config.paseto.upload_grant,
     )?;
+    let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        &config.paseto.upload_grant,
+    )?;
+    let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
+        config.server.public_api_base_url.clone(),
+        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        &config.paseto.upload_grant,
+    )?;
     let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
         proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -131,8 +142,11 @@ async fn run() -> Result<(), Error> {
         download_grant_decryptor,
         upload_grant_encryptor,
         upload_grant_decryptor,
+        agent_upload_grant_encryptor,
+        agent_upload_grant_decryptor,
         policy_upload_grant_encryptor,
         policy_upload_grant_decryptor,
+        max_document_bytes: config.uploads.max_document_bytes as u64,
         health: config.health.clone(),
         allowed_hosts: config.mcp.allowed_hosts.clone(),
         cancellation_token: sessions.clone(),

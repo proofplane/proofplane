@@ -16,7 +16,7 @@ Full rationale, contracts, schema, and decisions live in
 | 002. [Machine Upload Grants](./tickets/002-machine-upload-grants.md) | Done | Persist and issue one-file, agent-attributed upload authority. |
 | 003. [Machine Streaming Endpoint](./tickets/003-machine-streaming-endpoint.md) | Done | Accept raw HTTP streams and create pending submissions. |
 | 004. [Idempotent Upload Completion](./tickets/004-idempotent-upload-completion.md) | Done | Make retries, races, rollback, and cleanup deterministic. |
-| 005. [MCP Upload Preparation](./tickets/005-mcp-upload-preparation.md) | Todo | Give agents a safe transfer descriptor and polling workflow. |
+| 005. [MCP Upload Preparation](./tickets/005-mcp-upload-preparation.md) | Done | Give agents a safe transfer descriptor and polling workflow. |
 | 006. [Upload Operations And Guidance](./tickets/006-upload-operations-and-guidance.md) | Todo | Add audit events, metrics, documentation, and failure coverage. |
 
 ## Sequencing

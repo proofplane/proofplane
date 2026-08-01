@@ -23,7 +23,29 @@ pub(super) enum McpArgumentError {
     Missing { field: &'static str },
     InvalidUuid { field: &'static str },
     InvalidTimestamp { field: &'static str },
+    NegativeInteger { field: &'static str },
     DuplicateIds { field: &'static str, ids: Vec<Uuid> },
+}
+
+pub(super) fn required_arg<T>(
+    field: &'static str,
+    value: Option<T>,
+) -> Validation<T, McpArgumentError> {
+    match value {
+        Some(value) => Validation::valid(value),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
+}
+
+pub(super) fn required_non_negative_u64(
+    field: &'static str,
+    value: Option<i64>,
+) -> Validation<u64, McpArgumentError> {
+    match value {
+        Some(value) if value >= 0 => Validation::valid(value as u64),
+        Some(_) => Validation::invalid(McpArgumentError::NegativeInteger { field }),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
 }
 
 pub(super) fn authorize_token_workspace(
@@ -149,6 +171,10 @@ impl From<McpArgumentError> for FieldIssue {
             McpArgumentError::InvalidTimestamp { field } => Self {
                 field,
                 message: "must be an RFC 3339 timestamp".to_owned(),
+            },
+            McpArgumentError::NegativeInteger { field } => Self {
+                field,
+                message: "must be non-negative".to_owned(),
             },
             McpArgumentError::DuplicateIds { field, ids } => Self {
                 field,

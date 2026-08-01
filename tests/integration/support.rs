@@ -797,6 +797,18 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes");
+        let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("agent upload grant encryptor initializes");
+        let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("agent upload grant decryptor initializes");
         let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -822,8 +834,11 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             download_grant_decryptor,
             upload_grant_encryptor,
             upload_grant_decryptor,
+            agent_upload_grant_encryptor,
+            agent_upload_grant_decryptor,
             policy_upload_grant_encryptor,
             policy_upload_grant_decryptor,
+            max_document_bytes: self.app_config.uploads.max_document_bytes as u64,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),
