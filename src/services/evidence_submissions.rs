@@ -4,6 +4,7 @@ use crate::{
     domain::{
         CoverageWindow, CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document,
         DocumentId, DocumentOwner, EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
@@ -175,6 +176,22 @@ impl EvidenceSubmissionService {
             checksum_sha256: staged.checksum_sha256,
             checksum_crc32c: staged.checksum_crc32c,
         })
+    }
+
+    pub(crate) async fn get_agent_upload_document(
+        &self,
+        workspace_id: WorkspaceId,
+        submission_id: EvidenceSubmissionId,
+        document_id: DocumentId,
+    ) -> Result<Option<Document>, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context_read(workspace_id, async move |context| {
+                context
+                    .get_agent_upload_document(submission_id, document_id)
+                    .await
+            })
+            .await?)
     }
 
     pub async fn delete_uploaded_document_object(&self, object_key: &str) -> Result<(), Error> {

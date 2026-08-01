@@ -1,14 +1,19 @@
-use std::{fs, path::PathBuf};
+use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::http::StatusCode;
 use chrono::{TimeZone, Utc};
-use proofplane::domain::{AgentEvidenceUploadDeclaration, CoverageWindow};
+use futures_util::stream;
+use proofplane::{
+    domain::{AgentEvidenceUploadDeclaration, CoverageWindow},
+    services::agent_evidence_uploads::AgentEvidenceUploadOutcome,
+};
 use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::sync::Barrier;
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{capture_logs, TestApp};
 
 #[tokio::test]
 async fn valid_machine_stream_creates_pending_submission_and_scan_work() {
@@ -137,6 +142,134 @@ GROUP BY s.id, d.id, g.id
         .expect("completed grant exists");
     assert_eq!(completed.document_id().map(Uuid::from), Some(document_id));
     assert!(completed.completed_at().is_some());
+}
+
+#[tokio::test]
+async fn matching_retry_returns_the_original_upload_without_duplicate_work() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let content = b"machine-provided evidence";
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(content),
+        )
+        .await
+        .expect("machine upload grant issues");
+
+    let created = upload_request(&app, &issued, content).await;
+    created.assert_status(StatusCode::CREATED);
+    let created_body: Value = created.json();
+
+    let mismatched = app
+        .server()
+        .put(&format!("/agent-evidence-uploads/{}", issued.grant.id()))
+        .add_header(
+            "authorization",
+            format!("Proofplane-Upload {}", issued.credential.expose_secret()),
+        )
+        .add_header("content-type", "text/plain")
+        .add_header("content-length", content.len().to_string())
+        .bytes(content.as_slice().into())
+        .await;
+    mismatched.assert_status_bad_request();
+
+    let document_id = created_body["document_id"]
+        .as_str()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .expect("created document ID is valid");
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .execute(
+            "UPDATE documents SET upload_status = 'finalizing' WHERE id = $1",
+            &[&document_id],
+        )
+        .await
+        .expect("document status advances");
+
+    let replayed = upload_request(&app, &issued, content).await;
+
+    replayed.assert_status(StatusCode::OK);
+    let replayed_body: Value = replayed.json();
+    assert_eq!(
+        replayed_body["submission_id"],
+        created_body["submission_id"]
+    );
+    assert_eq!(replayed_body["document_id"], created_body["document_id"]);
+    assert_eq!(replayed_body["upload_status"], "finalizing");
+
+    assert_single_upload_work(&app, issued.grant.id().into()).await;
+    assert_eq!(files_under(app.object_storage_root()).len(), 2);
+}
+
+#[tokio::test]
+async fn concurrent_matching_uploads_converge_on_one_durable_result() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let content = b"machine-provided evidence";
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(content),
+        )
+        .await
+        .expect("machine upload grant issues");
+    let service = app.agent_evidence_upload_service();
+    let barrier = Arc::new(Barrier::new(2));
+    let upload_id = issued.grant.id();
+    let credential = issued.credential.expose_secret().to_owned();
+
+    let upload = |request_id, barrier: Arc<Barrier>| {
+        let service = service.clone();
+        let credential = credential.clone();
+        async move {
+            service
+                .upload(
+                    upload_id,
+                    &credential,
+                    "application/pdf",
+                    content.len() as u64,
+                    request_id,
+                    stream::once(async move {
+                        barrier.wait().await;
+                        Ok(bytes::Bytes::from_static(content))
+                    }),
+                )
+                .await
+        }
+    };
+
+    let (left, right) = tokio::join!(
+        upload(Uuid::new_v4(), barrier.clone()),
+        upload(Uuid::new_v4(), barrier),
+    );
+    let left = left.expect("left upload resolves");
+    let right = right.expect("right upload resolves");
+    assert!(matches!(
+        (&left, &right),
+        (
+            AgentEvidenceUploadOutcome::Created(_),
+            AgentEvidenceUploadOutcome::Replayed(_)
+        ) | (
+            AgentEvidenceUploadOutcome::Replayed(_),
+            AgentEvidenceUploadOutcome::Created(_)
+        )
+    ));
+    assert_eq!(left.result().submission_id, right.result().submission_id);
+    assert_eq!(left.result().document.id(), right.result().document.id());
+
+    assert_single_upload_work(&app, issued.grant.id().into()).await;
+    assert_eq!(files_under(app.object_storage_root()).len(), 2);
 }
 
 #[tokio::test]
@@ -414,6 +547,210 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_scan_outbox();
     response.assert_status_internal_server_error();
     assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
     assert!(files_under(app.object_storage_root()).is_empty());
+
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .batch_execute("DROP TRIGGER fail_machine_scan_outbox ON outbox_messages")
+        .await
+        .expect("failure trigger drops");
+    let retry = upload_request(&app, &issued, content).await;
+    retry.assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn interrupted_stream_leaves_the_grant_retryable_and_removes_partial_storage() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let content = b"machine-provided evidence";
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(content),
+        )
+        .await
+        .expect("machine upload grant issues");
+    let interrupted = stream::iter([
+        Ok(bytes::Bytes::from_static(b"partial")),
+        Err(proofplane::object_storage::StorageError::StreamRead {
+            message: "connection interrupted".to_owned(),
+            payload_too_large: false,
+        }),
+    ]);
+
+    let result = app
+        .agent_evidence_upload_service()
+        .upload(
+            issued.grant.id(),
+            issued.credential.expose_secret(),
+            "application/pdf",
+            content.len() as u64,
+            Uuid::new_v4(),
+            interrupted,
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
+    assert!(files_under(app.object_storage_root()).is_empty());
+
+    let retry = upload_request(&app, &issued, content).await;
+    retry.assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn interrupted_stream_cleanup_failure_preserves_primary_error_and_is_metered() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let content = b"machine-provided evidence";
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(content),
+        )
+        .await
+        .expect("machine upload grant issues");
+    let root = app.object_storage_root().to_path_buf();
+    let sabotage_root = root.clone();
+    let interrupted = stream::unfold(0, move |step| {
+        let sabotage_root = sabotage_root.clone();
+        async move {
+            match step {
+                0 => Some((Ok(bytes::Bytes::from_static(b"partial")), 1)),
+                1 => {
+                    make_partial_object_undeletable(&sabotage_root);
+                    Some((
+                        Err(proofplane::object_storage::StorageError::StreamRead {
+                            message: "connection interrupted".to_owned(),
+                            payload_too_large: false,
+                        }),
+                        2,
+                    ))
+                }
+                _ => None,
+            }
+        }
+    });
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let result = app
+        .agent_evidence_upload_service()
+        .upload(
+            issued.grant.id(),
+            issued.credential.expose_secret(),
+            "application/pdf",
+            content.len() as u64,
+            Uuid::new_v4(),
+            interrupted,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(proofplane::services::agent_evidence_uploads::AgentEvidenceUploadError::Service(
+            proofplane::services::Error::Storage(
+                proofplane::object_storage::StorageError::StreamRead { ref message, .. }
+            )
+        )) if message == "connection interrupted"
+    ));
+    assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("proofplane_cleanup_total"));
+    assert!(rendered_metrics.contains("operation=\"object_storage_partial_write\""));
+    assert!(rendered_metrics.contains("result=\"failed\""));
+}
+
+#[tokio::test]
+async fn cleanup_failure_preserves_the_primary_error_and_emits_safe_diagnostics() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id).await;
+    let content = b"machine-provided evidence";
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(content),
+        )
+        .await
+        .expect("machine upload grant issues");
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .batch_execute(
+            r#"
+CREATE FUNCTION delay_and_fail_machine_submission() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_sleep(2);
+    RAISE EXCEPTION 'injected machine submission failure';
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER delay_and_fail_machine_submission
+BEFORE INSERT ON evidence_submissions
+FOR EACH ROW EXECUTE FUNCTION delay_and_fail_machine_submission();
+"#,
+        )
+        .await
+        .expect("delayed failure trigger installs");
+    let service = app.agent_evidence_upload_service();
+    let root = app.object_storage_root().to_path_buf();
+    let credential = issued.credential.expose_secret().to_owned();
+    let upload_id = issued.grant.id();
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let ((result, sabotaged_path), logs) = capture_logs(|request_id| async move {
+        tokio::join!(
+            service.upload(
+                upload_id,
+                &credential,
+                "application/pdf",
+                content.len() as u64,
+                request_id,
+                stream::once(async { Ok(bytes::Bytes::from_static(content)) }),
+            ),
+            make_staged_object_undeletable(root),
+        )
+    })
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(proofplane::services::agent_evidence_uploads::AgentEvidenceUploadError::Repository(_))
+    ));
+    assert_upload_incomplete(&app, issued.grant.submission_id().into()).await;
+    assert!(sabotaged_path.is_dir());
+    let cleanup_log = logs
+        .iter()
+        .find(|record| {
+            record["fields"]["operation"] == "agent_evidence_upload_cleanup"
+                && record["fields"]["result"] == "failed"
+        })
+        .expect("cleanup failure is logged");
+    let serialized = cleanup_log.to_string();
+    assert!(!serialized.contains(issued.credential.expose_secret()));
+    assert!(!serialized.contains("access-review.pdf"));
+    assert!(!serialized.contains(&sha256(content)));
+    assert!(!serialized.contains(&sabotaged_path.to_string_lossy().to_string()));
+    let rendered_metrics = metrics.render();
+    assert!(rendered_metrics.contains("proofplane_cleanup_total"));
+    assert!(rendered_metrics.contains("operation=\"agent_evidence_upload_cleanup\""));
+    assert!(rendered_metrics.contains("result=\"failed\""));
 }
 
 #[tokio::test]
@@ -543,6 +880,37 @@ GROUP BY g.id
     assert!(row.get::<_, Option<Uuid>>("document_id").is_none());
 }
 
+async fn assert_single_upload_work(app: &TestApp, upload_id: Uuid) {
+    let row = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+SELECT
+    count(DISTINCT s.id) AS submission_count,
+    count(DISTINCT d.id) AS document_count,
+    count(DISTINCT o.id) AS outbox_count
+FROM agent_evidence_upload_grants g
+LEFT JOIN evidence_submissions s ON s.id = g.submission_id
+LEFT JOIN documents d
+  ON d.owner_type = 'evidence_submission'
+ AND d.owner_id = s.id
+LEFT JOIN outbox_messages o
+  ON o.aggregate_id = d.id::text
+ AND o.event_type = 'document.scan_requested'
+WHERE g.id = $1
+"#,
+            &[&upload_id],
+        )
+        .await
+        .expect("upload work counts load");
+    assert_eq!(row.get::<_, i64>("submission_count"), 1);
+    assert_eq!(row.get::<_, i64>("document_count"), 1);
+    assert_eq!(row.get::<_, i64>("outbox_count"), 1);
+}
+
 fn files_under(root: &std::path::Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
@@ -558,4 +926,44 @@ fn files_under(root: &std::path::Path) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+async fn make_staged_object_undeletable(root: PathBuf) -> PathBuf {
+    for _ in 0..200 {
+        let files = files_under(&root);
+        let metadata_exists = files.iter().any(|path| {
+            path.components()
+                .any(|part| part.as_os_str() == OsStr::new("metadata"))
+        });
+        let object = files.into_iter().find(|path| {
+            path.components()
+                .any(|part| part.as_os_str() == OsStr::new("objects"))
+        });
+        if metadata_exists {
+            if let Some(object) = object {
+                fs::remove_file(&object).expect("staged object can be replaced");
+                fs::create_dir(&object).expect("staged object path becomes a directory");
+                fs::write(object.join("blocker"), b"retain directory")
+                    .expect("staged object directory is non-empty");
+                return object;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("staged object appeared before timeout");
+}
+
+fn make_partial_object_undeletable(root: &std::path::Path) -> PathBuf {
+    let object = files_under(root)
+        .into_iter()
+        .find(|path| {
+            path.components()
+                .any(|part| part.as_os_str() == OsStr::new("objects"))
+        })
+        .expect("partial staged object exists");
+    fs::remove_file(&object).expect("partial staged object can be replaced");
+    fs::create_dir(&object).expect("partial staged object path becomes a directory");
+    fs::write(object.join("blocker"), b"retain directory")
+        .expect("partial staged object directory is non-empty");
+    object
 }

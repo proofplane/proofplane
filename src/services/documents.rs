@@ -120,7 +120,13 @@ where
     .await?;
     let actual_content_length = content_length.load(Ordering::Relaxed);
     if u64::try_from(staged.content_length) != Ok(actual_content_length) {
-        let _ = delete_staged_document(object_store, &staged.object_key).await;
+        if let Err(error) = delete_staged_document(object_store, &staged.object_key).await {
+            crate::observability::record_cleanup_failure(
+                &error,
+                "evidence_document_length_mismatch",
+                None,
+            );
+        }
         return Err(Error::Storage(StorageError::StreamRead {
             message: "staged object length does not match received bytes".to_owned(),
             payload_too_large: false,

@@ -213,8 +213,13 @@ impl ObjectStore for FilesystemObjectStore {
         let (content_length, sha256) = match write_result {
             Ok(result) => result,
             Err(error) => {
-                // On error, best-effort remove the file.
-                let _ = remove_file_if_exists(&object_path).await;
+                if let Err(cleanup_error) = remove_file_if_exists(&object_path).await {
+                    crate::observability::record_cleanup_failure(
+                        &cleanup_error,
+                        "object_storage_partial_write",
+                        None,
+                    );
+                }
                 return Err(error);
             }
         };
@@ -237,7 +242,13 @@ impl ObjectStore for FilesystemObjectStore {
                 source,
             })
         {
-            let _ = remove_file_if_exists(&object_path).await;
+            if let Err(cleanup_error) = remove_file_if_exists(&object_path).await {
+                crate::observability::record_cleanup_failure(
+                    &cleanup_error,
+                    "object_storage_metadata_write",
+                    None,
+                );
+            }
             return Err(error);
         }
 

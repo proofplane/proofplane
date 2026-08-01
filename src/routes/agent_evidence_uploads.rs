@@ -11,15 +11,14 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId,
-        DocumentUploadStatus,
-    },
+    domain::{AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId},
     object_storage::StorageError,
     routes::{error::ApiError, request_context::RequestId},
     services::{
         agent_evidence_upload_grants::AgentEvidenceUploadGrantError,
-        agent_evidence_uploads::{AgentEvidenceUploadError, AgentEvidenceUploadService},
+        agent_evidence_uploads::{
+            AgentEvidenceUploadError, AgentEvidenceUploadOutcome, AgentEvidenceUploadService,
+        },
         Error as ServiceError,
     },
 };
@@ -82,12 +81,17 @@ async fn upload(
         )
         .await
         .map_err(upload_error)?;
+    let status = match &result {
+        AgentEvidenceUploadOutcome::Created(_) => StatusCode::CREATED,
+        AgentEvidenceUploadOutcome::Replayed(_) => StatusCode::OK,
+    };
+    let result = result.result();
     let response = AgentEvidenceUploadResponse {
         submission_id: result.submission_id.into(),
         document_id: result.document.id().into(),
-        upload_status: DocumentUploadStatus::PendingUpload.as_str(),
+        upload_status: result.document.upload_status.as_str(),
     };
-    Ok((StatusCode::CREATED, Json(response)).into_response())
+    Ok((status, Json(response)).into_response())
 }
 
 fn upload_credential(headers: &HeaderMap) -> Option<&str> {

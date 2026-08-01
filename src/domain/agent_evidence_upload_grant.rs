@@ -280,13 +280,21 @@ impl AgentEvidenceUploadGrant {
         &self,
         now: DateTime<Utc>,
     ) -> Result<(), AgentEvidenceUploadGrantError> {
-        if self.lifecycle != AgentEvidenceUploadGrantLifecycle::Pending {
-            return Err(AgentEvidenceUploadGrantError::AlreadyCompleted);
+        if self.completed_document_at(now)?.is_some() {
+            Err(AgentEvidenceUploadGrantError::AlreadyCompleted)
+        } else {
+            Ok(())
         }
+    }
+
+    pub fn completed_document_at(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DocumentId>, AgentEvidenceUploadGrantError> {
         if now >= self.expires_at {
             return Err(AgentEvidenceUploadGrantError::Expired);
         }
-        Ok(())
+        Ok(self.document_id())
     }
 
     pub fn validate_declared_file(
@@ -583,6 +591,14 @@ mod tests {
         grant.complete(document_id, completed_at).unwrap();
         assert_eq!(grant.document_id(), Some(document_id));
         assert_eq!(grant.completed_at(), Some(completed_at));
+        assert_eq!(
+            grant.completed_document_at(completed_at),
+            Ok(Some(document_id))
+        );
+        assert_eq!(
+            grant.completed_document_at(grant.expires_at()),
+            Err(AgentEvidenceUploadGrantError::Expired)
+        );
         assert_eq!(
             grant.complete(Uuid::new_v4().into(), completed_at),
             Err(AgentEvidenceUploadGrantError::AlreadyCompleted)
