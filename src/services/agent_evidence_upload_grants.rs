@@ -11,10 +11,11 @@ use crate::{
         VerifiedPasetoToken,
     },
     domain::{
-        AgentConnectionId, AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrantId,
-        CoverageWindow, EvidenceId, EvidenceSubmissionId, UserId, WorkspaceId,
+        AgentConnectionId, AgentEvidenceUploadAuthority, AgentEvidenceUploadDeclaration,
+        AgentEvidenceUploadGrant, AgentEvidenceUploadGrantId, CoverageWindow, EvidenceId,
+        EvidenceSubmissionId, UserId, WorkspaceId,
     },
-    repository::{AgentEvidenceUploadGrant, NewAgentEvidenceUploadGrant, Postgres},
+    repository::Postgres,
 };
 
 use super::agent_connections::AgentConnectionContext;
@@ -49,6 +50,11 @@ struct VerifiedAgentEvidenceUploadGrantClaims {
 pub struct AgentEvidenceUploadGrantService {
     repository: Arc<Postgres>,
     encryptor: AgentEvidenceUploadGrantEncryptor,
+    credential_verifier: AgentEvidenceUploadCredentialVerifier,
+}
+
+#[derive(Clone)]
+pub struct AgentEvidenceUploadCredentialVerifier {
     decryptor: AgentEvidenceUploadGrantDecryptor,
 }
 
@@ -67,8 +73,12 @@ impl AgentEvidenceUploadGrantService {
         Self {
             repository,
             encryptor,
-            decryptor,
+            credential_verifier: AgentEvidenceUploadCredentialVerifier { decryptor },
         }
+    }
+
+    pub fn credential_verifier(&self) -> AgentEvidenceUploadCredentialVerifier {
+        self.credential_verifier.clone()
     }
 
     pub async fn issue(
@@ -80,7 +90,8 @@ impl AgentEvidenceUploadGrantService {
     ) -> Result<IssuedAgentEvidenceUploadGrant, AgentEvidenceUploadGrantError> {
         let upload_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
         let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
-        let expires_at = Utc::now()
+        let issued_at = Utc::now();
+        let expires_at = issued_at
             + chrono::Duration::from_std(GRANT_TTL)
                 .map_err(|_| AgentEvidenceUploadGrantError::Internal)?;
         let issued = self
@@ -102,6 +113,19 @@ impl AgentEvidenceUploadGrantService {
                 },
             )
             .map_err(|_| AgentEvidenceUploadGrantError::Internal)?;
+        let grant = AgentEvidenceUploadGrant::issue(
+            upload_id,
+            submission_id,
+            connection.workspace_id,
+            evidence_id,
+            coverage,
+            declaration,
+            connection.user_id,
+            connection.connection_id,
+            issued_at,
+            issued.expires_at,
+        )
+        .map_err(|_| AgentEvidenceUploadGrantError::Internal)?;
         let grant = self
             .repository
             .in_agent_connection_workspace_context(
@@ -109,16 +133,12 @@ impl AgentEvidenceUploadGrantService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    context
-                        .create_agent_evidence_upload_grant(NewAgentEvidenceUploadGrant {
-                            id: upload_id,
-                            submission_id,
-                            evidence_id,
-                            coverage,
-                            declaration,
-                            expires_at: issued.expires_at,
-                        })
-                        .await
+                    if context.get_evidence(grant.evidence_id()).await?.is_none() {
+                        return Ok(None);
+                    }
+                    let repository = context.agent_evidence_upload_grants();
+                    repository.save(&grant).await?;
+                    repository.get(grant.id(), grant.workspace_id()).await
                 },
             )
             .await?
@@ -129,45 +149,29 @@ impl AgentEvidenceUploadGrantService {
             credential: SecretString::from(issued.token),
         })
     }
+}
 
-    pub async fn verify(
+impl AgentEvidenceUploadCredentialVerifier {
+    pub fn verify(
         &self,
-        upload_id: AgentEvidenceUploadGrantId,
         credential: &str,
-    ) -> Result<AgentEvidenceUploadGrant, AgentEvidenceUploadGrantError> {
+    ) -> Result<AgentEvidenceUploadAuthority, AgentEvidenceUploadGrantError> {
         let verified = self
             .decryptor
             .decrypt::<AgentEvidenceUploadGrantClaims>(credential)
             .map_err(|_| AgentEvidenceUploadGrantError::Unavailable)?;
         let claims = VerifiedAgentEvidenceUploadGrantClaims::try_from(verified)
             .map_err(|_| AgentEvidenceUploadGrantError::Unavailable)?;
-        if claims.upload_id != upload_id {
-            return Err(AgentEvidenceUploadGrantError::Unavailable);
-        }
-        let grant = self
-            .repository
-            .get_unexpired_agent_evidence_upload_grant(upload_id, claims.workspace_id)
-            .await?
-            .ok_or(AgentEvidenceUploadGrantError::Unavailable)?;
-        if !claims_match_grant(claims, &grant) {
-            return Err(AgentEvidenceUploadGrantError::Unavailable);
-        }
-
-        Ok(grant)
+        Ok(AgentEvidenceUploadAuthority::new(
+            claims.upload_id,
+            claims.workspace_id,
+            claims.evidence_id,
+            claims.submission_id,
+            claims.issued_by_user_id,
+            claims.issued_via_agent_connection_id,
+            claims.expires_at,
+        ))
     }
-}
-
-fn claims_match_grant(
-    claims: VerifiedAgentEvidenceUploadGrantClaims,
-    grant: &AgentEvidenceUploadGrant,
-) -> bool {
-    claims.upload_id == grant.id
-        && claims.workspace_id == grant.workspace_id
-        && claims.evidence_id == grant.evidence_id
-        && claims.submission_id == grant.submission_id
-        && claims.issued_by_user_id == grant.issued_by_user_id
-        && claims.issued_via_agent_connection_id == grant.issued_via_agent_connection_id
-        && claims.expires_at == grant.expires_at
 }
 
 impl TryFrom<VerifiedPasetoToken<AgentEvidenceUploadGrantClaims>>

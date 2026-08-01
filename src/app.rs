@@ -7,6 +7,7 @@ use crate::{
             VerifiedClaims,
         },
         paseto::{
+            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
             PolicyUploadSessionEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
@@ -19,6 +20,7 @@ use crate::{
     repository::Postgres,
     routes::{
         agent_connections::{self, AgentConnectionsState},
+        agent_evidence_uploads::{self, AgentEvidenceUploadState},
         auditor_access::{self, AuditorAccessState},
         document_downloads::{self, DocumentDownloadState},
         document_upload_sessions::{self, DocumentUploadSessionState},
@@ -34,6 +36,10 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
+        agent_evidence_upload_grants::{
+            AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        },
+        agent_evidence_uploads::AgentEvidenceUploadService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_auth_transactions::AuditorAuthTransactionService,
@@ -82,6 +88,29 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
+    );
+    let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(crate::authentication::Error::from)?;
+    let agent_upload_grant_service = AgentEvidenceUploadGrantService::new(
+        dependencies.postgres.clone(),
+        agent_upload_grant_encryptor,
+        agent_upload_grant_decryptor,
+    );
+    let agent_evidence_upload_service = AgentEvidenceUploadService::new(
+        dependencies.postgres.clone(),
+        evidence_submission_service.clone(),
+        agent_upload_grant_service.credential_verifier(),
+        dependencies.config.uploads.max_document_bytes,
     );
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
@@ -237,6 +266,9 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         )
         .merge(document_downloads::router(DocumentDownloadState {
             service: document_download_service.clone(),
+        }))
+        .merge(agent_evidence_uploads::router(AgentEvidenceUploadState {
+            service: agent_evidence_upload_service,
         }))
         .merge(document_upload_sessions::router(
             DocumentUploadSessionState {

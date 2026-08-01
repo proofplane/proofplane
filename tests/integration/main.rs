@@ -1,6 +1,7 @@
 mod agent_connection_repository;
 mod agent_connections;
 mod agent_evidence_upload_grants;
+mod agent_evidence_uploads;
 mod auditor_access;
 mod auditor_access_grants;
 mod auditor_auth_transactions;

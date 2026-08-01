@@ -2,6 +2,7 @@ use thiserror::Error;
 
 pub mod agent_connections;
 pub mod agent_evidence_upload_grants;
+pub mod agent_evidence_uploads;
 pub mod auditor_access_grants;
 pub mod auditor_access_sessions;
 pub mod auditor_auth_transactions;

@@ -156,6 +156,41 @@ claims. Possession authorizes only the PUT operation. The persisted row remains
 the source of truth for expiry and completion; token validity alone is
 insufficient.
 
+### Revision: grant aggregate and persistence boundary (2026-07-31)
+
+The machine upload grant is a domain aggregate rather than a repository record.
+It owns exact credential-authority binding, pending and expiry eligibility,
+declared and received-file matching, rehydration consistency, and the one-way
+completion transition. Its identity, provenance, declaration, timestamps, and
+lifecycle state are private and exposed only through read-only accessors.
+
+Persistence uses a private database record and mapper. The concrete grant
+repository exposes only `get(upload_id, workspace_id)` and `save(&grant)`.
+`get` reads the complete aggregate snapshot with `FOR UPDATE`; verification's
+autocommit read releases that lock immediately, while completion reloads through
+the transaction-bound repository and holds the lock through commit. `save`
+maps and upserts the aggregate's complete current snapshot without interpreting
+which domain operation changed it. Existing aggregates are saved only after the
+service reloads them under that transaction lock.
+
+A crate-private workspace snapshot helper generates that atomic, tenant-guarded
+upsert from a single private record declaration. Every declared record field is
+inserted and every non-conflict field is replaced from the aggregate snapshot;
+repositories do not hand-maintain column, parameter, and assignment lists. The
+machine grant is the initial consumer. Other repositories are not migrated by
+this revision.
+
+Credential decoding produces a typed authority value but makes no authorization
+decision. The grant issuance service checks workspace-scoped evidence
+eligibility before creating durable state. `AgentEvidenceUploadService`
+coordinates authority and aggregate validation, streaming, transaction-bound
+reload, submission/document/outbox creation, aggregate completion, and
+best-effort cleanup. Lifecycle legality remains in the aggregate; tenant-scoped
+queries and domain-to-database mapping remain in persistence. HTTP routes retain
+only syntax parsing plus stable response and error mapping. This revision does
+not change the schema, endpoint contract, or ticket 004's replay and
+losing-attempt semantics.
+
 ## Streaming Endpoint
 
 Contract:

@@ -147,6 +147,36 @@ impl EvidenceSubmissionService {
         })
     }
 
+    pub(crate) async fn stage_agent_upload<S>(
+        &self,
+        grant: &crate::domain::AgentEvidenceUploadGrant,
+        max_bytes: usize,
+        chunks: S,
+    ) -> Result<StagedEvidenceDocument, Error>
+    where
+        S: Stream<Item = Result<Bytes, StorageError>> + Send,
+    {
+        let staged = stage_evidence_document(
+            &self.object_store,
+            grant.workspace_id(),
+            grant.submission_id(),
+            grant.declaration().filename().to_owned(),
+            grant.declaration().content_type().to_owned(),
+            max_bytes,
+            chunks,
+        )
+        .await?;
+        Ok(StagedEvidenceDocument {
+            evidence_submission_id: grant.submission_id(),
+            filename: staged.filename,
+            content_type: staged.content_type,
+            content_length: staged.content_length,
+            object_key: staged.object_key,
+            checksum_sha256: staged.checksum_sha256,
+            checksum_crc32c: staged.checksum_crc32c,
+        })
+    }
+
     pub async fn delete_uploaded_document_object(&self, object_key: &str) -> Result<(), Error> {
         delete_staged_document(&self.object_store, object_key).await
     }
@@ -237,7 +267,10 @@ impl EvidenceSubmissionService {
     }
 }
 
-fn document_scan_requested_message(document: &Document, request_id: Uuid) -> NewOutboxMessage {
+pub(crate) fn document_scan_requested_message(
+    document: &Document,
+    request_id: Uuid,
+) -> NewOutboxMessage {
     NewOutboxMessage {
         topic: TopicName::new(MESSAGE_BUS_TOPIC),
         event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),

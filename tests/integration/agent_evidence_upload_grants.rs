@@ -1,6 +1,8 @@
-use chrono::{TimeZone, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use proofplane::{
-    domain::{AgentEvidenceUploadDeclaration, CoverageWindow, EvidenceId},
+    domain::{
+        AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant, CoverageWindow, EvidenceId,
+    },
     services::agent_evidence_upload_grants::AgentEvidenceUploadGrantError,
 };
 use secrecy::ExposeSecret;
@@ -31,29 +33,39 @@ async fn machine_grant_persists_declared_metadata_and_provenance() {
         )
         .await
         .expect("machine grant issues");
-    let verified = app
+    let authority = app
         .agent_evidence_upload_grant_service()
-        .verify(issued.grant.id, issued.credential.expose_secret())
+        .credential_verifier()
+        .verify(issued.credential.expose_secret())
+        .expect("machine credential verifies");
+    let verified = app
+        .postgres()
+        .agent_evidence_upload_grants()
+        .get(issued.grant.id(), issued.grant.workspace_id())
         .await
-        .expect("machine grant verifies");
+        .expect("grant loads")
+        .expect("grant exists");
+    verified
+        .matches_authority(&authority)
+        .expect("authority matches");
 
     assert_eq!(verified, issued.grant);
-    assert_eq!(verified.workspace_id, workspace_id.into());
-    assert_eq!(verified.evidence_id, evidence_id.into());
-    assert_eq!(verified.coverage, coverage);
-    assert_eq!(verified.declaration, declaration);
-    assert_eq!(verified.issued_by_user_id, app.user_id().into());
+    assert_eq!(verified.workspace_id(), workspace_id.into());
+    assert_eq!(verified.evidence_id(), evidence_id.into());
+    assert_eq!(verified.coverage(), coverage);
+    assert_eq!(verified.declaration(), &declaration);
+    assert_eq!(verified.issued_by_user_id(), app.user_id().into());
     assert_eq!(
-        verified.issued_via_agent_connection_id,
+        verified.issued_via_agent_connection_id(),
         app.api_token_id().into()
     );
     assert_ne!(
-        verified.submission_id.to_string(),
-        issued.grant.id.to_string()
+        verified.submission_id().to_string(),
+        issued.grant.id().to_string()
     );
-    assert!(verified.expires_at > verified.issued_at);
-    assert!(verified.completed_at.is_none());
-    assert!(verified.document_id.is_none());
+    assert!(verified.expires_at() > verified.issued_at());
+    assert!(verified.completed_at().is_none());
+    assert!(verified.document_id().is_none());
 }
 
 #[tokio::test]
@@ -119,8 +131,136 @@ async fn machine_grant_accepts_every_existing_evidence_status() {
             )
             .await
             .expect("existing evidence is eligible");
-        assert_eq!(issued.grant.evidence_id, evidence_id.into());
+        assert_eq!(issued.grant.evidence_id(), evidence_id.into());
     }
+}
+
+#[tokio::test]
+async fn grant_repository_scopes_reads_and_persists_the_full_aggregate_snapshot() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .workspace("other", "Other workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(),
+        )
+        .await
+        .expect("machine grant issues");
+
+    assert!(app
+        .postgres()
+        .agent_evidence_upload_grants()
+        .get(issued.grant.id(), app.workspace_id("other").into())
+        .await
+        .expect("tenant-scoped lookup succeeds")
+        .is_none());
+
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .execute(
+            "UPDATE agent_evidence_upload_grants SET filename = 'tampered.pdf' WHERE id = $1",
+            &[&Uuid::from(issued.grant.id())],
+        )
+        .await
+        .expect("immutable field is tampered for the protection test");
+    let grant_id = issued.grant.id();
+    let grant_workspace_id = issued.grant.workspace_id();
+    let issued_by_user_id = issued.grant.issued_by_user_id();
+    let issued_via_agent_connection_id = issued.grant.issued_via_agent_connection_id();
+    let grant = issued.grant;
+    let round_tripped = app
+        .postgres()
+        .in_agent_connection_workspace_context(
+            grant_workspace_id,
+            issued_by_user_id,
+            issued_via_agent_connection_id,
+            async move |context| {
+                let repository = context.agent_evidence_upload_grants();
+                repository.save(&grant).await?;
+                let reloaded = repository.get(grant_id, grant_workspace_id).await?;
+                Ok(reloaded == Some(grant))
+            },
+        )
+        .await
+        .expect("full-snapshot save completes");
+    assert!(round_tripped);
+}
+
+#[tokio::test]
+async fn grant_repository_does_not_overwrite_a_same_id_grant_in_another_workspace() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .workspace("other", "Other workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let other_workspace_id = app.workspace_id("other");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    let other_evidence_id =
+        create_evidence(&app, other_workspace_id, "Other evidence", "active").await;
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(),
+        )
+        .await
+        .expect("machine grant issues");
+    let issued_at = Utc::now();
+    let colliding = AgentEvidenceUploadGrant::issue(
+        issued.grant.id(),
+        Uuid::new_v4().into(),
+        other_workspace_id.into(),
+        other_evidence_id.into(),
+        coverage(),
+        declaration(),
+        app.user_id().into(),
+        app.api_token_id().into(),
+        issued_at,
+        issued_at + Duration::minutes(5),
+    )
+    .expect("colliding aggregate is valid in isolation");
+
+    let save = app
+        .postgres()
+        .in_agent_connection_workspace_context(
+            colliding.workspace_id(),
+            colliding.issued_by_user_id(),
+            colliding.issued_via_agent_connection_id(),
+            async move |context| {
+                context
+                    .agent_evidence_upload_grants()
+                    .save(&colliding)
+                    .await
+            },
+        )
+        .await;
+    assert!(save.is_err());
+
+    let original = app
+        .postgres()
+        .agent_evidence_upload_grants()
+        .get(issued.grant.id(), workspace_id.into())
+        .await
+        .expect("original grant lookup succeeds")
+        .expect("original grant remains available");
+    assert_eq!(original.evidence_id(), evidence_id.into());
 }
 
 #[tokio::test]
@@ -145,11 +285,11 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
     assert!(!issued_debug.contains("application/pdf"));
 
     assert!(matches!(
-        service.verify(Uuid::new_v4().into(), token).await,
+        service.credential_verifier().verify(&tamper(token)),
         Err(AgentEvidenceUploadGrantError::Unavailable)
     ));
     assert!(matches!(
-        service.verify(issued.grant.id, &tamper(token)).await,
+        service.credential_verifier().verify(&tamper(token)),
         Err(AgentEvidenceUploadGrantError::Unavailable)
     ));
 
@@ -160,14 +300,20 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
         .expect("database opens")
         .execute(
             "UPDATE agent_evidence_upload_grants SET submission_id = $2 WHERE id = $1",
-            &[&Uuid::from(issued.grant.id), &mismatched_submission_id],
+            &[&Uuid::from(issued.grant.id()), &mismatched_submission_id],
         )
         .await
         .expect("persisted grant is changed");
-    assert!(matches!(
-        service.verify(issued.grant.id, token).await,
-        Err(AgentEvidenceUploadGrantError::Unavailable)
-    ));
+    let mismatched = app
+        .postgres()
+        .agent_evidence_upload_grants()
+        .get(issued.grant.id(), issued.grant.workspace_id())
+        .await
+        .expect("grant loads")
+        .expect("grant exists");
+    assert!(mismatched
+        .matches_authority(&service.credential_verifier().verify(token).unwrap())
+        .is_err());
     app.postgres()
         .get()
         .await
@@ -175,8 +321,8 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
         .execute(
             "UPDATE agent_evidence_upload_grants SET submission_id = $2 WHERE id = $1",
             &[
-                &Uuid::from(issued.grant.id),
-                &Uuid::from(issued.grant.submission_id),
+                &Uuid::from(issued.grant.id()),
+                &Uuid::from(issued.grant.submission_id()),
             ],
         )
         .await
@@ -188,14 +334,18 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
         .expect("database opens")
         .execute(
             "UPDATE agent_evidence_upload_grants SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes' WHERE id = $1",
-            &[&Uuid::from(issued.grant.id)],
+            &[&Uuid::from(issued.grant.id())],
         )
         .await
         .expect("grant expires");
-    assert!(matches!(
-        service.verify(issued.grant.id, token).await,
-        Err(AgentEvidenceUploadGrantError::Unavailable)
-    ));
+    let expired = app
+        .postgres()
+        .agent_evidence_upload_grants()
+        .get(issued.grant.id(), issued.grant.workspace_id())
+        .await
+        .expect("grant loads")
+        .expect("grant exists");
+    assert!(expired.ensure_pending_at(Utc::now()).is_err());
 
     let human = app
         .document_upload_grant_service()
@@ -209,7 +359,7 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
         .map(|(_, value)| value.into_owned())
         .expect("human token is present");
     assert!(matches!(
-        service.verify(issued.grant.id, &human_token).await,
+        service.credential_verifier().verify(&human_token),
         Err(AgentEvidenceUploadGrantError::Unavailable)
     ));
 }
