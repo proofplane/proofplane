@@ -601,7 +601,9 @@ async fn append_outbox(
             context.user_id,
             context.agent_connection_id,
             async move |context| {
-                context.append_outbox_message(&outbox_payload(aggregate_id)).await
+                context
+                    .append_outbox_message(&outbox_payload(aggregate_id))
+                    .await
             },
         )
         .await
