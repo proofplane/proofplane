@@ -59,7 +59,10 @@ impl AgentPolicyDocumentUploadGrantRepository<'_> {
                 postgres.get().await?.query(GET_SQL, &parameters).await?
             }
             RepositoryConnection::Transaction(context) => {
-                context.transaction.query(GET_SQL, &parameters).await?
+                context
+                    .transaction
+                    .query(GET_FOR_UPDATE_SQL, &parameters)
+                    .await?
             }
         };
         rows.into_iter()
@@ -94,8 +97,19 @@ SELECT
     issued_via_agent_connection_id, issued_at, expires_at, completed_at, document_id
 FROM agent_policy_document_upload_grants
 WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
 "#;
+
+const GET_FOR_UPDATE_SQL: &str = concat!(
+    r#"
+SELECT
+    id, workspace_id, policy_id, filename, content_type,
+    expected_content_length, expected_sha256, issued_by_user_id,
+    issued_via_agent_connection_id, issued_at, expires_at, completed_at, document_id
+FROM agent_policy_document_upload_grants
+WHERE id = $1 AND workspace_id = $2
+"#,
+    "FOR UPDATE"
+);
 
 workspace_snapshot_record! {
     struct GrantRecord {

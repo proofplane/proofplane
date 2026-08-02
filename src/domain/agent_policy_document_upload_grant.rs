@@ -123,7 +123,9 @@ impl AgentPolicyDocumentUploadGrant {
         .map_err(|_| AgentPolicyDocumentUploadGrantError::InvalidRehydration)?;
         grant.lifecycle = match (completed_at, document_id) {
             (None, None) => Lifecycle::Pending,
-            (Some(completed_at), Some(document_id)) if completed_at >= issued_at => {
+            (Some(completed_at), Some(document_id))
+                if completed_at >= issued_at && completed_at < expires_at =>
+            {
                 Lifecycle::Completed {
                     document_id,
                     completed_at,
@@ -486,6 +488,27 @@ mod tests {
             ),
             Err(AgentPolicyDocumentUploadGrantError::InvalidRehydration)
         );
+        for completed_at in [
+            grant.issued_at() - Duration::milliseconds(1),
+            grant.expires_at(),
+            grant.expires_at() + Duration::milliseconds(1),
+        ] {
+            assert_eq!(
+                AgentPolicyDocumentUploadGrant::rehydrate(
+                    grant.id(),
+                    grant.workspace_id(),
+                    grant.policy_id(),
+                    grant.declaration().clone(),
+                    grant.issued_by_user_id(),
+                    grant.issued_via_agent_connection_id(),
+                    grant.issued_at(),
+                    grant.expires_at(),
+                    Some(completed_at),
+                    Some(Uuid::new_v4().into()),
+                ),
+                Err(AgentPolicyDocumentUploadGrantError::InvalidRehydration)
+            );
+        }
     }
 
     fn pending() -> AgentPolicyDocumentUploadGrant {

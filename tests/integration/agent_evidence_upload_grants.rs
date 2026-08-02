@@ -7,6 +7,7 @@ use proofplane::{
 };
 use secrecy::ExposeSecret;
 use serde_json::json;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::support::TestApp;
@@ -261,6 +262,138 @@ async fn grant_repository_does_not_overwrite_a_same_id_grant_in_another_workspac
         .expect("original grant lookup succeeds")
         .expect("original grant remains available");
     assert_eq!(original.evidence_id(), evidence_id.into());
+}
+
+#[tokio::test]
+async fn transactional_grant_reads_hold_a_row_lock_while_verification_reads_do_not() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(),
+        )
+        .await
+        .expect("machine grant issues");
+    let grant_id = issued.grant.id();
+    let user_id = issued.grant.issued_by_user_id();
+    let connection_id = issued.grant.issued_via_agent_connection_id();
+
+    let postgres = app.postgres_arc();
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let lock_holder = tokio::spawn(async move {
+        postgres
+            .in_agent_connection_workspace_context(
+                workspace_id.into(),
+                user_id,
+                connection_id,
+                async move |context| {
+                    let loaded = context
+                        .agent_evidence_upload_grants()
+                        .get(grant_id, workspace_id.into())
+                        .await?;
+                    assert!(loaded.is_some());
+                    locked_tx.send(()).expect("lock acquisition is observed");
+                    release_rx.await.expect("lock release is requested");
+                    Ok(())
+                },
+            )
+            .await
+    });
+    locked_rx.await.expect("transaction acquires the row lock");
+
+    let contender = app.postgres().get().await.expect("database opens");
+    contender
+        .batch_execute("SET lock_timeout = '100ms'")
+        .await
+        .expect("lock timeout configures");
+    contender
+        .execute(
+            "UPDATE agent_evidence_upload_grants SET filename = filename WHERE id = $1",
+            &[&Uuid::from(grant_id)],
+        )
+        .await
+        .expect_err("transaction-backed get holds the row lock");
+
+    release_tx.send(()).expect("transaction is released");
+    lock_holder
+        .await
+        .expect("lock task joins")
+        .expect("lock transaction commits");
+
+    app.postgres()
+        .agent_evidence_upload_grants()
+        .get(grant_id, workspace_id.into())
+        .await
+        .expect("verification read succeeds")
+        .expect("grant exists");
+    contender
+        .execute(
+            "UPDATE agent_evidence_upload_grants SET filename = filename WHERE id = $1",
+            &[&Uuid::from(grant_id)],
+        )
+        .await
+        .expect("verification read leaves no row lock behind");
+}
+
+#[tokio::test]
+async fn machine_grant_schema_rejects_completion_at_the_expiry_boundary() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(),
+        )
+        .await
+        .expect("machine grant issues");
+    let client = app.postgres().get().await.expect("database opens");
+    let document_id: Uuid = client
+        .query_one(
+            r#"
+INSERT INTO documents (
+    workspace_id, owner_type, owner_id, filename, content_type, content_length,
+    object_key, checksum_sha256, checksum_crc32c, created_by_user_id
+)
+VALUES ($1, 'evidence_submission', $2, 'boundary.pdf', 'application/pdf', 1,
+        $3, 'sha256', 'crc32c', $4)
+RETURNING id
+"#,
+            &[
+                &workspace_id,
+                &Uuid::from(issued.grant.submission_id()),
+                &format!("quarantine/{}/boundary", issued.grant.id()),
+                &app.user_id(),
+            ],
+        )
+        .await
+        .expect("document fixture inserts")
+        .get("id");
+
+    client
+        .execute(
+            "UPDATE agent_evidence_upload_grants SET completed_at = expires_at, document_id = $2 WHERE id = $1",
+            &[&Uuid::from(issued.grant.id()), &document_id],
+        )
+        .await
+        .expect_err("completion at expiry violates the snapshot constraint");
 }
 
 #[tokio::test]
