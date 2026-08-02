@@ -604,6 +604,28 @@ async fn configured_limit_rejects_declared_upload_without_durable_or_staged_stat
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let metrics = recorder.handle();
     let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let path = format!("/agent-evidence-uploads/{}", issued.grant.id());
+    for authorization in [
+        None,
+        Some(format!(
+            "Proofplane-Upload {}",
+            tamper(issued.credential.expose_secret())
+        )),
+    ] {
+        let mut request = app
+            .server()
+            .put(&path)
+            .add_header("content-type", "application/pdf")
+            .add_header("content-length", content.len().to_string());
+        if let Some(authorization) = authorization {
+            request = request.add_header("authorization", authorization);
+        }
+        request
+            .bytes(content.as_slice().into())
+            .await
+            .assert_status_not_found();
+    }
     let response = upload_request(&app, &issued, content).await;
 
     response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
@@ -643,6 +665,9 @@ async fn configured_limit_rejects_declared_upload_without_durable_or_staged_stat
     assert!(metrics.render().contains(
         "proofplane_agent_evidence_upload_attempts_total{result=\"validation_rejected\"} 2"
     ));
+    assert!(metrics
+        .render()
+        .contains("proofplane_agent_evidence_upload_attempts_total{result=\"unavailable\"} 2"));
 }
 
 #[tokio::test]

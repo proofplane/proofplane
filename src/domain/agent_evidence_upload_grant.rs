@@ -1,124 +1,13 @@
-use std::fmt;
-
 use chrono::{DateTime, Utc};
-use http::HeaderValue;
-
-use crate::validation::Validation;
 
 use super::{
-    ids::uuid_id, validate_document_filename, AgentConnectionId, CoverageWindow, DocumentId,
-    DomainError, EvidenceId, EvidenceSubmissionId, Sha256Digest, UserId, WorkspaceId,
+    ids::uuid_id, AgentConnectionId, CoverageWindow, DeclaredUploadFile, DeclaredUploadFileError,
+    DocumentId, EvidenceId, EvidenceSubmissionId, UserId, WorkspaceId,
 };
 
 uuid_id!(AgentEvidenceUploadGrantId);
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct AgentEvidenceUploadDeclaration {
-    filename: String,
-    content_type: String,
-    expected_content_length: u64,
-    expected_sha256: Option<Sha256Digest>,
-}
-
-impl fmt::Debug for AgentEvidenceUploadDeclaration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("AgentEvidenceUploadDeclaration([redacted])")
-    }
-}
-
-impl AgentEvidenceUploadDeclaration {
-    pub fn new(
-        filename: String,
-        content_type: String,
-        expected_content_length: u64,
-        expected_sha256: Option<String>,
-        max_bytes: u64,
-    ) -> Validation<Self, DomainError> {
-        let mut errors = Vec::new();
-        let filename = match validate_document_filename(filename).into_result() {
-            Ok(filename) => Some(filename),
-            Err(mut filename_errors) => {
-                errors.append(&mut filename_errors);
-                None
-            }
-        };
-        let valid_content_type = !content_type.is_empty()
-            && content_type.trim() == content_type
-            && content_type.parse::<mime::Mime>().is_ok()
-            && HeaderValue::from_str(&content_type).is_ok();
-        if !valid_content_type {
-            errors.push(DomainError::InvalidDocumentContentType);
-        }
-        let maximum = max_bytes.min(i64::MAX as u64);
-        if expected_content_length > maximum {
-            errors.push(DomainError::DocumentContentLengthTooLarge { maximum });
-        }
-        let expected_sha256 = match expected_sha256 {
-            None => Some(None),
-            Some(value) if is_lowercase_sha256(&value) => hex::decode(value)
-                .ok()
-                .and_then(|bytes| bytes.try_into().ok())
-                .map(Sha256Digest::from_bytes)
-                .map(Some),
-            Some(_) => None,
-        };
-        if expected_sha256.is_none() {
-            errors.push(DomainError::InvalidDocumentSha256Checksum);
-        }
-
-        match (filename, valid_content_type, expected_sha256) {
-            (Some(filename), true, Some(expected_sha256)) if errors.is_empty() => {
-                Validation::valid(Self {
-                    filename,
-                    content_type,
-                    expected_content_length,
-                    expected_sha256,
-                })
-            }
-            _ => Validation::invalid_many(errors),
-        }
-    }
-
-    pub(crate) fn rehydrate(
-        filename: String,
-        content_type: String,
-        expected_content_length: u64,
-        expected_sha256: Option<Sha256Digest>,
-    ) -> Result<Self, AgentEvidenceUploadGrantError> {
-        Self::new(
-            filename,
-            content_type,
-            expected_content_length,
-            expected_sha256.map(|digest| hex::encode(digest.as_bytes())),
-            i64::MAX as u64,
-        )
-        .into_result()
-        .map_err(|_| AgentEvidenceUploadGrantError::InvalidRehydration)
-    }
-
-    pub fn filename(&self) -> &str {
-        &self.filename
-    }
-
-    pub fn content_type(&self) -> &str {
-        &self.content_type
-    }
-
-    pub fn expected_content_length(&self) -> u64 {
-        self.expected_content_length
-    }
-
-    pub fn expected_sha256(&self) -> Option<&Sha256Digest> {
-        self.expected_sha256.as_ref()
-    }
-}
-
-fn is_lowercase_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
+pub type AgentEvidenceUploadDeclaration = DeclaredUploadFile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentEvidenceUploadAuthority {
@@ -302,13 +191,9 @@ impl AgentEvidenceUploadGrant {
         content_type: &str,
         content_length: u64,
     ) -> Result<(), AgentEvidenceUploadGrantError> {
-        if content_type != self.declaration.content_type {
-            return Err(AgentEvidenceUploadGrantError::ContentTypeMismatch);
-        }
-        if content_length != self.declaration.expected_content_length {
-            return Err(AgentEvidenceUploadGrantError::DeclaredContentLengthMismatch);
-        }
-        Ok(())
+        self.declaration
+            .validate_declared(content_type, content_length)
+            .map_err(AgentEvidenceUploadGrantError::from)
     }
 
     pub fn validate_staged_file(
@@ -316,19 +201,9 @@ impl AgentEvidenceUploadGrant {
         content_length: i64,
         checksum_sha256: &str,
     ) -> Result<(), AgentEvidenceUploadGrantError> {
-        let content_length = u64::try_from(content_length)
-            .map_err(|_| AgentEvidenceUploadGrantError::ReceivedContentLengthMismatch)?;
-        if content_length != self.declaration.expected_content_length {
-            return Err(AgentEvidenceUploadGrantError::ReceivedContentLengthMismatch);
-        }
-        if self
-            .declaration
-            .expected_sha256
-            .is_some_and(|expected| hex::encode(expected.as_bytes()) != checksum_sha256)
-        {
-            return Err(AgentEvidenceUploadGrantError::ChecksumMismatch);
-        }
-        Ok(())
+        self.declaration
+            .validate_staged(content_length, checksum_sha256)
+            .map_err(AgentEvidenceUploadGrantError::from)
     }
 
     pub fn complete(
@@ -415,13 +290,29 @@ pub enum AgentEvidenceUploadGrantError {
     ChecksumMismatch,
 }
 
+impl From<DeclaredUploadFileError> for AgentEvidenceUploadGrantError {
+    fn from(error: DeclaredUploadFileError) -> Self {
+        match error {
+            DeclaredUploadFileError::InvalidRehydration => Self::InvalidRehydration,
+            DeclaredUploadFileError::ContentTypeMismatch => Self::ContentTypeMismatch,
+            DeclaredUploadFileError::DeclaredContentLengthMismatch => {
+                Self::DeclaredContentLengthMismatch
+            }
+            DeclaredUploadFileError::ReceivedContentLengthMismatch => {
+                Self::ReceivedContentLengthMismatch
+            }
+            DeclaredUploadFileError::ChecksumMismatch => Self::ChecksumMismatch,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use uuid::Uuid;
 
     use super::*;
-    use crate::domain::DomainError;
+    use crate::domain::{DomainError, Sha256Digest};
 
     fn pending() -> AgentEvidenceUploadGrant {
         let issued_at = Utc.with_ymd_and_hms(2026, 7, 31, 12, 0, 0).unwrap();
@@ -514,7 +405,7 @@ mod tests {
         .unwrap();
 
         let debug = format!("{declaration:?}");
-        assert_eq!(debug, "AgentEvidenceUploadDeclaration([redacted])");
+        assert_eq!(debug, "DeclaredUploadFile([redacted])");
         assert!(!debug.contains("secret-report.pdf"));
         assert!(!debug.contains("application/secret"));
     }

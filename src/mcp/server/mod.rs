@@ -1,4 +1,5 @@
 mod agent_evidence_upload_grants;
+mod agent_policy_document_upload_grants;
 mod auditor_access_grants;
 mod common;
 mod controls;
@@ -6,6 +7,7 @@ mod document_grants;
 mod evidence;
 mod evidence_submissions;
 mod guide;
+mod machine_upload_descriptor;
 mod policies;
 mod policy_document_grants;
 mod resources;
@@ -24,6 +26,7 @@ use crate::{
     mcp::server::common::authorize_connection,
     services::{
         agent_evidence_upload_grants::AgentEvidenceUploadGrantService,
+        agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
@@ -68,6 +71,7 @@ pub struct ProofplaneMcp {
     evidence: EvidenceService,
     evidence_submissions: EvidenceSubmissionService,
     agent_evidence_upload_grants: AgentEvidenceUploadGrantService,
+    agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
     document_upload_grants: DocumentUploadGrantService,
     policy_document_upload_grants: PolicyDocumentUploadGrantService,
     auditor_access_grants: AuditorAccessGrantService,
@@ -82,6 +86,7 @@ pub(super) struct UploadDependencies {
     pub evidence_grants: DocumentUploadGrantService,
     pub policy_document_grants: PolicyDocumentUploadGrantService,
     pub agent_evidence_grants: AgentEvidenceUploadGrantService,
+    pub agent_policy_document_grants: AgentPolicyDocumentUploadGrantService,
     pub max_document_bytes: u64,
 }
 
@@ -99,6 +104,7 @@ impl ProofplaneMcp {
             evidence,
             evidence_submissions,
             agent_evidence_upload_grants: uploads.agent_evidence_grants,
+            agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
             document_upload_grants: uploads.evidence_grants,
             policy_document_upload_grants: uploads.policy_document_grants,
             auditor_access_grants,
@@ -115,6 +121,7 @@ impl ProofplaneMcp {
             + Self::evidence_tool_router()
             + Self::evidence_submissions_tool_router()
             + Self::agent_evidence_upload_grants_tool_router()
+            + Self::agent_policy_document_upload_grants_tool_router()
             + Self::document_grants_tool_router()
             + Self::policy_document_grants_tool_router()
             + Self::auditor_access_grants_tool_router()
@@ -275,6 +282,10 @@ mod tests {
             (
                 "prepare_evidence_submission_upload",
                 "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            ),
+            (
+                "prepare_policy_document_upload",
+                "Use this when a trusted runtime can read a local policy file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic policies.",
             ),
             (
                 "manage_policy_document",
@@ -506,7 +517,8 @@ mod tests {
                 | "detach_policy_from_control"
                 | "detach_policy_from_controls"
                 | "detach_control_from_policies"
-                | "manage_policy_document" => Some("policies"),
+                | "manage_policy_document"
+                | "prepare_policy_document_upload" => Some("policies"),
                 "create_auditor_access_link"
                 | "list_auditor_access_links"
                 | "revoke_auditor_access_link"

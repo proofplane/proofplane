@@ -8,6 +8,7 @@ use crate::{
         },
         paseto::{
             AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
+            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
             PolicyUploadSessionEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
@@ -21,6 +22,7 @@ use crate::{
     routes::{
         agent_connections::{self, AgentConnectionsState},
         agent_evidence_uploads::{self, AgentEvidenceUploadState},
+        agent_policy_document_uploads::{self, AgentPolicyDocumentUploadState},
         auditor_access::{self, AuditorAccessState},
         document_downloads::{self, DocumentDownloadState},
         document_upload_sessions::{self, DocumentUploadSessionState},
@@ -40,6 +42,10 @@ use crate::{
             AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         },
         agent_evidence_uploads::AgentEvidenceUploadService,
+        agent_policy_document_upload_grants::{
+            AgentPolicyDocumentUploadGrantService, AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+        },
+        agent_policy_document_uploads::AgentPolicyDocumentUploadService,
         auditor_access_grants::AuditorAccessGrantService,
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_auth_transactions::AuditorAuthTransactionService,
@@ -110,6 +116,29 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         dependencies.postgres.clone(),
         evidence_submission_service.clone(),
         agent_upload_grant_service.credential_verifier(),
+        dependencies.config.uploads.max_document_bytes,
+    );
+    let agent_policy_upload_grant_encryptor = AgentPolicyDocumentUploadGrantEncryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(AuthenticationError::from)?;
+    let agent_policy_upload_grant_decryptor = AgentPolicyDocumentUploadGrantDecryptor::from_config(
+        dependencies.config.server.public_api_base_url.clone(),
+        AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+        &dependencies.config.paseto.upload_grant,
+    )
+    .map_err(AuthenticationError::from)?;
+    let agent_policy_upload_grant_service = AgentPolicyDocumentUploadGrantService::new(
+        dependencies.postgres.clone(),
+        agent_policy_upload_grant_encryptor,
+        agent_policy_upload_grant_decryptor,
+    );
+    let agent_policy_document_upload_service = AgentPolicyDocumentUploadService::new(
+        dependencies.postgres.clone(),
+        dependencies.object_store.clone(),
+        agent_policy_upload_grant_service.credential_verifier(),
         dependencies.config.uploads.max_document_bytes,
     );
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
@@ -269,7 +298,14 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         }))
         .merge(agent_evidence_uploads::router(AgentEvidenceUploadState {
             service: agent_evidence_upload_service,
+            max_document_bytes: dependencies.config.uploads.max_document_bytes,
         }))
+        .merge(agent_policy_document_uploads::router(
+            AgentPolicyDocumentUploadState {
+                service: agent_policy_document_upload_service,
+                max_document_bytes: dependencies.config.uploads.max_document_bytes,
+            },
+        ))
         .merge(document_upload_sessions::router(
             DocumentUploadSessionState {
                 grants: document_upload_grant_service,

@@ -91,8 +91,9 @@ Input:
 
 `content_length` is required, non-negative, and no greater than
 `uploads.max_document_bytes`. Existing filename validation applies.
-`content_type` must be a non-empty, syntactically valid media type that can be
-represented in an HTTP `Content-Type` header. When supplied,
+`content_type` must be a non-empty, syntactically valid media type of at most
+255 bytes that can be represented in an HTTP `Content-Type` header. The shared
+declaration type and both machine-grant tables enforce the same bound. When supplied,
 `checksum_sha256` is exactly 64 lowercase hexadecimal characters.
 
 The tool requires `write_controls`. A missing, archived, or cross-workspace
@@ -145,9 +146,10 @@ declared one-file contract or idempotent completion state.
 | `issued_at`, `expires_at` | Short-lived validity window. |
 | `completed_at`, `document_id` | Null until atomic completion succeeds. |
 
-Persistence enforces non-empty bounded metadata, non-negative length, a valid
-optional digest, expiry after issuance, valid completion pairing, a unique
-completed document ID, and at most one completion per grant.
+Persistence enforces filenames and content types of at most 255 bytes,
+non-negative length, a valid optional digest, expiry after issuance, valid
+completion pairing, a unique completed document ID, and at most one completion
+per grant.
 
 Model the grant as a policy-specific aggregate with private state and
 read-only accessors. It owns exact credential-authority binding, expiry and
@@ -155,6 +157,24 @@ pending eligibility, declared-versus-received matching, rehydration
 consistency, and the one-way completion transition. Reuse the evidence grant's
 workspace snapshot persistence pattern rather than creating a second style of
 grant repository.
+
+### Revision: evidence aggregate and snapshot repository alignment (2026-08-01)
+
+Policy machine upload grants adopt the evidence grant aggregate and persistence
+boundary directly. The aggregate owns lifecycle transitions and invariants;
+the grant service owns policy eligibility, authorization, provenance, and
+completion orchestration. The private persistence record maps the complete
+aggregate snapshot, and the repository exposes only workspace-scoped `get` and
+transaction-backed `save` operations.
+
+`get` rehydrates the complete snapshot with `FOR UPDATE`. An autocommit
+verification read releases that lock immediately, while a transaction-backed
+completion read holds it through commit. `save` verifies only that the
+aggregate workspace matches the transaction workspace, then performs the
+tenant-guarded full-snapshot upsert. It does not interpret the operation that
+changed the aggregate or query policy and agent-connection relationships;
+those checks remain in workspace-scoped services and existing foreign keys.
+This revision changes no schema, HTTP, MCP, credential, or domain behavior.
 
 The opaque, versioned credential uses a distinct policy-upload audience and is
 bound to the persisted grant ID, workspace, policy, issuing user, issuing agent
@@ -181,10 +201,11 @@ grants receive one stable unavailable response that does not reveal tenant or
 authority details.
 
 The stored filename always comes from the grant. `Content-Type` and
-`Content-Length` must match the declaration. The route applies the configured
-body limit before streaming, and the ingestion service independently stops an
-oversized stream. Received length and optional SHA-256 are checked against the
-computed values.
+`Content-Length` must match the declaration. Credential and grant authority are
+verified before an oversized declaration or stream can be rejected. The route
+then applies the configured body limit while streaming, and the ingestion
+service independently stops an oversized stream. Received length and optional
+SHA-256 are checked against the computed values.
 
 The endpoint streams into a unique quarantine object for each attempt without
 buffering the complete body. First completion returns `201 Created` with
@@ -303,6 +324,12 @@ Runtime code added or refactored by this epic must not use `.expect(...)`.
 
 ## Revisions
 
+- 2026-08-01: Corrected the policy grant persistence boundary to match the
+  evidence aggregate and full-snapshot repository pattern; eligibility,
+  authorization, and relationship orchestration remain service concerns.
+- 2026-08-01: Aligned policy transfers with the corrected evidence authority
+  ordering, bounded shared content types to 255 bytes in the domain and both
+  machine-grant tables, and recorded issuance immediately after persistence.
 - 2026-08-01: Initial spec created from the shipped agent-native evidence
   upload flow. Chose a sibling policy-specific grant and endpoint, reused
   internal transfer machinery, and preserved explicit human-managed archival

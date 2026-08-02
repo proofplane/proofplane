@@ -5,7 +5,10 @@ use futures_core::Stream;
 use uuid::Uuid;
 
 use crate::{
-    domain::{CreateDocumentPayload, Document, DocumentId, DocumentOwner, PolicyId},
+    domain::{
+        AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId, DocumentOwner,
+        PolicyId, WorkspaceId,
+    },
     object_storage::{FilesystemObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
@@ -15,7 +18,9 @@ use crate::{
 
 use super::{
     agent_connections::AgentConnectionContext,
-    documents::{delete_staged_document, stage_document},
+    documents::{
+        delete_staged_document, stage_bounded_document, stage_document, BoundedStagingRequest,
+    },
     Error,
 };
 
@@ -75,6 +80,57 @@ impl PolicyDocumentService {
             checksum_sha256: staged.checksum_sha256,
             checksum_crc32c: staged.checksum_crc32c,
         })
+    }
+
+    pub(crate) async fn stage_agent_upload<S>(
+        &self,
+        grant: &AgentPolicyDocumentUploadGrant,
+        max_bytes: usize,
+        chunks: S,
+    ) -> Result<UploadPolicyDocumentPayload, Error>
+    where
+        S: Stream<Item = Result<Bytes, StorageError>> + Send,
+    {
+        let staged = stage_bounded_document(
+            &self.object_store,
+            BoundedStagingRequest {
+                workspace_id: grant.workspace_id(),
+                owner: DocumentOwner::Policy(grant.policy_id()),
+                upload_id: Uuid::new_v4(),
+                filename: grant.declaration().filename().to_owned(),
+                content_type: grant.declaration().content_type().to_owned(),
+                max_bytes,
+                cleanup_operation: "agent_policy_document_length_mismatch",
+            },
+            chunks,
+        )
+        .await?;
+
+        Ok(UploadPolicyDocumentPayload {
+            policy_id: grant.policy_id(),
+            filename: staged.filename,
+            content_type: staged.content_type,
+            content_length: staged.content_length,
+            object_key: staged.object_key,
+            checksum_sha256: staged.checksum_sha256,
+            checksum_crc32c: staged.checksum_crc32c,
+        })
+    }
+
+    pub(crate) async fn get_agent_upload_document(
+        &self,
+        workspace_id: WorkspaceId,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> Result<Option<Document>, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context_read(workspace_id, async move |context| {
+                context
+                    .get_policy_document_for_agent_upload(policy_id, document_id)
+                    .await
+            })
+            .await?)
     }
 
     pub async fn create(
@@ -194,7 +250,7 @@ impl PolicyDocumentService {
     }
 }
 
-fn policy_document_scan_requested_message(
+pub(crate) fn policy_document_scan_requested_message(
     document: &Document,
     request_id: Uuid,
 ) -> NewOutboxMessage {
