@@ -7,6 +7,7 @@ pub mod domain;
 pub mod errors;
 pub mod handlers;
 pub mod mcp;
+pub mod messaging;
 pub mod migrations;
 pub mod object_storage;
 pub mod observability;
