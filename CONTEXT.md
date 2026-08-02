@@ -24,3 +24,35 @@ _Avoid_: Human upload grant, presigned upload
 One transfer made under a machine upload grant; attempts may fail or race, but
 at most one completes the grant.
 _Avoid_: Evidence submission
+
+## Document Processing
+
+**Document**:
+A file artifact whose lifecycle records staging, malware scanning,
+finalization, failure, and archival for one evidence submission or policy.
+_Avoid_: Attachment, blob
+
+**Evidence document**:
+A document owned by one evidence submission.
+_Avoid_: Evidence submission
+
+**Policy document**:
+A document owned by one policy.
+_Avoid_: Policy attachment
+
+## Access and Identity
+
+**Agent connection**:
+A workspace-scoped relationship authorizing an agent client to act for a user
+with an explicit set of permissions.
+_Avoid_: Session, API key
+
+**Auditor access grant**:
+A workspace-scoped authority allowing an invited auditor to enter the auditor
+portal for a bounded period.
+_Avoid_: Auditor session, invitation token
+
+**OAuth authorization flow**:
+The lifecycle of one OAuth authorization request from preparation through
+consent, cancellation, code issuance, and consumption.
+_Avoid_: Login session, agent connection

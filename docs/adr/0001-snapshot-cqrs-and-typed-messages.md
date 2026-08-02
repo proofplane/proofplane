@@ -1,0 +1,21 @@
+# Use snapshot CQRS and typed integration messages
+
+Proofplane separates mutations into task-specific command handlers that load
+and save complete aggregate snapshots, and reads into query handlers that
+return purpose-built DTOs from the same Postgres database. Aggregate
+transitions may return explicit domain events, while only facts with an actual
+external reaction are translated into versioned integration commands or
+events and stored atomically in the outbox. We chose this over event sourcing,
+a separate read database, and a generic mediator because it preserves current
+synchronous consistency and operational simplicity while making write
+invariants, read models, and asynchronous contracts independent.
+
+## Consequences
+
+- Snapshots, not event streams, remain the write-side source of truth.
+- Commands and queries are invoked through concrete typed handlers; there is
+  no runtime handler registry or service locator.
+- Domain events are explicit transition results and are not replayed to
+  reconstruct aggregates.
+- Existing asynchronous document processing remains at-least-once and workers
+  retain compatibility with queued legacy messages during the cutover.
