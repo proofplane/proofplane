@@ -77,3 +77,19 @@ setup steps change.
 Do not commit credentials or production configuration. Override the default
 with `PROOFPLANE_CONFIG=path/to/config.yaml`. Treat `make reset-local` as
 destructive: it removes Docker volumes and `.local/storage`.
+
+## Agent skills
+
+### Issue tracker
+
+Work is tracked in local Markdown tickets under `docs/epics/<epic>/tickets/`.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Tickets retain their `Todo`/`Done` lifecycle status and use a separate five-role
+triage field. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Proofplane uses a single-context domain layout. See `docs/agents/domain.md`.
