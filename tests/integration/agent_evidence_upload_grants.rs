@@ -397,6 +397,78 @@ RETURNING id
 }
 
 #[tokio::test]
+async fn completed_machine_grant_snapshot_round_trips_immediately_before_expiry() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    let issued = app
+        .agent_evidence_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            evidence_id.into(),
+            coverage(),
+            declaration(),
+        )
+        .await
+        .expect("machine grant issues");
+    let document_id: Uuid = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+INSERT INTO documents (
+    workspace_id, owner_type, owner_id, filename, content_type, content_length,
+    object_key, checksum_sha256, checksum_crc32c, created_by_user_id
+)
+VALUES ($1, 'evidence_submission', $2, 'completed.pdf', 'application/pdf', 1,
+        $3, 'sha256', 'crc32c', $4)
+RETURNING id
+"#,
+            &[
+                &workspace_id,
+                &Uuid::from(issued.grant.submission_id()),
+                &format!("quarantine/{}/completed", issued.grant.id()),
+                &app.user_id(),
+            ],
+        )
+        .await
+        .expect("document fixture inserts")
+        .get("id");
+    let mut grant = issued.grant;
+    grant
+        .complete(
+            document_id.into(),
+            grant.expires_at() - Duration::milliseconds(1),
+        )
+        .expect("completion immediately before expiry is valid");
+    let grant_id = grant.id();
+    let user_id = grant.issued_by_user_id();
+    let connection_id = grant.issued_via_agent_connection_id();
+
+    let round_trips = app
+        .postgres()
+        .in_agent_connection_workspace_context(
+            workspace_id.into(),
+            user_id,
+            connection_id,
+            async move |context| {
+                let repository = context.agent_evidence_upload_grants();
+                repository.save(&grant).await?;
+                Ok(repository.get(grant_id, workspace_id.into()).await? == Some(grant))
+            },
+        )
+        .await
+        .expect("completed snapshot saves and reloads");
+    assert!(round_trips);
+}
+
+#[tokio::test]
 async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_purpose() {
     let app = TestApp::builder()
         .workspace("workspace", "Machine upload workspace")

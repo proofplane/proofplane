@@ -423,6 +423,77 @@ async fn policy_transactional_grant_reads_hold_a_row_lock_while_verification_rea
 }
 
 #[tokio::test]
+async fn completed_policy_machine_grant_snapshot_round_trips_immediately_before_expiry() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Policy machine grant workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let policy_id = create_policy(&app, workspace_id, "Completed policy").await;
+    let issued = app
+        .agent_policy_document_upload_grant_service()
+        .issue(
+            &app.agent_connection_context(workspace_id),
+            policy_id,
+            declaration(),
+        )
+        .await
+        .expect("grant issues");
+    let document_id: Uuid = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            r#"
+INSERT INTO documents (
+    workspace_id, owner_type, owner_id, filename, content_type, content_length,
+    object_key, checksum_sha256, checksum_crc32c, created_by_user_id
+)
+VALUES ($1, 'policy', $2, 'completed.pdf', 'application/pdf', 1,
+        $3, 'sha256', 'crc32c', $4)
+RETURNING id
+"#,
+            &[
+                &workspace_id,
+                &Uuid::from(policy_id),
+                &format!("quarantine/{}/completed", issued.grant.id()),
+                &app.user_id(),
+            ],
+        )
+        .await
+        .expect("document fixture inserts")
+        .get("id");
+    let mut grant = issued.grant;
+    grant
+        .complete(
+            document_id.into(),
+            grant.expires_at() - Duration::milliseconds(1),
+        )
+        .expect("completion immediately before expiry is valid");
+    let grant_id = grant.id();
+    let user_id = grant.issued_by_user_id();
+    let connection_id = grant.issued_via_agent_connection_id();
+
+    let round_trips = app
+        .postgres()
+        .in_agent_connection_workspace_context(
+            workspace_id.into(),
+            user_id,
+            connection_id,
+            async move |context| {
+                let repository = context.agent_policy_document_upload_grants();
+                repository.save(&grant).await?;
+                Ok(repository.get(grant_id, workspace_id.into()).await? == Some(grant))
+            },
+        )
+        .await
+        .expect("completed snapshot saves and reloads");
+    assert!(round_trips);
+}
+
+#[tokio::test]
 async fn policy_machine_grant_schema_rejects_invalid_metadata_and_lifecycle() {
     let app = TestApp::builder()
         .workspace("workspace", "Policy machine grant workspace")
