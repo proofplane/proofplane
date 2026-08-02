@@ -58,6 +58,14 @@ async fn document_worker_handlers_are_idempotent_for_duplicate_deliveries() {
         1,
         "duplicate scan delivery must enqueue finalization once"
     );
+    assert_eq!(
+        finalization_messages[0].correlation_id,
+        scan_message.correlation_id
+    );
+    assert_eq!(
+        finalization_messages[0].causation_id,
+        Some(scan_message.message_id)
+    );
 
     deliver_twice(&worker, &finalization_messages[0]).await;
 
@@ -91,6 +99,71 @@ async fn document_worker_handlers_are_idempotent_for_duplicate_deliveries() {
 }
 
 #[tokio::test]
+async fn legacy_scan_and_finalization_envelopes_retain_document_processing_behavior() {
+    let app = worker_test_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let document = upload_document(&app, workspace_id, submission_id, "legacy.txt").await;
+    let worker = app.worker_server().await;
+    let scan = outbox_message(&app, DOCUMENT_SCAN_REQUESTED, &document.id.to_string()).await;
+
+    worker
+        .post("/pubsub/messages")
+        .json(&legacy_pubsub_envelope(&scan))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let finalization = outbox_message(
+        &app,
+        DOCUMENT_FINALIZATION_REQUESTED,
+        &document.id.to_string(),
+    )
+    .await;
+    worker
+        .post("/pubsub/messages")
+        .json(&legacy_pubsub_envelope(&finalization))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    assert_eq!(document_status(&app, document.id).await, "uploaded");
+}
+
+#[tokio::test]
+async fn poison_typed_messages_are_acknowledged_without_document_state_changes() {
+    let app = worker_test_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let submission_id = create_submission(&app, workspace_id).await;
+    let document = upload_document(&app, workspace_id, submission_id, "poison.txt").await;
+    let worker = app.worker_server().await;
+    let scan = outbox_message(&app, DOCUMENT_SCAN_REQUESTED, &document.id.to_string()).await;
+    let base = typed_message_data(&scan);
+
+    let mut unknown_type = base.clone();
+    unknown_type["type"] = json!("UnknownCommand");
+    let mut unknown_version = base.clone();
+    unknown_version["version"] = json!(2);
+    let mut malformed_payload = base;
+    malformed_payload["payload"] = json!({ "object_key": 7 });
+
+    for poison in [unknown_type, unknown_version, malformed_payload] {
+        worker
+            .post("/pubsub/messages")
+            .json(&push_envelope(poison))
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+
+    assert_eq!(document_status(&app, document.id).await, "pending");
+    assert!(outbox_messages(
+        &app,
+        DOCUMENT_FINALIZATION_REQUESTED,
+        &document.id.to_string()
+    )
+    .await
+    .is_empty());
+}
+
+#[tokio::test]
 async fn document_scan_handler_coordinates_concrete_postgres_outcomes_and_retries() {
     let app = worker_test_app().await;
     let workspace_id = app.workspace_id("workspace");
@@ -105,6 +178,8 @@ async fn document_scan_handler_coordinates_concrete_postgres_outcomes_and_retrie
         5,
     );
     let clean_message = scan_worker_message(&clean, submission_id, Some(request_id), Some(1));
+    let clean_message_id =
+        Uuid::parse_str(&clean_message.message_id).expect("scan integration message ID is a UUID");
     clean_handler
         .handle_scan_requested(clean_message.clone())
         .await
@@ -119,6 +194,11 @@ async fn document_scan_handler_coordinates_concrete_postgres_outcomes_and_retrie
         outbox_messages(&app, DOCUMENT_FINALIZATION_REQUESTED, &clean.id.to_string()).await;
     assert_eq!(finalization_messages.len(), 1);
     assert_eq!(finalization_messages[0].request_id, Some(request_id));
+    assert_eq!(finalization_messages[0].correlation_id, Some(request_id));
+    assert_eq!(
+        finalization_messages[0].causation_id,
+        Some(clean_message_id)
+    );
 
     let malicious =
         upload_document_with_content(&app, workspace_id, submission_id, "malicious.txt", EICAR)
@@ -516,6 +596,23 @@ async fn outbox_messages(
 }
 
 fn pubsub_envelope(message: &OutboxMessage) -> Value {
+    push_envelope(typed_message_data(message))
+}
+
+fn typed_message_data(message: &OutboxMessage) -> Value {
+    json!({
+        "message_id": message.message_id,
+        "kind": message.message_kind,
+        "type": message.message_type,
+        "version": message.message_version,
+        "subject": message.subject,
+        "correlation_id": message.correlation_id,
+        "causation_id": message.causation_id,
+        "payload": message.payload,
+    })
+}
+
+fn legacy_pubsub_envelope(message: &OutboxMessage) -> Value {
     let data = json!({
         "event_type": message.event_type,
         "aggregate_type": message.aggregate_type,
@@ -524,9 +621,13 @@ fn pubsub_envelope(message: &OutboxMessage) -> Value {
         "payload": message.payload,
     });
 
+    push_envelope(data)
+}
+
+fn push_envelope(data: Value) -> Value {
     json!({
         "message": {
-            "messageId": format!("outbox-{}", message.id),
+            "messageId": Uuid::new_v4().to_string(),
             "data": STANDARD.encode(data.to_string()),
         },
         "deliveryAttempt": 1,
