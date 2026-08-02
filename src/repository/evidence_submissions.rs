@@ -428,6 +428,48 @@ SELECT
 }
 
 impl WorkspaceReadContext {
+    pub(crate) async fn get_agent_upload_document(
+        &self,
+        submission_id: EvidenceSubmissionId,
+        document_id: DocumentId,
+    ) -> Result<Option<Document>, Error> {
+        let rows = self
+            .client
+            .query(
+                r#"
+SELECT
+    a.id AS document_id,
+    a.owner_id AS document_submission_id,
+    a.filename,
+    a.content_type,
+    a.content_length,
+    a.object_key,
+    a.checksum_sha256,
+    a.checksum_crc32c,
+    a.created_by_user_id,
+    a.upload_status,
+    a.created_at
+FROM documents a
+JOIN evidence_submissions s
+  ON s.id = a.owner_id
+ AND a.owner_type = 'evidence_submission'
+JOIN evidence e ON e.id = s.evidence_id
+WHERE s.id = $1
+  AND a.id = $2
+  AND e.workspace_id = $3
+  AND a.workspace_id = e.workspace_id
+"#,
+                &[
+                    &Uuid::from(submission_id),
+                    &Uuid::from(document_id),
+                    &Uuid::from(self.workspace_id),
+                ],
+            )
+            .await?;
+
+        rows.first().map(evidence_document_from_row).transpose()
+    }
+
     pub async fn get_document_for_download_grant(
         &self,
         evidence_submission_id: EvidenceSubmissionId,

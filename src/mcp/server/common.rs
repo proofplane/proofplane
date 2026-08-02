@@ -23,7 +23,29 @@ pub(super) enum McpArgumentError {
     Missing { field: &'static str },
     InvalidUuid { field: &'static str },
     InvalidTimestamp { field: &'static str },
+    NegativeInteger { field: &'static str },
     DuplicateIds { field: &'static str, ids: Vec<Uuid> },
+}
+
+pub(super) fn required_arg<T>(
+    field: &'static str,
+    value: Option<T>,
+) -> Validation<T, McpArgumentError> {
+    match value {
+        Some(value) => Validation::valid(value),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
+}
+
+pub(super) fn required_non_negative_u64(
+    field: &'static str,
+    value: Option<i64>,
+) -> Validation<u64, McpArgumentError> {
+    match value {
+        Some(value) if value >= 0 => Validation::valid(value as u64),
+        Some(_) => Validation::invalid(McpArgumentError::NegativeInteger { field }),
+        None => Validation::invalid(McpArgumentError::Missing { field }),
+    }
 }
 
 pub(super) fn authorize_token_workspace(
@@ -150,6 +172,10 @@ impl From<McpArgumentError> for FieldIssue {
                 field,
                 message: "must be an RFC 3339 timestamp".to_owned(),
             },
+            McpArgumentError::NegativeInteger { field } => Self {
+                field,
+                message: "must be non-negative".to_owned(),
+            },
             McpArgumentError::DuplicateIds { field, ids } => Self {
                 field,
                 message: format!(
@@ -218,6 +244,18 @@ impl From<DomainError> for FieldIssue {
             DomainError::ReservedDocumentFilename => Self {
                 field: "filename",
                 message: "document filename must not be . or ..".to_owned(),
+            },
+            DomainError::InvalidDocumentContentType => Self {
+                field: "content_type",
+                message: "content_type must be a valid HTTP media type".to_owned(),
+            },
+            DomainError::DocumentContentLengthTooLarge { maximum } => Self {
+                field: "content_length",
+                message: format!("content_length must be at most {maximum} bytes"),
+            },
+            DomainError::InvalidDocumentSha256Checksum => Self {
+                field: "checksum_sha256",
+                message: "checksum_sha256 must be 64 lowercase hexadecimal characters".to_owned(),
             },
         }
     }

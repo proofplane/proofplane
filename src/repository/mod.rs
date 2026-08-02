@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
+mod agent_evidence_upload_grants;
 mod auditor_access_grants;
 mod auditor_access_sessions;
 mod auditor_auth_transactions;
@@ -20,10 +21,12 @@ mod oauth;
 mod outbox;
 mod policies;
 mod policy_document_upload_grants;
+mod snapshot;
 mod users;
 mod workspace_memberships;
 mod workspaces;
 
+pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
 pub use auditor_access_sessions::NewAuditorSession;
 pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
 pub use constraints::ConflictKind;

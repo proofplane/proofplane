@@ -2,9 +2,11 @@ use std::{env, fmt, io};
 
 use thiserror::Error;
 use tracing_subscriber::filter::EnvFilter;
+use uuid::Uuid;
 
 use crate::config::{LogFormat, ObservabilityConfig};
 
+pub(crate) mod agent_evidence_uploads;
 pub mod audit;
 
 pub const RUST_LOG: &str = "RUST_LOG";
@@ -12,6 +14,24 @@ pub const PROOFPLANE_CLI_LOG: &str = "PROOFPLANE_CLI_LOG";
 
 pub fn default_log_filter() -> &'static str {
     "info"
+}
+
+pub(crate) fn record_cleanup_failure(
+    error: &impl fmt::Display,
+    operation: &'static str,
+    request_id: Option<Uuid>,
+) {
+    metrics::counter!(
+        "proofplane_cleanup_total",
+        "operation" => operation,
+        "result" => "failed"
+    )
+    .increment(1);
+    if let Some(request_id) = request_id {
+        tracing::error!(%error, %request_id, operation, result = "failed", "cleanup failed");
+    } else {
+        tracing::error!(%error, operation, result = "failed", "cleanup failed");
+    }
 }
 
 pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), Error> {

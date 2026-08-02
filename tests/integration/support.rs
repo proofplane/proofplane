@@ -17,6 +17,10 @@ use futures_util::stream;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::services::{
     agent_connections::{digest_secret, AgentConnectionContext},
+    agent_evidence_upload_grants::{
+        AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+    },
+    agent_evidence_uploads::AgentEvidenceUploadService,
     document_downloads::DocumentDownloadService,
     document_upload_grants::DocumentUploadGrantService,
     evidence::EvidenceService,
@@ -31,6 +35,7 @@ use proofplane::{
             VerifiedMcpClaims, VerifyError,
         },
         paseto::{
+            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
             PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
         },
@@ -99,17 +104,19 @@ pub async fn submit_evidence_file(
     )
     .expect("coverage window is valid");
     let bytes = Bytes::copy_from_slice(content);
-    let mut payload = service
-        .upload_document(
+    let payload = service
+        .stage_document(
             &connection,
-            submission_id.into(),
-            filename.to_owned(),
-            "text/plain".to_owned(),
-            stream::once(async move { Ok(bytes) }),
+            proofplane::services::evidence_submissions::StageEvidenceDocumentInput {
+                evidence_submission_id: submission_id.into(),
+                filename: filename.to_owned(),
+                content_type: "text/plain".to_owned(),
+                max_bytes: app.app_config.uploads.max_document_bytes,
+                chunks: stream::once(async move { Ok(bytes) }),
+            },
         )
         .await
         .expect("document object uploads");
-    payload.checksum_crc32c = crc32c_base64(content);
     let document = service
         .create_submission(
             &connection,
@@ -144,6 +151,20 @@ where
     F: FnOnce(Uuid) -> Fut,
     Fut: Future<Output = T>,
 {
+    let (output, records) = capture_logs(capture).await;
+    let records = records
+        .into_iter()
+        .filter(|record| record["fields"]["type"] == "audit_log")
+        .collect();
+
+    (output, records)
+}
+
+pub async fn capture_logs<F, Fut, T>(capture: F) -> (T, Vec<Value>)
+where
+    F: FnOnce(Uuid) -> Fut,
+    Fut: Future<Output = T>,
+{
     let sink = audit_log_sink();
     let request_id = Uuid::new_v4();
     let start = sink.lock().expect("audit log sink locks").len();
@@ -156,10 +177,7 @@ where
         .expect("audit logs are UTF-8")
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|record| {
-            record["fields"]["type"] == "audit_log"
-                && record["fields"]["request_id"].as_str() == Some(request_id.as_str())
-        })
+        .filter(|record| record["fields"]["request_id"].as_str() == Some(request_id.as_str()))
         .collect();
 
     (output, records)
@@ -176,7 +194,9 @@ fn audit_log_sink() -> Arc<StdMutex<Vec<u8>>> {
                 .with_file(false)
                 .with_line_number(false)
                 .with_writer(SharedWriter(sink.clone()))
-                .with_env_filter(EnvFilter::new("proofplane::audit=info"))
+                .with_env_filter(EnvFilter::new(
+                    "proofplane::audit=info,proofplane::observability=error",
+                ))
                 .finish();
             tracing::subscriber::set_global_default(subscriber)
                 .expect("integration audit tracing subscriber installs");
@@ -579,6 +599,35 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
         )
     }
 
+    pub fn agent_evidence_upload_grant_service(&self) -> AgentEvidenceUploadGrantService {
+        let issuer = self.app_config.server.public_api_base_url.clone();
+        AgentEvidenceUploadGrantService::new(
+            self.postgres.clone(),
+            AgentEvidenceUploadGrantEncryptor::from_config(
+                issuer.clone(),
+                AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent evidence upload grant encryptor initializes"),
+            AgentEvidenceUploadGrantDecryptor::from_config(
+                issuer,
+                AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent evidence upload grant decryptor initializes"),
+        )
+    }
+
+    pub fn agent_evidence_upload_service(&self) -> AgentEvidenceUploadService {
+        let grant_service = self.agent_evidence_upload_grant_service();
+        AgentEvidenceUploadService::new(
+            self.postgres.clone(),
+            EvidenceSubmissionService::new(self.postgres.clone(), self.object_store.clone()),
+            grant_service.credential_verifier(),
+            self.app_config.uploads.max_document_bytes,
+        )
+    }
+
     pub fn document_download_service(&self) -> DocumentDownloadService {
         let issuer = self.app_config.server.public_api_base_url.clone();
         DocumentDownloadService::new(
@@ -748,6 +797,18 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             &self.app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes");
+        let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("agent upload grant encryptor initializes");
+        let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
+            self.app_config.server.public_api_base_url.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &self.app_config.paseto.upload_grant,
+        )
+        .expect("agent upload grant decryptor initializes");
         let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -773,8 +834,11 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             download_grant_decryptor,
             upload_grant_encryptor,
             upload_grant_decryptor,
+            agent_upload_grant_encryptor,
+            agent_upload_grant_decryptor,
             policy_upload_grant_encryptor,
             policy_upload_grant_decryptor,
+            max_document_bytes: self.app_config.uploads.max_document_bytes as u64,
             health: HealthConfig {
                 live_path: "/livez".to_owned(),
                 ready_path: "/readyz".to_owned(),
@@ -840,6 +904,11 @@ impl TestAppBuilder {
 
     pub fn with_clamav(mut self) -> Self {
         self.clamav = true;
+        self
+    }
+
+    pub fn with_max_document_bytes(mut self, max_document_bytes: usize) -> Self {
+        self.max_document_bytes = max_document_bytes;
         self
     }
 

@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CoverageWindow, CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document,
-        DocumentId, DocumentOwner, EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload,
+        CreateEvidenceSubmissionPayload, Document, DocumentId, DocumentOwner, EvidenceId,
+        EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
@@ -14,7 +15,7 @@ use crate::{
 
 use super::{
     agent_connections::AgentConnectionContext,
-    documents::{delete_staged_document, stage_document},
+    documents::{delete_staged_document, stage_evidence_document},
 };
 use bytes::Bytes;
 use futures_core::Stream;
@@ -34,8 +35,16 @@ impl Clone for EvidenceSubmissionService {
     }
 }
 
+pub struct StageEvidenceDocumentInput<S> {
+    pub evidence_submission_id: EvidenceSubmissionId,
+    pub filename: String,
+    pub content_type: String,
+    pub max_bytes: usize,
+    pub chunks: S,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadEvidenceDocumentPayload {
+pub struct StagedEvidenceDocument {
     pub evidence_submission_id: EvidenceSubmissionId,
     pub filename: String,
     pub content_type: String,
@@ -110,29 +119,26 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn upload_document<S>(
+    pub async fn stage_document<S>(
         &self,
         connection: &AgentConnectionContext,
-        submission_id: EvidenceSubmissionId,
-        filename: String,
-        content_type: String,
-        chunks: S,
-    ) -> Result<UploadEvidenceDocumentPayload, Error>
+        input: StageEvidenceDocumentInput<S>,
+    ) -> Result<StagedEvidenceDocument, Error>
     where
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
-        let staged = stage_document(
+        let staged = stage_evidence_document(
             &self.object_store,
             connection.workspace_id,
-            DocumentOwner::EvidenceSubmission(submission_id),
-            Uuid::new_v4(),
-            filename,
-            content_type,
-            chunks,
+            input.evidence_submission_id,
+            input.filename,
+            input.content_type,
+            input.max_bytes,
+            input.chunks,
         )
         .await?;
-        Ok(UploadEvidenceDocumentPayload {
-            evidence_submission_id: submission_id,
+        Ok(StagedEvidenceDocument {
+            evidence_submission_id: input.evidence_submission_id,
             filename: staged.filename,
             content_type: staged.content_type,
             content_length: staged.content_length,
@@ -140,6 +146,52 @@ impl EvidenceSubmissionService {
             checksum_sha256: staged.checksum_sha256,
             checksum_crc32c: staged.checksum_crc32c,
         })
+    }
+
+    pub(crate) async fn stage_agent_upload<S>(
+        &self,
+        grant: &AgentEvidenceUploadGrant,
+        max_bytes: usize,
+        chunks: S,
+    ) -> Result<StagedEvidenceDocument, Error>
+    where
+        S: Stream<Item = Result<Bytes, StorageError>> + Send,
+    {
+        let staged = stage_evidence_document(
+            &self.object_store,
+            grant.workspace_id(),
+            grant.submission_id(),
+            grant.declaration().filename().to_owned(),
+            grant.declaration().content_type().to_owned(),
+            max_bytes,
+            chunks,
+        )
+        .await?;
+        Ok(StagedEvidenceDocument {
+            evidence_submission_id: grant.submission_id(),
+            filename: staged.filename,
+            content_type: staged.content_type,
+            content_length: staged.content_length,
+            object_key: staged.object_key,
+            checksum_sha256: staged.checksum_sha256,
+            checksum_crc32c: staged.checksum_crc32c,
+        })
+    }
+
+    pub(crate) async fn get_agent_upload_document(
+        &self,
+        workspace_id: WorkspaceId,
+        submission_id: EvidenceSubmissionId,
+        document_id: DocumentId,
+    ) -> Result<Option<Document>, Error> {
+        Ok(self
+            .repository
+            .in_workspace_context_read(workspace_id, async move |context| {
+                context
+                    .get_agent_upload_document(submission_id, document_id)
+                    .await
+            })
+            .await?)
     }
 
     pub async fn delete_uploaded_document_object(&self, object_key: &str) -> Result<(), Error> {
@@ -153,7 +205,7 @@ impl EvidenceSubmissionService {
         submission_id: EvidenceSubmissionId,
         evidence_id: EvidenceId,
         coverage: CoverageWindow,
-        payload: UploadEvidenceDocumentPayload,
+        payload: StagedEvidenceDocument,
     ) -> Result<Option<Document>, Error> {
         let object_key = payload.object_key.clone();
         let submission_payload = CreateEvidenceSubmissionPayload {
@@ -232,7 +284,10 @@ impl EvidenceSubmissionService {
     }
 }
 
-fn document_scan_requested_message(document: &Document, request_id: Uuid) -> NewOutboxMessage {
+pub(crate) fn document_scan_requested_message(
+    document: &Document,
+    request_id: Uuid,
+) -> NewOutboxMessage {
     NewOutboxMessage {
         topic: TopicName::new(MESSAGE_BUS_TOPIC),
         event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),

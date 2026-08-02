@@ -1,4 +1,5 @@
 mod agent_connection;
+mod agent_evidence_upload_grant;
 mod auditor_access_grant;
 mod auditor_access_session;
 mod auditor_auth_transaction;
@@ -21,6 +22,10 @@ mod workspace;
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
     NewPendingAgentConnection, UserAgentConnection,
+};
+pub use agent_evidence_upload_grant::{
+    AgentEvidenceUploadAuthority, AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant,
+    AgentEvidenceUploadGrantError, AgentEvidenceUploadGrantId,
 };
 pub use auditor_access_grant::{
     AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,

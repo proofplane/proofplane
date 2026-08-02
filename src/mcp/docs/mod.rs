@@ -84,4 +84,25 @@ mod tests {
             assert_eq!(find_topic(topic.topic), Some(&topic));
         }
     }
+
+    #[test]
+    fn submitting_evidence_distinguishes_human_and_trusted_runtime_uploads() {
+        let guide = find_topic("submitting-evidence").expect("submitting evidence guide exists");
+
+        for expected in [
+            "Human browser upload",
+            "Trusted-runtime machine upload",
+            "manage_evidence_submissions",
+            "prepare_evidence_submission_upload",
+            "Content-Length",
+            "get_evidence_submission",
+            "same descriptor",
+            "File bytes and local paths never pass through MCP or the model",
+        ] {
+            assert!(
+                guide.markdown.contains(expected),
+                "guide contains {expected:?}"
+            );
+        }
+    }
 }

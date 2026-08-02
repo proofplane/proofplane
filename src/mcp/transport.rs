@@ -17,11 +17,12 @@ use tracing::Span;
 
 use super::{
     auth::{authenticate_request, AuthenticationState},
-    server::{DocumentGrantServices, ProofplaneMcp},
+    server::{ProofplaneMcp, UploadDependencies},
 };
 use crate::authentication::paseto::{
-    DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
-    PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
+    AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor, DownloadGrantDecryptor,
+    DownloadGrantEncryptor, PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor,
+    UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
@@ -39,6 +40,7 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
+        agent_evidence_upload_grants::AgentEvidenceUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
@@ -69,8 +71,11 @@ pub struct McpAppDependencies<V> {
     pub download_grant_decryptor: DownloadGrantDecryptor,
     pub upload_grant_encryptor: UploadGrantEncryptor,
     pub upload_grant_decryptor: UploadGrantDecryptor,
+    pub agent_upload_grant_encryptor: AgentEvidenceUploadGrantEncryptor,
+    pub agent_upload_grant_decryptor: AgentEvidenceUploadGrantDecryptor,
     pub policy_upload_grant_encryptor: PolicyUploadGrantEncryptor,
     pub policy_upload_grant_decryptor: PolicyUploadGrantDecryptor,
+    pub max_document_bytes: u64,
     pub health: HealthConfig,
     pub allowed_hosts: Vec<String>,
     pub cancellation_token: CancellationToken,
@@ -90,8 +95,11 @@ impl<V> Clone for McpAppDependencies<V> {
             download_grant_decryptor: self.download_grant_decryptor.clone(),
             upload_grant_encryptor: self.upload_grant_encryptor.clone(),
             upload_grant_decryptor: self.upload_grant_decryptor.clone(),
+            agent_upload_grant_encryptor: self.agent_upload_grant_encryptor.clone(),
+            agent_upload_grant_decryptor: self.agent_upload_grant_decryptor.clone(),
             policy_upload_grant_encryptor: self.policy_upload_grant_encryptor.clone(),
             policy_upload_grant_decryptor: self.policy_upload_grant_decryptor.clone(),
+            max_document_bytes: self.max_document_bytes,
             health: self.health.clone(),
             allowed_hosts: self.allowed_hosts.clone(),
             cancellation_token: self.cancellation_token.clone(),
@@ -114,6 +122,11 @@ where
         dependencies.upload_grant_encryptor,
         dependencies.upload_grant_decryptor,
     );
+    let agent_evidence_upload_grants = AgentEvidenceUploadGrantService::new(
+        dependencies.postgres.clone(),
+        dependencies.agent_upload_grant_encryptor,
+        dependencies.agent_upload_grant_decryptor,
+    );
     let policy_document_upload_grants = PolicyDocumentUploadGrantService::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
@@ -131,9 +144,11 @@ where
         ProofplaneMcp::new(
             evidence,
             evidence_submissions,
-            DocumentGrantServices {
-                evidence: document_upload_grants,
-                policy: policy_document_upload_grants,
+            UploadDependencies {
+                evidence_grants: document_upload_grants,
+                policy_document_grants: policy_document_upload_grants,
+                agent_evidence_grants: agent_evidence_upload_grants,
+                max_document_bytes: dependencies.max_document_bytes,
             },
             auditor_access_grants,
             controls,

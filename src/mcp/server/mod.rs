@@ -1,3 +1,4 @@
+mod agent_evidence_upload_grants;
 mod auditor_access_grants;
 mod common;
 mod controls;
@@ -22,6 +23,7 @@ use rmcp::{
 use crate::{
     mcp::server::common::authorize_connection,
     services::{
+        agent_evidence_upload_grants::AgentEvidenceUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
@@ -65,25 +67,29 @@ fn server_instructions() -> String {
 pub struct ProofplaneMcp {
     evidence: EvidenceService,
     evidence_submissions: EvidenceSubmissionService,
+    agent_evidence_upload_grants: AgentEvidenceUploadGrantService,
     document_upload_grants: DocumentUploadGrantService,
     policy_document_upload_grants: PolicyDocumentUploadGrantService,
     auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
     policies: PolicyService,
     public_api_base_url: Url,
+    max_document_bytes: u64,
     tool_router: ToolRouter<Self>,
 }
 
-pub(super) struct DocumentGrantServices {
-    pub evidence: DocumentUploadGrantService,
-    pub policy: PolicyDocumentUploadGrantService,
+pub(super) struct UploadDependencies {
+    pub evidence_grants: DocumentUploadGrantService,
+    pub policy_document_grants: PolicyDocumentUploadGrantService,
+    pub agent_evidence_grants: AgentEvidenceUploadGrantService,
+    pub max_document_bytes: u64,
 }
 
 impl ProofplaneMcp {
     pub(super) fn new(
         evidence: EvidenceService,
         evidence_submissions: EvidenceSubmissionService,
-        document_grants: DocumentGrantServices,
+        uploads: UploadDependencies,
         auditor_access_grants: AuditorAccessGrantService,
         controls: ControlService,
         policies: PolicyService,
@@ -92,12 +98,14 @@ impl ProofplaneMcp {
         Self {
             evidence,
             evidence_submissions,
-            document_upload_grants: document_grants.evidence,
-            policy_document_upload_grants: document_grants.policy,
+            agent_evidence_upload_grants: uploads.agent_evidence_grants,
+            document_upload_grants: uploads.evidence_grants,
+            policy_document_upload_grants: uploads.policy_document_grants,
             auditor_access_grants,
             controls,
             policies,
             public_api_base_url,
+            max_document_bytes: uploads.max_document_bytes,
             tool_router: Self::tool_router(),
         }
     }
@@ -106,6 +114,7 @@ impl ProofplaneMcp {
         ToolRouter::new()
             + Self::evidence_tool_router()
             + Self::evidence_submissions_tool_router()
+            + Self::agent_evidence_upload_grants_tool_router()
             + Self::document_grants_tool_router()
             + Self::policy_document_grants_tool_router()
             + Self::auditor_access_grants_tool_router()
@@ -261,7 +270,11 @@ mod tests {
             ),
             (
                 "manage_evidence_submissions",
-                "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+                "Use this when a human will upload in a browser: create a short-lived bearer-secret URL for one or more evidence files in a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            ),
+            (
+                "prepare_evidence_submission_upload",
+                "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
             ),
             (
                 "manage_policy_document",
@@ -467,7 +480,8 @@ mod tests {
                 | "list_evidence_submissions"
                 | "get_evidence_submission"
                 | "get_latest_evidence_submission"
-                | "manage_evidence_submissions" => Some("submitting-evidence"),
+                | "manage_evidence_submissions"
+                | "prepare_evidence_submission_upload" => Some("submitting-evidence"),
                 "list_frameworks"
                 | "list_framework_requirements"
                 | "list_controls"

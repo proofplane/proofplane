@@ -4,7 +4,6 @@ use super::{ids::uuid_id, AgentConnectionId, Document, DomainError, EvidenceId, 
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(DocumentUploadGrantId);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoverageWindow {
     pub valid_from: DateTime<Utc>,

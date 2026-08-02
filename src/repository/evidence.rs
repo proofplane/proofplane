@@ -12,6 +12,32 @@ use crate::{
 use super::Error;
 
 impl WorkspaceTransactionContext<'_> {
+    pub async fn get_evidence(&self, id: EvidenceId) -> Result<Option<Evidence>, Error> {
+        let rows = self
+            .transaction
+            .query(
+                r#"
+SELECT
+    id,
+    workspace_id,
+    title,
+    description,
+    collection_instructions,
+    status,
+    created_at,
+    updated_at
+FROM evidence
+WHERE id = $1
+  AND workspace_id = $2
+FOR KEY SHARE
+"#,
+                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+
+        rows.into_iter().next().map(evidence_from_row).transpose()
+    }
+
     pub async fn create_evidence(
         &self,
         payload: &CreateEvidencePayload,

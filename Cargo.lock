@@ -2391,6 +2391,7 @@ dependencies = [
  "jwtk",
  "metrics",
  "metrics-exporter-prometheus",
+ "mime",
  "pasetors",
  "prost-types",
  "refinery",

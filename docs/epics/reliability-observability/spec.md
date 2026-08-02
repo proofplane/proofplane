@@ -73,7 +73,7 @@ document remains `finalizing` for operational recovery.
 
 ## Metrics Contract
 
-Use the `proof_` prefix. Allowed labels are matched route, method, status class,
+Use the `proofplane_` prefix. Allowed labels are matched route, method, status class,
 operation, dependency, permission, event type, and coarse result.
 Never label with workspace, actor, request, object, submission, document,
 credential, error string, or raw path.
@@ -142,7 +142,9 @@ Stable event names are:
 - `evidence_document_download_grant.issued`;
 - `evidence_document_download_grant.redeemed`;
 - `evidence_document_scan.completed`;
-- `evidence_document_finalization.completed`.
+- `evidence_document_finalization.completed`;
+- `agent_evidence_upload_grant.issued`;
+- `agent_evidence_upload.completed`.
 
 Allowed fields include workspace ID, user ID, agent connection ID, system
 client, request correlation ID, event name, outcome, evidence ID,
@@ -171,6 +173,8 @@ deterministic alone and in the full integration target.
 
 ## Revisions
 
+- 2026-08-01: Reconciled the metric prefix with the shipped `proofplane_`
+  application families and added the agent-native upload lifecycle events.
 - 2026-06-11: Reconciled the plan with existing concrete worker rollback
   coverage and removed stale claims that all failure work was unimplemented.
 - 2026-06-11: Replaced database-backed audit events and query APIs with

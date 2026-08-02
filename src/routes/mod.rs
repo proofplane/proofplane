@@ -1,4 +1,5 @@
 pub mod agent_connections;
+pub mod agent_evidence_uploads;
 pub mod auditor_access;
 pub mod authentication;
 pub mod document_downloads;

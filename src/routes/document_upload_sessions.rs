@@ -12,16 +12,11 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use futures_util::stream;
 use serde::Deserialize;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
 use uuid::Uuid;
 
 use crate::{
@@ -41,7 +36,9 @@ use crate::{
         document_downloads::DownloadGrantIssuer,
         document_downloads::{DocumentDownloadService, DownloadError},
         document_upload_grants::{DocumentUploadGrantService, UploadGrantError},
-        evidence_submissions::{EvidenceSubmissionService, UploadEvidenceDocumentPayload},
+        evidence_submissions::{
+            EvidenceSubmissionService, StageEvidenceDocumentInput, StagedEvidenceDocument,
+        },
         upload_sessions::{
             UploadSessionError, UploadSessionIssuer, UploadSessionTokenService,
             VerifiedUploadSession,
@@ -173,6 +170,7 @@ async fn upload_file(
         &connection,
         submission_id,
         multipart,
+        state.max_document_bytes,
         DocumentUploadDigest::ComputeOnly,
     )
     .await
@@ -712,8 +710,9 @@ async fn document_upload_from_multipart(
     connection: &AgentConnectionContext,
     evidence_submission_id: EvidenceSubmissionId,
     mut multipart: Multipart,
+    max_document_bytes: usize,
     digest: DocumentUploadDigest,
-) -> Result<UploadEvidenceDocumentPayload, ApiError> {
+) -> Result<StagedEvidenceDocument, ApiError> {
     let field = multipart
         .next_field()
         .await
@@ -744,19 +743,19 @@ async fn document_upload_from_multipart(
         .into_result()
         .map_err(domain_errors)?;
 
-    let crc32c = Arc::new(AtomicU32::new(0));
-    let chunks = file_chunks(field, Arc::clone(&crc32c));
-    let mut uploaded_file = service
-        .upload_document(
+    let chunks = file_chunks(field);
+    let uploaded_file = service
+        .stage_document(
             connection,
-            evidence_submission_id,
-            filename,
-            content_type,
-            chunks,
+            StageEvidenceDocumentInput {
+                evidence_submission_id,
+                filename,
+                content_type,
+                max_bytes: max_document_bytes,
+                chunks,
+            },
         )
         .await?;
-
-    let actual_crc32c = crc32c.load(Ordering::Relaxed);
 
     if digest == DocumentUploadDigest::ComputeOnly
         && multipart
@@ -771,7 +770,6 @@ async fn document_upload_from_multipart(
         ]));
     }
 
-    uploaded_file.checksum_crc32c = BASE64_STANDARD.encode(actual_crc32c.to_be_bytes());
     Ok(uploaded_file)
 }
 
@@ -788,19 +786,11 @@ fn multipart_error(error: MultipartError) -> ApiError {
 
 fn file_chunks(
     field: Field<'_>,
-    crc32c: Arc<AtomicU32>,
 ) -> impl Stream<Item = Result<Bytes, crate::object_storage::StorageError>> + Send + '_ {
-    stream::try_unfold(field, move |mut field| {
-        let crc32c = Arc::clone(&crc32c);
-        async move {
-            match field.chunk().await.map_err(multipart_stream_error)? {
-                Some(chunk) => {
-                    let current = crc32c.load(Ordering::Relaxed);
-                    crc32c.store(crc32c::crc32c_append(current, &chunk), Ordering::Relaxed);
-                    Ok(Some((chunk, field)))
-                }
-                None => Ok(None),
-            }
+    stream::try_unfold(field, |mut field| async move {
+        match field.chunk().await.map_err(multipart_stream_error)? {
+            Some(chunk) => Ok(Some((chunk, field))),
+            None => Ok(None),
         }
     })
 }

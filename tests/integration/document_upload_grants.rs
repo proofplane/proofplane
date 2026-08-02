@@ -1,14 +1,18 @@
+use std::{fs, path::PathBuf};
+
 use axum::http::StatusCode;
 use axum_test::multipart::{MultipartForm, Part};
+use futures_util::StreamExt;
 use proofplane::{
     domain::{CoverageWindow, EvidenceId},
+    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
     services::document_upload_grants::UploadGrantError,
 };
 use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
-use super::support::TestApp;
+use super::support::{crc32c_base64, TestApp};
 
 #[tokio::test]
 async fn upload_grant_redeems_once_and_session_creates_one_submission_per_file() {
@@ -82,6 +86,54 @@ async fn upload_grant_redeems_once_and_session_creates_one_submission_per_file()
 }
 
 #[tokio::test]
+async fn browser_upload_preserves_submission_metadata_provenance_and_scan_enqueueing() {
+    let app = upload_app().await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Upload metadata").await;
+    let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
+    let content = b"browser report";
+
+    let response = app
+        .server()
+        .post("/evidence-document-uploads/files")
+        .add_header("cookie", cookie)
+        .multipart(upload_form(content, "report.txt"))
+        .await;
+
+    response.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(response.header("location"), "/evidence-document-uploads");
+
+    let row = uploaded_document(&app, evidence_id).await;
+    assert_eq!(row.filename, "report.txt");
+    assert_eq!(row.content_type, "text/plain");
+    assert_eq!(row.content_length, content.len() as i64);
+    assert_eq!(
+        row.checksum_sha256,
+        "e3b5d3940dfa9e79884c7f553949341f0b3a4ce1dced844511ef17df138aeded"
+    );
+    assert_eq!(row.checksum_crc32c, crc32c_base64(content));
+    assert_eq!(row.upload_status, "pending");
+    assert_eq!(row.submitted_by_agent_connection_id, app.api_token_id());
+    assert_eq!(row.created_by_user_id, app.user_id());
+    assert_eq!(row.outbox_count, 1);
+
+    let store = FilesystemObjectStore::new(app.object_storage_root())
+        .await
+        .expect("object store opens");
+    let object = store
+        .get_object(&ObjectKey::parse(row.object_key).expect("quarantine key parses"))
+        .await
+        .expect("quarantined upload reads");
+    let stored = object
+        .chunks
+        .map(|chunk| chunk.expect("quarantine chunk reads"))
+        .collect::<Vec<_>>()
+        .await
+        .concat();
+    assert_eq!(stored, content);
+}
+
+#[tokio::test]
 async fn concurrent_browser_uploads_create_distinct_single_document_submissions() {
     let app = upload_app().await;
     let workspace_id = app.workspace_id("workspace");
@@ -138,32 +190,71 @@ async fn upload_session_rejects_invalid_forms_and_conceals_unavailable_sessions(
         .await
         .assert_status_not_found();
 
-    for form in [
-        MultipartForm::new().add_part("note", Part::text("not a file")),
-        upload_form(b"bytes", "path/file.txt"),
-        MultipartForm::new()
-            .add_part(
-                "file",
-                Part::bytes(b"one".to_vec())
-                    .file_name("one.txt")
-                    .mime_type("text/plain"),
-            )
-            .add_part(
-                "file",
-                Part::bytes(b"two".to_vec())
-                    .file_name("two.txt")
-                    .mime_type("text/plain"),
-            ),
+    for (form, expected_message) in [
+        (
+            MultipartForm::new().add_part("note", Part::text("not a file")),
+            "multipart upload field for file must have correct name",
+        ),
+        (
+            upload_form(b"bytes", "path/file.txt"),
+            "document filename contains unsupported characters",
+        ),
+        (
+            MultipartForm::new()
+                .add_part(
+                    "file",
+                    Part::bytes(b"one".to_vec())
+                        .file_name("one.txt")
+                        .mime_type("text/plain"),
+                )
+                .add_part(
+                    "file",
+                    Part::bytes(b"two".to_vec())
+                        .file_name("two.txt")
+                        .mime_type("text/plain"),
+                ),
+            "browser upload requires exactly one file field",
+        ),
     ] {
         let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
-        app.server()
+        let response = app
+            .server()
             .post("/evidence-document-uploads/files")
             .add_header("cookie", cookie)
             .multipart(form)
-            .await
-            .assert_status_bad_request();
+            .await;
+        response.assert_status_bad_request();
+        assert!(response
+            .text()
+            .contains(&format!("Upload failed: {expected_message}")));
     }
     assert!(submission_documents(&app, evidence_id).await.is_empty());
+    assert!(files_under(app.object_storage_root()).is_empty());
+}
+
+#[tokio::test]
+async fn browser_upload_over_configured_limit_returns_existing_error_and_stores_nothing() {
+    let app = TestApp::builder()
+        .with_max_document_bytes(1024)
+        .workspace("workspace", "Upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Oversized upload").await;
+    let cookie = upload_session_cookie(&app, workspace_id, evidence_id).await;
+
+    let response = app
+        .server()
+        .post("/evidence-document-uploads/files")
+        .add_header("cookie", cookie)
+        .multipart(upload_form(&vec![b'x'; 2048], "large.txt"))
+        .await;
+
+    response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(response.text().contains("Upload failed: file is too large"));
+    assert!(submission_documents(&app, evidence_id).await.is_empty());
+    assert!(files_under(app.object_storage_root()).is_empty());
 }
 
 #[tokio::test]
@@ -344,6 +435,83 @@ struct SubmissionDocument {
     filename: String,
     valid_from: chrono::DateTime<chrono::Utc>,
     valid_until: chrono::DateTime<chrono::Utc>,
+}
+
+struct UploadedDocument {
+    filename: String,
+    content_type: String,
+    content_length: i64,
+    object_key: String,
+    checksum_sha256: String,
+    checksum_crc32c: String,
+    upload_status: String,
+    submitted_by_agent_connection_id: Uuid,
+    created_by_user_id: Uuid,
+    outbox_count: i64,
+}
+
+async fn uploaded_document(app: &TestApp, evidence_id: Uuid) -> UploadedDocument {
+    let row = app
+        .postgres()
+        .get()
+        .await
+        .expect("connection opens")
+        .query_one(
+            r#"
+SELECT
+    d.filename,
+    d.content_type,
+    d.content_length,
+    d.object_key,
+    d.checksum_sha256,
+    d.checksum_crc32c,
+    d.upload_status,
+    s.submitted_by_agent_connection_id,
+    d.created_by_user_id,
+    count(o.id) AS outbox_count
+FROM evidence_submissions s
+JOIN documents d
+  ON d.owner_type = 'evidence_submission'
+ AND d.owner_id = s.id
+LEFT JOIN outbox_messages o
+  ON o.aggregate_id = d.id::text
+WHERE s.evidence_id = $1
+GROUP BY s.id, d.id
+"#,
+            &[&evidence_id],
+        )
+        .await
+        .expect("uploaded document loads");
+
+    UploadedDocument {
+        filename: row.get("filename"),
+        content_type: row.get("content_type"),
+        content_length: row.get("content_length"),
+        object_key: row.get("object_key"),
+        checksum_sha256: row.get("checksum_sha256"),
+        checksum_crc32c: row.get("checksum_crc32c"),
+        upload_status: row.get("upload_status"),
+        submitted_by_agent_connection_id: row.get("submitted_by_agent_connection_id"),
+        created_by_user_id: row.get("created_by_user_id"),
+        outbox_count: row.get("outbox_count"),
+    }
+}
+
+fn files_under(root: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .flat_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                files_under(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
 }
 
 async fn submission_documents(app: &TestApp, evidence_id: Uuid) -> Vec<SubmissionDocument> {

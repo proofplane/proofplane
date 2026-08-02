@@ -40,4 +40,13 @@ pub enum DomainError {
 
     #[error("document filename must not be . or ..")]
     ReservedDocumentFilename,
+
+    #[error("document content type must be a valid HTTP media type")]
+    InvalidDocumentContentType,
+
+    #[error("document content length must be at most {maximum} bytes")]
+    DocumentContentLengthTooLarge { maximum: u64 },
+
+    #[error("document SHA-256 checksum must be 64 lowercase hexadecimal characters")]
+    InvalidDocumentSha256Checksum,
 }
