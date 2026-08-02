@@ -23,9 +23,9 @@ use rmcp::{
 };
 
 use crate::{
+    application::commands::issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
     mcp::server::common::authorize_connection,
     services::{
-        agent_evidence_upload_grants::AgentEvidenceUploadGrantService,
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
         document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
@@ -70,7 +70,7 @@ fn server_instructions() -> String {
 pub struct ProofplaneMcp {
     evidence: EvidenceService,
     evidence_submissions: EvidenceSubmissionService,
-    agent_evidence_upload_grants: AgentEvidenceUploadGrantService,
+    issue_agent_evidence_upload_grant: IssueAgentEvidenceUploadGrantHandler,
     agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
     document_upload_grants: DocumentUploadGrantService,
     policy_document_upload_grants: PolicyDocumentUploadGrantService,
@@ -85,7 +85,7 @@ pub struct ProofplaneMcp {
 pub(super) struct UploadDependencies {
     pub evidence_grants: DocumentUploadGrantService,
     pub policy_document_grants: PolicyDocumentUploadGrantService,
-    pub agent_evidence_grants: AgentEvidenceUploadGrantService,
+    pub issue_agent_evidence_grant: IssueAgentEvidenceUploadGrantHandler,
     pub agent_policy_document_grants: AgentPolicyDocumentUploadGrantService,
     pub max_document_bytes: u64,
 }
@@ -103,7 +103,7 @@ impl ProofplaneMcp {
         Self {
             evidence,
             evidence_submissions,
-            agent_evidence_upload_grants: uploads.agent_evidence_grants,
+            issue_agent_evidence_upload_grant: uploads.issue_agent_evidence_grant,
             agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
             document_upload_grants: uploads.evidence_grants,
             policy_document_upload_grants: uploads.policy_document_grants,
