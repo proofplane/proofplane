@@ -66,12 +66,9 @@ type, positive version, subject, optional correlation and causation IDs, and a
 typed payload serialized to JSON. `ScanDocument` and `FinalizeDocument` are
 commands with one intended worker handler.
 
-Forward-only migration columns retain the legacy outbox fields while adding
-message kind, type, version, message ID, subject, correlation ID, and causation
-ID. Existing `document.scan_requested` and
-`document.finalization_requested` rows are backfilled as version-zero legacy
-commands. New producers populate both the typed columns and compatible legacy
-fields during the rolling cutover.
+The baseline outbox schema retains the legacy fields while requiring message
+kind, type, version, message ID, subject, correlation ID, and causation ID for
+new rows. Producers populate both representations while adapters are cut over.
 
 The dequeuer publishes the versioned envelope. Workers decode both the old
 envelope and supported typed command versions; unknown types, versions, and
@@ -90,10 +87,18 @@ reads do not claim a lock that would be released immediately.
 
 ## Migration and compatibility
 
-Migration proceeds operation by operation. Existing public schemas and status
-codes remain stable while internal callers move to handlers. Legacy messages
-already queued or retried remain processable. Schema changes are forward-only
-and existing records are backfilled before new columns become required.
+The application is not deployed, so schema work through the typed-outbox
+foundation is consolidated into `V001__initial_schema.sql`. Existing public
+schemas and status codes remain stable while internal callers move to handlers.
+Workers retain legacy-envelope decoding for compatibility fixtures and any
+externally replayed version-zero messages, but no database rolling-upgrade or
+backfill path is required before the first deployment.
+
+## Revisions
+
+- 2026-08-02: Consolidated pre-deployment migrations V002–V006 into V001 and
+  removed the rolling database cutover requirement. Runtime legacy-envelope
+  decoding remains part of the compatibility contract.
 
 ## Verification
 
