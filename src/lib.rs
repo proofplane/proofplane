@@ -1,4 +1,5 @@
 pub mod app;
+pub mod application;
 pub mod authentication;
 pub mod config;
 pub mod dequeuer;

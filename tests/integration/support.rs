@@ -32,6 +32,7 @@ use proofplane::services::{
 };
 use proofplane::{
     app::{create_app, AppDependencies},
+    application::commands::issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
     authentication::{
         auth0::{
             AuditorIdentityExchange, AuditorIdentityProvider, AuditorIdentityProviderError,
@@ -620,6 +621,20 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
                 &self.app_config.paseto.upload_grant,
             )
             .expect("agent evidence upload grant decryptor initializes"),
+        )
+    }
+
+    pub fn issue_agent_evidence_upload_grant_handler(
+        &self,
+    ) -> IssueAgentEvidenceUploadGrantHandler {
+        IssueAgentEvidenceUploadGrantHandler::new(
+            self.postgres.clone(),
+            AgentEvidenceUploadGrantEncryptor::from_config(
+                self.app_config.server.public_api_base_url.clone(),
+                AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent evidence upload grant encryptor initializes"),
         )
     }
 

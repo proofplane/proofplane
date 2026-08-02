@@ -1,5 +1,9 @@
 use chrono::{Duration, TimeZone, Utc};
 use proofplane::{
+    application::{
+        commands::issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrant,
+        ExecutionMetadata,
+    },
     domain::{
         AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant, CoverageWindow, EvidenceId,
     },
@@ -25,12 +29,15 @@ async fn machine_grant_persists_declared_metadata_and_provenance() {
     let declaration = declaration();
 
     let issued = app
-        .agent_evidence_upload_grant_service()
-        .issue(
-            &app.agent_connection_context(workspace_id),
-            evidence_id.into(),
-            coverage,
-            declaration.clone(),
+        .issue_agent_evidence_upload_grant_handler()
+        .handle(
+            IssueAgentEvidenceUploadGrant {
+                connection: app.agent_connection_context(workspace_id),
+                evidence_id: evidence_id.into(),
+                coverage,
+                declaration: declaration.clone(),
+            },
+            ExecutionMetadata::for_request(Uuid::new_v4()),
         )
         .await
         .expect("machine grant issues");
@@ -82,16 +89,19 @@ async fn machine_grant_conceals_missing_and_cross_workspace_evidence_without_per
     let other_workspace_id = app.workspace_id("other");
     let other_evidence_id =
         create_evidence(&app, other_workspace_id, "Other evidence", "retired").await;
-    let service = app.agent_evidence_upload_grant_service();
+    let handler = app.issue_agent_evidence_upload_grant_handler();
 
     for evidence_id in [Uuid::new_v4(), other_evidence_id] {
         assert!(matches!(
-            service
-                .issue(
-                    &app.agent_connection_context(workspace_id),
-                    EvidenceId::from(evidence_id),
-                    coverage(),
-                    declaration(),
+            handler
+                .handle(
+                    IssueAgentEvidenceUploadGrant {
+                        connection: app.agent_connection_context(workspace_id),
+                        evidence_id: EvidenceId::from(evidence_id),
+                        coverage: coverage(),
+                        declaration: declaration(),
+                    },
+                    ExecutionMetadata::for_request(Uuid::new_v4()),
                 )
                 .await,
             Err(AgentEvidenceUploadGrantError::Unavailable)
