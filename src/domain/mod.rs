@@ -46,12 +46,12 @@ pub use auditor_portal::{
 };
 pub use batch::{duplicate_ids, validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
 pub use controls::{
-    Control, ControlEvidenceMappingItem, ControlId, ControlSummary,
-    CreateControlEvidenceMappingsPayload, CreateControlPayload,
-    CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
-    DeleteControlEvidenceMappingsPayload, DeleteEvidenceControlMappingsPayload,
-    EvidenceControlMapping, EvidenceControlMappingItem, Framework, FrameworkId,
-    FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+    Control, ControlAggregate, ControlAggregateError, ControlDefinition,
+    ControlEvidenceMappingItem, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
+    CreateControlPayload, CreateEvidenceControlMappingPayload,
+    CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
+    DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
+    Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
 };
 pub use declared_upload_file::{DeclaredUploadFile, DeclaredUploadFileError};
 pub use document::{

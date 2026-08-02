@@ -1,11 +1,148 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{ids::uuid_id, BatchKey, EvidenceId, WorkspaceId};
+use crate::{validate, validation::Validation};
+
+use super::{ids::uuid_id, required_text, BatchKey, DomainError, EvidenceId, WorkspaceId};
 
 uuid_id!(FrameworkId);
 uuid_id!(FrameworkRequirementId);
 uuid_id!(ControlId);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlDefinition {
+    code: String,
+    title: String,
+    description: String,
+}
+
+impl ControlDefinition {
+    pub fn new(
+        raw_code: String,
+        raw_title: String,
+        raw_description: String,
+    ) -> Validation<Self, DomainError> {
+        validate! {
+            code <- required_text("code", raw_code),
+            title <- required_text("title", raw_title),
+            description <- required_text("description", raw_description),
+            => Self { code, title, description },
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+/// Complete mutable snapshot for one workspace control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlAggregate {
+    id: ControlId,
+    workspace_id: WorkspaceId,
+    definition: ControlDefinition,
+    framework_requirement_ids: Vec<FrameworkRequirementId>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl ControlAggregate {
+    pub fn define(
+        id: ControlId,
+        workspace_id: WorkspaceId,
+        definition: ControlDefinition,
+        framework_requirement_ids: Vec<FrameworkRequirementId>,
+        created_at: DateTime<Utc>,
+    ) -> Result<Self, ControlAggregateError> {
+        validate_framework_requirement_ids(&framework_requirement_ids)?;
+        Ok(Self {
+            id,
+            workspace_id,
+            definition,
+            framework_requirement_ids,
+            created_at,
+            updated_at: created_at,
+        })
+    }
+
+    pub fn replace(
+        &mut self,
+        definition: ControlDefinition,
+        framework_requirement_ids: Vec<FrameworkRequirementId>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), ControlAggregateError> {
+        validate_framework_requirement_ids(&framework_requirement_ids)?;
+        if updated_at < self.created_at {
+            return Err(ControlAggregateError::InvalidReplacementTime);
+        }
+        self.definition = definition;
+        self.framework_requirement_ids = framework_requirement_ids;
+        self.updated_at = updated_at;
+        Ok(())
+    }
+
+    pub fn id(&self) -> ControlId {
+        self.id
+    }
+
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    pub fn code(&self) -> &str {
+        self.definition.code()
+    }
+
+    pub fn title(&self) -> &str {
+        self.definition.title()
+    }
+
+    pub fn description(&self) -> &str {
+        self.definition.description()
+    }
+
+    pub fn framework_requirement_ids(&self) -> &[FrameworkRequirementId] {
+        &self.framework_requirement_ids
+    }
+
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+}
+
+fn validate_framework_requirement_ids(
+    ids: &[FrameworkRequirementId],
+) -> Result<(), ControlAggregateError> {
+    let mut seen = std::collections::HashSet::with_capacity(ids.len());
+    for id in ids {
+        if !seen.insert(*id) {
+            return Err(ControlAggregateError::DuplicateFrameworkRequirementReference(*id));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ControlAggregateError {
+    #[error("framework requirement reference is duplicated")]
+    DuplicateFrameworkRequirementReference(FrameworkRequirementId),
+    #[error("persisted control snapshot is inconsistent")]
+    InvalidRehydration,
+    #[error("control replacement predates its creation")]
+    InvalidReplacementTime,
+}
 
 /**
  * A Framework is a specific set of rules an organization wants to adhere to.
@@ -150,9 +287,13 @@ pub struct CreateControlEvidenceMappingsPayload {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::{ControlId, FrameworkId, FrameworkRequirementId};
+    use super::{
+        ControlAggregate, ControlAggregateError, ControlDefinition, ControlId, FrameworkId,
+        FrameworkRequirementId,
+    };
 
     #[test]
     fn framework_ids_wrap_uuid() {
@@ -168,5 +309,85 @@ mod tests {
         let id = ControlId::from(uuid);
 
         assert_eq!(Uuid::from(id), uuid);
+    }
+
+    #[test]
+    fn control_replacement_changes_the_complete_definition_and_reference_snapshot() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let updated_at = created_at + Duration::minutes(5);
+        let first_requirement = FrameworkRequirementId::from(Uuid::new_v4());
+        let second_requirement = FrameworkRequirementId::from(Uuid::new_v4());
+        let mut control = ControlAggregate::define(
+            ControlId::from(Uuid::new_v4()),
+            Uuid::new_v4().into(),
+            ControlDefinition::new(
+                "PP-AC-01".to_owned(),
+                "Access review".to_owned(),
+                "Review access quarterly.".to_owned(),
+            )
+            .into_result()
+            .unwrap(),
+            vec![first_requirement],
+            created_at,
+        )
+        .unwrap();
+
+        control
+            .replace(
+                ControlDefinition::new(
+                    "PP-AC-02".to_owned(),
+                    "Privileged access review".to_owned(),
+                    "Review privileged access monthly.".to_owned(),
+                )
+                .into_result()
+                .unwrap(),
+                vec![second_requirement],
+                updated_at,
+            )
+            .unwrap();
+
+        assert_eq!(control.code(), "PP-AC-02");
+        assert_eq!(control.title(), "Privileged access review");
+        assert_eq!(control.description(), "Review privileged access monthly.");
+        assert_eq!(control.framework_requirement_ids(), &[second_requirement]);
+        assert_eq!(control.created_at(), created_at);
+        assert_eq!(control.updated_at(), updated_at);
+    }
+
+    #[test]
+    fn duplicate_framework_references_are_rejected_without_changing_the_snapshot() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let requirement = FrameworkRequirementId::from(Uuid::new_v4());
+        let mut control = ControlAggregate::define(
+            ControlId::from(Uuid::new_v4()),
+            Uuid::new_v4().into(),
+            ControlDefinition::new(
+                "PP-AC-01".to_owned(),
+                "Access review".to_owned(),
+                "Review access quarterly.".to_owned(),
+            )
+            .into_result()
+            .unwrap(),
+            vec![requirement],
+            now,
+        )
+        .unwrap();
+        let before = control.clone();
+
+        assert_eq!(
+            control.replace(
+                ControlDefinition::new(
+                    "PP-AC-02".to_owned(),
+                    "Changed".to_owned(),
+                    "Changed description.".to_owned(),
+                )
+                .into_result()
+                .unwrap(),
+                vec![requirement, requirement],
+                now + Duration::minutes(1),
+            ),
+            Err(ControlAggregateError::DuplicateFrameworkRequirementReference(requirement))
+        );
+        assert_eq!(control, before);
     }
 }
