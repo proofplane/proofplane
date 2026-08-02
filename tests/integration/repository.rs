@@ -1,12 +1,12 @@
 use chrono::{Duration, Utc};
 use proofplane::domain::{
     AgentConnectionId, CoverageWindow, CreateDocumentPayload, CreateEvidencePayload,
-    CreateEvidenceSubmissionPayload, CreateWorkspacePayload, DocumentOwner, DocumentUploadStatus,
-    EvidenceStatus, EvidenceSubmissionId, UpdateWorkspacePayload, UserId,
+    CreateEvidenceSubmissionPayload, CreateWorkspacePayload, DocumentIdentity, DocumentOwner,
+    DocumentUploadStatus, EvidenceStatus, EvidenceSubmissionId, UpdateWorkspacePayload, UserId,
 };
+use proofplane::messaging::IntegrationMessage;
 use proofplane::pubsub::{TopicName, MESSAGE_BUS_TOPIC};
 use proofplane::repository::NewOutboxMessage;
-use serde_json::json;
 use uuid::Uuid;
 
 use super::support::TestApp;
@@ -150,17 +150,18 @@ async fn document_scan_handoff_is_atomic_idempotent_and_finalization_marks_uploa
         .expect("pending work exists");
     let request_id = Uuid::new_v4();
 
-    let message = NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: "document.finalization_requested".to_owned(),
-        aggregate_type: "evidence_document".to_owned(),
-        aggregate_id: Uuid::from(document.id()).to_string(),
-        payload: serde_json::json!({
-            "evidence_submission_id": Uuid::from(submission.id).to_string(),
-            "object_key": quarantine_key,
-        }),
-        request_id: Some(request_id),
-    };
+    let message = NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::finalize_document(
+            DocumentIdentity::Evidence {
+                evidence_submission_id: submission.id,
+                document_id: document.id(),
+            },
+            quarantine_key.clone(),
+            Some(request_id),
+            None,
+        ),
+    );
 
     let first_work = work.clone();
     let first_message = message.clone();
@@ -189,7 +190,18 @@ async fn document_scan_handoff_is_atomic_idempotent_and_finalization_marks_uploa
     let outbox = client
         .query_one(
             r#"
-SELECT event_type, aggregate_id, payload, request_id
+SELECT
+    event_type,
+    aggregate_id,
+    payload,
+    request_id,
+    message_kind,
+    message_type,
+    message_version,
+    message_id,
+    subject,
+    correlation_id,
+    causation_id
 FROM outbox_messages
 WHERE event_type = 'document.finalization_requested'
   AND aggregate_id = $1
@@ -206,6 +218,19 @@ WHERE event_type = 'document.finalization_requested'
         outbox.get::<_, Option<Uuid>>("request_id"),
         Some(request_id)
     );
+    assert_eq!(outbox.get::<_, String>("message_kind"), "command");
+    assert_eq!(outbox.get::<_, String>("message_type"), "FinalizeDocument");
+    assert_eq!(outbox.get::<_, i32>("message_version"), 1);
+    assert_ne!(outbox.get::<_, Uuid>("message_id"), Uuid::nil());
+    assert_eq!(
+        outbox.get::<_, String>("subject"),
+        Uuid::from(document.id()).to_string()
+    );
+    assert_eq!(
+        outbox.get::<_, Option<Uuid>>("correlation_id"),
+        Some(request_id)
+    );
+    assert_eq!(outbox.get::<_, Option<Uuid>>("causation_id"), None);
     assert_eq!(
         outbox.get::<_, serde_json::Value>("payload"),
         serde_json::json!({
@@ -336,11 +361,7 @@ async fn outbox_append_commits_atomically_with_domain_write() {
                     })
                     .await?;
                 context
-                    .append_outbox_message(&outbox_payload(
-                        "evidence.created",
-                        "evidence",
-                        Uuid::from(request.id).to_string(),
-                    ))
+                    .append_outbox_message(&outbox_payload(Uuid::from(request.id).to_string()))
                     .await?;
 
                 Ok(request)
@@ -354,7 +375,7 @@ async fn outbox_append_commits_atomically_with_domain_write() {
         .await
         .expect("outbox rows list");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].event_type, "evidence.created");
+    assert_eq!(rows[0].event_type, "document.scan_requested");
     assert_eq!(rows[0].aggregate_id, Uuid::from(request.id).to_string());
 }
 
@@ -379,11 +400,7 @@ async fn outbox_append_rolls_back_with_domain_write() {
                     })
                     .await?;
                 context
-                    .append_outbox_message(&outbox_payload(
-                        "evidence.created",
-                        "evidence",
-                        "rolled-back",
-                    ))
+                    .append_outbox_message(&outbox_payload("rolled-back"))
                     .await?;
 
                 Err::<(), proofplane::repository::Error>(proofplane::repository::Error::Conflict(
@@ -428,7 +445,7 @@ async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failur
         due.iter()
             .map(|row| row.aggregate_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["first", "second"]
+        vec![first.aggregate_id.as_str(), second.aggregate_id.as_str()]
     );
 
     assert!(postgres
@@ -469,7 +486,7 @@ async fn outbox_repository_lists_due_rows_deletes_successes_and_schedules_failur
             .iter()
             .map(|row| row.aggregate_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["second"]
+        vec![second.aggregate_id.as_str()]
     );
 }
 
@@ -584,13 +601,7 @@ async fn append_outbox(
             context.user_id,
             context.agent_connection_id,
             async move |context| {
-                context
-                    .append_outbox_message(&outbox_payload(
-                        "document.scan_requested",
-                        "evidence_document",
-                        aggregate_id,
-                    ))
-                    .await
+                context.append_outbox_message(&outbox_payload(aggregate_id)).await
             },
         )
         .await
@@ -612,19 +623,22 @@ async fn set_outbox_next_available_at(
         .expect("outbox next_available_at updates");
 }
 
-fn outbox_payload(
-    event_type: &str,
-    aggregate_type: &str,
-    aggregate_id: impl Into<String>,
-) -> NewOutboxMessage {
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: event_type.to_owned(),
-        aggregate_type: aggregate_type.to_owned(),
-        aggregate_id: aggregate_id.into(),
-        payload: json!({ "id": "payload-id" }),
-        request_id: None,
-    }
+fn outbox_payload(aggregate_id: impl Into<String>) -> NewOutboxMessage {
+    let aggregate_id = aggregate_id.into();
+    let document_id = Uuid::parse_str(&aggregate_id)
+        .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, aggregate_id.as_bytes()));
+    NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::scan_document(
+            DocumentIdentity::Evidence {
+                evidence_submission_id: Uuid::from_u128(99).into(),
+                document_id: document_id.into(),
+            },
+            "quarantine/payload-id",
+            None,
+            None,
+        ),
+    )
 }
 
 fn submission_payload(

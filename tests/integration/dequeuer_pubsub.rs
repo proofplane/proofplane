@@ -9,6 +9,8 @@ use google_cloud_pubsub::{
 use proofplane::{
     config::PubSubSubscriptionsConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
+    domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId},
+    messaging::IntegrationMessage,
     pubsub::{
         ensure_worker_subscription, GoogleCloudPublisher, TopicName, MESSAGE_BUS_TOPIC,
         PUBSUB_EMULATOR_HOST, WORKER_DEAD_LETTER_TOPIC,
@@ -29,6 +31,120 @@ const PROJECT_ID: &str = "proofplane-integration";
 const SUBSCRIPTION: &str = "proofplane-worker-integration";
 static PUBSUB_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+#[tokio::test]
+async fn typed_outbox_migration_backfills_legacy_rows_without_rewriting_legacy_fields() {
+    let postgres_container = postgres::Postgres::default()
+        .start()
+        .await
+        .expect("Postgres test container starts");
+    let database_url = postgres_url(&postgres_container).await;
+    let mut database = store::conn(&database_url)
+        .await
+        .expect("fixture database connection opens");
+
+    store::migration_runner()
+        .set_target(refinery::Target::Version(5))
+        .run_async(&mut database)
+        .await
+        .expect("pre-typed migrations run");
+    database
+        .batch_execute(
+            r#"
+INSERT INTO outbox_messages (
+    topic, event_type, aggregate_type, aggregate_id, payload, request_id
+)
+VALUES
+    (
+        'message-bus',
+        'document.scan_requested',
+        'evidence_document',
+        'document-1',
+        '{"evidence_submission_id":"00000000-0000-0000-0000-000000000002","object_key":"quarantine/document-1"}',
+        '00000000-0000-0000-0000-000000000004'
+    ),
+    (
+        'message-bus',
+        'document.finalization_requested',
+        'policy_document',
+        'document-2',
+        '{"policy_id":"00000000-0000-0000-0000-000000000003","object_key":"quarantine/document-2"}',
+        NULL
+    ),
+    (
+        'message-bus',
+        'evidence.created',
+        'evidence',
+        'evidence-1',
+        '{"id":"evidence-1"}',
+        NULL
+    );
+"#,
+        )
+        .await
+        .expect("legacy rows insert");
+
+    store::migrate(&mut database)
+        .await
+        .expect("typed outbox migration runs");
+
+    let rows = database
+        .query(
+            r#"
+SELECT
+    event_type,
+    aggregate_id,
+    request_id,
+    message_kind,
+    message_type,
+    message_version,
+    message_id,
+    subject,
+    correlation_id,
+    causation_id
+FROM outbox_messages
+ORDER BY id
+"#,
+            &[],
+        )
+        .await
+        .expect("backfilled rows load");
+
+    assert_eq!(rows.len(), 3);
+    for row in &rows {
+        assert_eq!(row.get::<_, i32>("message_version"), 0);
+        assert_ne!(row.get::<_, Uuid>("message_id"), Uuid::nil());
+        assert_eq!(
+            row.get::<_, String>("subject"),
+            row.get::<_, String>("aggregate_id")
+        );
+        assert_eq!(
+            row.get::<_, Option<Uuid>>("correlation_id"),
+            row.get::<_, Option<Uuid>>("request_id")
+        );
+        assert_eq!(row.get::<_, Option<Uuid>>("causation_id"), None);
+    }
+    assert_eq!(rows[0].get::<_, String>("message_kind"), "command");
+    assert_eq!(
+        rows[0].get::<_, String>("message_type"),
+        "document.scan_requested"
+    );
+    assert_eq!(rows[1].get::<_, String>("message_kind"), "command");
+    assert_eq!(
+        rows[1].get::<_, String>("message_type"),
+        "document.finalization_requested"
+    );
+    assert_eq!(rows[2].get::<_, String>("message_kind"), "event");
+    assert_eq!(rows[2].get::<_, String>("message_type"), "evidence.created");
+
+    let invalid_version = database
+        .execute(
+            "UPDATE outbox_messages SET message_version = -1 WHERE id = 1",
+            &[],
+        )
+        .await;
+    assert!(invalid_version.is_err(), "negative versions remain invalid");
+}
 
 #[tokio::test]
 async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
@@ -62,7 +178,7 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
         .await
         .expect("application Postgres pool opens");
     let postgres = Postgres::new(pool);
-    let outbox_id = append_outbox_message(&postgres).await.id;
+    let outbox = append_outbox_message(&postgres).await;
 
     let dequeuer = OutboxDequeuer::new(&postgres, &publisher, OutboxDequeuerConfig::default());
 
@@ -86,12 +202,17 @@ async fn dequeuer_publishes_outbox_rows_to_deltio_pubsub() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&message.data).expect("message data is JSON"),
         json!({
-            "outbox_message_id": outbox_id.to_string(),
-            "event_type": "document.scan_requested",
-            "aggregate_type": "evidence_document",
-            "aggregate_id": "document-1",
-            "request_id": null,
-            "payload": { "scan_id": "scan-1" },
+            "message_id": outbox.message_id,
+            "kind": "command",
+            "type": "ScanDocument",
+            "version": 1,
+            "subject": outbox.subject,
+            "correlation_id": null,
+            "causation_id": null,
+            "payload": {
+                "evidence_submission_id": Uuid::from_u128(2),
+                "object_key": "quarantine/document-1"
+            },
         })
     );
     assert!(message.attributes.is_empty());
@@ -224,14 +345,18 @@ async fn ensure_subscription(
 }
 
 async fn append_outbox_message(postgres: &Postgres) -> OutboxMessage {
-    let message = NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: "document.scan_requested".to_owned(),
-        aggregate_type: "evidence_document".to_owned(),
-        aggregate_id: "document-1".to_owned(),
-        payload: json!({ "scan_id": "scan-1" }),
-        request_id: None,
-    };
+    let message = NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::scan_document(
+            DocumentIdentity::Evidence {
+                evidence_submission_id: EvidenceSubmissionId::from(Uuid::from_u128(2)),
+                document_id: DocumentId::from(Uuid::from_u128(3)),
+            },
+            "quarantine/document-1",
+            None,
+            None,
+        ),
+    );
 
     postgres
         .in_transaction(async move |context| context.append_outbox_message(&message).await)
