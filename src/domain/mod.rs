@@ -11,11 +11,13 @@ mod declared_upload_file;
 mod document;
 mod error;
 mod evidence;
+mod evidence_document_upload_grant;
 mod evidence_submission;
 mod ids;
 mod oauth;
 mod permission;
 mod policy;
+mod policy_document_upload_grant;
 mod sha256_digest;
 mod user;
 mod validation;
@@ -62,6 +64,10 @@ pub use error::DomainError;
 pub use evidence::{
     CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
 };
+pub use evidence_document_upload_grant::{
+    EvidenceDocumentUploadGrant, EvidenceDocumentUploadGrantAuthority,
+    EvidenceDocumentUploadGrantError,
+};
 pub use evidence_submission::{
     CoverageWindow, CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
     EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
@@ -76,6 +82,9 @@ pub use policy::{
     CreatePolicyControlMappingsPayload, CreatePolicyPayload, DeleteControlPolicyMappingsPayload,
     DeletePolicyControlMappingsPayload, Policy, PolicyControlMapping, PolicyDocumentUploadGrantId,
     PolicyId, UpdatePolicyPayload,
+};
+pub use policy_document_upload_grant::{
+    PolicyDocumentUploadGrant, PolicyDocumentUploadGrantAuthority, PolicyDocumentUploadGrantError,
 };
 pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserError, UserId, UserTransition};
