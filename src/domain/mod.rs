@@ -78,7 +78,7 @@ pub use policy::{
     PolicyId, UpdatePolicyPayload,
 };
 pub use sha256_digest::Sha256Digest;
-pub use user::{ProvisionUserPayload, User, UserId};
+pub use user::{ProvisionUserPayload, User, UserError, UserId, UserTransition};
 pub use validation::{optional_text, required_text, validate_document_filename};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceId, WorkspaceMembership,

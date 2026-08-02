@@ -1,6 +1,13 @@
 use std::sync::Arc;
 
 use crate::{
+    application::{
+        commands::record_user_login::{
+            RecordUserLogin, RecordUserLoginError, RecordUserLoginHandler,
+        },
+        queries::get_user::{GetUser, GetUserHandler},
+        ExecutionMetadata,
+    },
     domain::{User, UserId},
     repository::Postgres,
     services::Error,
@@ -8,19 +15,37 @@ use crate::{
 
 #[derive(Clone)]
 pub struct UserService {
-    repository: Arc<Postgres>,
+    get_user: GetUserHandler,
+    record_login: RecordUserLoginHandler,
 }
 
 impl UserService {
     pub fn new(repository: Arc<Postgres>) -> Self {
-        Self { repository }
+        Self {
+            get_user: GetUserHandler::new(repository.clone()),
+            record_login: RecordUserLoginHandler::new(repository),
+        }
     }
 
     pub async fn get_user(&self, id: UserId) -> Result<Option<User>, Error> {
-        Ok(self.repository.get_user(id).await?)
+        Ok(self.get_user.handle(GetUser { user_id: id }).await?)
     }
 
     pub async fn record_login(&self, id: UserId) -> Result<Option<User>, Error> {
-        Ok(self.repository.record_user_login(id).await?)
+        match self
+            .record_login
+            .handle(
+                RecordUserLogin {
+                    user_id: id,
+                    logged_in_at: chrono::Utc::now(),
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+        {
+            Ok(user) => Ok(Some(user)),
+            Err(RecordUserLoginError::Unavailable) => Ok(None),
+            Err(RecordUserLoginError::Repository(error)) => Err(Error::Repository(error)),
+        }
     }
 }

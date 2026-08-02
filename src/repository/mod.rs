@@ -46,6 +46,7 @@ pub use policies::{
     ArchivePolicyResult, CreatePolicyDocumentResult, PolicyDocumentUploadEligibility,
 };
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
+pub use users::UserRepository;
 pub use workspace_memberships::NewWorkspaceMembership;
 
 pub struct Postgres {
