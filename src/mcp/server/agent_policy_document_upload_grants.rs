@@ -4,15 +4,17 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router, ErrorData, Json, RoleServer,
 };
-use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::common::{
-    argument_errors, authorize_token_workspace, conflict, domain_errors, format_datetime,
-    not_found, required_arg, required_non_negative_u64, required_uuid,
+use super::{
+    common::{
+        argument_errors, authorize_token_workspace, conflict, domain_errors, not_found,
+        required_arg, required_non_negative_u64, required_uuid,
+    },
+    machine_upload_descriptor::MachineUploadDescriptor,
+    ProofplaneMcp,
 };
-use super::ProofplaneMcp;
 use crate::{
     domain::{AgentPolicyDocumentUploadDeclaration, PolicyId, WorkspacePermission},
     observability::{
@@ -27,8 +29,6 @@ use crate::{
     },
     validate,
 };
-
-const AUTHORIZATION_SCHEME: &str = "Proofplane-Upload";
 
 #[tool_router(router = agent_policy_document_upload_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
@@ -135,34 +135,21 @@ struct PreparePolicyDocumentUploadRequest {
 #[derive(Serialize, JsonSchema)]
 struct PreparePolicyDocumentUploadResponse {
     upload_id: String,
-    upload: PolicyDocumentUploadDescriptor,
-}
-
-#[derive(Serialize, JsonSchema)]
-struct PolicyDocumentUploadDescriptor {
-    method: &'static str,
-    url: String,
-    authorization: String,
-    content_type: String,
-    expires_at: String,
-    max_bytes: u64,
+    upload: MachineUploadDescriptor,
 }
 
 impl PreparePolicyDocumentUploadResponse {
     fn new(issued: IssuedAgentPolicyDocumentUploadGrant, url: url::Url, max_bytes: u64) -> Self {
+        let upload = MachineUploadDescriptor::new(
+            url,
+            &issued.credential,
+            issued.grant.declaration().content_type(),
+            issued.grant.expires_at(),
+            max_bytes,
+        );
         Self {
             upload_id: issued.grant.id().to_string(),
-            upload: PolicyDocumentUploadDescriptor {
-                method: "PUT",
-                url: url.to_string(),
-                authorization: format!(
-                    "{AUTHORIZATION_SCHEME} {}",
-                    issued.credential.expose_secret()
-                ),
-                content_type: issued.grant.declaration().content_type().to_owned(),
-                expires_at: format_datetime(issued.grant.expires_at()),
-                max_bytes,
-            },
+            upload,
         }
     }
 }
@@ -413,7 +400,7 @@ mod tests {
         assert!(output["properties"].get("upload").is_some());
         let input_properties = input["properties"].as_object().expect("input properties");
         let output_properties = output["properties"].as_object().expect("output properties");
-        let descriptor_properties = output["$defs"]["PolicyDocumentUploadDescriptor"]["properties"]
+        let descriptor_properties = output["$defs"]["MachineUploadDescriptor"]["properties"]
             .as_object()
             .expect("descriptor properties");
         for forbidden in ["bytes", "path", "attachment", "object_key", "base64"] {

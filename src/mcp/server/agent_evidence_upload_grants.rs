@@ -4,15 +4,15 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router, ErrorData, Json, RoleServer,
 };
-use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, domain_errors, format_datetime, not_found,
-        required_arg, required_non_negative_u64, required_timestamp, required_uuid,
+        argument_errors, authorize_token_workspace, domain_errors, not_found, required_arg,
+        required_non_negative_u64, required_timestamp, required_uuid,
     },
+    machine_upload_descriptor::MachineUploadDescriptor,
     ProofplaneMcp,
 };
 use crate::{
@@ -30,8 +30,6 @@ use crate::{
     validate,
     validation::Validation,
 };
-
-const AUTHORIZATION_SCHEME: &str = "Proofplane-Upload";
 
 #[tool_router(router = agent_evidence_upload_grants_tool_router, vis = "pub(super)")]
 impl ProofplaneMcp {
@@ -146,35 +144,22 @@ struct PrepareEvidenceSubmissionUploadRequest {
 struct PrepareEvidenceSubmissionUploadResponse {
     upload_id: String,
     submission_id: String,
-    upload: EvidenceSubmissionUploadDescriptor,
-}
-
-#[derive(Serialize, JsonSchema)]
-struct EvidenceSubmissionUploadDescriptor {
-    method: &'static str,
-    url: String,
-    authorization: String,
-    content_type: String,
-    expires_at: String,
-    max_bytes: u64,
+    upload: MachineUploadDescriptor,
 }
 
 impl PrepareEvidenceSubmissionUploadResponse {
     fn new(issued: IssuedAgentEvidenceUploadGrant, url: url::Url, max_bytes: u64) -> Self {
+        let upload = MachineUploadDescriptor::new(
+            url,
+            &issued.credential,
+            issued.grant.declaration().content_type(),
+            issued.grant.expires_at(),
+            max_bytes,
+        );
         Self {
             upload_id: issued.grant.id().to_string(),
             submission_id: issued.grant.submission_id().to_string(),
-            upload: EvidenceSubmissionUploadDescriptor {
-                method: "PUT",
-                url: url.to_string(),
-                authorization: format!(
-                    "{AUTHORIZATION_SCHEME} {}",
-                    issued.credential.expose_secret()
-                ),
-                content_type: issued.grant.declaration().content_type().to_owned(),
-                expires_at: format_datetime(issued.grant.expires_at()),
-                max_bytes,
-            },
+            upload,
         }
     }
 }

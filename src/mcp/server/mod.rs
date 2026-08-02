@@ -7,6 +7,7 @@ mod document_grants;
 mod evidence;
 mod evidence_submissions;
 mod guide;
+mod machine_upload_descriptor;
 mod policies;
 mod policy_document_grants;
 mod resources;

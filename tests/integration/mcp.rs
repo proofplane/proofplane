@@ -38,6 +38,48 @@ use proofplane::services::agent_connections::digest_secret;
 
 const MCP: &str = "/mcp";
 
+fn assert_machine_upload_descriptor(
+    descriptor: &Value,
+    expected_url: &str,
+    expected_content_type: &str,
+    expected_max_bytes: u64,
+) -> String {
+    assert_eq!(
+        descriptor
+            .as_object()
+            .expect("upload descriptor is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        [
+            "authorization",
+            "content_type",
+            "expires_at",
+            "max_bytes",
+            "method",
+            "url",
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(descriptor["method"], "PUT");
+    assert_eq!(descriptor["url"], expected_url);
+    assert_eq!(descriptor["content_type"], expected_content_type);
+    assert_eq!(descriptor["max_bytes"], expected_max_bytes);
+    descriptor["expires_at"]
+        .as_str()
+        .expect("expiry is a string")
+        .parse::<chrono::DateTime<Utc>>()
+        .expect("expiry is RFC 3339");
+
+    let authorization = descriptor["authorization"]
+        .as_str()
+        .expect("authorization is text")
+        .to_owned();
+    assert!(authorization.starts_with("Proofplane-Upload "));
+    authorization
+}
+
 struct StubAuth0Verifier {
     outcome: StubAuth0Outcome,
 }
@@ -1677,36 +1719,18 @@ async fn mcp_machine_upload_runs_from_preparation_through_scan_and_finalization(
             .into_iter()
             .collect()
     );
-    assert_eq!(
-        prepared["upload"]
-            .as_object()
-            .expect("upload descriptor is an object")
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        [
-            "authorization",
-            "content_type",
-            "expires_at",
-            "max_bytes",
-            "method",
-            "url",
-        ]
-        .into_iter()
-        .collect()
-    );
-    assert_eq!(prepared["upload"]["method"], "PUT");
-    assert_eq!(prepared["upload"]["content_type"], "application/pdf");
-    assert_eq!(prepared["upload"]["max_bytes"], 1024);
-    assert!(prepared["upload"]["authorization"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("Proofplane-Upload ")));
     let upload_id = Uuid::parse_str(
         prepared["upload_id"]
             .as_str()
             .expect("upload ID is a string"),
     )
     .expect("upload ID is a UUID");
+    let authorization = assert_machine_upload_descriptor(
+        &prepared["upload"],
+        &format!("https://api.proofplane.test/agent-evidence-uploads/{upload_id}"),
+        "application/pdf",
+        1024,
+    );
     let submission_id = Uuid::parse_str(
         prepared["submission_id"]
             .as_str()
@@ -1735,37 +1759,18 @@ async fn mcp_machine_upload_runs_from_preparation_through_scan_and_finalization(
         })
     );
     let serialized_issuance = issuance_logs[0].to_string();
-    for forbidden in [
-        prepared["upload"]["authorization"]
-            .as_str()
-            .expect("authorization"),
-        "access-review.pdf",
-        "application/pdf",
-    ] {
+    for forbidden in [&authorization, "access-review.pdf", "application/pdf"] {
         assert!(!serialized_issuance.contains(forbidden));
     }
     let rendered_metrics = metrics.render();
     assert!(rendered_metrics
         .contains("proofplane_agent_evidence_upload_grants_total{result=\"issued\"} 1"));
-    assert!(!rendered_metrics.contains(
-        prepared["upload"]["authorization"]
-            .as_str()
-            .expect("authorization")
-    ));
+    assert!(!rendered_metrics.contains(&authorization));
     assert!(!rendered_metrics.contains("access-review.pdf"));
-    assert_eq!(
-        prepared["upload"]["url"],
-        format!("https://api.proofplane.test/agent-evidence-uploads/{upload_id}")
-    );
     assert!(!prepared["upload"]["url"]
         .as_str()
         .expect("upload URL is a string")
         .contains('?'));
-    prepared["upload"]["expires_at"]
-        .as_str()
-        .expect("expiry is a string")
-        .parse::<chrono::DateTime<Utc>>()
-        .expect("expiry is RFC 3339");
 
     let persisted = app
         .postgres()
@@ -1804,13 +1809,7 @@ WHERE id = $1
     let transferred = app
         .server()
         .put(&format!("/agent-evidence-uploads/{upload_id}"))
-        .add_header(
-            "authorization",
-            prepared["upload"]["authorization"]
-                .as_str()
-                .expect("authorization is a string")
-                .to_owned(),
-        )
+        .add_header("authorization", authorization)
         .add_header("content-type", "application/pdf")
         .add_header("content-length", content.len().to_string())
         .bytes(content.as_slice().into())
@@ -1918,18 +1917,12 @@ async fn mcp_policy_machine_upload_runs_from_preparation_through_scan_and_finali
         ["upload", "upload_id"].into_iter().collect()
     );
     let upload_id = uuid_from(&prepared["upload_id"]);
-    assert_eq!(prepared["upload"]["method"], "PUT");
-    assert_eq!(prepared["upload"]["content_type"], "application/pdf");
-    assert_eq!(prepared["upload"]["max_bytes"], 1024);
-    assert_eq!(
-        prepared["upload"]["url"],
-        format!("https://api.proofplane.test/agent-policy-document-uploads/{upload_id}")
+    let authorization = assert_machine_upload_descriptor(
+        &prepared["upload"],
+        &format!("https://api.proofplane.test/agent-policy-document-uploads/{upload_id}"),
+        "application/pdf",
+        1024,
     );
-    let authorization = prepared["upload"]["authorization"]
-        .as_str()
-        .expect("authorization is text")
-        .to_owned();
-    assert!(authorization.starts_with("Proofplane-Upload "));
     assert_eq!(issuance_logs.len(), 1);
     assert_audit_event(
         &issuance_logs[0],
