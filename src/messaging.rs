@@ -8,6 +8,8 @@ use crate::domain::{DocumentIdentity, DocumentOwner};
 pub const SCAN_DOCUMENT_TYPE: &str = "ScanDocument";
 pub const FINALIZE_DOCUMENT_TYPE: &str = "FinalizeDocument";
 pub const CURRENT_MESSAGE_VERSION: i32 = 1;
+pub const LEGACY_DOCUMENT_SCAN_REQUESTED: &str = "document.scan_requested";
+pub const LEGACY_DOCUMENT_FINALIZATION_REQUESTED: &str = "document.finalization_requested";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

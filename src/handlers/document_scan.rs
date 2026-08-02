@@ -6,12 +6,13 @@ use uuid::Uuid;
 
 use crate::{
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
+    messaging::IntegrationMessage,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{NewOutboxMessage, Postgres, TypedDocumentUploadWork},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
-    worker::{RetryableWorkerError, WorkerMessage, DOCUMENT_FINALIZATION_REQUESTED},
+    worker::{RetryableWorkerError, WorkerMessage},
 };
 
 const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
@@ -169,7 +170,8 @@ impl DocumentScanHandler {
             Err(error) => return Err(scan_error(error)),
         };
 
-        self.apply_scan_result(work, scan_result, message.request_id)
+        let causation_id = Uuid::parse_str(&message.message_id).ok();
+        self.apply_scan_result(work, scan_result, message.request_id, causation_id)
             .await
     }
 
@@ -178,11 +180,13 @@ impl DocumentScanHandler {
         work: TypedDocumentUploadWork,
         scan_result: MalwareScanResult,
         request_id: Option<Uuid>,
+        causation_id: Option<Uuid>,
     ) -> Result<(), RetryableWorkerError> {
         match scan_result.outcome {
             MalwareScanOutcome::Clean => {
                 tracing::debug!("got clean scan, requesting finalization");
-                let message = document_finalization_requested_message(&work, request_id);
+                let message =
+                    document_finalization_requested_message(&work, request_id, causation_id);
                 let transaction_work = work.clone();
                 let updated = self
                     .repository
@@ -320,45 +324,24 @@ fn emit_worker_document_audit(
 
 fn document_finalization_requested_message(
     work: &TypedDocumentUploadWork,
-    request_id: Option<Uuid>,
+    correlation_id: Option<Uuid>,
+    causation_id: Option<Uuid>,
 ) -> NewOutboxMessage {
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: DOCUMENT_FINALIZATION_REQUESTED.to_owned(),
-        aggregate_type: aggregate_type(work.identity).to_owned(),
-        aggregate_id: work.identity.document_uuid().to_string(),
-        payload: finalization_payload(work),
-        request_id,
-    }
-}
-
-fn aggregate_type(identity: DocumentIdentity) -> &'static str {
-    match identity {
-        DocumentIdentity::Evidence { .. } => "evidence_document",
-        DocumentIdentity::Policy { .. } => "policy_document",
-    }
+    NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::finalize_document(
+            work.identity,
+            work.object_key.clone(),
+            correlation_id,
+            causation_id,
+        ),
+    )
 }
 
 fn scan_event_name(identity: DocumentIdentity) -> &'static str {
     match identity {
         DocumentIdentity::Evidence { .. } => "evidence_document_scan.completed",
         DocumentIdentity::Policy { .. } => "policy_document_scan.completed",
-    }
-}
-
-fn finalization_payload(work: &TypedDocumentUploadWork) -> serde_json::Value {
-    match work.identity {
-        DocumentIdentity::Evidence {
-            evidence_submission_id,
-            ..
-        } => serde_json::json!({
-            "evidence_submission_id": Uuid::from(evidence_submission_id).to_string(),
-            "object_key": work.object_key,
-        }),
-        DocumentIdentity::Policy { policy_id, .. } => serde_json::json!({
-            "policy_id": Uuid::from(policy_id).to_string(),
-            "object_key": work.object_key,
-        }),
     }
 }
 

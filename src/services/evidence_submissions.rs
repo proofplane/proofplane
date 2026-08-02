@@ -6,11 +6,11 @@ use crate::{
         CreateEvidenceSubmissionPayload, Document, DocumentId, DocumentOwner, EvidenceId,
         EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspaceId,
     },
+    messaging::IntegrationMessage,
     object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     repository::{ArchiveDocumentResult, NewOutboxMessage, Postgres},
     services::Error,
-    worker::DOCUMENT_SCAN_REQUESTED,
 };
 
 use super::{
@@ -288,15 +288,13 @@ pub(crate) fn document_scan_requested_message(
     document: &Document,
     request_id: Uuid,
 ) -> NewOutboxMessage {
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "evidence_document".to_owned(),
-        aggregate_id: Uuid::from(document.id()).to_string(),
-        payload: serde_json::json!({
-            "evidence_submission_id": document.owner().owner_uuid().to_string(),
-            "object_key": document.object_key,
-        }),
-        request_id: Some(request_id),
-    }
+    NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::scan_document(
+            document.identity,
+            document.object_key.clone(),
+            Some(request_id),
+            None,
+        ),
+    )
 }
