@@ -16,17 +16,19 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::issue_agent_evidence_upload_grant::{
+            AgentEvidenceUploadGrantError, IssueAgentEvidenceUploadGrant,
+            IssuedAgentEvidenceUploadGrant,
+        },
+        ExecutionMetadata,
+    },
     domain::{AgentEvidenceUploadDeclaration, CoverageWindow, EvidenceId, WorkspacePermission},
     observability::{
         agent_evidence_uploads::{record_grant, AgentEvidenceUploadGrantResult},
         audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     },
-    services::{
-        agent_evidence_upload_grants::{
-            AgentEvidenceUploadGrantError, IssuedAgentEvidenceUploadGrant,
-        },
-        Error as ServiceError,
-    },
+    services::Error as ServiceError,
     validate,
     validation::Validation,
 };
@@ -59,12 +61,15 @@ impl ProofplaneMcp {
                 }
             };
         let issued = match self
-            .agent_evidence_upload_grants
-            .issue(
-                &context.agent_connection_context(),
-                evidence_id,
-                coverage,
-                declaration,
+            .issue_agent_evidence_upload_grant
+            .handle(
+                IssueAgentEvidenceUploadGrant {
+                    connection: context.agent_connection_context(),
+                    evidence_id,
+                    coverage,
+                    declaration,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
             )
             .await
         {

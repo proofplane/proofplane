@@ -1,15 +1,18 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
+    application::commands::issue_agent_evidence_upload_grant::{
+        AgentEvidenceUploadCredentialVerifier, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+    },
     authentication::{
         auth0::{
             Auth0AuditorIdentityProvider, SharedAuditorIdentityProvider, TokenVerifier,
             VerifiedClaims,
         },
         paseto::{
-            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
-            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
-            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            AgentEvidenceUploadGrantDecryptor, AgentPolicyDocumentUploadGrantDecryptor,
+            AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor,
+            DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
             PolicyUploadSessionEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
             UploadSessionDecryptor, UploadSessionEncryptor,
@@ -38,9 +41,6 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
-        agent_evidence_upload_grants::{
-            AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-        },
         agent_evidence_uploads::AgentEvidenceUploadService,
         agent_policy_document_upload_grants::{
             AgentPolicyDocumentUploadGrantService, AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
@@ -95,27 +95,16 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
-        dependencies.config.server.public_api_base_url.clone(),
-        AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-        &dependencies.config.paseto.upload_grant,
-    )
-    .map_err(AuthenticationError::from)?;
     let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(AuthenticationError::from)?;
-    let agent_upload_grant_service = AgentEvidenceUploadGrantService::new(
-        dependencies.postgres.clone(),
-        agent_upload_grant_encryptor,
-        agent_upload_grant_decryptor,
-    );
     let agent_evidence_upload_service = AgentEvidenceUploadService::new(
         dependencies.postgres.clone(),
         evidence_submission_service.clone(),
-        agent_upload_grant_service.credential_verifier(),
+        AgentEvidenceUploadCredentialVerifier::new(agent_upload_grant_decryptor),
         dependencies.config.uploads.max_document_bytes,
     );
     let agent_policy_upload_grant_encryptor = AgentPolicyDocumentUploadGrantEncryptor::from_config(

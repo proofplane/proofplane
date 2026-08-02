@@ -854,12 +854,6 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             &self.app_config.paseto.upload_grant,
         )
         .expect("agent upload grant encryptor initializes");
-        let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
-            self.app_config.server.public_api_base_url.clone(),
-            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-            &self.app_config.paseto.upload_grant,
-        )
-        .expect("agent upload grant decryptor initializes");
         let agent_policy_upload_grant_encryptor =
             AgentPolicyDocumentUploadGrantEncryptor::from_config(
                 self.app_config.server.public_api_base_url.clone(),
@@ -900,7 +894,6 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             upload_grant_encryptor,
             upload_grant_decryptor,
             agent_upload_grant_encryptor,
-            agent_upload_grant_decryptor,
             agent_policy_upload_grant_encryptor,
             agent_policy_upload_grant_decryptor,
             policy_upload_grant_encryptor,

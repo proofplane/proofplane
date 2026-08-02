@@ -4,11 +4,10 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::paseto::{
-        AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
-        AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
-        DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-        PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
-        UploadGrantEncryptor,
+        AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantDecryptor,
+        AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor, DownloadGrantEncryptor,
+        McpOAuthDecryptor, McpOAuthEncryptor, PolicyUploadGrantDecryptor,
+        PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},
@@ -92,12 +91,7 @@ async fn run() -> Result<(), Error> {
     )?;
     let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-        &config.paseto.upload_grant,
-    )?;
-    let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
-        config.server.public_api_base_url.clone(),
-        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        proofplane::application::commands::issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let agent_policy_upload_grant_encryptor =
@@ -156,7 +150,6 @@ async fn run() -> Result<(), Error> {
         upload_grant_encryptor,
         upload_grant_decryptor,
         agent_upload_grant_encryptor,
-        agent_upload_grant_decryptor,
         agent_policy_upload_grant_encryptor,
         agent_policy_upload_grant_decryptor,
         policy_upload_grant_encryptor,
