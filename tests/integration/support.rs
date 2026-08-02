@@ -21,6 +21,10 @@ use proofplane::services::{
         AgentEvidenceUploadGrantService, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
     },
     agent_evidence_uploads::AgentEvidenceUploadService,
+    agent_policy_document_upload_grants::{
+        AgentPolicyDocumentUploadGrantService, AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+    },
+    agent_policy_document_uploads::AgentPolicyDocumentUploadService,
     document_downloads::DocumentDownloadService,
     document_upload_grants::DocumentUploadGrantService,
     evidence::EvidenceService,
@@ -36,6 +40,7 @@ use proofplane::{
         },
         paseto::{
             AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
+            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
             PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
         },
@@ -628,6 +633,37 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
         )
     }
 
+    pub fn agent_policy_document_upload_grant_service(
+        &self,
+    ) -> AgentPolicyDocumentUploadGrantService {
+        let issuer = self.app_config.server.public_api_base_url.clone();
+        AgentPolicyDocumentUploadGrantService::new(
+            self.postgres.clone(),
+            AgentPolicyDocumentUploadGrantEncryptor::from_config(
+                issuer.clone(),
+                AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent policy document upload grant encryptor initializes"),
+            AgentPolicyDocumentUploadGrantDecryptor::from_config(
+                issuer,
+                AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent policy document upload grant decryptor initializes"),
+        )
+    }
+
+    pub fn agent_policy_document_upload_service(&self) -> AgentPolicyDocumentUploadService {
+        let grant_service = self.agent_policy_document_upload_grant_service();
+        AgentPolicyDocumentUploadService::new(
+            self.postgres.clone(),
+            self.object_store.clone(),
+            grant_service.credential_verifier(),
+            self.app_config.uploads.max_document_bytes,
+        )
+    }
+
     pub fn document_download_service(&self) -> DocumentDownloadService {
         let issuer = self.app_config.server.public_api_base_url.clone();
         DocumentDownloadService::new(
@@ -809,6 +845,20 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             &self.app_config.paseto.upload_grant,
         )
         .expect("agent upload grant decryptor initializes");
+        let agent_policy_upload_grant_encryptor =
+            AgentPolicyDocumentUploadGrantEncryptor::from_config(
+                self.app_config.server.public_api_base_url.clone(),
+                AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent policy upload grant encryptor initializes");
+        let agent_policy_upload_grant_decryptor =
+            AgentPolicyDocumentUploadGrantDecryptor::from_config(
+                self.app_config.server.public_api_base_url.clone(),
+                AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+                &self.app_config.paseto.upload_grant,
+            )
+            .expect("agent policy upload grant decryptor initializes");
         let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
             self.app_config.server.public_api_base_url.clone(),
             proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -836,6 +886,8 @@ VALUES ($1, $2, 'Seeded description', 'Seeded instructions', 'active')
             upload_grant_decryptor,
             agent_upload_grant_encryptor,
             agent_upload_grant_decryptor,
+            agent_policy_upload_grant_encryptor,
+            agent_policy_upload_grant_decryptor,
             policy_upload_grant_encryptor,
             policy_upload_grant_decryptor,
             max_document_bytes: self.app_config.uploads.max_document_bytes as u64,

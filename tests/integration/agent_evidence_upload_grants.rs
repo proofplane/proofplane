@@ -328,6 +328,18 @@ async fn machine_grant_verification_rejects_tampering_mismatch_expiry_and_wrong_
         .await
         .expect("persisted grant is restored");
 
+    let oversized_content_type = format!("application/{}", "a".repeat(244));
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .execute(
+            "UPDATE agent_evidence_upload_grants SET content_type = $2 WHERE id = $1",
+            &[&Uuid::from(issued.grant.id()), &oversized_content_type],
+        )
+        .await
+        .expect_err("database constraint rejects an oversized content type");
+
     app.postgres()
         .get()
         .await

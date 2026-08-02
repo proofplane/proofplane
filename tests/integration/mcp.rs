@@ -536,6 +536,7 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         "get_evidence_submission",
         "get_latest_evidence_submission",
         "manage_policy_document",
+        "prepare_policy_document_upload",
         "manage_evidence_submissions",
         "prepare_evidence_submission_upload",
         "create_auditor_access_link",
@@ -606,6 +607,10 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         (
             "manage_policy_document",
             "Create a short-lived bearer-secret browser URL for a human to manage an active policy’s document; file bytes never pass through MCP; for guidance, call get_proofplane_guide with topic policies.",
+        ),
+        (
+            "prepare_policy_document_upload",
+            "Use this when a trusted runtime can read a local policy file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "create_auditor_access_link",
@@ -809,6 +814,30 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         &find_tool(&tool_list, "manage_policy_document")["inputSchema"],
         "policy_id",
     );
+    let prepare_policy_upload_input =
+        &find_tool(&tool_list, "prepare_policy_document_upload")["inputSchema"];
+    for field in [
+        "policy_id",
+        "filename",
+        "content_type",
+        "content_length",
+        "checksum_sha256",
+    ] {
+        assert_schema_has_property(prepare_policy_upload_input, field);
+    }
+    for field in ["policy_id", "filename", "content_type", "content_length"] {
+        assert_schema_requires_property(prepare_policy_upload_input, field);
+    }
+    for forbidden in [
+        "bytes",
+        "file",
+        "path",
+        "attachment",
+        "object_key",
+        "base64",
+    ] {
+        assert_schema_lacks_property(prepare_policy_upload_input, forbidden);
+    }
     assert_schema_has_property(
         &find_tool(&tool_list, "create_auditor_access_link")["inputSchema"],
         "email",
@@ -1022,6 +1051,21 @@ async fn mcp_reauthenticates_token_state_and_serves_public_operational_routes() 
         &find_tool(&tool_list, "manage_policy_document")["outputSchema"],
         "policy_id",
     );
+    let prepare_policy_upload_output =
+        &find_tool(&tool_list, "prepare_policy_document_upload")["outputSchema"];
+    assert_schema_has_property(prepare_policy_upload_output, "upload_id");
+    assert_schema_has_property(prepare_policy_upload_output, "upload");
+    assert_schema_lacks_property(prepare_policy_upload_output, "document_id");
+    for forbidden in [
+        "bytes",
+        "file",
+        "path",
+        "attachment",
+        "object_key",
+        "base64",
+    ] {
+        assert_schema_lacks_property(prepare_policy_upload_output, forbidden);
+    }
     assert_schema_has_property(
         &find_tool(&tool_list, "create_auditor_access_link")["outputSchema"],
         "url",
@@ -1817,6 +1861,311 @@ WHERE id = $1
         )
         .await;
     assert_eq!(uploaded["document"]["upload_status"], "uploaded");
+}
+
+#[tokio::test]
+async fn mcp_policy_machine_upload_runs_from_preparation_through_scan_and_finalization() {
+    let app = TestApp::builder()
+        .without_default_auth()
+        .with_clamav()
+        .with_max_document_bytes(1024)
+        .workspace("workspace", "MCP policy machine upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let mcp_server = app.mcp_http_server();
+    let token = app.api_token().to_owned();
+    let client = McpClient::connect(&mcp_server, &token).await;
+    let policy = client
+        .call_tool(
+            "create_policy",
+            json!({ "name": "Machine-uploaded policy" }),
+        )
+        .await;
+    let policy_id = uuid_from(&policy["id"]);
+    let content = b"agent-native policy";
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let (prepared, issuance_logs) = capture_audit_logs(|request_id| {
+        let mcp_server = &mcp_server;
+        let token = token.clone();
+        async move {
+            McpClient::connect_with_request_id(mcp_server, &token, request_id)
+                .await
+                .call_tool(
+                    "prepare_policy_document_upload",
+                    json!({
+                        "policy_id": policy_id,
+                        "filename": "security-policy.pdf",
+                        "content_type": "application/pdf",
+                        "content_length": content.len(),
+                    }),
+                )
+                .await
+        }
+    })
+    .await;
+    assert_eq!(
+        prepared
+            .as_object()
+            .expect("preparation response is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ["upload", "upload_id"].into_iter().collect()
+    );
+    let upload_id = uuid_from(&prepared["upload_id"]);
+    assert_eq!(prepared["upload"]["method"], "PUT");
+    assert_eq!(prepared["upload"]["content_type"], "application/pdf");
+    assert_eq!(prepared["upload"]["max_bytes"], 1024);
+    assert_eq!(
+        prepared["upload"]["url"],
+        format!("https://api.proofplane.test/agent-policy-document-uploads/{upload_id}")
+    );
+    let authorization = prepared["upload"]["authorization"]
+        .as_str()
+        .expect("authorization is text")
+        .to_owned();
+    assert!(authorization.starts_with("Proofplane-Upload "));
+    assert_eq!(issuance_logs.len(), 1);
+    assert_audit_event(
+        &issuance_logs[0],
+        ExpectedAuditEvent {
+            event_name: "agent_policy_document_upload_grant.issued",
+            operation: "prepare_policy_document_upload",
+            client_type: "mcp",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "agent_policy_document_upload_grant",
+            object_id: upload_id,
+        },
+    );
+    assert_eq!(
+        audit_metadata(&issuance_logs[0]),
+        json!({ "policy_id": policy_id.to_string() })
+    );
+    assert!(!issuance_logs[0].to_string().contains(&authorization));
+    assert!(!issuance_logs[0].to_string().contains("security-policy.pdf"));
+
+    let (transferred, completion_logs) = capture_audit_logs(|request_id| {
+        let app = &app;
+        let authorization = authorization.clone();
+        async move {
+            app.server()
+                .put(&format!("/agent-policy-document-uploads/{upload_id}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .add_header("authorization", authorization)
+                .add_header("content-type", "application/pdf")
+                .add_header("content-length", content.len().to_string())
+                .bytes(content.as_slice().into())
+                .await
+        }
+    })
+    .await;
+    transferred.assert_status(StatusCode::CREATED);
+    let transferred: Value = transferred.json();
+    let document_id = uuid_from(&transferred["document_id"]);
+    assert_eq!(transferred["policy_id"], policy_id.to_string());
+    assert_eq!(completion_logs.len(), 1);
+    assert_audit_event(
+        &completion_logs[0],
+        ExpectedAuditEvent {
+            event_name: "agent_policy_document_upload.completed",
+            operation: "upload_agent_policy_document",
+            client_type: "rest",
+            workspace_id,
+            user_id: app.user_id(),
+            api_token_id: app.api_token_id(),
+            object_type: "agent_policy_document_upload_grant",
+            object_id: upload_id,
+        },
+    );
+    assert_eq!(
+        audit_metadata(&completion_logs[0]),
+        json!({
+            "lifecycle_status": "pending",
+            "policy_document_id": document_id.to_string(),
+            "policy_id": policy_id.to_string(),
+        })
+    );
+    assert!(!completion_logs[0].to_string().contains(&authorization));
+
+    let polled = client
+        .call_tool("get_policy", json!({ "policy_id": policy_id }))
+        .await;
+    assert_eq!(polled["document"]["id"], document_id.to_string());
+    assert_eq!(polled["document"]["upload_status"], "pending");
+
+    let worker = app.worker_server().await;
+    let scan =
+        machine_upload_outbox_message(&app, DOCUMENT_SCAN_REQUESTED, &document_id.to_string())
+            .await;
+    deliver_worker_message(&worker, &scan).await;
+    let finalizing = client
+        .call_tool("get_policy", json!({ "policy_id": policy_id }))
+        .await;
+    assert_eq!(finalizing["document"]["upload_status"], "finalizing");
+
+    let finalize = machine_upload_outbox_message(
+        &app,
+        DOCUMENT_FINALIZATION_REQUESTED,
+        &document_id.to_string(),
+    )
+    .await;
+    deliver_worker_message(&worker, &finalize).await;
+    let uploaded = client
+        .call_tool("get_policy", json!({ "policy_id": policy_id }))
+        .await;
+    assert_eq!(uploaded["document"]["upload_status"], "uploaded");
+
+    let rendered = metrics.render();
+    assert!(rendered
+        .contains("proofplane_agent_policy_document_upload_grants_total{result=\"issued\"} 1"));
+    assert!(rendered
+        .contains("proofplane_agent_policy_document_upload_attempts_total{result=\"created\"} 1"));
+    assert!(rendered.contains("proofplane_agent_policy_document_upload_received_bytes_total 19"));
+    for forbidden in [&authorization, "security-policy.pdf", "application/pdf"] {
+        assert!(!rendered.contains(forbidden));
+    }
+}
+
+#[tokio::test]
+async fn mcp_policy_machine_upload_preparation_validates_and_conceals_unavailable_policies() {
+    let app = TestApp::builder()
+        .with_max_document_bytes(4)
+        .workspace("workspace", "MCP policy upload validation workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let server = app.mcp_http_server();
+    let client = McpClient::connect(&server, app.api_token()).await;
+    let policy = client
+        .call_tool("create_policy", json!({ "name": "Validation policy" }))
+        .await;
+    let policy_id = uuid_from(&policy["id"]);
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let metrics = recorder.handle();
+    let _metrics_guard = metrics::set_default_local_recorder(&recorder);
+
+    let missing = client
+        .call_tool_error("prepare_policy_document_upload", json!({}))
+        .await;
+    assert_eq!(
+        field_issue_names(&missing.data),
+        ["policy_id", "filename", "content_type", "content_length"]
+    );
+    let invalid = client
+        .call_tool_error(
+            "prepare_policy_document_upload",
+            json!({
+                "policy_id": policy_id,
+                "filename": "../policy.pdf",
+                "content_type": "invalid",
+                "content_length": 5,
+                "checksum_sha256": "A".repeat(64),
+            }),
+        )
+        .await;
+    assert_eq!(
+        field_issue_names(&invalid.data),
+        [
+            "filename",
+            "content_type",
+            "content_length",
+            "checksum_sha256"
+        ]
+    );
+    let unavailable = client
+        .call_tool_error(
+            "prepare_policy_document_upload",
+            json!({
+                "policy_id": Uuid::new_v4(),
+                "filename": "policy.pdf",
+                "content_type": "application/pdf",
+                "content_length": 4,
+            }),
+        )
+        .await;
+    assert_eq!(unavailable.data["problem"]["code"], "not_found");
+    insert_policy_document_row(&app, policy_id, "uploaded").await;
+    let (conflict, conflict_logs) = capture_audit_logs(|_| async {
+        client
+            .call_tool_error(
+                "prepare_policy_document_upload",
+                json!({
+                    "policy_id": policy_id,
+                    "filename": "policy.pdf",
+                    "content_type": "application/pdf",
+                    "content_length": 4,
+                }),
+            )
+            .await
+    })
+    .await;
+    assert_eq!(conflict.data["problem"]["code"], "policy_document_exists");
+    assert!(conflict.data["problem"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("get_policy")));
+    assert!(conflict_logs.is_empty());
+    let read_only = app
+        .issue_api_token(workspace_id, vec![WorkspacePermission::ReadControls])
+        .await;
+    let denied = McpClient::connect(&server, &read_only.raw_token)
+        .await
+        .call_tool_error(
+            "prepare_policy_document_upload",
+            json!({
+                "policy_id": policy_id,
+                "filename": "policy.pdf",
+                "content_type": "application/pdf",
+                "content_length": 4,
+            }),
+        )
+        .await;
+    assert_eq!(denied.data["problem"]["code"], "not_found");
+    for forbidden in ["bytes", "file", "path", "attachment", "base64"] {
+        let mut arguments = json!({
+            "policy_id": policy_id,
+            "filename": "policy.pdf",
+            "content_type": "application/pdf",
+            "content_length": 4,
+        });
+        arguments[forbidden] = json!("forbidden");
+        assert_eq!(
+            client
+                .call_tool_error_code("prepare_policy_document_upload", arguments)
+                .await,
+            rmcp::model::ErrorCode::INVALID_PARAMS
+        );
+    }
+    let grant_count = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one(
+            "SELECT count(*) FROM agent_policy_document_upload_grants",
+            &[],
+        )
+        .await
+        .expect("grant count loads")
+        .get::<_, i64>(0);
+    assert_eq!(grant_count, 0);
+    let rendered = metrics.render();
+    assert!(rendered.contains(
+        "proofplane_agent_policy_document_upload_grants_total{result=\"validation_rejected\"} 2"
+    ));
+    assert!(rendered.contains(
+        "proofplane_agent_policy_document_upload_grants_total{result=\"unavailable\"} 2"
+    ));
+    assert!(rendered.contains(
+        "proofplane_agent_policy_document_upload_grants_total{result=\"current_document\"} 1"
+    ));
 }
 
 #[tokio::test]

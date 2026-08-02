@@ -22,6 +22,8 @@ const DOWNLOAD_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-download:v1";
 const UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-upload-grant:v1";
 const AGENT_EVIDENCE_UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] =
     b"proofplane:agent-evidence-upload-grant:v1";
+const AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] =
+    b"proofplane:agent-policy-document-upload-grant:v1";
 const UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] = b"proofplane:document-upload-session:v1";
 const POLICY_UPLOAD_GRANT_IMPLICIT_ASSERTION: &[u8] = b"proofplane:policy-document-upload-grant:v1";
 const POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] =
@@ -251,106 +253,145 @@ impl UploadGrantDecryptor {
     }
 }
 
-#[derive(Clone)]
-pub struct AgentEvidenceUploadGrantEncryptor {
-    issuer: Url,
-    audience: String,
-    key_id: String,
-    secret_key: SymmetricKey<V4>,
+macro_rules! machine_upload_grant_paseto {
+    ($encryptor:ident, $decryptor:ident, $implicit_assertion:expr) => {
+        #[derive(Clone)]
+        pub struct $encryptor {
+            issuer: Url,
+            audience: String,
+            key_id: String,
+            secret_key: SymmetricKey<V4>,
+        }
+
+        impl $encryptor {
+            pub fn from_config(
+                issuer: Url,
+                audience: impl Into<String>,
+                config: &PasetoUploadGrantConfig,
+            ) -> Result<Self, Error> {
+                let active = config
+                    .keys
+                    .iter()
+                    .find(|key| key.id == config.active_key_id)
+                    .ok_or(Error::Keyring)?;
+                Ok(Self {
+                    issuer,
+                    audience: audience.into(),
+                    key_id: active.id.clone(),
+                    secret_key: symmetric_key(active.secret.expose_secret())?,
+                })
+            }
+
+            pub fn encrypt<T: Serialize>(
+                &self,
+                registered: RegisteredClaims,
+                custom_claims: &T,
+            ) -> Result<IssuedPasetoToken, Error> {
+                let payload = payload(
+                    self.issuer.as_str(),
+                    &self.audience,
+                    &registered,
+                    custom_claims,
+                )?;
+                let footer = footer(&self.key_id)?;
+                let token = encrypt_local_token(
+                    &self.secret_key,
+                    payload.as_bytes(),
+                    footer.as_bytes(),
+                    $implicit_assertion,
+                )?;
+                Ok(IssuedPasetoToken {
+                    token,
+                    token_id: registered.token_id,
+                    key_id: self.key_id.clone(),
+                    expires_at: normalize_datetime(registered.expires_at)?,
+                })
+            }
+        }
+
+        #[derive(Clone)]
+        pub struct $decryptor {
+            issuer: Url,
+            audience: String,
+            keys: HashMap<String, SymmetricKey<V4>>,
+        }
+
+        impl $decryptor {
+            pub fn from_config(
+                issuer: Url,
+                audience: impl Into<String>,
+                config: &PasetoUploadGrantConfig,
+            ) -> Result<Self, Error> {
+                let mut keys = HashMap::new();
+                for key in &config.keys {
+                    keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
+                }
+                Ok(Self {
+                    issuer,
+                    audience: audience.into(),
+                    keys,
+                })
+            }
+
+            pub fn decrypt<T: DeserializeOwned>(
+                &self,
+                token: &str,
+            ) -> Result<VerifiedPasetoToken<T>, Error> {
+                let untrusted =
+                    UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
+                let footer = parse_footer(untrusted.untrusted_footer())?;
+                let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
+                let trusted = decrypt_local_token(key, &untrusted, $implicit_assertion)?;
+                verified_payload(
+                    trusted.payload(),
+                    &footer.kid,
+                    self.issuer.as_str(),
+                    &self.audience,
+                )
+            }
+        }
+    };
 }
 
-impl AgentEvidenceUploadGrantEncryptor {
-    pub fn from_config(
-        issuer: Url,
-        audience: impl Into<String>,
-        config: &PasetoUploadGrantConfig,
-    ) -> Result<Self, Error> {
-        let active = config
-            .keys
-            .iter()
-            .find(|key| key.id == config.active_key_id)
-            .ok_or(Error::Keyring)?;
+machine_upload_grant_paseto!(
+    AgentEvidenceUploadGrantEncryptor,
+    AgentEvidenceUploadGrantDecryptor,
+    AGENT_EVIDENCE_UPLOAD_GRANT_IMPLICIT_ASSERTION
+);
+machine_upload_grant_paseto!(
+    AgentPolicyDocumentUploadGrantEncryptor,
+    AgentPolicyDocumentUploadGrantDecryptor,
+    AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_IMPLICIT_ASSERTION
+);
 
-        Ok(Self {
-            issuer,
-            audience: audience.into(),
-            key_id: active.id.clone(),
-            secret_key: symmetric_key(active.secret.expose_secret())?,
-        })
-    }
-
-    pub fn encrypt<T: Serialize>(
+#[cfg(test)]
+impl AgentPolicyDocumentUploadGrantEncryptor {
+    pub(crate) fn encrypt_expired<T: Serialize>(
         &self,
         registered: RegisteredClaims,
         custom_claims: &T,
     ) -> Result<IssuedPasetoToken, Error> {
-        let payload = payload(
+        let issued_at = registered.expires_at - chrono::Duration::seconds(1);
+        let payload = payload_at(
             self.issuer.as_str(),
             &self.audience,
             &registered,
             custom_claims,
+            issued_at,
         )?;
         let footer = footer(&self.key_id)?;
         let token = encrypt_local_token(
             &self.secret_key,
             payload.as_bytes(),
             footer.as_bytes(),
-            AGENT_EVIDENCE_UPLOAD_GRANT_IMPLICIT_ASSERTION,
+            AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_IMPLICIT_ASSERTION,
         )?;
-
         Ok(IssuedPasetoToken {
             token,
             token_id: registered.token_id,
             key_id: self.key_id.clone(),
             expires_at: normalize_datetime(registered.expires_at)?,
         })
-    }
-}
-
-#[derive(Clone)]
-pub struct AgentEvidenceUploadGrantDecryptor {
-    issuer: Url,
-    audience: String,
-    keys: HashMap<String, SymmetricKey<V4>>,
-}
-
-impl AgentEvidenceUploadGrantDecryptor {
-    pub fn from_config(
-        issuer: Url,
-        audience: impl Into<String>,
-        config: &PasetoUploadGrantConfig,
-    ) -> Result<Self, Error> {
-        let mut keys = HashMap::new();
-        for key in &config.keys {
-            keys.insert(key.id.clone(), symmetric_key(key.secret.expose_secret())?);
-        }
-
-        Ok(Self {
-            issuer,
-            audience: audience.into(),
-            keys,
-        })
-    }
-
-    pub fn decrypt<T: DeserializeOwned>(
-        &self,
-        token: &str,
-    ) -> Result<VerifiedPasetoToken<T>, Error> {
-        let untrusted = UntrustedToken::<Local, V4>::try_from(token).map_err(|_| Error::Verify)?;
-        let footer = parse_footer(untrusted.untrusted_footer())?;
-        let key = self.keys.get(&footer.kid).ok_or(Error::Verify)?;
-        let trusted = decrypt_local_token(
-            key,
-            &untrusted,
-            AGENT_EVIDENCE_UPLOAD_GRANT_IMPLICIT_ASSERTION,
-        )?;
-
-        verified_payload(
-            trusted.payload(),
-            &footer.kid,
-            self.issuer.as_str(),
-            &self.audience,
-        )
     }
 }
 
@@ -773,6 +814,16 @@ fn payload<T: Serialize>(
     custom_claims: &T,
 ) -> Result<String, Error> {
     let issued_at = Utc::now();
+    payload_at(issuer, audience, registered, custom_claims, issued_at)
+}
+
+fn payload_at<T: Serialize>(
+    issuer: &str,
+    audience: &str,
+    registered: &RegisteredClaims,
+    custom_claims: &T,
+    issued_at: DateTime<Utc>,
+) -> Result<String, Error> {
     if registered.expires_at <= issued_at {
         return Err(Error::Issue);
     }
@@ -1087,6 +1138,15 @@ mod tests {
         .encrypt(registered(), &custom_claims())
         .unwrap()
         .token;
+        let agent_policy_upload_token = AgentPolicyDocumentUploadGrantEncryptor::from_config(
+            issuer(),
+            "proofplane-agent-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .encrypt(registered(), &custom_claims())
+        .unwrap()
+        .token;
         let policy_upload_grant_token = PolicyUploadGrantEncryptor::from_config(
             issuer(),
             "proofplane-policy-document-upload-grant",
@@ -1124,6 +1184,38 @@ mod tests {
         )
         .unwrap()
         .decrypt::<TestClaims>(&upload_grant_token)
+        .is_err());
+        assert!(AgentPolicyDocumentUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-agent-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&agent_upload_token)
+        .is_err());
+        assert!(AgentPolicyDocumentUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-agent-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&policy_upload_grant_token)
+        .is_err());
+        assert!(AgentEvidenceUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-agent-evidence-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&agent_policy_upload_token)
+        .is_err());
+        assert!(PolicyUploadGrantDecryptor::from_config(
+            issuer(),
+            "proofplane-policy-document-upload-grant",
+            &upload_grant_config,
+        )
+        .unwrap()
+        .decrypt::<TestClaims>(&agent_policy_upload_token)
         .is_err());
         assert!(PolicyUploadGrantDecryptor::from_config(
             issuer(),

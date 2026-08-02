@@ -1,11 +1,13 @@
 mod agent_connection;
 mod agent_evidence_upload_grant;
+mod agent_policy_document_upload_grant;
 mod auditor_access_grant;
 mod auditor_access_session;
 mod auditor_auth_transaction;
 mod auditor_portal;
 mod batch;
 mod controls;
+mod declared_upload_file;
 mod document;
 mod error;
 mod evidence;
@@ -27,6 +29,11 @@ pub use agent_evidence_upload_grant::{
     AgentEvidenceUploadAuthority, AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant,
     AgentEvidenceUploadGrantError, AgentEvidenceUploadGrantId,
 };
+pub use agent_policy_document_upload_grant::{
+    AgentPolicyDocumentUploadAuthority, AgentPolicyDocumentUploadDeclaration,
+    AgentPolicyDocumentUploadGrant, AgentPolicyDocumentUploadGrantError,
+    AgentPolicyDocumentUploadGrantId,
+};
 pub use auditor_access_grant::{
     AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
 };
@@ -46,6 +53,7 @@ pub use controls::{
     EvidenceControlMapping, EvidenceControlMappingItem, Framework, FrameworkId,
     FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
 };
+pub use declared_upload_file::{DeclaredUploadFile, DeclaredUploadFileError};
 pub use document::{
     CreateDocumentPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,
     DocumentUploadStatus,

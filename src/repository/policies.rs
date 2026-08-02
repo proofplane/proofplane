@@ -43,7 +43,48 @@ pub enum CreatePolicyDocumentResult {
     DocumentExists,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDocumentUploadEligibility {
+    Eligible,
+    CurrentDocument,
+}
+
 impl WorkspaceTransactionContext<'_> {
+    pub async fn lock_policy_document_upload_eligibility(
+        &self,
+        policy_id: PolicyId,
+    ) -> Result<Option<PolicyDocumentUploadEligibility>, Error> {
+        let row = self
+            .transaction
+            .query_opt(
+                r#"
+SELECT EXISTS (
+    SELECT 1
+    FROM documents d
+    WHERE d.owner_type = 'policy'
+      AND d.owner_id = p.id
+      AND d.workspace_id = p.workspace_id
+      AND d.archived = false
+) AS current_document
+FROM policies p
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND p.archived_at IS NULL
+FOR UPDATE OF p
+"#,
+                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?;
+        row.map(|row| {
+            if row.try_get::<_, bool>("current_document")? {
+                Ok(PolicyDocumentUploadEligibility::CurrentDocument)
+            } else {
+                Ok(PolicyDocumentUploadEligibility::Eligible)
+            }
+        })
+        .transpose()
+    }
+
     pub async fn create_policy_document(
         &self,
         payload: &CreateDocumentPayload,
@@ -833,6 +874,34 @@ WHERE m.policy_id = $1
 }
 
 impl WorkspaceReadContext {
+    pub(crate) async fn get_policy_document_for_agent_upload(
+        &self,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> Result<Option<Document>, Error> {
+        self.client
+            .query_opt(
+                r#"
+SELECT d.*, d.owner_id AS policy_id
+FROM documents d
+JOIN policies p ON p.id = d.owner_id
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND d.owner_type = 'policy'
+  AND d.workspace_id = $2
+  AND d.id = $3
+"#,
+                &[
+                    &Uuid::from(policy_id),
+                    &Uuid::from(self.workspace_id),
+                    &Uuid::from(document_id),
+                ],
+            )
+            .await?
+            .map(|row| policy_document_from_row(&row))
+            .transpose()
+    }
+
     pub async fn get_policy_document_for_download(
         &self,
         policy_id: PolicyId,

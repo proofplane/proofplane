@@ -26,6 +26,16 @@ pub(crate) struct StagedDocument {
     pub checksum_crc32c: String,
 }
 
+pub(crate) struct BoundedStagingRequest {
+    pub workspace_id: WorkspaceId,
+    pub owner: DocumentOwner,
+    pub upload_id: uuid::Uuid,
+    pub filename: String,
+    pub content_type: String,
+    pub max_bytes: usize,
+    pub cleanup_operation: &'static str,
+}
+
 pub(crate) async fn stage_document<S>(
     object_store: &FilesystemObjectStore,
     workspace_id: WorkspaceId,
@@ -83,11 +93,35 @@ pub(crate) async fn stage_evidence_document<S>(
 where
     S: Stream<Item = Result<Bytes, StorageError>> + Send,
 {
+    stage_bounded_document(
+        object_store,
+        BoundedStagingRequest {
+            workspace_id,
+            owner: DocumentOwner::EvidenceSubmission(evidence_submission_id),
+            upload_id: uuid::Uuid::new_v4(),
+            filename,
+            content_type,
+            max_bytes,
+            cleanup_operation: "evidence_document_length_mismatch",
+        },
+        chunks,
+    )
+    .await
+}
+
+pub(crate) async fn stage_bounded_document<S>(
+    object_store: &FilesystemObjectStore,
+    request: BoundedStagingRequest,
+    chunks: S,
+) -> Result<StagedDocument, Error>
+where
+    S: Stream<Item = Result<Bytes, StorageError>> + Send,
+{
     let content_length = Arc::new(AtomicU64::new(0));
     let checksum_crc32c = Arc::new(AtomicU32::new(0));
     let stream_content_length = Arc::clone(&content_length);
     let stream_checksum_crc32c = Arc::clone(&checksum_crc32c);
-    let max_bytes = u64::try_from(max_bytes).map_err(|_| stream_too_large())?;
+    let max_bytes = u64::try_from(request.max_bytes).map_err(|_| stream_too_large())?;
     let chunks = chunks.map(move |chunk| {
         let chunk = chunk?;
         let chunk_length = u64::try_from(chunk.len()).map_err(|_| stream_too_large())?;
@@ -110,22 +144,18 @@ where
 
     let mut staged = stage_document(
         object_store,
-        workspace_id,
-        DocumentOwner::EvidenceSubmission(evidence_submission_id),
-        uuid::Uuid::new_v4(),
-        filename,
-        content_type,
+        request.workspace_id,
+        request.owner,
+        request.upload_id,
+        request.filename,
+        request.content_type,
         chunks,
     )
     .await?;
     let actual_content_length = content_length.load(Ordering::Relaxed);
     if u64::try_from(staged.content_length) != Ok(actual_content_length) {
         if let Err(error) = delete_staged_document(object_store, &staged.object_key).await {
-            crate::observability::record_cleanup_failure(
-                &error,
-                "evidence_document_length_mismatch",
-                None,
-            );
+            crate::observability::record_cleanup_failure(&error, request.cleanup_operation, None);
         }
         return Err(Error::Storage(StorageError::StreamRead {
             message: "staged object length does not match received bytes".to_owned(),

@@ -48,6 +48,13 @@ development commands may use `expect` when aborting is the intended behavior
 and the message is actionable. Before completing a change, search modified
 runtime code for `.expect(` and remove every occurrence.
 
+For snapshot-persisted aggregates, keep lifecycle transitions and invariants in
+the domain aggregate. Services own authorization, parent eligibility, and
+orchestration. Repositories map through private persistence records and expose
+narrow `get` and `save` operations: `get` rehydrates the complete aggregate,
+and `save` persists its complete current snapshot. Snapshot `save` methods must
+not add aggregate-specific eligibility or relationship queries.
+
 ## Testing Guidelines
 
 Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,

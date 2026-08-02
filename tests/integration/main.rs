@@ -2,6 +2,8 @@ mod agent_connection_repository;
 mod agent_connections;
 mod agent_evidence_upload_grants;
 mod agent_evidence_uploads;
+mod agent_policy_document_upload_grants;
+mod agent_policy_document_uploads;
 mod auditor_access;
 mod auditor_access_grants;
 mod auditor_auth_transactions;

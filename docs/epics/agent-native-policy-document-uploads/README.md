@@ -13,10 +13,10 @@ of technical depth. Tickets below are lean handoff units that link into it.
 
 | Ticket | Status | Notes |
 | --- | --- | --- |
-| 001. [Policy Machine Upload Grants](./tickets/001-policy-machine-upload-grants.md) | Todo | Share transfer primitives and persist policy-specific authority. |
-| 002. [Policy Document Streaming](./tickets/002-policy-document-streaming.md) | Todo | Stream, atomically complete, replay, and resolve document races. |
-| 003. [MCP Policy Upload Preparation](./tickets/003-mcp-policy-upload-preparation.md) | Todo | Expose the trusted-runtime descriptor and polling guidance. |
-| 004. [Policy Upload Operations](./tickets/004-policy-upload-operations.md) | Todo | Add audit, metrics, end-to-end failures, and regression coverage. |
+| 001. [Policy Machine Upload Grants](./tickets/001-policy-machine-upload-grants.md) | Done | Share transfer primitives and persist policy-specific authority. |
+| 002. [Policy Document Streaming](./tickets/002-policy-document-streaming.md) | Done | Stream, atomically complete, replay, and resolve document races. |
+| 003. [MCP Policy Upload Preparation](./tickets/003-mcp-policy-upload-preparation.md) | Done | Expose the trusted-runtime descriptor and polling guidance. |
+| 004. [Policy Upload Operations](./tickets/004-policy-upload-operations.md) | Done | Add audit, metrics, end-to-end failures, and regression coverage. |
 
 ## Sequencing
 

@@ -44,6 +44,7 @@ getrandom = "0.4.3"
 hex = "0.4"
 hmac = "0.12"
 http = "1"
+http-body-util = "0.1"
 jwtk = { version = "0.5", features = ["openssl"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -60,7 +61,7 @@ tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "rt-
 tokio-util = "0.7"
 tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.10", features = ["cors", "trace"] }
+tower-http = { version = "0.6.10", features = ["cors", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"

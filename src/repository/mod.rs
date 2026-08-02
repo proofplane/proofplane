@@ -6,6 +6,7 @@ use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
 
 mod agent_connections;
 mod agent_evidence_upload_grants;
+mod agent_policy_document_upload_grants;
 mod auditor_access_grants;
 mod auditor_access_sessions;
 mod auditor_auth_transactions;
@@ -27,6 +28,7 @@ mod workspace_memberships;
 mod workspaces;
 
 pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
+pub use agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantRepository;
 pub use auditor_access_sessions::NewAuditorSession;
 pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
 pub use constraints::ConflictKind;
@@ -38,7 +40,9 @@ pub use evidence_submissions::{
     PendingDocumentUploadWork,
 };
 pub use outbox::{NewOutboxMessage, OutboxMessage};
-pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
+pub use policies::{
+    ArchivePolicyResult, CreatePolicyDocumentResult, PolicyDocumentUploadEligibility,
+};
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use workspace_memberships::NewWorkspaceMembership;
 

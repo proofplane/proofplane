@@ -14,7 +14,10 @@ use crate::{
     domain::{AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId},
     object_storage::StorageError,
     observability::agent_evidence_uploads::{record_attempt, AgentEvidenceUploadAttemptResult},
-    routes::{error::ApiError, request_context::RequestId},
+    routes::{
+        error::ApiError, limited_body, request_body_stream_error, request_context::RequestId,
+        upload_credential,
+    },
     services::{
         agent_evidence_upload_grants::AgentEvidenceUploadGrantError,
         agent_evidence_uploads::{
@@ -24,11 +27,10 @@ use crate::{
     },
 };
 
-const AUTHORIZATION_SCHEME: &str = "Proofplane-Upload ";
-
 #[derive(Clone)]
 pub struct AgentEvidenceUploadState {
     pub service: AgentEvidenceUploadService,
+    pub max_document_bytes: usize,
 }
 
 pub fn router(state: AgentEvidenceUploadState) -> Router {
@@ -64,12 +66,9 @@ async fn upload(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| validation_attempt("valid content-length header is required"))?;
-    let chunks = body.into_data_stream().map(|chunk| {
-        chunk.map_err(|_| StorageError::StreamRead {
-            message: "request body stream failed".to_owned(),
-            payload_too_large: false,
-        })
-    });
+    let chunks = limited_body(body, state.max_document_bytes)
+        .into_data_stream()
+        .map(|chunk| chunk.map_err(request_body_stream_error));
     let result = state
         .service
         .upload(
@@ -92,15 +91,6 @@ async fn upload(
         upload_status: result.document.upload_status.as_str(),
     };
     Ok((status, Json(response)).into_response())
-}
-
-fn upload_credential(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let credential = value.strip_prefix(AUTHORIZATION_SCHEME)?;
-    if credential.is_empty() || credential.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return None;
-    }
-    Some(credential)
 }
 
 impl From<AgentEvidenceUploadError> for ApiError {

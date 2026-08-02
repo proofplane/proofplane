@@ -105,4 +105,27 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn policies_distinguishes_human_management_and_trusted_runtime_uploads() {
+        let guide = find_topic("policies").expect("policies guide exists");
+
+        for expected in [
+            "Human browser management",
+            "Trusted-runtime machine upload",
+            "manage_policy_document",
+            "prepare_policy_document_upload",
+            "Content-Length",
+            "get_policy",
+            "same descriptor",
+            "File bytes never pass through MCP or the model",
+            "Local paths never pass through MCP or the model",
+            "archive",
+        ] {
+            assert!(
+                guide.markdown.contains(expected),
+                "guide contains {expected:?}"
+            );
+        }
+    }
 }
