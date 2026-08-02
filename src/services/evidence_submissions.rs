@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        CoverageWindow, CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document,
-        DocumentId, DocumentOwner, EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
-        WorkspaceId,
+        AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload,
+        CreateEvidenceSubmissionPayload, Document, DocumentId, DocumentOwner, EvidenceId,
+        EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
@@ -150,7 +150,7 @@ impl EvidenceSubmissionService {
 
     pub(crate) async fn stage_agent_upload<S>(
         &self,
-        grant: &crate::domain::AgentEvidenceUploadGrant,
+        grant: &AgentEvidenceUploadGrant,
         max_bytes: usize,
         chunks: S,
     ) -> Result<StagedEvidenceDocument, Error>

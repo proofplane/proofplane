@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AgentEvidenceUploadGrant, AgentEvidenceUploadGrantError as DomainGrantError,
-        AgentEvidenceUploadGrantId, CreateDocumentPayload, CreateEvidenceSubmissionPayload,
-        Document, DocumentId, DocumentOwner, EvidenceSubmissionId,
+        AgentEvidenceUploadAuthority, AgentEvidenceUploadGrant,
+        AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId,
+        CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document, DocumentId,
+        DocumentOwner, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::StorageError,
     observability::{
@@ -40,7 +41,7 @@ pub struct AgentEvidenceUploadService {
 }
 
 pub struct AgentEvidenceUploadResult {
-    pub submission_id: crate::domain::EvidenceSubmissionId,
+    pub submission_id: EvidenceSubmissionId,
     pub document: Document,
 }
 
@@ -192,7 +193,7 @@ impl AgentEvidenceUploadService {
     async fn complete(
         &self,
         grant: AgentEvidenceUploadGrant,
-        authority: crate::domain::AgentEvidenceUploadAuthority,
+        authority: AgentEvidenceUploadAuthority,
         request_id: Uuid,
         staged: StagedEvidenceDocument,
     ) -> Result<AgentEvidenceUploadOutcome, AgentEvidenceUploadError> {
@@ -365,7 +366,7 @@ impl AgentEvidenceUploadService {
 
     async fn load_completed_result_by_id(
         &self,
-        workspace_id: crate::domain::WorkspaceId,
+        workspace_id: WorkspaceId,
         submission_id: EvidenceSubmissionId,
         document_id: DocumentId,
     ) -> Result<AgentEvidenceUploadResult, AgentEvidenceUploadError> {

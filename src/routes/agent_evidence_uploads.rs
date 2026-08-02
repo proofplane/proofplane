@@ -80,8 +80,7 @@ async fn upload(
             request_id.0,
             chunks,
         )
-        .await
-        .map_err(upload_error)?;
+        .await?;
     let status = match &result {
         AgentEvidenceUploadOutcome::Created(_) => StatusCode::CREATED,
         AgentEvidenceUploadOutcome::Replayed(_) => StatusCode::OK,
@@ -104,40 +103,45 @@ fn upload_credential(headers: &HeaderMap) -> Option<&str> {
     Some(credential)
 }
 
-fn upload_error(error: AgentEvidenceUploadError) -> ApiError {
-    match error {
-        AgentEvidenceUploadError::Unavailable
-        | AgentEvidenceUploadError::GrantCredential(AgentEvidenceUploadGrantError::Unavailable)
-        | AgentEvidenceUploadError::Grant(DomainGrantError::Expired)
-        | AgentEvidenceUploadError::Grant(DomainGrantError::AlreadyCompleted)
-        | AgentEvidenceUploadError::Grant(DomainGrantError::AuthorityMismatch) => unavailable(),
-        AgentEvidenceUploadError::PayloadTooLarge
-        | AgentEvidenceUploadError::Service(ServiceError::Storage(StorageError::StreamRead {
-            payload_too_large: true,
-            ..
-        })) => ApiError::PayloadTooLarge,
-        AgentEvidenceUploadError::Grant(DomainGrantError::ContentTypeMismatch) => {
-            validation_error("content-type header does not match upload grant")
-        }
-        AgentEvidenceUploadError::Grant(DomainGrantError::DeclaredContentLengthMismatch) => {
-            validation_error("content-length header does not match upload grant")
-        }
-        AgentEvidenceUploadError::Grant(DomainGrantError::ReceivedContentLengthMismatch) => {
-            validation_error("request body length does not match upload grant")
-        }
-        AgentEvidenceUploadError::Grant(DomainGrantError::ChecksumMismatch) => {
-            validation_error("request body checksum does not match upload grant")
-        }
-        AgentEvidenceUploadError::Service(ServiceError::Storage(StorageError::StreamRead {
-            message,
-            ..
-        })) => ApiError::BadRequest(vec![message]),
-        AgentEvidenceUploadError::Grant(_)
-        | AgentEvidenceUploadError::GrantCredential(_)
-        | AgentEvidenceUploadError::Service(_)
-        | AgentEvidenceUploadError::Repository(_) => {
-            tracing::error!(%error, "agent evidence upload dependency failure");
-            ApiError::Internal
+impl From<AgentEvidenceUploadError> for ApiError {
+    fn from(error: AgentEvidenceUploadError) -> Self {
+        match error {
+            AgentEvidenceUploadError::Unavailable
+            | AgentEvidenceUploadError::GrantCredential(
+                AgentEvidenceUploadGrantError::Unavailable,
+            )
+            | AgentEvidenceUploadError::Grant(DomainGrantError::Expired)
+            | AgentEvidenceUploadError::Grant(DomainGrantError::AlreadyCompleted)
+            | AgentEvidenceUploadError::Grant(DomainGrantError::AuthorityMismatch) => unavailable(),
+            AgentEvidenceUploadError::PayloadTooLarge
+            | AgentEvidenceUploadError::Service(ServiceError::Storage(
+                StorageError::StreamRead {
+                    payload_too_large: true,
+                    ..
+                },
+            )) => ApiError::PayloadTooLarge,
+            AgentEvidenceUploadError::Grant(DomainGrantError::ContentTypeMismatch) => {
+                validation_error("content-type header does not match upload grant")
+            }
+            AgentEvidenceUploadError::Grant(DomainGrantError::DeclaredContentLengthMismatch) => {
+                validation_error("content-length header does not match upload grant")
+            }
+            AgentEvidenceUploadError::Grant(DomainGrantError::ReceivedContentLengthMismatch) => {
+                validation_error("request body length does not match upload grant")
+            }
+            AgentEvidenceUploadError::Grant(DomainGrantError::ChecksumMismatch) => {
+                validation_error("request body checksum does not match upload grant")
+            }
+            AgentEvidenceUploadError::Service(ServiceError::Storage(
+                StorageError::StreamRead { message, .. },
+            )) => ApiError::BadRequest(vec![message]),
+            AgentEvidenceUploadError::Grant(_)
+            | AgentEvidenceUploadError::GrantCredential(_)
+            | AgentEvidenceUploadError::Service(_)
+            | AgentEvidenceUploadError::Repository(_) => {
+                tracing::error!(%error, "agent evidence upload dependency failure");
+                ApiError::Internal
+            }
         }
     }
 }
