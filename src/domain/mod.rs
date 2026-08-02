@@ -37,10 +37,15 @@ pub use agent_policy_document_upload_grant::{
     AgentPolicyDocumentUploadGrantId,
 };
 pub use auditor_access_grant::{
-    AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, CreateAuditorAccessGrantPayload,
+    AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, AuditorAccessGrantLifecycleError,
+    AuditorAccessGrantRevocation,
 };
-pub use auditor_access_session::{AuditorSession, AuditorSessionId};
-pub use auditor_auth_transaction::AuditorAuthTransactionId;
+pub use auditor_access_session::{
+    AuditorSession, AuditorSessionId, AuditorSessionLifecycleError, AuditorSessionTransition,
+};
+pub use auditor_auth_transaction::{
+    AuditorAuthTransaction, AuditorAuthTransactionId, AuditorAuthTransactionLifecycleError,
+};
 pub use auditor_portal::{
     AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
     AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,

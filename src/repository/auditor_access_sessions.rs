@@ -2,11 +2,13 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{AuditReviewPeriod, AuditorAccessGrantId, AuditorSession, AuditorSessionId};
+use crate::domain::{
+    AuditReviewPeriod, AuditorAccessGrantId, AuditorSession, AuditorSessionId, Sha256Digest,
+};
 
 use super::{Error, Postgres};
 
-const SESSION_COLUMNS: &str = "s.id, s.grant_id, g.workspace_id, s.auditor_email, s.auth0_subject, s.expires_at, g.period_start, g.period_end, s.revoked_at, s.last_used_at, s.created_at";
+const SESSION_COLUMNS: &str = "s.id, s.grant_id, g.workspace_id, s.session_digest, s.auditor_email, s.auth0_subject, s.expires_at, g.period_start, g.period_end, s.revoked_at, s.last_used_at, s.created_at";
 
 pub struct NewAuditorSession {
     pub id: AuditorSessionId,
@@ -124,16 +126,22 @@ RETURNING {SESSION_COLUMNS}
 }
 
 fn auditor_session_from_row(row: &Row) -> Result<AuditorSession, Error> {
-    Ok(AuditorSession {
-        id: AuditorSessionId::from(row.try_get::<_, Uuid>("id")?),
-        grant_id: AuditorAccessGrantId::from(row.try_get::<_, Uuid>("grant_id")?),
-        workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
-        auditor_email: row.try_get("auditor_email")?,
-        auth0_subject: row.try_get("auth0_subject")?,
-        expires_at: row.try_get("expires_at")?,
-        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
-        revoked_at: row.try_get("revoked_at")?,
-        last_used_at: row.try_get("last_used_at")?,
-        created_at: row.try_get("created_at")?,
-    })
+    let session_digest = row.try_get::<_, Vec<u8>>("session_digest")?;
+    let session_digest = session_digest
+        .try_into()
+        .map_err(|_| Error::InvariantViolation("auditor session digest must contain 32 bytes"))?;
+    AuditorSession::rehydrate(
+        row.try_get::<_, Uuid>("id")?.into(),
+        row.try_get::<_, Uuid>("grant_id")?.into(),
+        row.try_get::<_, Uuid>("workspace_id")?.into(),
+        row.try_get("auditor_email")?,
+        Sha256Digest::from_bytes(session_digest),
+        row.try_get("auth0_subject")?,
+        row.try_get("expires_at")?,
+        AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
+        row.try_get("revoked_at")?,
+        row.try_get("last_used_at")?,
+        row.try_get("created_at")?,
+    )
+    .map_err(|_| Error::InvariantViolation("persisted auditor session is inconsistent"))
 }

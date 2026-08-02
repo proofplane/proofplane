@@ -4,22 +4,22 @@ use uuid::Uuid;
 use crate::{
     authentication::opaque_token::AuditorInviteSecretDigest,
     domain::{
-        AgentConnectionId, AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId,
-        CreateAuditorAccessGrantPayload, WorkspaceId,
+        AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest, WorkspaceId,
     },
     repository::WorkspaceTransactionContext,
 };
 
 use super::{Error, Postgres};
 
-const AUDITOR_ACCESS_GRANT_COLUMNS: &str = "id, workspace_id, auditor_email, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
+const AUDITOR_ACCESS_GRANT_COLUMNS: &str = "id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
 
 impl WorkspaceTransactionContext<'_> {
     pub async fn create_auditor_access_grant(
         &self,
-        grant: CreateAuditorAccessGrantPayload,
+        grant: AuditorAccessGrant,
     ) -> Result<AuditorAccessGrant, Error> {
-        let digest: &[u8] = grant.secret_digest.as_bytes();
+        let secret_digest = grant.secret_digest();
+        let digest: &[u8] = secret_digest.as_bytes();
         let agent_connection_id = self.credential.agent_connection_uuid();
         let row = self
             .transaction
@@ -165,17 +165,22 @@ WHERE workspace_id = $1
 }
 
 fn auditor_access_grant_from_row(row: &Row) -> Result<AuditorAccessGrant, Error> {
-    Ok(AuditorAccessGrant {
-        id: AuditorAccessGrantId::from(row.try_get::<_, Uuid>("id")?),
-        workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
-        auditor_email: row.try_get("auditor_email")?,
-        created_by_user_id: row.try_get::<_, Uuid>("created_by_user_id")?.into(),
-        created_via_agent_connection_id: row
-            .try_get::<_, Uuid>("created_via_agent_connection_id")
-            .map(AgentConnectionId::from)?,
-        created_at: row.try_get("created_at")?,
-        expires_at: row.try_get("expires_at")?,
-        period: AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
-        revoked_at: row.try_get("revoked_at")?,
-    })
+    let secret_digest = row.try_get::<_, Vec<u8>>("secret_digest")?;
+    let secret_digest = secret_digest.try_into().map_err(|_| {
+        Error::InvariantViolation("auditor access grant digest must contain 32 bytes")
+    })?;
+    AuditorAccessGrant::rehydrate(
+        row.try_get::<_, Uuid>("id")?.into(),
+        row.try_get::<_, Uuid>("workspace_id")?.into(),
+        row.try_get("auditor_email")?,
+        Sha256Digest::from_bytes(secret_digest),
+        row.try_get::<_, Uuid>("created_by_user_id")?.into(),
+        row.try_get::<_, Uuid>("created_via_agent_connection_id")?
+            .into(),
+        row.try_get("created_at")?,
+        row.try_get("expires_at")?,
+        AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
+        row.try_get("revoked_at")?,
+    )
+    .map_err(|_| Error::InvariantViolation("persisted auditor access grant is inconsistent"))
 }

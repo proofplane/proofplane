@@ -10,8 +10,8 @@ use crate::{
         generate_auditor_invite_secret, parse_auditor_invite_secret, OpaqueTokenError,
     },
     domain::{
-        AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId,
-        CreateAuditorAccessGrantPayload, WorkspaceId, WorkspacePermission,
+        AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest, WorkspaceId,
+        WorkspacePermission,
     },
     repository::Postgres,
 };
@@ -81,15 +81,23 @@ impl AuditorAccessGrantService {
                 connection.user_id,
                 connection.connection_id,
                 async move |context| {
-                    context
-                        .create_auditor_access_grant(CreateAuditorAccessGrantPayload {
-                            id: grant_id,
-                            secret_digest: issued.digest,
-                            auditor_email,
-                            expires_at,
-                            period,
-                        })
-                        .await
+                    let grant = AuditorAccessGrant::issue(
+                        grant_id,
+                        connection.workspace_id,
+                        auditor_email,
+                        Sha256Digest::from_bytes(*issued.digest.as_bytes()),
+                        connection.user_id,
+                        connection.connection_id,
+                        Utc::now(),
+                        expires_at,
+                        period,
+                    )
+                    .map_err(|_| {
+                        crate::repository::Error::InvariantViolation(
+                            "auditor access grant issuance must be valid",
+                        )
+                    })?;
+                    context.create_auditor_access_grant(grant).await
                 },
             )
             .await?;
