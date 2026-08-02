@@ -121,6 +121,64 @@ async fn machine_grant_conceals_missing_and_cross_workspace_evidence_without_per
 }
 
 #[tokio::test]
+async fn machine_grant_persistence_failure_returns_no_credential_and_rolls_back() {
+    let app = TestApp::builder()
+        .workspace("workspace", "Machine upload workspace")
+        .with_default_membership()
+        .build()
+        .await;
+    let workspace_id = app.workspace_id("workspace");
+    let evidence_id = create_evidence(&app, workspace_id, "Machine evidence", "active").await;
+    app.postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .batch_execute(
+            r#"
+CREATE FUNCTION fail_machine_grant_save() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'injected machine grant save failure';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER fail_machine_grant_save
+BEFORE INSERT ON agent_evidence_upload_grants
+FOR EACH ROW EXECUTE FUNCTION fail_machine_grant_save();
+"#,
+        )
+        .await
+        .expect("failure trigger installs");
+
+    let result = app
+        .issue_agent_evidence_upload_grant_handler()
+        .handle(
+            IssueAgentEvidenceUploadGrant {
+                connection: app.agent_connection_context(workspace_id),
+                evidence_id: evidence_id.into(),
+                coverage: coverage(),
+                declaration: declaration(),
+            },
+            ExecutionMetadata::for_request(Uuid::new_v4()),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(AgentEvidenceUploadGrantError::Repository(_))
+    ));
+    let count: i64 = app
+        .postgres()
+        .get()
+        .await
+        .expect("database opens")
+        .query_one("SELECT count(*) FROM agent_evidence_upload_grants", &[])
+        .await
+        .expect("grant count loads")
+        .get(0);
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn machine_grant_accepts_every_existing_evidence_status() {
     let app = TestApp::builder()
         .workspace("workspace", "Machine upload workspace")

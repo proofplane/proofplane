@@ -1,9 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    application::commands::issue_agent_evidence_upload_grant::{
-        AgentEvidenceUploadCredentialVerifier, AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-    },
+    application::commands::issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
     authentication::{
         auth0::{
             Auth0AuditorIdentityProvider, SharedAuditorIdentityProvider, TokenVerifier,
@@ -41,6 +39,7 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionService,
+        agent_evidence_upload_grants::AgentEvidenceUploadCredentialVerifier,
         agent_evidence_uploads::AgentEvidenceUploadService,
         agent_policy_document_upload_grants::{
             AgentPolicyDocumentUploadGrantService, AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
