@@ -6,20 +6,21 @@ use uuid::Uuid;
 
 use crate::{
     application::ExecutionMetadata,
-    authentication::paseto::{AgentEvidenceUploadGrantEncryptor, RegisteredClaims},
+    authentication::{
+        paseto::{
+            AgentEvidenceUploadGrantClaims, AgentEvidenceUploadGrantEncryptor, RegisteredClaims,
+        },
+        AgentConnectionContext,
+    },
     domain::{
         AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant, AgentEvidenceUploadGrantId,
         CoverageWindow, EvidenceId, EvidenceSubmissionId, WorkspacePermission,
     },
     repository::Postgres,
-    services::{
-        agent_connections::AgentConnectionContext,
-        agent_evidence_upload_grants::AgentEvidenceUploadGrantClaims,
-    },
 };
 
 const GRANT_TTL: Duration = Duration::from_secs(5 * 60);
-pub const AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-agent-evidence-upload-grant";
+pub use crate::authentication::paseto::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE;
 
 #[derive(Debug, Clone)]
 pub struct IssueAgentEvidenceUploadGrant {
@@ -88,12 +89,12 @@ impl IssueAgentEvidenceUploadGrantHandler {
                             expires_at,
                         },
                         &AgentEvidenceUploadGrantClaims::new(
-                            upload_id,
-                            command.connection.workspace_id,
-                            command.evidence_id,
-                            submission_id,
-                            command.connection.user_id,
-                            command.connection.connection_id,
+                            upload_id.into(),
+                            command.connection.workspace_id.into(),
+                            command.evidence_id.into(),
+                            submission_id.into(),
+                            command.connection.user_id.into(),
+                            command.connection.connection_id.into(),
                         ),
                     ) {
                         Ok(issued) => issued,

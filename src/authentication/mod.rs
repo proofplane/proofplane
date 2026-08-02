@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     authentication::auth0::{TokenVerifier, VerifiedClaims, VerifyError},
-    domain::{ProvisionUserPayload, UserId},
+    domain::{AgentConnectionId, ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermissions},
     repository,
 };
 
@@ -11,6 +11,15 @@ pub mod client_registration;
 mod jwks;
 pub mod opaque_token;
 pub mod paseto;
+
+/// Authenticated machine scope supplied to application operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentConnectionContext {
+    pub user_id: UserId,
+    pub connection_id: AgentConnectionId,
+    pub workspace_id: WorkspaceId,
+    pub permissions: WorkspacePermissions,
+}
 
 /// An authenticated human management-plane identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
