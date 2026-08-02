@@ -14,8 +14,8 @@ of technical depth. Tickets below are lean handoff units that link into it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Architecture and machine-grant corrections](./tickets/001-architecture-and-machine-grant-corrections.md) | Done | Domain boundaries, ADR, rehydration, constraints, and locks. |
-| 002. [CQRS application foundation](./tickets/002-cqrs-application-foundation.md) | Todo | Handler conventions and an issuance reference slice. |
-| 003. [Typed messaging and outbox](./tickets/003-typed-messaging-and-outbox.md) | Todo | Versioned envelopes and legacy worker compatibility. |
+| 002. [CQRS application foundation](./tickets/002-cqrs-application-foundation.md) | Done | Handler conventions and an issuance reference slice. |
+| 003. [Typed messaging and outbox](./tickets/003-typed-messaging-and-outbox.md) | Done | Versioned envelopes and legacy worker compatibility. |
 | 004. [Human upload grants](./tickets/004-human-upload-grants.md) | Todo | Evidence and policy issue/redeem commands and queries. |
 | 005. [Auditor access workflows](./tickets/005-auditor-access-workflows.md) | Todo | Access, sessions, authentication transactions, and portal queries. |
 | 006. [Users and workspaces](./tickets/006-users-and-workspaces.md) | Todo | Identity and membership aggregates and handlers. |
