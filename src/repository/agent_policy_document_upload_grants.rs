@@ -132,6 +132,17 @@ workspace_snapshot_record! {
     scope: workspace_id,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{GET_FOR_UPDATE_SQL, GET_SQL};
+
+    #[test]
+    fn verification_and_transactional_reads_have_distinct_locking_sql() {
+        assert!(!GET_SQL.contains("FOR UPDATE"));
+        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+}
+
 impl TryFrom<Row> for GrantRecord {
     type Error = Error;
 
