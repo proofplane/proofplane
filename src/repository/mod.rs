@@ -34,7 +34,9 @@ pub use agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantRepos
 pub use auditor_access_sessions::NewAuditorSession;
 pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
 pub use constraints::ConflictKind;
-pub use document_upload_grants::{DocumentUploadGrant, NewDocumentUploadGrant};
+pub use document_upload_grants::{
+    DocumentUploadGrant, EvidenceDocumentUploadGrantRepository, NewDocumentUploadGrant,
+};
 pub use documents::TypedDocumentUploadWork;
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{
@@ -45,7 +47,9 @@ pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{
     ArchivePolicyResult, CreatePolicyDocumentResult, PolicyDocumentUploadEligibility,
 };
-pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
+pub use policy_document_upload_grants::{
+    NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant, PolicyDocumentUploadGrantRepository,
+};
 pub use users::UserRepository;
 pub use workspace_memberships::NewWorkspaceMembership;
 pub use workspaces::WorkspaceRepository;

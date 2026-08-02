@@ -268,7 +268,8 @@ CREATE TABLE document_upload_grants (
     CONSTRAINT document_upload_grants_coverage_window
         CHECK (valid_until >= valid_from),
     CHECK (expires_at > issued_at),
-    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+    CONSTRAINT document_upload_grants_redemption
+        CHECK (redeemed_at IS NULL OR (redeemed_at >= issued_at AND redeemed_at < expires_at))
 );
 
 CREATE INDEX idx_document_upload_grants_redemption
@@ -409,7 +410,8 @@ CREATE TABLE policy_document_upload_grants (
     expires_at TIMESTAMPTZ NOT NULL,
     redeemed_at TIMESTAMPTZ,
     CHECK (expires_at > issued_at),
-    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+    CONSTRAINT policy_document_upload_grants_redemption
+        CHECK (redeemed_at IS NULL OR (redeemed_at >= issued_at AND redeemed_at < expires_at))
 );
 
 CREATE INDEX policy_document_upload_grants_redemption_idx
