@@ -30,6 +30,9 @@ const POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] =
     b"proofplane:policy-document-upload-session:v1";
 const MCP_OAUTH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
+const AGENT_EVIDENCE_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
+
+pub const AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-agent-evidence-upload-grant";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredClaims {
@@ -53,6 +56,90 @@ pub struct VerifiedPasetoToken<T> {
     pub key_id: String,
     pub expires_at: DateTime<Utc>,
     pub claims: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AgentEvidenceUploadGrantClaims {
+    version: u8,
+    upload_id: String,
+    workspace_id: String,
+    evidence_id: String,
+    submission_id: String,
+    issued_by_user_id: String,
+    issued_via_agent_connection_id: String,
+}
+
+impl AgentEvidenceUploadGrantClaims {
+    pub(crate) fn new(
+        upload_id: Uuid,
+        workspace_id: Uuid,
+        evidence_id: Uuid,
+        submission_id: Uuid,
+        issued_by_user_id: Uuid,
+        issued_via_agent_connection_id: Uuid,
+    ) -> Self {
+        Self {
+            version: AGENT_EVIDENCE_UPLOAD_GRANT_TOKEN_VERSION,
+            upload_id: upload_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            evidence_id: evidence_id.to_string(),
+            submission_id: submission_id.to_string(),
+            issued_by_user_id: issued_by_user_id.to_string(),
+            issued_via_agent_connection_id: issued_via_agent_connection_id.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerifiedAgentEvidenceUploadGrantClaims {
+    pub(crate) upload_id: Uuid,
+    pub(crate) workspace_id: Uuid,
+    pub(crate) evidence_id: Uuid,
+    pub(crate) submission_id: Uuid,
+    pub(crate) issued_by_user_id: Uuid,
+    pub(crate) issued_via_agent_connection_id: Uuid,
+    pub(crate) expires_at: DateTime<Utc>,
+}
+
+impl TryFrom<VerifiedPasetoToken<AgentEvidenceUploadGrantClaims>>
+    for VerifiedAgentEvidenceUploadGrantClaims
+{
+    type Error = InvalidAgentEvidenceUploadGrantClaims;
+
+    fn try_from(
+        token: VerifiedPasetoToken<AgentEvidenceUploadGrantClaims>,
+    ) -> Result<Self, Self::Error> {
+        if token.claims.version != AGENT_EVIDENCE_UPLOAD_GRANT_TOKEN_VERSION {
+            return Err(InvalidAgentEvidenceUploadGrantClaims);
+        }
+        let upload_id = parse_agent_evidence_upload_grant_uuid(&token.claims.upload_id)?;
+        let issued_by_user_id =
+            parse_agent_evidence_upload_grant_uuid(&token.claims.issued_by_user_id)?;
+        if upload_id != token.token_id || issued_by_user_id != token.subject {
+            return Err(InvalidAgentEvidenceUploadGrantClaims);
+        }
+
+        Ok(Self {
+            upload_id,
+            workspace_id: parse_agent_evidence_upload_grant_uuid(&token.claims.workspace_id)?,
+            evidence_id: parse_agent_evidence_upload_grant_uuid(&token.claims.evidence_id)?,
+            submission_id: parse_agent_evidence_upload_grant_uuid(&token.claims.submission_id)?,
+            issued_by_user_id,
+            issued_via_agent_connection_id: parse_agent_evidence_upload_grant_uuid(
+                &token.claims.issued_via_agent_connection_id,
+            )?,
+            expires_at: token.expires_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InvalidAgentEvidenceUploadGrantClaims;
+
+fn parse_agent_evidence_upload_grant_uuid(
+    value: &str,
+) -> Result<Uuid, InvalidAgentEvidenceUploadGrantClaims> {
+    Uuid::parse_str(value).map_err(|_| InvalidAgentEvidenceUploadGrantClaims)
 }
 
 #[derive(Clone)]
@@ -1001,6 +1088,46 @@ mod tests {
             workspace_id: Uuid::new_v4(),
             permission: "read".to_owned(),
         }
+    }
+
+    fn verified_agent_evidence_upload_token() -> VerifiedPasetoToken<AgentEvidenceUploadGrantClaims>
+    {
+        let upload_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        VerifiedPasetoToken {
+            subject: user_id,
+            token_id: upload_id,
+            key_id: "test-key".to_owned(),
+            expires_at: Utc::now() + ChronoDuration::minutes(5),
+            claims: AgentEvidenceUploadGrantClaims::new(
+                upload_id,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                user_id,
+                Uuid::new_v4(),
+            ),
+        }
+    }
+
+    #[test]
+    fn agent_evidence_upload_claims_require_version_subject_token_id_and_typed_ids() {
+        assert!(VerifiedAgentEvidenceUploadGrantClaims::try_from(
+            verified_agent_evidence_upload_token()
+        )
+        .is_ok());
+
+        let mut wrong_version = verified_agent_evidence_upload_token();
+        wrong_version.claims.version += 1;
+        assert!(VerifiedAgentEvidenceUploadGrantClaims::try_from(wrong_version).is_err());
+
+        let mut wrong_subject = verified_agent_evidence_upload_token();
+        wrong_subject.subject = Uuid::new_v4();
+        assert!(VerifiedAgentEvidenceUploadGrantClaims::try_from(wrong_subject).is_err());
+
+        let mut invalid_workspace = verified_agent_evidence_upload_token();
+        invalid_workspace.claims.workspace_id = "invalid".to_owned();
+        assert!(VerifiedAgentEvidenceUploadGrantClaims::try_from(invalid_workspace).is_err());
     }
 
     fn download_config(active_id: &str) -> PasetoDownloadConfig {

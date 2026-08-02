@@ -13,6 +13,8 @@ use crate::{
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
 
+pub use crate::authentication::AgentConnectionContext;
+
 #[derive(Clone)]
 pub struct AgentConnectionService {
     repository: Arc<Postgres>,
@@ -96,14 +98,6 @@ pub enum ConsumeContinuationOutcome {
 pub enum ActivationOutcome {
     Activated(AgentConnection),
     Rejected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentConnectionContext {
-    pub user_id: UserId,
-    pub connection_id: AgentConnectionId,
-    pub workspace_id: WorkspaceId,
-    pub permissions: WorkspacePermissions,
 }
 
 impl AgentConnectionService {
