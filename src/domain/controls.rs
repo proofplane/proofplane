@@ -62,7 +62,8 @@ impl ControlAggregate {
         framework_requirement_ids: Vec<FrameworkRequirementId>,
         created_at: DateTime<Utc>,
     ) -> Result<Self, ControlAggregateError> {
-        validate_framework_requirement_ids(&framework_requirement_ids)?;
+        let framework_requirement_ids =
+            normalize_framework_requirement_ids(framework_requirement_ids)?;
         Ok(Self {
             id,
             workspace_id,
@@ -73,13 +74,36 @@ impl ControlAggregate {
         })
     }
 
+    pub(crate) fn rehydrate(
+        id: ControlId,
+        workspace_id: WorkspaceId,
+        definition: ControlDefinition,
+        framework_requirement_ids: Vec<FrameworkRequirementId>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<Self, ControlAggregateError> {
+        if updated_at < created_at {
+            return Err(ControlAggregateError::InvalidRehydration);
+        }
+        let mut control = Self::define(
+            id,
+            workspace_id,
+            definition,
+            framework_requirement_ids,
+            created_at,
+        )?;
+        control.updated_at = updated_at;
+        Ok(control)
+    }
+
     pub fn replace(
         &mut self,
         definition: ControlDefinition,
         framework_requirement_ids: Vec<FrameworkRequirementId>,
         updated_at: DateTime<Utc>,
     ) -> Result<(), ControlAggregateError> {
-        validate_framework_requirement_ids(&framework_requirement_ids)?;
+        let framework_requirement_ids =
+            normalize_framework_requirement_ids(framework_requirement_ids)?;
         if updated_at < self.created_at {
             return Err(ControlAggregateError::InvalidReplacementTime);
         }
@@ -122,16 +146,17 @@ impl ControlAggregate {
     }
 }
 
-fn validate_framework_requirement_ids(
-    ids: &[FrameworkRequirementId],
-) -> Result<(), ControlAggregateError> {
+fn normalize_framework_requirement_ids(
+    mut ids: Vec<FrameworkRequirementId>,
+) -> Result<Vec<FrameworkRequirementId>, ControlAggregateError> {
+    ids.sort_unstable_by_key(|id| Uuid::from(*id));
     let mut seen = std::collections::HashSet::with_capacity(ids.len());
-    for id in ids {
+    for id in &ids {
         if !seen.insert(*id) {
             return Err(ControlAggregateError::DuplicateFrameworkRequirementReference(*id));
         }
     }
-    Ok(())
+    Ok(ids)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
