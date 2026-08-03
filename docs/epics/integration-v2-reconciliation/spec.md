@@ -102,15 +102,22 @@ The integration-v2 matrix must include:
 
 - exact transfer-descriptor shape without file bytes or a local path;
 - permission denial and missing or cross-workspace evidence concealment;
-- unchanged eligibility for active, paused, and retired evidence;
+- active-evidence eligibility through the public preparation and transfer flow;
 - invalid authority, path mismatch, declaration/header mismatch, checksum or
   length mismatch, configured body limit, and interrupted transfer;
 - a matching retry after success and concurrent valid transfers converging on
   one submission and document;
-- retryable storage or transaction failure where the existing harness can
-  inject it at the dependency boundary; and
 - correct agent provenance, one scan/finalization lifecycle, no false success
   audits, and unchanged human browser uploads.
+
+Paused and retired evidence eligibility remains a lower-boundary coverage gap:
+the public product exposes evidence status but no status-mutation entry point,
+so integration-v2 cannot arrange either state without violating its client-only
+rule. Deterministic storage and completion-transaction failures also remain at
+their existing lower-level boundaries because the suite has no injectable
+filesystem or Postgres dependency control. Closing either gap must use a real
+public mutation or external dependency boundary; it must not add database
+access, filesystem controls, or production/test-only routes to integration-v2.
 
 Assertions use `get_evidence_submission`, HTTP responses, audit capture, and
 pipeline events. They must not inspect grant, submission, document, or outbox
@@ -155,5 +162,10 @@ The epic is complete when:
 
 ## Revisions
 
+- 2026-08-03: Reconciled agent evidence upload coverage with integration-v2's
+  strict black-box boundary. Active evidence is covered end to end; paused and
+  retired arrangement plus deterministic storage and transaction failures stay
+  at lower test boundaries until a public mutation or injectable external
+  dependency boundary exists.
 - 2026-08-03: Initial reconciliation after rebasing integration-v2 onto the
   Auth0 auditor cutover and agent-native evidence and policy upload work.

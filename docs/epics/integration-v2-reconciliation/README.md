@@ -15,7 +15,7 @@ handoff units that link into it.
 | Ticket | Status | Notes |
 | --- | --- | --- |
 | 001. [Auth0 Harness And Auditor Coverage](./tickets/001-auth0-harness-and-auditor-coverage.md) | Done | Restored compilation and replaced obsolete OTP arrangements with current hosted-login coverage. |
-| 002. [Agent Evidence Upload Coverage](./tickets/002-agent-evidence-upload-coverage.md) | Todo | Cover MCP preparation, raw transfer, retries, isolation, and lifecycle completion. |
+| 002. [Agent Evidence Upload Coverage](./tickets/002-agent-evidence-upload-coverage.md) | Done | Added seven black-box upload stories in maintainable directory submodules. |
 | 003. [Agent Policy Upload Coverage](./tickets/003-agent-policy-upload-coverage.md) | Todo | Cover the policy-specific transfer contract and single-current-document races. |
 
 ## Sequencing

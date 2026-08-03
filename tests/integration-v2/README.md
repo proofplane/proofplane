@@ -223,6 +223,18 @@ file-local wrapper around one create or mapping call. A
 `connect(app, subject, workspace)` wrapper around the whole arrangement still hides too
 much.
 
+## Module size
+
+Treat 500 lines as a review signal for integration-v2 test modules, not as a
+hard limit. When a file approaches that size or mixes several independent test
+stories with substantial local machinery, split it into a directory module
+with small story-focused files and a local `helpers.rs`. Keep `mod.rs` limited
+to module declarations and genuinely shared imports or constants.
+
+Splitting must preserve the rest of this guide: authorization, permissions,
+declarations, and operations under test stay explicit in each story, while
+only repeated protocol mechanics and complete assertion helpers are shared.
+
 ## `support/` is shared machinery, not conveniences
 
 | Module | What it is |
