@@ -231,30 +231,14 @@ async fn policy_pages_render_every_document_label_download_rule_and_safe_catalog
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    let auditor_cookie = request_cookie(
-        verified
-            .header("set-cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-browser-policies-identity",
+        auditor_email,
+    )
+    .await;
 
     let ((catalog, catalog_request_id), catalog_logs) = app
         .capture_audit_logs(async |request_id| {

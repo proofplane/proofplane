@@ -1,8 +1,13 @@
+use http::{header::SET_COOKIE, StatusCode};
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
-use crate::support::json::{assert_rfc3339, object_keys};
+use crate::support::{
+    harness::TestApp,
+    http::request_cookie,
+    json::{assert_rfc3339, object_keys},
+};
 
 pub fn invite_token(invite_url: &Url) -> String {
     let query = invite_url
@@ -14,6 +19,53 @@ pub fn invite_token(invite_url: &Url) -> String {
     };
     assert_eq!(query_name, "token");
     invite_token.clone()
+}
+
+pub async fn authenticate_auditor(
+    app: &TestApp,
+    workspace_id: Uuid,
+    invitation_token: &str,
+    auth0_subject: &str,
+    auditor_email: &str,
+) -> String {
+    let authorization_code = format!("auditor-integration-{}", Uuid::new_v4());
+    let _identity =
+        app.auditor_identity_provider()
+            .verified(&authorization_code, auth0_subject, auditor_email);
+    let started = app
+        .app_server()
+        .post(&format!("/auditor-access/{workspace_id}/login"))
+        .form(&[("token", invitation_token)])
+        .await;
+    started.assert_status(StatusCode::SEE_OTHER);
+    let authorization_url = Url::parse(
+        started
+            .header("location")
+            .to_str()
+            .expect("auditor authorization redirect is text"),
+    )
+    .expect("auditor authorization redirect is a URL");
+    let state = authorization_url
+        .query_pairs()
+        .find_map(|(name, value)| (name == "state").then(|| value.into_owned()))
+        .expect("auditor authorization redirect carries state");
+
+    let callback = app
+        .app_server()
+        .get("/auditor-access/auth0/callback")
+        .add_query_param("code", &authorization_code)
+        .add_query_param("state", &state)
+        .await;
+    callback.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(callback.header("location"), "/auditor-access/portal");
+    request_cookie(
+        callback
+            .headers()
+            .get(SET_COOKIE)
+            .expect("auditor callback sets a session cookie")
+            .to_str()
+            .expect("auditor session cookie is text"),
+    )
 }
 
 #[track_caller]

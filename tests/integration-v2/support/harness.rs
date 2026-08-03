@@ -1,9 +1,8 @@
 use crate::support::{
     audit_log::audit_log_sink,
     auth::FakeTokenVerifier,
-    auth0,
+    auth0::{self, FakeAuditorIdentityProvider},
     clamd::{ClamdControls, FakeClamd},
-    mail::TestMailAdapter,
     pubsub::TestPubSub,
     reference_data,
     scenario::types::TestFramework,
@@ -23,6 +22,8 @@ use proofplane::{
     app::AppDependencies,
     authentication::{
         paseto::{
+            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
+            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor,
@@ -37,6 +38,8 @@ use proofplane::{
     repository::Postgres,
     routes::authentication::AUTHORIZATION_HEADER,
     services::{
+        agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         client_resolver::ClientResolver, oauth::OAuthService,
         policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
     },
@@ -72,7 +75,7 @@ struct Harness {
 pub struct TestApp {
     app_server: Arc<TestServer>,
     mcp_server: Arc<TestServer>,
-    mail_adapter: Arc<TestMailAdapter>,
+    auditor_identity_provider: Arc<FakeAuditorIdentityProvider>,
     pipeline_events: PipelineEvents,
     pipeline_controls: PipelineControls,
     clamd_controls: ClamdControls,
@@ -125,7 +128,7 @@ impl Harness {
                 .await
                 .expect("filesystem object store initializes"),
         );
-        let mail_adapter = Arc::new(TestMailAdapter::default());
+        let auditor_identity_provider = Arc::new(FakeAuditorIdentityProvider::default());
         let clamd = FakeClamd::start().await;
         let clamd_controls = clamd.controls();
         app_config.scanner.clamd_address = clamd.address();
@@ -175,10 +178,10 @@ impl Harness {
                     &app_config,
                     &postgres,
                     &object_store,
-                    &mail_adapter,
+                    &auditor_identity_provider,
                 )),
                 mcp_server: Arc::new(build_mcp_server(&app_config, &postgres, &object_store)),
-                mail_adapter,
+                auditor_identity_provider,
                 pipeline_events,
                 pipeline_controls,
                 clamd_controls,
@@ -197,8 +200,8 @@ impl TestApp {
         &self.mcp_server
     }
 
-    pub fn mailer(&self) -> &TestMailAdapter {
-        &self.mail_adapter
+    pub fn auditor_identity_provider(&self) -> &FakeAuditorIdentityProvider {
+        &self.auditor_identity_provider
     }
 
     pub fn pipeline_events(&self) -> &PipelineEvents {
@@ -263,7 +266,7 @@ fn build_app_server(
     app_config: &AppConfig,
     postgres: &Arc<Postgres>,
     object_store: &Arc<FilesystemObjectStore>,
-    mail_adapter: &Arc<TestMailAdapter>,
+    auditor_identity_provider: &Arc<FakeAuditorIdentityProvider>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
     let dependencies = AppDependencies {
@@ -272,7 +275,7 @@ fn build_app_server(
         object_store: object_store.clone(),
         metrics: recorder.handle(),
         user_authenticator: UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone()),
-        mail_adapter: Some(mail_adapter.clone()),
+        auditor_identity_provider: Some(auditor_identity_provider.clone()),
     };
 
     TestServer::builder()
@@ -342,6 +345,30 @@ fn build_mcp_server(
             &app_config.paseto.upload_grant,
         )
         .expect("upload grant decryptor initializes"),
+        agent_upload_grant_encryptor: AgentEvidenceUploadGrantEncryptor::from_config(
+            issuer.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &app_config.paseto.upload_grant,
+        )
+        .expect("agent evidence upload grant encryptor initializes"),
+        agent_upload_grant_decryptor: AgentEvidenceUploadGrantDecryptor::from_config(
+            issuer.clone(),
+            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            &app_config.paseto.upload_grant,
+        )
+        .expect("agent evidence upload grant decryptor initializes"),
+        agent_policy_upload_grant_encryptor: AgentPolicyDocumentUploadGrantEncryptor::from_config(
+            issuer.clone(),
+            AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+            &app_config.paseto.upload_grant,
+        )
+        .expect("agent policy upload grant encryptor initializes"),
+        agent_policy_upload_grant_decryptor: AgentPolicyDocumentUploadGrantDecryptor::from_config(
+            issuer.clone(),
+            AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
+            &app_config.paseto.upload_grant,
+        )
+        .expect("agent policy upload grant decryptor initializes"),
         policy_upload_grant_encryptor: PolicyUploadGrantEncryptor::from_config(
             issuer.clone(),
             POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -354,6 +381,7 @@ fn build_mcp_server(
             &app_config.paseto.upload_grant,
         )
         .expect("policy upload grant decryptor initializes"),
+        max_document_bytes: app_config.uploads.max_document_bytes as u64,
         health: app_config.health.clone(),
         // Empty means the transport applies no Host guard.
         allowed_hosts: Vec::new(),

@@ -10,7 +10,8 @@ dedicated OS thread runs a long-lived multi-thread Tokio runtime containing one
 Postgres container and pool, one transactionally seeded SOC 2 reference catalog, one
 filesystem object store, a fake clamd server,
 one worker, one observable push proxy, one deltio Pub/Sub project, one dequeuer,
-and one API and MCP server. `harness::app().await` returns a lightweight
+one controlled auditor identity-provider boundary, and one API and MCP server.
+`harness::app().await` returns a lightweight
 cloneable handle to those shared servers; it does not bind application resources
 to the calling test's Tokio runtime.
 
@@ -227,15 +228,15 @@ much.
 | Module | What it is |
 | --- | --- |
 | `agent_connections` | Public-listing lookup of an authorized connection ID by subject and client name, used when audit attribution is the assertion rather than connection listing itself. |
-| `auditor_access` | Exact invite-token parsing and complete secret-free auditor portal read-audit assertions shared across session, JSON, download, and browser stories. |
-| `harness` | The suite-owned runtime and shared application topology. `TestApp` exposes the two client-facing HTTP test servers, pipeline events, proxy and ClamAV controls, `login`, and `capture_audit_logs`. |
+| `auditor_access` | Exact invite-token parsing, a hosted-login prerequisite that accepts explicit workspace, invitation, subject, and email values, and complete secret-free auditor portal read-audit assertions shared across session, JSON, download, and browser stories. |
+| `harness` | The suite-owned runtime and shared application topology. `TestApp` exposes the two client-facing HTTP test servers, code-scoped auditor identity controls and recorded exchanges, pipeline events, proxy and ClamAV controls, `login`, and `capture_audit_logs`. |
 | `config` | The hard-coded `AppConfig`. No YAML, no env vars. |
 | `documents` | Shared owner-neutral multipart construction for evidence and policy document browser uploads. |
 | `evidence_documents` | Coverage timestamps and canonical evidence-document paths. |
 | `http` | Mechanical translation of public URLs and response cookies into local test-request values. |
 | `json` | Complete JSON object-key collection and RFC 3339 timestamp assertions shared across API and MCP tests. |
 | `auth` | `FakeTokenVerifier` — the bearer token *is* the `auth0_sub`. Plus `assert_unauthorized`. |
-| `auth0` | A fake upstream tenant on `127.0.0.1:9099`. Echoes the `code` back as the access token, so passing an `auth0_sub` as the code picks the identity. |
+| `auth0` | A fake upstream tenant on `127.0.0.1:9099` for owner OAuth, plus the injected auditor identity-provider boundary. Auditor outcomes and recorded exchanges are keyed by a test-unique authorization code; unregistered codes are rejected. |
 | `clamd` | Concurrent test-only INSTREAM server. Chooses clean, EICAR, or scanner-error replies from uploaded bytes and provides a scoped content-matched hang after reading a complete scan request. |
 | `pubsub` | Suite-wide deltio container with container-to-host routing for push delivery. |
 | `worker` | Real worker server plus the `0.0.0.0` push proxy, post-response pipeline event stream, request-ID-reserved holds, and one-shot redelivery injection. |
@@ -244,7 +245,6 @@ much.
 | `reference_data` | One support-only transaction that inserts only SOC 2, CC6.1, and CC7.1 before server startup; raw IDs stay private. |
 | `scenario` | `ScenarioBuilder` for users, workspaces, and OAuth/MCP/browser/worker-backed prerequisite evidence, controls, control-requirement links resolved through the seeded catalog, minimal policies, clean terminal documents, evidence-control mappings, and policy-control mappings; every result also carries typed chained lookups and the fixed reference-catalog projections. |
 | `audit_log` | The tracing sink behind `capture_audit_logs`. |
-| `mail` | `TestMailAdapter` captures OTP snapshots by recipient and provides nested, recipient-scoped delivery-failure guards. |
 
 `TestApp` deliberately has **no request helpers**. It hands you servers; tests
 write their own requests. Adding `app.create_evidence(...)` would put the

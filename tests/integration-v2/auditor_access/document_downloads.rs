@@ -7,7 +7,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::support::{
-    auditor_access::invite_token,
+    auditor_access::{authenticate_auditor, invite_token},
     clamd::{EICAR, ERROR_TRIGGER},
     documents::upload_form,
     evidence_documents::archive_path_for_ids as evidence_archive_path,
@@ -77,33 +77,14 @@ async fn eligible_evidence_download_streams_safe_bytes_and_logs_one_secret_free_
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("verification sets an auditor cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-evidence-download-success-identity",
+        auditor_email,
+    )
+    .await;
 
     let ((response, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -188,33 +169,14 @@ async fn eligible_policy_download_streams_safe_bytes_and_logs_one_secret_free_au
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("verification sets an auditor cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-policy-download-success-identity",
+        auditor_email,
+    )
+    .await;
 
     let ((response, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -308,39 +270,14 @@ async fn evidence_download_is_concealed_outside_the_grant_period_and_served_on_o
         .get(&local_path(outside_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", outside_token.as_str())])
-        .await
-        .assert_status_ok();
-    let outside_sent = app.mailer().sent_mail_for(outside_email);
-    assert_eq!(outside_sent.len(), 1);
-    let outside_code = outside_sent[0].code.clone();
-    let outside_verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[
-            ("token", outside_token.as_str()),
-            ("code", outside_code.as_str()),
-        ])
-        .await;
-    outside_verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(
-        outside_verified.header("location"),
-        "/auditor-access/portal"
-    );
-    let outside_cookie = request_cookie(
-        outside_verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("outside-period verification sets a cookie")
-            .to_str()
-            .expect("outside-period cookie is text"),
-    );
+    let outside_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &outside_token,
+        "auth0|auditor-evidence-period-outside-identity",
+        outside_email,
+    )
+    .await;
     assert_download_not_found(
         &app.app_server()
             .get(&path)
@@ -371,39 +308,14 @@ async fn evidence_download_is_concealed_outside_the_grant_period_and_served_on_o
         .get(&local_path(overlap_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", overlap_token.as_str())])
-        .await
-        .assert_status_ok();
-    let overlap_sent = app.mailer().sent_mail_for(overlap_email);
-    assert_eq!(overlap_sent.len(), 1);
-    let overlap_code = overlap_sent[0].code.clone();
-    let overlap_verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[
-            ("token", overlap_token.as_str()),
-            ("code", overlap_code.as_str()),
-        ])
-        .await;
-    overlap_verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(
-        overlap_verified.header("location"),
-        "/auditor-access/portal"
-    );
-    let overlap_cookie = request_cookie(
-        overlap_verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("overlapping verification sets a cookie")
-            .to_str()
-            .expect("overlapping cookie is text"),
-    );
+    let overlap_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &overlap_token,
+        "auth0|auditor-evidence-period-overlap-identity",
+        overlap_email,
+    )
+    .await;
     assert_safe_download(
         &app.app_server()
             .get(&path)
@@ -631,33 +543,14 @@ async fn evidence_downloads_conceal_pipeline_archive_identifier_tenant_and_sessi
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("verification sets an auditor cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-evidence-download-concealment-identity",
+        auditor_email,
+    )
+    .await;
 
     let active_path = evidence_download_path(mismatch_a.id, mismatch_a.document_id);
     assert_download_not_found(&app.app_server().get(&active_path).await);
@@ -994,33 +887,14 @@ async fn policy_downloads_conceal_pipeline_archives_identifier_tenant_and_revoke
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("verification sets an auditor cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-policy-download-concealment-identity",
+        auditor_email,
+    )
+    .await;
 
     for path in [
         policy_download_path(finalizing_policy.id, finalizing_document_id),

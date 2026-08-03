@@ -14,30 +14,12 @@ pub(super) fn invite_body(workspace_id: Uuid, token: &str, auditor_email: &str) 
         r#"<main class="narrow">
 <p class="eyebrow">Auditor verification</p>
 <h1>Verify access for {auditor_email}</h1>
-<p class="lede">Proofplane will send a single-use code to this email before opening the read-only evidence portal.</p>
+<p class="lede">Proofplane will verify this email before opening the read-only evidence portal.</p>
 
-<form class="panel form-panel" method="post" action="/auditor-access/{workspace_id}/otp/request/browser">
+<form class="panel form-panel" method="post" action="/auditor-access/{workspace_id}/login">
 <input type="hidden" name="token" value="{token}">
-<button type="submit">Send verification code</button>
+<button type="submit">Continue</button>
 </form>
-</main>"#
-    )
-}
-
-pub(super) fn verification_body(workspace_id: Uuid, token: &str, auditor_email: &str) -> String {
-    format!(
-        r#"<main class="narrow">
-<p class="eyebrow">Code required</p>
-<h1>Enter the code sent to {auditor_email}</h1>
-<p class="lede">Codes expire after 10 minutes. A successful check creates a seven-day browser session for this portal only.</p>
-<section class="notice" role="status"><p>Code sent. Check the intended auditor inbox.</p></section>
-<form class="panel form-panel" method="post" action="/auditor-access/{workspace_id}/otp/verify/browser">
-<input type="hidden" name="token" value="{token}">
-<label for="code">Verification code</label>
-<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{{6}}" maxlength="6" required>
-<button type="submit">Open portal</button>
-</form>
-<div class="resend-action"><form method="post" action="/auditor-access/{workspace_id}/otp/request/browser"><input type="hidden" name="token" value="{token}"><input type="hidden" name="resend" value="true"><button class="link-button" type="submit">Resend code</button></form></div>
 </main>"#
     )
 }

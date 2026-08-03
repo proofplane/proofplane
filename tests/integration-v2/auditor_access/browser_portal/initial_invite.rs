@@ -1,7 +1,7 @@
 use super::{assertions::*, *};
 
 #[tokio::test]
-async fn initial_invite_enters_otp_flow_and_empty_portal_lists_seeded_requirements() {
+async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requirements() {
     let app = harness::app().await;
     let subject = "auth0|auditor-browser-initial";
     let workspace_name = "Auditor Browser Initial";
@@ -45,39 +45,14 @@ async fn initial_invite_enters_otp_flow_and_empty_portal_lists_seeded_requiremen
         invite_body(workspace_id, &invite_token, auditor_email)
     );
 
-    let requested = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await;
-    requested.assert_status_ok();
-    assert_eq!(
-        body_projection(&requested.text()),
-        verification_body(workspace_id, &invite_token, auditor_email)
-    );
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("verification sets a cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-browser-initial-identity",
+        auditor_email,
+    )
+    .await;
 
     let portal = app
         .app_server()

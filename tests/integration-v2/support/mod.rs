@@ -11,7 +11,6 @@ pub mod harness;
 pub mod http;
 pub mod id;
 pub mod json;
-pub mod mail;
 pub mod mcp;
 pub mod oauth;
 pub mod pubsub;

@@ -1,6 +1,6 @@
 # 001 - Auth0 Harness And Auditor Coverage
 
-**Status:** Todo · **Depends on:** none · **Spec:** [spec.md](../spec.md#auth0-harness-and-auditor-coverage)
+**Status:** Done · **Depends on:** none · **Spec:** [spec.md](../spec.md#auth0-harness-and-auditor-coverage)
 
 **Summary** - Restore integration-v2 compilation after custom OTP retirement
 and move every auditor story onto the shipped Auth0 hosted-login boundary. Keep
@@ -9,30 +9,30 @@ controlling only the external identity-provider outcome.
 
 **Acceptance criteria**
 
-- [ ] Given a matching verified Auth0 identity and active invitation, when the
+- [x] Given a matching verified Auth0 identity and active invitation, when the
   hosted-login callback completes, then one scoped auditor session opens the
   portal and emits complete secret-free lifecycle audits.
-- [ ] Given replay, callback mismatch, provider rejection or outage, revoked
+- [x] Given replay, callback mismatch, provider rejection or outage, revoked
   authority, or removed OTP endpoints, when authentication is attempted, then
   no usable auditor session is created and the documented coarse response is
   returned.
-- [ ] Given existing portal, download, logout, period-filtering, revocation,
+- [x] Given existing portal, download, logout, period-filtering, revocation,
   concealment, and escaping stories, when sessions originate through Auth0,
   then those client-visible guarantees remain unchanged.
 
 **Tasks**
 
-- [ ] Remove mail configuration, `TestMailAdapter`, and all `proofplane::mailer`
+- [x] Remove mail configuration, `TestMailAdapter`, and all `proofplane::mailer`
   references from integration-v2 support.
-- [ ] Add a controllable fake for the auditor identity-provider boundary and
+- [x] Add a controllable fake for the auditor identity-provider boundary and
   wire the current `AppDependencies` contract without bypassing HTTP routes.
-- [ ] Replace OTP send, resend, verification, and delivery-failure helpers and
+- [x] Replace OTP send, resend, verification, and delivery-failure helpers and
   stories with explicit login-start and callback arrangements.
-- [ ] Add focused success, replay, mismatch, unverified identity, provider
+- [x] Add focused success, replay, mismatch, unverified identity, provider
   failure, concurrency, and removed-endpoint coverage.
-- [ ] Reuse Auth0-created cookies across the existing portal and auditor
+- [x] Reuse Auth0-created cookies across the existing portal and auditor
   download stories without hiding grant or identity setup.
-- [ ] Run `cargo test --no-run` and the focused integration-v2 auditor modules.
+- [x] Run `cargo test --no-run` and the focused integration-v2 auditor modules.
 
 **Notes**
 

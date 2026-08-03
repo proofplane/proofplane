@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
 use proofplane::config::{
-    AppConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig, LogFormat, MailAdapterConfig,
-    MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
+    AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
+    LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
     PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
     ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
@@ -48,6 +48,20 @@ pub fn config(
                 client_secret: SecretString::from("integration-auth0-secret"),
                 callback_path: "/oauth/auth0/callback".to_owned(),
             },
+            auditor_portal: Auth0AuditorPortalConfig {
+                client_id: "integration-auditor-client".to_owned(),
+                client_secret: SecretString::from("integration-auditor-secret"),
+                callback_path: "/auditor-access/auth0/callback".to_owned(),
+                callback_url: url::Url::parse(
+                    "https://api.proofplane.test/auditor-access/auth0/callback",
+                )
+                .expect("auditor callback URL parses"),
+                connection: "email".to_owned(),
+                authorization_endpoint: url::Url::parse("https://auth.proofplane.test/authorize")
+                    .expect("auditor authorization endpoint parses"),
+                token_endpoint: url::Url::parse("https://auth.proofplane.test/oauth/token")
+                    .expect("auditor token endpoint parses"),
+            },
         },
         paseto: PasetoConfig {
             download: PasetoDownloadConfig {
@@ -85,9 +99,6 @@ pub fn config(
             scan_timeout_ms: 30000,
         },
         uploads: UploadsConfig { max_document_bytes },
-        mail: MailConfig {
-            adapter: MailAdapterConfig::Disabled,
-        },
         observability: ObservabilityConfig {
             log_format: LogFormat::Pretty,
             default_filter: "info".to_owned(),

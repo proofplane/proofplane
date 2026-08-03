@@ -1,13 +1,12 @@
-use http::{header::SET_COOKIE, StatusCode};
 use proofplane::{domain::WorkspacePermission, routes::request_context::REQUEST_ID_HEADER};
 use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
 use crate::support::{
-    auditor_access::invite_token,
+    auditor_access::{authenticate_auditor, invite_token},
     harness,
-    http::{local_path, request_cookie},
+    http::local_path,
     mcp::McpClient,
     oauth::authorize_agent_connection,
     scenario::ScenarioBuilder,
@@ -106,33 +105,14 @@ async fn period_overlap_filters_and_orders_sequential_submissions_newest_first()
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("browser verification sets a cookie")
-            .to_str()
-            .expect("auditor cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-portal-period-identity",
+        auditor_email,
+    )
+    .await;
 
     let response = app
         .app_server()

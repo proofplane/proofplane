@@ -6,7 +6,7 @@ mod soc2_navigation;
 mod unavailable_states;
 
 use chrono::{DateTime, FixedOffset};
-use http::{header::SET_COOKIE, StatusCode};
+use http::StatusCode;
 use proofplane::{
     domain::WorkspacePermission,
     routes::request_context::REQUEST_ID_HEADER,
@@ -17,7 +17,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::support::{
-    auditor_access::{assert_portal_read_audit_event, invite_token},
+    auditor_access::{assert_portal_read_audit_event, authenticate_auditor, invite_token},
     clamd::EICAR,
     documents::upload_form,
     harness,

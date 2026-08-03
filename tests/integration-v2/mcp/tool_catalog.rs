@@ -37,6 +37,7 @@ async fn tool_catalog_matches_the_published_surface() {
         "list_evidence_submissions",
         "get_evidence_submission",
         "get_latest_evidence_submission",
+        "prepare_evidence_submission_upload",
         "manage_policy_document",
         "manage_evidence_submissions",
         "create_auditor_access_link",
@@ -57,6 +58,7 @@ async fn tool_catalog_matches_the_published_surface() {
         "remove_evidence_control_mapping",
         "list_policies",
         "get_policy",
+        "prepare_policy_document_upload",
         "create_policy",
         "update_policy",
         "archive_policy",
@@ -98,7 +100,11 @@ async fn tool_catalog_matches_the_published_surface() {
         ),
         (
             "manage_evidence_submissions",
-            "Create a short-lived browser URL for a human to upload files as evidence submissions for a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+            "Use this when a human will upload in a browser: create a short-lived bearer-secret URL for one or more evidence files in a coverage window; each file becomes one submission; for guidance, call get_proofplane_guide with topic submitting-evidence.",
+        ),
+        (
+            "prepare_evidence_submission_upload",
+            "Use this when a trusted runtime can read a local file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic submitting-evidence.",
         ),
         (
             "manage_policy_document",
@@ -175,6 +181,10 @@ async fn tool_catalog_matches_the_published_surface() {
         (
             "get_policy",
             "Get one active policy with its mapped controls and safe current document metadata by policy ID; for guidance, call get_proofplane_guide with topic policies.",
+        ),
+        (
+            "prepare_policy_document_upload",
+            "Use this when a trusted runtime can read a local policy file and execute HTTP PUT: prepare a short-lived bearer-secret descriptor without sending the file path or bytes through MCP; for guidance, call get_proofplane_guide with topic policies.",
         ),
         (
             "create_policy",

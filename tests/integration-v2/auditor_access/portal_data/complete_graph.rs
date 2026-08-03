@@ -1,4 +1,4 @@
-use http::{header::SET_COOKIE, StatusCode};
+use http::StatusCode;
 use proofplane::{
     domain::WorkspacePermission,
     routes::request_context::REQUEST_ID_HEADER,
@@ -9,7 +9,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::support::{
-    auditor_access::{assert_portal_read_audit_event, invite_token},
+    auditor_access::{assert_portal_read_audit_event, authenticate_auditor, invite_token},
     documents::upload_form,
     harness,
     http::{local_path, request_cookie},
@@ -244,33 +244,14 @@ async fn complete_safe_graph_is_workspace_scoped_and_emits_exact_read_audits() {
         .get(&local_path(invite_url.as_str()))
         .await
         .assert_status_ok();
-    app.app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/request/browser"
-        ))
-        .form(&[("token", invite_token.as_str())])
-        .await
-        .assert_status_ok();
-    let sent = app.mailer().sent_mail_for(auditor_email);
-    assert_eq!(sent.len(), 1);
-    let code = sent[0].code.clone();
-    let verified = app
-        .app_server()
-        .post(&format!(
-            "/auditor-access/{workspace_id}/otp/verify/browser"
-        ))
-        .form(&[("token", invite_token.as_str()), ("code", code.as_str())])
-        .await;
-    verified.assert_status(StatusCode::SEE_OTHER);
-    assert_eq!(verified.header("location"), "/auditor-access/portal");
-    let auditor_cookie = request_cookie(
-        verified
-            .headers()
-            .get(SET_COOKIE)
-            .expect("browser verification sets a cookie")
-            .to_str()
-            .expect("auditor session cookie is text"),
-    );
+    let auditor_cookie = authenticate_auditor(
+        &app,
+        workspace_id,
+        &invite_token,
+        "auth0|auditor-portal-complete-identity",
+        auditor_email,
+    )
+    .await;
 
     let ((portal_response, portal_request_id), portal_logs) = app
         .capture_audit_logs(async |request_id| {
