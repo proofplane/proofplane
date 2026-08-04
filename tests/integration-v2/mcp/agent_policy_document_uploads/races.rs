@@ -1,7 +1,7 @@
 use super::{helpers::*, *};
 
 #[tokio::test]
-async fn competing_machine_grants_choose_one_current_document() {
+async fn competing_machine_grants_allow_the_loser_after_the_winner_is_archived() {
     let app = harness::app().await;
     let subject = "auth0|agent-policy-competing-grants";
     let workspace_name = "Agent Policy Competing Grants";
@@ -87,26 +87,38 @@ async fn competing_machine_grants_choose_one_current_document() {
             .count(),
         1
     );
-    let (winner, loser, winner_descriptor, loser_descriptor, filename, bytes) =
-        if left.status == StatusCode::CREATED {
-            (
-                &left,
-                &right,
-                &first,
-                &second,
-                first_filename,
-                first_bytes.as_slice(),
-            )
-        } else {
-            (
-                &right,
-                &left,
-                &second,
-                &first,
-                second_filename,
-                second_bytes.as_slice(),
-            )
-        };
+    let (
+        winner,
+        loser,
+        winner_descriptor,
+        loser_descriptor,
+        winner_filename,
+        winner_bytes,
+        loser_filename,
+        loser_bytes,
+    ) = if left.status == StatusCode::CREATED {
+        (
+            &left,
+            &right,
+            &first,
+            &second,
+            first_filename,
+            first_bytes.as_slice(),
+            second_filename,
+            second_bytes.as_slice(),
+        )
+    } else {
+        (
+            &right,
+            &left,
+            &second,
+            &first,
+            second_filename,
+            second_bytes.as_slice(),
+            first_filename,
+            first_bytes.as_slice(),
+        )
+    };
     let document_id = assert_pending_result(winner, StatusCode::CREATED, policy.id);
     assert_policy_conflict(loser);
     assert_eq!(logs.len(), 1);
@@ -136,8 +148,8 @@ async fn competing_machine_grants_choose_one_current_document() {
             policy,
             Some(ExpectedPolicyDocument {
                 user_id,
-                filename,
-                bytes,
+                filename: winner_filename,
+                bytes: winner_bytes,
                 upload_status: "pending",
             }),
         ),
@@ -146,17 +158,7 @@ async fn competing_machine_grants_choose_one_current_document() {
 
     let (losing_retry, retry_logs) = app
         .capture_audit_logs(async |retry_request_id| {
-            execute_transfer(
-                &app,
-                loser_descriptor,
-                if loser_descriptor.upload_id == first.upload_id {
-                    first_bytes
-                } else {
-                    second_bytes
-                },
-                retry_request_id,
-            )
-            .await
+            execute_transfer(&app, loser_descriptor, loser_bytes, retry_request_id).await
         })
         .await;
     assert_policy_conflict(&losing_retry);
@@ -180,6 +182,144 @@ async fn competing_machine_grants_choose_one_current_document() {
             .await_event(DOCUMENT_FINALIZATION_REQUESTED, &document_id.to_string())
             .await,
         StatusCode::NO_CONTENT
+    );
+
+    let uploaded = client
+        .call_tool("get_policy", json!({ "policy_id": policy.id }))
+        .await;
+    assert_eq!(
+        assert_policy_projection(
+            &uploaded,
+            policy,
+            Some(ExpectedPolicyDocument {
+                user_id,
+                filename: winner_filename,
+                bytes: winner_bytes,
+                upload_status: "uploaded",
+            }),
+        ),
+        Some(document_id)
+    );
+
+    let archive_token = authorize_agent_connection(
+        &app,
+        subject,
+        "Competing Policy Browser Manager",
+        &WorkspacePermission::ALL,
+    )
+    .await;
+    let archive_connection_id =
+        get_agent_connection_id_for(&app, subject, "Competing Policy Browser Manager").await;
+    let archive_client = McpClient::connect(app.mcp_server(), &archive_token).await;
+    let management_grant = archive_client
+        .call_tool("manage_policy_document", json!({ "policy_id": policy.id }))
+        .await;
+    let redeemed = app
+        .app_server()
+        .get(&local_path(
+            management_grant["url"]
+                .as_str()
+                .expect("browser management grant URL is text"),
+        ))
+        .await;
+    redeemed.assert_status(StatusCode::SEE_OTHER);
+    let cookie = request_cookie(
+        redeemed
+            .header("set-cookie")
+            .to_str()
+            .expect("browser policy cookie is text"),
+    );
+    let ((archived, archive_request_id), archive_logs) = app
+        .capture_audit_logs(async |request_id| {
+            let response = app
+                .app_server()
+                .post(&format!("{BROWSER_UPLOAD_PATH}/{document_id}/archive"))
+                .add_header("cookie", cookie)
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .await;
+            (response, request_id)
+        })
+        .await;
+    archived.assert_status(StatusCode::SEE_OTHER);
+    assert_eq!(archived.header("location"), MANAGEMENT_PATH);
+    assert_eq!(archive_logs.len(), 1);
+    assert_upload_audit_event(
+        &archive_logs[0],
+        archive_request_id,
+        "policy_document.archived",
+        "rest",
+        "archive_policy_document",
+        user_id,
+        archive_connection_id,
+        workspace.id,
+        "policy_document",
+        document_id,
+        json!({
+            "policy_document_id": document_id,
+            "policy_id": policy.id,
+        }),
+    );
+    let empty = client
+        .call_tool("get_policy", json!({ "policy_id": policy.id }))
+        .await;
+    assert_eq!(assert_policy_projection(&empty, policy, None), None);
+
+    let mut replacement_events = app.pipeline_events().subscribe();
+    let ((replacement, replacement_request_id), replacement_logs) = app
+        .capture_audit_logs(async |request_id| {
+            (
+                execute_transfer(&app, loser_descriptor, loser_bytes, request_id).await,
+                request_id,
+            )
+        })
+        .await;
+    let replacement_id = assert_pending_result(&replacement, StatusCode::CREATED, policy.id);
+    assert_ne!(replacement_id, document_id);
+    assert_eq!(replacement_logs.len(), 1);
+    assert_upload_audit_event(
+        &replacement_logs[0],
+        replacement_request_id,
+        "agent_policy_document_upload.completed",
+        "rest",
+        "upload_agent_policy_document",
+        user_id,
+        connection_id,
+        workspace.id,
+        "agent_policy_document_upload_grant",
+        loser_descriptor.upload_id,
+        json!({
+            "policy_document_id": replacement_id,
+            "policy_id": policy.id,
+            "lifecycle_status": "pending",
+        }),
+    );
+    assert_eq!(
+        replacement_events
+            .await_event(DOCUMENT_SCAN_REQUESTED, &replacement_id.to_string())
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        replacement_events
+            .await_event(DOCUMENT_FINALIZATION_REQUESTED, &replacement_id.to_string(),)
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    let replacement_uploaded = client
+        .call_tool("get_policy", json!({ "policy_id": policy.id }))
+        .await;
+    assert_eq!(
+        assert_policy_projection(
+            &replacement_uploaded,
+            policy,
+            Some(ExpectedPolicyDocument {
+                user_id,
+                filename: loser_filename,
+                bytes: loser_bytes,
+                upload_status: "uploaded",
+            }),
+        ),
+        Some(replacement_id)
     );
 }
 

@@ -1,7 +1,7 @@
 use super::{helpers::*, *};
 
 #[tokio::test]
-async fn matching_policy_replay_returns_the_original_document_without_duplicate_work() {
+async fn matching_policy_replay_tracks_the_lifecycle_and_rejects_completed_mismatches() {
     let app = harness::app().await;
     let subject = "auth0|agent-policy-matching-replay";
     let workspace_name = "Agent Policy Matching Replay";
@@ -38,21 +38,49 @@ async fn matching_policy_replay_returns_the_original_document_without_duplicate_
     let descriptor = policy_machine_transfer(&prepared);
     let mut events = app.pipeline_events().subscribe();
 
-    let ((created, replayed, gate, request_id), logs) = app
-        .capture_audit_logs(async |request_id| {
-            let mut gate = app
+    let ((created, pending_replay, mismatch, scan_gate, mut finalization_gate, request_id), logs) =
+        app.capture_audit_logs(async |request_id| {
+            let mut scan_gate = app
                 .pipeline_controls()
                 .hold(DOCUMENT_SCAN_REQUESTED, request_id);
+            let finalization_gate = app
+                .pipeline_controls()
+                .hold(DOCUMENT_FINALIZATION_REQUESTED, request_id);
             let created = execute_transfer(&app, &descriptor, bytes, request_id).await;
-            let interception = gate.await_interception().await;
-            assert_eq!(interception.aggregate_id, created.body["document_id"]);
-            let replayed = execute_transfer(&app, &descriptor, bytes, request_id).await;
-            (created, replayed, gate, request_id)
+            let scan_interception = scan_gate.await_interception().await;
+            assert_eq!(scan_interception.aggregate_id, created.body["document_id"]);
+            let pending_replay = execute_transfer(&app, &descriptor, bytes, request_id).await;
+            let mismatch = fail_transfer_on_purpose(
+                &app,
+                &descriptor.path,
+                Some(&descriptor.authorization),
+                Some("application/pdf"),
+                Some(bytes.len() as u64),
+                bytes,
+                request_id,
+            )
+            .await;
+
+            (
+                created,
+                pending_replay,
+                mismatch,
+                scan_gate,
+                finalization_gate,
+                request_id,
+            )
         })
         .await;
     let document_id = assert_pending_result(&created, StatusCode::CREATED, policy.id);
-    assert_eq!(replayed.status, StatusCode::OK);
-    assert_eq!(replayed.body, created.body);
+    assert_eq!(pending_replay.status, StatusCode::OK);
+    assert_eq!(pending_replay.body, created.body);
+    assert_http_error(
+        &mismatch,
+        StatusCode::BAD_REQUEST,
+        "bad_request",
+        "request validation failed",
+        json!(["content-type header does not match upload grant"]),
+    );
     assert_eq!(logs.len(), 1);
     assert_upload_audit_event(
         &logs[0],
@@ -71,6 +99,29 @@ async fn matching_policy_replay_returns_the_original_document_without_duplicate_
             "lifecycle_status": "pending",
         }),
     );
+
+    scan_gate.release();
+    assert_eq!(
+        events
+            .await_event(DOCUMENT_SCAN_REQUESTED, &document_id.to_string())
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    let finalizing_interception = finalization_gate.await_interception().await;
+    assert_eq!(
+        finalizing_interception.aggregate_id,
+        document_id.to_string()
+    );
+    let finalizing_replay = execute_transfer(&app, &descriptor, bytes, request_id).await;
+    assert_eq!(finalizing_replay.status, StatusCode::OK);
+    assert_eq!(
+        finalizing_replay.body,
+        json!({
+            "policy_id": policy.id,
+            "document_id": document_id,
+            "upload_status": "finalizing",
+        })
+    );
     let current = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
@@ -82,19 +133,13 @@ async fn matching_policy_replay_returns_the_original_document_without_duplicate_
                 user_id,
                 filename,
                 bytes,
-                upload_status: "pending",
+                upload_status: "finalizing",
             }),
         ),
         Some(document_id)
     );
 
-    gate.release();
-    assert_eq!(
-        events
-            .await_event(DOCUMENT_SCAN_REQUESTED, &document_id.to_string())
-            .await,
-        StatusCode::NO_CONTENT
-    );
+    finalization_gate.release();
     assert_eq!(
         events
             .await_event(DOCUMENT_FINALIZATION_REQUESTED, &document_id.to_string())

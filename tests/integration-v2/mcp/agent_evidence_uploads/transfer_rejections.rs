@@ -212,7 +212,7 @@ async fn transfer_conceals_invalid_authority_and_rejects_header_mismatches_befor
 }
 
 #[tokio::test]
-async fn length_checksum_and_body_limit_failures_leave_the_grant_retryable() {
+async fn authority_is_checked_before_body_limit_and_rejections_leave_the_grant_retryable() {
     let app = harness::app().await;
     let subject = "auth0|agent-evidence-content-rejections";
     let workspace_name = "Agent Evidence Content Rejections";
@@ -248,6 +248,7 @@ async fn length_checksum_and_body_limit_failures_leave_the_grant_retryable() {
         )
         .await;
     let descriptor = machine_transfer(&prepared, CONTENT_TYPE);
+    let tampered_authorization = tamper(&descriptor.authorization);
 
     let ((), rejected_logs) = app
         .capture_audit_logs(async |request_id| {
@@ -270,7 +271,39 @@ async fn length_checksum_and_body_limit_failures_leave_the_grant_retryable() {
                 json!(["request body checksum does not match upload grant"]),
             );
 
-            let oversized = fail_transfer_on_purpose(
+            let concealed_oversized = [
+                fail_transfer_on_purpose(
+                    &app,
+                    &descriptor.path,
+                    None,
+                    Some(CONTENT_TYPE),
+                    Some(MAX_DOCUMENT_BYTES + 1),
+                    &[],
+                    request_id,
+                )
+                .await,
+                fail_transfer_on_purpose(
+                    &app,
+                    &descriptor.path,
+                    Some(&tampered_authorization),
+                    Some(CONTENT_TYPE),
+                    Some(MAX_DOCUMENT_BYTES + 1),
+                    &[],
+                    request_id,
+                )
+                .await,
+            ];
+            for concealed in concealed_oversized {
+                assert_http_error(
+                    &concealed,
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "route not found",
+                    json!([]),
+                );
+            }
+
+            let authorized_oversized = fail_transfer_on_purpose(
                 &app,
                 &descriptor.path,
                 Some(&descriptor.authorization),
@@ -281,7 +314,7 @@ async fn length_checksum_and_body_limit_failures_leave_the_grant_retryable() {
             )
             .await;
             assert_http_error(
-                &oversized,
+                &authorized_oversized,
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
                 "request payload is too large",
