@@ -4,7 +4,6 @@ use axum_test::{
     multipart::{MultipartForm, Part},
     TestResponse,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use http::StatusCode;
 use proofplane::{
@@ -14,7 +13,6 @@ use proofplane::{
 };
 use rmcp::model::ErrorCode;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::support::{
@@ -26,7 +24,8 @@ use crate::support::{
     json::{assert_rfc3339, object_keys},
     mcp::{assert_not_found, assert_validation_error, McpClient, McpError},
     oauth::authorize_agent_connection,
-    scenario::{types::TestPolicy, ScenarioBuilder},
+    policy_documents::{assert_policy_projection, ExpectedPolicyDocument as ExpectedDocument},
+    scenario::ScenarioBuilder,
 };
 
 const MANAGEMENT_PATH: &str = "/policy-document-uploads";
@@ -1297,84 +1296,6 @@ async fn browser_routes_reject_invalid_sessions_forms_tokens_and_cross_policy_do
             .await,
         other_settled
     );
-}
-
-struct ExpectedDocument<'a> {
-    user_id: Uuid,
-    filename: &'a str,
-    bytes: &'a [u8],
-    upload_status: &'a str,
-}
-
-#[track_caller]
-fn assert_policy_projection(
-    projection: &Value,
-    policy: &TestPolicy,
-    expected_document: Option<ExpectedDocument<'_>>,
-) -> Option<Uuid> {
-    assert_eq!(
-        object_keys(projection),
-        [
-            "controls",
-            "created_at",
-            "description",
-            "document",
-            "id",
-            "name",
-            "updated_at",
-        ]
-        .into_iter()
-        .collect()
-    );
-    assert_eq!(projection["id"], policy.id.to_string());
-    assert_eq!(projection["name"], policy.name);
-    assert_eq!(projection["description"], json!(policy.description));
-    assert_eq!(projection["controls"], json!([]));
-    assert_rfc3339(&projection["created_at"]);
-    assert_rfc3339(&projection["updated_at"]);
-
-    let Some(expected) = expected_document else {
-        assert_eq!(projection["document"], Value::Null);
-        return None;
-    };
-    let document = &projection["document"];
-    assert_eq!(
-        object_keys(document),
-        [
-            "checksum_crc32c",
-            "checksum_sha256",
-            "content_length",
-            "content_type",
-            "created_at",
-            "created_by_user_id",
-            "filename",
-            "id",
-            "upload_status",
-        ]
-        .into_iter()
-        .collect()
-    );
-    let document_id = Uuid::parse_str(
-        document["id"]
-            .as_str()
-            .expect("policy document id is a string"),
-    )
-    .expect("policy document id is a UUID");
-    assert_eq!(document["created_by_user_id"], expected.user_id.to_string());
-    assert_eq!(document["filename"], expected.filename);
-    assert_eq!(document["content_type"], "text/plain");
-    assert_eq!(document["content_length"], expected.bytes.len());
-    assert_eq!(
-        document["checksum_sha256"],
-        hex::encode(Sha256::digest(expected.bytes))
-    );
-    assert_eq!(
-        document["checksum_crc32c"],
-        BASE64_STANDARD.encode(crc32c::crc32c(expected.bytes).to_be_bytes())
-    );
-    assert_eq!(document["upload_status"], expected.upload_status);
-    assert_rfc3339(&document["created_at"]);
-    Some(document_id)
 }
 
 fn archive_path(document_id: Uuid) -> String {

@@ -149,6 +149,16 @@ The integration-v2 matrix must include:
 Assertions use `get_policy`, public HTTP responses, audit capture, and pipeline
 events. They must not inspect grant, policy-document, or outbox tables directly.
 
+Active, archived, cross-workspace, and already-documented policy eligibility is
+reachable through public MCP and browser workflows and is covered here.
+Deterministic grant expiry, storage failure, cleanup failure, and completion
+transaction failure remain at their existing lower-level boundaries because
+integration-v2 exposes no public clock or injectable filesystem/Postgres
+control. Closing those gaps must not add database access, filesystem mutation
+controls, or production/test-only routes. Existing browser management coverage
+continues to prove explicit archive, replacement, download, and concealment
+behavior.
+
 ## Completion Contract
 
 The epic is complete when:
@@ -162,6 +172,11 @@ The epic is complete when:
 
 ## Revisions
 
+- 2026-08-03: Reconciled agent policy upload coverage with integration-v2's
+  public controls. Public eligibility, transfer, retry, convergence, and
+  current-document races are covered; deterministic expiry, storage, cleanup,
+  and transaction failures remain at lower boundaries until a suitable public
+  or external dependency control exists.
 - 2026-08-03: Reconciled agent evidence upload coverage with integration-v2's
   strict black-box boundary. Active evidence is covered end to end; paused and
   retired arrangement plus deterministic storage and transaction failures stay
