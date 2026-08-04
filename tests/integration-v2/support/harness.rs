@@ -45,7 +45,7 @@ use proofplane::{
     },
 };
 use serde_json::Value;
-use testcontainers::{runners::AsyncRunner, ContainerAsync};
+use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 use testcontainers_modules::postgres;
 use tokio_util::sync::CancellationToken;
 
@@ -53,6 +53,7 @@ use proofplane::store;
 use uuid::Uuid;
 
 const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
+const POSTGRES_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 const DOWNLOAD_AUDIENCE: &str = "proofplane-document-download";
 const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
 
@@ -89,6 +90,7 @@ impl Harness {
         auth0::start();
 
         let container = postgres::Postgres::default()
+            .with_startup_timeout(POSTGRES_STARTUP_TIMEOUT)
             .start()
             .await
             .expect("Postgres test container starts");
