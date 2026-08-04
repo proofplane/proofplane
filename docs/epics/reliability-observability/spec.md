@@ -14,13 +14,14 @@ for the API, dequeuer, worker, storage, and MCP runtimes.
   Onboarding](../agent-connector-onboarding/spec.md) 2026-07-09 decision
   banner.) Authorization is local policy over that context; there is no separate
   authorization service or synchronization path.
-- Outbox publish retry and worker delivery behavior have integration coverage.
+- Outbox publish retry and worker delivery behavior have integration-v2
+  coverage.
 - Document scan/finalization tests already cover concrete Postgres rollback,
   scanner failure, and object-store failure.
 - `/metrics` exists, but application-specific `proof_` metrics do not.
 
 The existing worker-handler coverage is baseline. Do not recreate it as pending
-work or replace concrete integration tests with internal mocks.
+work or replace concrete integration-v2 tests with internal mocks.
 
 Do not add live Postgres interruption/recovery tests. Those primarily exercise
 the database and connection-pool dependencies rather than Proofplane behavior.
@@ -51,10 +52,11 @@ Stable API errors must not expose dependency internals. Logs include request,
 user/API-token or system identity, operation, and dependency context without
 credentials or document bytes.
 
-Existing authentication and authorization integration tests are baseline. They
-already cover invalid credentials, workspace mismatch, missing permissions, and
-not-found concealment. Do not create an artificial authorization-dependency
-failure fixture now that authorization is Postgres-sourced application policy.
+Existing integration-v2 authentication and authorization tests are baseline.
+They already cover invalid credentials, workspace mismatch, missing permissions,
+and not-found concealment. Do not create an artificial
+authorization-dependency failure fixture now that authorization is
+Postgres-sourced application policy.
 
 The API owns the initial stream into quarantine storage before creating the
 document row. The worker later owns the copy from quarantine to the final
@@ -166,10 +168,10 @@ only with an explicit non-success outcome.
 
 ## Test Harness
 
-Add reusable dependency controls to `tests/integration/support.rs` only where
+Add reusable dependency controls to `tests/integration-v2/support/` only where
 multiple tests need them. Prefer stopping a container, severing a proxy, or
 injecting an adapter failure at the true external boundary. Tests must be
-deterministic alone and in the full integration target.
+deterministic alone and in the full `integration-v2` target.
 
 ## Revisions
 

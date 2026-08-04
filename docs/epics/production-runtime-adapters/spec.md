@@ -60,8 +60,8 @@ or application default credentials.
 
 ## Verification
 
-Local integration tests use `FilesystemObjectStore` and require no cloud
-credentials. CI has a dedicated GCS integration-test configuration with a real
+Local integration-v2 tests use `FilesystemObjectStore` and require no cloud
+credentials. CI has a dedicated GCS integration-v2 configuration with a real
 test bucket and application default credentials. The same object-store contract
 suite runs against filesystem locally and real GCS in CI, including upload,
 head, read, copy, delete, prefix isolation, checksums, and cleanup.
@@ -69,17 +69,17 @@ head, read, copy, delete, prefix isolation, checksums, and cleanup.
 GCS tests create unique per-run prefixes and delete their objects even after
 failures. The CI identity is restricted to the test bucket. Unit tests may still
 cover parsing and deterministic error mapping, but fakes do not substitute for
-the real GCS integration suite.
+the real GCS integration-v2 suite.
 
-Pub/Sub emulator integration tests remain because Pub/Sub local behavior is a
-separate decision. A credential-free construction test proves the dequeuer no
-longer requires the emulator variable; normal CI integration coverage verifies
-the configured Pub/Sub mode without a separate deployment smoke test.
+Pub/Sub emulator integration-v2 tests remain because Pub/Sub local behavior is
+a separate decision. A credential-free construction test proves the dequeuer no
+longer requires the emulator variable; normal CI integration-v2 coverage
+verifies the configured Pub/Sub mode without a separate deployment smoke test.
 
 ## Revisions
 
 - 2026-06-11: Added the production Pub/Sub gap discovered while reconciling
   the original runtime plan with current code.
 - 2026-06-11: Removed the GCS emulator path. Local tests use filesystem storage;
-  CI integration tests exercise the real GCS adapter and clean up isolated
+  CI integration-v2 tests exercise the real GCS adapter and clean up isolated
   prefixes.

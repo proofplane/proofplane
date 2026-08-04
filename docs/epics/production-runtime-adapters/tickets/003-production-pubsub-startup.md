@@ -20,5 +20,5 @@ Google Pub/Sub when no emulator is configured.
 - [ ] Remove the emulator-required startup guard.
 - [ ] Make client mode selection explicit in startup logs without secrets.
 - [ ] Preserve idempotent topic and subscription provisioning.
-- [ ] Add construction/error tests and retain emulator integration coverage.
+- [ ] Add construction/error tests and retain emulator integration-v2 coverage.
 - [ ] Document deployment-level push endpoint protection.

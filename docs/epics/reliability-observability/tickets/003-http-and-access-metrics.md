@@ -19,4 +19,4 @@ stable low-cardinality Prometheus metrics.
 - [ ] Add HTTP middleware metrics using matched routes.
 - [ ] Instrument authentication, authorization, and readiness outcomes.
 - [ ] Document metric names, labels, and buckets.
-- [ ] Add integration tests for presence and forbidden cardinality.
+- [ ] Add integration-v2 tests for presence and forbidden cardinality.
