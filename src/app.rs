@@ -53,7 +53,7 @@ use crate::{
         Error as AuthenticationError, UserAuthenticator,
     },
     config::AppConfig,
-    object_storage::FilesystemObjectStore,
+    object_storage::{EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     routes::{
         agent_connections::{self, AgentConnectionsState},
@@ -101,7 +101,8 @@ use tracing::Span;
 pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<FilesystemObjectStore>,
+    pub quarantine_store: QuarantineObjectStore,
+    pub evidence_store: EvidenceObjectStore,
     pub metrics: PrometheusHandle,
     pub user_authenticator: UserAuthenticator<V>,
     pub auditor_identity_provider: Option<SharedAuditorIdentityProvider>,
@@ -120,7 +121,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
 ) -> Result<Router, CreateAppError> {
     let evidence_submission_service = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store.clone(),
+        dependencies.quarantine_store.clone(),
     );
     let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
@@ -142,7 +143,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     .map_err(AuthenticationError::from)?;
     let agent_policy_document_upload_service = AgentPolicyDocumentUploadService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store.clone(),
+        dependencies.quarantine_store.clone(),
         AgentPolicyDocumentUploadCredentialVerifier::new(agent_policy_upload_grant_decryptor),
         dependencies.config.uploads.max_document_bytes,
     );
@@ -160,7 +161,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     .map_err(AuthenticationError::from)?;
     let document_download_service = DocumentDownloadService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store.clone(),
+        dependencies.evidence_store.clone(),
         dependencies.config.server.public_api_base_url.clone(),
         download_grant_encryptor,
         download_grant_decryptor,
@@ -217,7 +218,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let policy_document_service = PolicyDocumentService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store.clone(),
+        dependencies.quarantine_store.clone(),
     );
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),

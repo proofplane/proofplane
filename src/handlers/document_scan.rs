@@ -13,7 +13,7 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
+    object_storage::{ObjectKey, QuarantineObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{Postgres, TypedDocumentUploadWork},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
@@ -24,7 +24,7 @@ const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
 
 pub struct DocumentScanHandler {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    quarantine_store: QuarantineObjectStore,
     scanner: Arc<ClamAvMalwareScanner>,
     max_delivery_attempts: u16,
     command_handler: ScanDocumentCommandHandler,
@@ -34,7 +34,7 @@ impl Clone for DocumentScanHandler {
     fn clone(&self) -> Self {
         Self {
             repository: self.repository.clone(),
-            object_store: self.object_store.clone(),
+            quarantine_store: self.quarantine_store.clone(),
             scanner: self.scanner.clone(),
             max_delivery_attempts: self.max_delivery_attempts,
             command_handler: self.command_handler.clone(),
@@ -45,14 +45,14 @@ impl Clone for DocumentScanHandler {
 impl DocumentScanHandler {
     pub fn new(
         repository: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        quarantine_store: QuarantineObjectStore,
         scanner: Arc<ClamAvMalwareScanner>,
         max_delivery_attempts: u16,
     ) -> Self {
         Self {
             command_handler: ScanDocumentCommandHandler::new(repository.clone()),
             repository,
-            object_store,
+            quarantine_store,
             scanner,
             max_delivery_attempts,
         }
@@ -96,7 +96,7 @@ impl DocumentScanHandler {
         tracing::debug!("initiating scan");
 
         let quarantine_key = ObjectKey::parse(work.object_key.clone()).map_err(retryable)?;
-        let object = match self.object_store.get_object(&quarantine_key).await {
+        let object = match self.quarantine_store.get_object(&quarantine_key).await {
             Ok(object) => object,
             Err(StorageError::NotFound) => {
                 let updated = self
@@ -450,7 +450,7 @@ mod tests {
         let submission_id = Uuid::new_v4();
         let workspace_id = Uuid::new_v4();
         let key = format!(
-            "workspaces/{workspace_id}/quarantine/evidence-submissions/{submission_id}/documents/upload/manual.txt"
+            "workspaces/{workspace_id}/evidence-submissions/{submission_id}/documents/upload/manual.txt"
         );
 
         let payload =
@@ -472,7 +472,7 @@ mod tests {
         let document_id = Uuid::new_v4();
         let submission_id = Uuid::new_v4();
         let key = format!(
-            "workspaces/{}/quarantine/evidence-submissions/{submission_id}/documents/upload/manual.txt",
+            "workspaces/{}/evidence-submissions/{submission_id}/documents/upload/manual.txt",
             Uuid::new_v4()
         );
 
@@ -511,9 +511,8 @@ mod tests {
         let document_id = Uuid::new_v4();
         let policy_id = Uuid::new_v4();
         let workspace_id = Uuid::new_v4();
-        let key = format!(
-            "workspaces/{workspace_id}/quarantine/policies/{policy_id}/documents/upload/manual.txt"
-        );
+        let key =
+            format!("workspaces/{workspace_id}/policies/{policy_id}/documents/upload/manual.txt");
         let mut message = message(document_id, policy_id, &key);
         message.aggregate_type = "policy_document".to_owned();
         message.payload = serde_json::json!({

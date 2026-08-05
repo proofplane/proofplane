@@ -25,8 +25,18 @@ name = "mcp"
 path = "src/bin/mcp.rs"
 
 [[bin]]
+name = "migrate"
+path = "src/bin/migrate.rs"
+
+[[bin]]
 name = "seed"
 path = "src/bin/seed.rs"
+
+# Local development only. The Dockerfile builds the five production commands
+# by name, so this one cannot reach the release image.
+[[bin]]
+name = "pubsub-init"
+path = "src/bin/pubsub_init.rs"
 
 [dependencies]
 async-trait = "0.1"
@@ -50,6 +60,13 @@ jwtk = { version = "0.5", features = ["openssl"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 mime = "0.3"
+# The one TLS stack. `jwtk` already puts it in the graph, so a direct dependency
+# adds no compile unit and no system dependency. The release image already links
+# `libssl3` and carries the `ca-certificates` bundle that the connector reads.
+# `native-tls` would use Security.framework on macOS, which refuses a certificate
+# valid for more than 398 days and so refuses endpoints that OpenSSL accepts.
+openssl = "0.10"
+postgres-openssl = "0.5"
 rmcp = { version = "1.7.0", features = ["client", "server", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 prost-types = "0.14"
 refinery = { version = "0.9.1", features = ["tokio-postgres"] }
@@ -58,7 +75,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = "0.7"
 tokio-postgres = { version = "0.7.17", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tower = "0.5.3"
@@ -72,10 +89,19 @@ google-cloud-pubsub = { version = "1.7.1", package = "gcloud-pubsub" }
 google-cloud-gax = { version = "1.4.0", package = "gcloud-gax" }
 gcloud-auth = "1.3.0"
 google-cloud-googleapis = { version = "1.3.0", package = "gcloud-googleapis", features = ["pubsub"] }
+google-cloud-storage = "1.17.0"
+google-cloud-wkt = "1.7.0"
 pasetors = "=0.7.8"
 reqwest = "0.13"
+anyhow = { version = "1.0.104", features = ["std", "backtrace"] }
 
 [dev-dependencies]
 axum-test = "20"
-testcontainers = "0.27"
-testcontainers-modules = { version = "0.15", features = ["postgres"] }
+# Both default to the rustls `ring` provider, while every non-test dependency
+# that speaks TLS (gcloud-auth, gcloud-pubsub, google-cloud-storage, reqwest)
+# uses `aws-lc-rs`. Cargo unifies features across normal and dev dependencies,
+# so the defaults turn on both providers in a test build. rustls then refuses to
+# choose one and panics on the first TLS handshake. Pin these to the provider
+# the rest of the graph already uses.
+testcontainers = { version = "0.27", default-features = false, features = ["aws-lc-rs"] }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres", "aws-lc-rs"] }

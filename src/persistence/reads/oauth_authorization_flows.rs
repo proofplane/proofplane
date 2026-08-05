@@ -5,7 +5,7 @@ use crate::{
     persistence::Error,
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct OAuthAuthorizationFlowReads<'a, E> {
     executor: &'a E,
@@ -26,7 +26,7 @@ impl OAuthAuthorizationFlowReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_opt(
                 "SELECT id FROM oauth_authorization_requests WHERE csrf_token_digest = $1",
-                &[&digest],
+                &[param(&digest)],
             )
             .await?
             .map(|row| {
@@ -45,7 +45,7 @@ impl OAuthAuthorizationFlowReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_opt(
                 "SELECT request_id FROM oauth_authorization_codes WHERE code_digest = $1",
-                &[&digest],
+                &[param(&digest)],
             )
             .await?
             .map(|row| {

@@ -1,8 +1,9 @@
 use std::str::FromStr;
 
 use proofplane::config::{
-    AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-    LogFormat, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+    AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
+    DatabasePoolConfig, DatabaseTlsConfig, FilesystemObjectStorageConfig, HealthConfig, LogFormat,
+    MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
     PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
     ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
@@ -26,7 +27,18 @@ pub fn config(
             mcp_bind: socket_addr("127.0.0.1:0"),
             public_api_base_url,
         },
-        postgres: SecretString::from(database_url),
+        database: DatabaseConfig {
+            url: SecretString::from(database_url),
+            tls: DatabaseTlsConfig::DISABLED,
+            pool: DatabasePoolConfig {
+                api: 8,
+                mcp: 8,
+                worker: 8,
+                dequeuer: 8,
+                acquire_timeout_ms: 5_000,
+                idle_timeout_ms: 300_000,
+            },
+        },
         pubsub: PubSubConfig {
             project_id: "integration-test".to_owned(),
             subscriptions: PubSubSubscriptionsConfig {
@@ -105,7 +117,10 @@ pub fn config(
         mail: MailConfig {
             adapter: MailAdapterConfig::LocalStdout,
         },
-        object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        object_storage: ObjectStorageConfig::Filesystem(FilesystemObjectStorageConfig {
+            quarantine_root: storage_root.join("quarantine"),
+            evidence_root: storage_root.join("evidence"),
+        }),
         scanner: ScannerConfig {
             clamd_address: socket_addr("127.0.0.1:3310"),
             connection_timeout_ms: 1000,

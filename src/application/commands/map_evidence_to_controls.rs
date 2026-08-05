@@ -186,7 +186,7 @@ mod tests {
         application::ExecutionMetadata,
         authentication::AgentConnectionContext,
         domain::{ControlId, WorkspacePermission, WorkspacePermissions},
-        persistence::test_support,
+        persistence::{param, test_support},
     };
 
     use super::{
@@ -205,9 +205,9 @@ mod tests {
         let foreign_control_id = Uuid::new_v4();
         let client = postgres.get().await.unwrap();
         client
-            .execute(
+            .execute_typed(
                 "INSERT INTO controls (id, workspace_id, code, title, description) VALUES ($1, $2, 'C1', 'Foreign', 'Description')",
-                &[&foreign_control_id, &Uuid::from(foreign.workspace_id)],
+                &[param(&foreign_control_id), param(&Uuid::from(foreign.workspace_id))],
             )
             .await
             .unwrap();

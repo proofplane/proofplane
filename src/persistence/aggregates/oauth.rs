@@ -7,6 +7,7 @@ use crate::domain::{
     UserId, WorkspacePermission,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, UnitOfWork,
@@ -33,9 +34,9 @@ impl OAuthAuthorizationFlowRepository<'_> {
         // the left join before a code has been issued.
         self.unit_of_work
             .transaction
-            .query_opt(
+            .query_typed_opt(
                 &format!("{FLOW_SELECT_SQL} WHERE r.id = $1 FOR UPDATE OF r"),
-                &[&Uuid::from(request_id)],
+                &[param(&Uuid::from(request_id))],
             )
             .await?
             .map(|row| {
@@ -55,9 +56,9 @@ impl OAuthAuthorizationFlowRepository<'_> {
         } else {
             self.unit_of_work
                 .transaction
-                .execute(
+                .execute_typed(
                     "DELETE FROM oauth_authorization_codes WHERE request_id = $1",
-                    &[&Uuid::from(flow.id())],
+                    &[param(&Uuid::from(flow.id()))],
                 )
                 .await?;
         }

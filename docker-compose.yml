@@ -18,10 +18,30 @@ services:
       retries: 12
       start_period: 5s
 
+  # Stands in for the Supavisor transaction pooler that production runtime
+  # traffic goes through, so local runs and the integration suite exercise
+  # transaction-pooling semantics rather than discovering them on first deploy.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./docker/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./docker/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   pubsub:
     image: ghcr.io/jeffijoe/deltio:latest
     ports:
-      - "8085:8085"
+      - "8086:8085"
     # deltio pushes via push subscriptions to a worker running on the host
     # (i.e., a CI job runner). This means the deltio container needs a DNS
     # name where it can reach the worker. On Mac, this is redundant because

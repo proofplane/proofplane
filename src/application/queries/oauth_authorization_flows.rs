@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{OAuthAuthorizationRequestId, UserId, WorkspaceId, WorkspacePermission},
-    persistence::{Error, Postgres},
+    persistence::{param, Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -40,16 +40,17 @@ impl ReadOAuthConsentContextHandler {
         &self,
         query: ReadOAuthConsentContext,
     ) -> Result<Option<OAuthConsentContext>, Error> {
-        self.repository
+        let row = self
+            .repository
             .get()
             .await?
-            .query_opt(
+            .query_typed_opt(
                 CONSENT_CONTEXT_SQL,
-                &[&Uuid::from(query.request_id), &query.now],
+                &[param(&Uuid::from(query.request_id)), param(&query.now)],
             )
-            .await?
-            .map(consent_context_from_row)
-            .transpose()
+            .await?;
+
+        row.map(consent_context_from_row).transpose()
     }
 }
 
@@ -83,13 +84,14 @@ impl ReadOAuthAuthorizationGrantHandler {
         &self,
         query: ReadOAuthAuthorizationGrant,
     ) -> Result<Option<OAuthAuthorizationGrantView>, Error> {
-        self.repository
+        let row = self
+            .repository
             .get()
             .await?
-            .query_opt(GRANT_VIEW_SQL, &[&Uuid::from(query.request_id)])
-            .await?
-            .map(grant_view_from_row)
-            .transpose()
+            .query_typed_opt(GRANT_VIEW_SQL, &[param(&Uuid::from(query.request_id))])
+            .await?;
+
+        row.map(grant_view_from_row).transpose()
     }
 }
 const CONSENT_CONTEXT_SQL: &str = "SELECT r.id, r.client_name, r.client_id, r.redirect_uri, r.state, r.resource, r.scopes, r.auth0_subject, r.user_id, m.workspace_id, r.expires_at FROM oauth_authorization_requests r JOIN workspace_memberships m ON m.user_id = r.user_id WHERE r.id = $1 AND r.consumed_at IS NULL AND r.expires_at > $2 AND r.auth0_subject IS NOT NULL";

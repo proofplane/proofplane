@@ -7,9 +7,12 @@ by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
 persistence in `persistence/`, types in `domain/` and `read_models/`, and external
 adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
-and `seed`).
+`migrate`, `seed`, and `pubsub-init`). The last two are local development
+commands and never ship in the release image.
 
-Database migrations belong in `migrations/`. API fixtures and project design
+Database migrations belong in `migrations/`; read
+[`migrations/README.md`](./migrations/README.md) before adding one, because
+schema changes must expand before they contract. API fixtures and project design
 notes live in `docs/`.
 
 ## Build, Test, and Development Commands
@@ -18,14 +21,31 @@ notes live in `docs/`.
 - `make check`: run formatting checks, Clippy with warnings denied, and all
   tests. Run `make up` first: the integration-v2 suite uses the compose stack
   rather than starting services of its own.
-- `make up && make health`: start and verify local Postgres, Pub/Sub, and
-  ClamAV dependencies.
-- `make seed`: run database migrations and seed local data.
+- `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
+  and ClamAV dependencies. `make up` also runs `make pubsub-init`, which creates
+  the emulator topics and the worker push subscription. The emulator keeps no
+  state between runs, and no runtime process provisions Pub/Sub resources.
+- `make migrate`: apply database migrations and nothing else. This is the
+  command production runs; it writes no data. It connects to Postgres on 5432
+  directly, not through PgBouncer, because its `lock_timeout` is a session
+  setting.
+- `make seed`: apply database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
-  setup.
+  setup, and run `make migrate` or `make seed` first; runtimes only validate
+  schema history and never apply migrations. The dequeuer publishes only. It
+  reads `PUBSUB_EMULATOR_HOST` to choose between the emulator and Google
+  application default credentials, and it creates no topic or subscription.
 - `cargo test --test integration-v2 evidence_document_uploads`: run a focused
   integration-v2 test module.
+- `make image && make image-smoke`: build the production release image and
+  validate it. The image is `linux/amd64` and packages `api`, `mcp`, `worker`,
+  `dequeuer`, and `migrate`, but never `seed` or `pubsub-init`.
+  `make image-push` and `make clamav-mirror` publish to Artifact Registry and
+  need `PROOFPLANE_PROJECT_ID`, a configured Docker credential helper, and a
+  current `gcloud auth login`. Terraform needs a separate
+  `gcloud auth application-default login`. See
+  [`docs/runbooks/production-deployment.md`](./docs/runbooks/production-deployment.md).
 
 ## Architecture: Snapshot CQRS
 
@@ -148,6 +168,44 @@ integration-v2 suite starts nothing: it uses the Postgres and Pub/Sub emulator
 from the compose stack, so `make up` has to have been run first, and it drops
 and recreates its own `proofplane_integration_v2` database on every run rather
 than touching the `proofplane` database you develop against.
+
+The compose stack also runs PgBouncer in transaction mode on 6432, standing in
+for the Supavisor transaction pooler that production runtime traffic goes
+through. The integration-v2 application under test connects through it, so the
+suite proves pooler compatibility on every run; only the suite's own
+`DROP DATABASE`/`CREATE DATABASE` reaches Postgres directly on 5432, because
+neither can run through a transaction pooler. `config/local.yaml` points at 6432
+too, so `make api` and friends exercise the same path.
+
+Neither Postgres nor PgBouncer serves a certificate locally. `database.tls` is
+therefore `disable` in `config/local.yaml`, and `make migrate` passes
+`PROOFPLANE_MIGRATION_DATABASE_TLS=disable`. Production sets `verify-full`. The
+migration command verifies by default. An older `.local/config.yaml` fails to
+load until you add the field to it.
+
+An endpoint whose certificate chains to a private root needs
+`database.tls_root_certificate` beside the mode, holding that root as PEM. It is
+added to the system certificate store and never replaces it.
+
+Because of that pooler, **never call `query`, `query_one`, `query_opt`, or
+`execute`.** Those name the prepared statement they create, and a transaction
+pooler reassigns the server connection between the `Parse` and the `Bind`, so
+the statement fails with `prepared statement "sN" does not exist`. Use
+`query_typed`, `query_typed_one`, `query_typed_opt`, and `execute_typed`, which
+parse into the unnamed statement and send the whole exchange under one `Sync`.
+
+Those methods want each parameter's Postgres type. Do not write `Type::…` at a
+call site: wrap the value in `persistence::param`, which recovers the type from
+the Rust type through the `PgParam` trait in `src/persistence/params.rs`.
+
+```rust
+.query_typed_opt("SELECT id FROM users WHERE auth0_sub = $1", &[param(&auth0_sub)])
+```
+
+Aggregate saves need nothing extra — `snapshot_record!` derives each column's
+type from the declared field type. Adding a `PgParam` impl means committing to a
+column type, so check `migrations/` first; a Rust type with no impl is a compile
+error, which is the point. Transactions are for atomicity, not for the pooler.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test

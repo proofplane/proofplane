@@ -9,6 +9,7 @@ use crate::{
     },
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, UnitOfWork, WorkspaceUnitOfWork,
@@ -61,13 +62,13 @@ impl AuditorAccessGrantRepository<'_> {
                 postgres
                     .get()
                     .await?
-                    .query(GET_SQL, &[&id, &workspace_id])
+                    .query_typed(GET_SQL, &[param(&id), param(&workspace_id)])
                     .await?
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .query_typed(GET_FOR_UPDATE_SQL, &[param(&id), param(&workspace_id)])
                     .await?
             }
             RepositoryConnection::WorkspaceTransaction(workspace) => {
@@ -76,7 +77,7 @@ impl AuditorAccessGrantRepository<'_> {
                 }
                 workspace
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .query_typed(GET_FOR_UPDATE_SQL, &[param(&id), param(&workspace_id)])
                     .await?
             }
         };
@@ -183,9 +184,9 @@ impl Postgres {
         let row = self
             .get()
             .await?
-            .query_opt(
+            .query_typed_opt(
                 &format!("SELECT {COLUMNS} FROM auditor_access_grants WHERE id = $1"),
-                &[&Uuid::from(grant_id)],
+                &[param(&Uuid::from(grant_id))],
             )
             .await?;
         let grant = row
@@ -198,14 +199,12 @@ impl Postgres {
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<Vec<AuditorAccessGrant>, Error> {
-        let rows = self
-            .get()
-            .await?
-            .query(
+        let rows = self.get().await?
+            .query_typed(
                 &format!(
                     "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC"
                 ),
-                &[&Uuid::from(workspace_id)],
+                &[param(&Uuid::from(workspace_id))],
             )
             .await?;
         rows.into_iter()
@@ -219,14 +218,12 @@ impl Postgres {
         digest: AuditorInviteSecretDigest,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
         let digest: &[u8] = digest.as_bytes();
-        let row = self
-            .get()
-            .await?
-            .query_opt(
+        let row = self.get().await?
+            .query_typed_opt(
                 &format!(
                     "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 AND secret_digest = $2"
                 ),
-                &[&Uuid::from(workspace_id), &digest],
+                &[param(&Uuid::from(workspace_id)), param(&digest)],
             )
             .await?;
         let grant = row

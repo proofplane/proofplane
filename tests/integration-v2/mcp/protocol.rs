@@ -1,11 +1,7 @@
 use http::header;
-use proofplane::{
-    domain::WorkspacePermission,
-    mcp::{ENDPOINT, SESSION_ID_HEADER},
-};
+use proofplane::{domain::WorkspacePermission, mcp::ENDPOINT};
 use rmcp::model::ErrorCode;
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 use crate::support::{
     harness, mcp::McpClient, oauth::authorize_agent_connection, scenario::ScenarioBuilder,
@@ -35,13 +31,9 @@ async fn initialize_advertises_server_identity_and_capabilities() {
         .json(&initialize_body())
         .await;
     response.assert_status_ok();
+    assert_eq!(response.header(header::CONTENT_TYPE), "application/json");
 
-    let body = response
-        .text()
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .find_map(|data| serde_json::from_str::<Value>(data).ok())
-        .expect("initialize event carries a JSON-RPC response");
+    let body = response.json::<Value>();
 
     let result = &body["result"];
     assert_eq!(result["serverInfo"]["name"], "proofplane");
@@ -54,14 +46,6 @@ async fn initialize_advertises_server_identity_and_capabilities() {
     );
     assert_eq!(result["capabilities"]["tools"], json!({}));
     assert_eq!(result["capabilities"]["resources"], json!({}));
-
-    Uuid::parse_str(
-        response
-            .header(SESSION_ID_HEADER)
-            .to_str()
-            .expect("session id is text"),
-    )
-    .expect("session id is a UUID");
 }
 
 #[tokio::test]

@@ -4,6 +4,18 @@ pub enum Validation<T, E> {
     Invalid(Vec<E>),
 }
 
+pub(crate) fn is_canonical_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && value.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && !segment.contains(['\\', '\0'])
+        })
+}
+
 impl<T, E> Validation<T, E> {
     pub fn valid(value: T) -> Self {
         Self::Valid(value)

@@ -14,7 +14,7 @@ use crate::{
         AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionId, WorkspaceId,
     },
-    object_storage::{FilesystemObjectStore, StorageError},
+    object_storage::{QuarantineObjectStore, StorageError},
     persistence::{ArchiveDocumentResult, Postgres},
     read_models::EvidenceSubmissionDetail,
     services::Error,
@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 pub struct EvidenceSubmissionService {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    quarantine_store: QuarantineObjectStore,
     create_document: CreateEvidenceSubmissionDocumentHandler,
     archive_document: ArchiveDocumentHandler,
 }
@@ -36,7 +36,7 @@ impl Clone for EvidenceSubmissionService {
     fn clone(&self) -> Self {
         Self {
             repository: self.repository.clone(),
-            object_store: self.object_store.clone(),
+            quarantine_store: self.quarantine_store.clone(),
             create_document: self.create_document.clone(),
             archive_document: self.archive_document.clone(),
         }
@@ -63,12 +63,12 @@ pub struct StagedEvidenceDocument {
 }
 
 impl EvidenceSubmissionService {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
+    pub fn new(repository: Arc<Postgres>, quarantine_store: QuarantineObjectStore) -> Self {
         Self {
             create_document: CreateEvidenceSubmissionDocumentHandler::new(repository.clone()),
             archive_document: ArchiveDocumentHandler::new(repository.clone()),
             repository,
-            object_store,
+            quarantine_store,
         }
     }
 
@@ -138,7 +138,7 @@ impl EvidenceSubmissionService {
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let staged = stage_evidence_document(
-            &self.object_store,
+            &self.quarantine_store,
             connection.workspace_id,
             input.evidence_submission_id,
             input.filename,
@@ -168,7 +168,7 @@ impl EvidenceSubmissionService {
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let staged = stage_evidence_document(
-            &self.object_store,
+            &self.quarantine_store,
             grant.workspace_id(),
             grant.submission_id(),
             grant.declaration().filename().to_owned(),
@@ -203,8 +203,8 @@ impl EvidenceSubmissionService {
             .await?)
     }
 
-    pub async fn delete_uploaded_document_object(&self, object_key: &str) -> Result<(), Error> {
-        delete_staged_document(&self.object_store, object_key).await
+    pub async fn delete_staged_object(&self, object_key: &str) -> Result<(), Error> {
+        delete_staged_document(&self.quarantine_store, object_key).await
     }
 
     pub async fn create_submission(
@@ -249,11 +249,11 @@ impl EvidenceSubmissionService {
                 Ok(Some(document))
             }
             Err(DocumentCommandError::Unavailable | DocumentCommandError::Invalid) => {
-                let _ = self.delete_uploaded_document_object(&object_key).await;
+                let _ = self.delete_staged_object(&object_key).await;
                 Ok(None)
             }
             Err(error) => {
-                let _ = self.delete_uploaded_document_object(&object_key).await;
+                let _ = self.delete_staged_object(&object_key).await;
                 Err(command_error(error))
             }
         }

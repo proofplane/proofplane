@@ -27,7 +27,7 @@ use crate::{
         IntegrationMessage, IntegrationMessageDecodeError, LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
         LEGACY_DOCUMENT_SCAN_REQUESTED, SEND_WORKSPACE_INVITATION_TYPE,
     },
-    object_storage::FilesystemObjectStore,
+    object_storage::{EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     routes::{
         error::not_found,
@@ -85,7 +85,8 @@ pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<FilesystemObjectStore>,
+    pub quarantine_store: QuarantineObjectStore,
+    pub evidence_store: EvidenceObjectStore,
     pub scanner: Arc<ClamAvMalwareScanner>,
     pub mail: Arc<dyn MailAdapter>,
     pub workspace_invitation_authority: WorkspaceInvitationAuthority,
@@ -99,14 +100,15 @@ pub struct WorkerAppDependencies {
 #[derive(Clone)]
 pub struct WorkerState {
     document_scan_handler: DocumentScanHandler,
-    document_finalization_handler: DocumentFinalizationHandler<FilesystemObjectStore>,
+    document_finalization_handler: DocumentFinalizationHandler,
     workspace_invitation_delivery_handler: WorkspaceInvitationDeliveryHandler,
 }
 
 impl WorkerState {
     pub fn new(
         postgres: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        quarantine_store: QuarantineObjectStore,
+        evidence_store: EvidenceObjectStore,
         scanner: Arc<ClamAvMalwareScanner>,
         mail: Arc<dyn MailAdapter>,
         workspace_invitation_authority: WorkspaceInvitationAuthority,
@@ -115,13 +117,14 @@ impl WorkerState {
         Self {
             document_scan_handler: DocumentScanHandler::new(
                 postgres.clone(),
-                object_store.clone(),
+                quarantine_store.clone(),
                 scanner,
                 worker_max_delivery_attempts,
             ),
             document_finalization_handler: DocumentFinalizationHandler::new(
                 postgres.clone(),
-                object_store,
+                quarantine_store,
+                evidence_store,
             ),
             workspace_invitation_delivery_handler: WorkspaceInvitationDeliveryHandler::new(
                 postgres,
@@ -136,7 +139,8 @@ impl WorkerState {
 pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
     let state = WorkerState::new(
         dependencies.postgres.clone(),
-        dependencies.object_store,
+        dependencies.quarantine_store,
+        dependencies.evidence_store,
         dependencies.scanner,
         dependencies.mail,
         dependencies.workspace_invitation_authority,
@@ -480,7 +484,7 @@ mod tests {
             "causation_id": Uuid::from_u128(5),
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             }
         })))
         .expect("typed worker message decodes");
@@ -494,7 +498,7 @@ mod tests {
             message.payload,
             json!({
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             })
         );
         assert_eq!(message.delivery_attempt, Some(2));
@@ -512,7 +516,7 @@ mod tests {
             "causation_id": null,
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             },
             "event_type": DOCUMENT_FINALIZATION_REQUESTED,
             "aggregate_type": "evidence_document",
@@ -540,7 +544,7 @@ mod tests {
             "causation_id": null,
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             }
         });
 

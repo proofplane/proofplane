@@ -6,7 +6,7 @@ use crate::{
     read_models::EvidenceDetail,
 };
 
-use super::ReadExecutor;
+use super::{param, ReadExecutor};
 
 pub(crate) struct EvidenceReads<'a, E> {
     executor: &'a E,
@@ -26,7 +26,10 @@ impl<E: ReadExecutor> EvidenceReads<'_, E> {
         self.executor
             .query_opt(
                 &format!("{EVIDENCE_SELECT} WHERE id = $1 AND workspace_id = $2"),
-                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?
             .map(evidence_from_row)
@@ -36,7 +39,7 @@ impl<E: ReadExecutor> EvidenceReads<'_, E> {
         self.executor
             .query(
                 &format!("{EVIDENCE_SELECT} WHERE workspace_id = $1 ORDER BY title"),
-                &[&Uuid::from(self.workspace_id)],
+                &[param(&Uuid::from(self.workspace_id))],
             )
             .await?
             .into_iter()

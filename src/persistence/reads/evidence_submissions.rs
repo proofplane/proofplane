@@ -11,7 +11,7 @@ use crate::{
     read_models::{DocumentDownloadCandidate, EvidenceSubmissionDetail},
 };
 
-use super::{documents::document_from_row, ReadExecutor, TransactionalReadExecutor};
+use super::{documents::document_from_row, param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct EvidenceSubmissionReads<'a, E> {
     executor: &'a E,
@@ -36,9 +36,9 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
             .query_opt(
                 DOCUMENT_SQL,
                 &[
-                    &Uuid::from(submission_id),
-                    &Uuid::from(document_id),
-                    &Uuid::from(self.workspace_id),
+                    param(&Uuid::from(submission_id)),
+                    param(&Uuid::from(document_id)),
+                    param(&Uuid::from(self.workspace_id)),
                 ],
             )
             .await?
@@ -83,11 +83,11 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
                     .query_opt(
                         &sql,
                         &[
-                            &Uuid::from(self.workspace_id),
-                            &Uuid::from(submission_id),
-                            &Uuid::from(document_id),
-                            &start,
-                            &end,
+                            param(&Uuid::from(self.workspace_id)),
+                            param(&Uuid::from(submission_id)),
+                            param(&Uuid::from(document_id)),
+                            param(&start),
+                            param(&end),
                         ],
                     )
                     .await?
@@ -97,9 +97,9 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
                     .query_opt(
                         &sql,
                         &[
-                            &Uuid::from(self.workspace_id),
-                            &Uuid::from(submission_id),
-                            &Uuid::from(document_id),
+                            param(&Uuid::from(self.workspace_id)),
+                            param(&Uuid::from(submission_id)),
+                            param(&Uuid::from(document_id)),
                         ],
                     )
                     .await?
@@ -115,7 +115,13 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         let sql = format!("SELECT{SUBMISSION_DETAIL_COLUMNS} {DETAIL_FROM} WHERE s.id = $1 AND e.workspace_id = $2");
         self.executor
-            .query_opt(&sql, &[&Uuid::from(id), &Uuid::from(self.workspace_id)])
+            .query_opt(
+                &sql,
+                &[
+                    param(&Uuid::from(id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
+            )
             .await?
             .as_ref()
             .map(evidence_submission_detail_from_row)
@@ -146,17 +152,23 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
                     .query(
                         &sql,
                         &[
-                            &Uuid::from(id),
-                            &Uuid::from(self.workspace_id),
-                            &c.valid_from,
-                            &c.valid_until,
+                            param(&Uuid::from(id)),
+                            param(&Uuid::from(self.workspace_id)),
+                            param(&c.valid_from),
+                            param(&c.valid_until),
                         ],
                     )
                     .await?
             }
             None => {
                 self.executor
-                    .query(&sql, &[&Uuid::from(id), &Uuid::from(self.workspace_id)])
+                    .query(
+                        &sql,
+                        &[
+                            param(&Uuid::from(id)),
+                            param(&Uuid::from(self.workspace_id)),
+                        ],
+                    )
                     .await?
             }
         };
@@ -175,7 +187,7 @@ impl<E: ReadExecutor> EvidenceSubmissionReads<'_, E> {
 
 impl EvidenceSubmissionReads<'_, TransactionalReadExecutor<'_>> {
     pub async fn exists(&self, id: EvidenceSubmissionId) -> Result<bool, Error> {
-        Ok(self.executor.query_opt("SELECT 1 FROM evidence_submissions s JOIN evidence e ON e.id = s.evidence_id WHERE s.id = $1 AND e.workspace_id = $2 FOR KEY SHARE OF s", &[&Uuid::from(id), &Uuid::from(self.workspace_id)]).await?.is_some())
+        Ok(self.executor.query_opt("SELECT 1 FROM evidence_submissions s JOIN evidence e ON e.id = s.evidence_id WHERE s.id = $1 AND e.workspace_id = $2 FOR KEY SHARE OF s", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace_id))]).await?.is_some())
     }
 }
 

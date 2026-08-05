@@ -6,7 +6,7 @@ use crate::{
     read_models::{WorkspaceDetails, WorkspaceWithRole},
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct WorkspaceReads<'a, E> {
     executor: &'a E,
@@ -22,7 +22,7 @@ impl<E: ReadExecutor> WorkspaceReads<'_, E> {
         self.executor
             .query_opt(
                 "SELECT id, slug, name, created_at FROM workspaces WHERE id = $1",
-                &[&Uuid::from(id)],
+                &[param(&Uuid::from(id))],
             )
             .await?
             .map(workspace_from_row)
@@ -36,7 +36,7 @@ impl<E: ReadExecutor> WorkspaceReads<'_, E> {
 FROM workspace_memberships m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1"#,
-                &[&Uuid::from(user_id)],
+                &[param(&Uuid::from(user_id))],
             )
             .await?
             .map(|row| {
@@ -58,7 +58,10 @@ WHERE m.user_id = $1"#,
         self.executor
             .query_opt(
                 "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2",
-                &[&Uuid::from(workspace_id), &Uuid::from(user_id)],
+                &[
+                    param(&Uuid::from(workspace_id)),
+                    param(&Uuid::from(user_id)),
+                ],
             )
             .await?
             .map(|row| {
@@ -79,13 +82,13 @@ impl WorkspaceReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_one(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                &[&user_key],
+                &[param(&user_key)],
             )
             .await?;
         self.executor
             .query_opt(
                 "SELECT workspace_id FROM workspace_memberships WHERE user_id = $1",
-                &[&Uuid::from(user_id)],
+                &[param(&Uuid::from(user_id))],
             )
             .await?
             .map(|row| {

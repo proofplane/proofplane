@@ -8,12 +8,14 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        auditor_callback_path, auditor_connection, gcs_credentials_mode, nonzero_u16, nonzero_u64,
-        nonzero_usize, optional_url, parse_log_format, paseto_download_key, path_string,
-        postgres_connection_string, public_api_base_url as validate_public_api_base_url,
-        secret_value, string_url, string_value, ConfigValidationExt,
+        auditor_callback_path, auditor_connection, database_root_certificate, database_tls,
+        nonzero_u16, nonzero_u64, nonzero_usize, object_key_prefix as validate_object_key_prefix,
+        parse_log_format, paseto_download_key, path_string, postgres_connection_string,
+        public_api_base_url as validate_public_api_base_url, secret_value, string_url,
+        string_value, ConfigValidationExt,
     },
-    Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
+    Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
+    DatabasePoolConfig, DatabaseTlsConfig, FilesystemObjectStorageConfig, GcsObjectStorageConfig,
     HealthConfig, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
     ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
     PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
@@ -24,7 +26,7 @@ use super::{
 #[derive(Debug, Deserialize)]
 pub(super) struct RawAppConfig {
     pub(super) server: RawServerConfig,
-    pub(super) postgres: SecretString,
+    pub(super) database: RawDatabaseConfig,
     pub(super) pubsub: RawPubSubConfig,
     pub(super) auth0: RawAuth0Config,
     pub(super) paseto: RawPasetoConfig,
@@ -173,10 +175,74 @@ impl RawScannerConfig {
 
 impl RawAppConfig {}
 
-pub(super) fn validate_postgres_connection_string(
-    value: SecretString,
-) -> Validation<SecretString, ConfigFieldError> {
-    postgres_connection_string(value).at("postgres")
+#[derive(Debug, Deserialize)]
+pub(super) struct RawDatabaseConfig {
+    url: SecretString,
+    tls: String,
+    /// Absent for a plaintext connection, and for a server whose certificate
+    /// already chains to a root in the system store.
+    #[serde(default)]
+    tls_root_certificate: Option<String>,
+    pool: RawDatabasePoolConfig,
+}
+
+impl RawDatabaseConfig {
+    pub(super) fn validate(self) -> Validation<DatabaseConfig, ConfigFieldError> {
+        // Named apart from the binding below: `validate!` declares the binding
+        // before it evaluates the expression, so a shared name resolves to the
+        // empty binding rather than to this.
+        let validated_certificate = match self.tls_root_certificate {
+            Some(value) => database_root_certificate(value)
+                .at("database.tls_root_certificate")
+                .map(Some),
+            None => Validation::valid(None),
+        };
+
+        validate! {
+            url <- postgres_connection_string(self.url).at("database.url"),
+            mode <- database_tls(self.tls).at("database.tls"),
+            root_certificate <- validated_certificate,
+            pool <- self.pool.validate(),
+            => DatabaseConfig {
+                url,
+                tls: DatabaseTlsConfig { mode, root_certificate },
+                pool,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawDatabasePoolConfig {
+    api: usize,
+    mcp: usize,
+    worker: usize,
+    dequeuer: usize,
+    acquire_timeout_ms: u64,
+    idle_timeout_ms: u64,
+}
+
+impl RawDatabasePoolConfig {
+    pub(super) fn validate(self) -> Validation<DatabasePoolConfig, ConfigFieldError> {
+        validate! {
+            api <- nonzero_usize(self.api).at("database.pool.api"),
+            mcp <- nonzero_usize(self.mcp).at("database.pool.mcp"),
+            worker <- nonzero_usize(self.worker).at("database.pool.worker"),
+            dequeuer <- nonzero_usize(self.dequeuer).at("database.pool.dequeuer"),
+            acquire_timeout_ms <- nonzero_u64(self.acquire_timeout_ms)
+                .at("database.pool.acquire_timeout_ms"),
+            idle_timeout_ms <- nonzero_u64(self.idle_timeout_ms)
+                .at("database.pool.idle_timeout_ms"),
+            => DatabasePoolConfig {
+                api,
+                mcp,
+                worker,
+                dequeuer,
+                acquire_timeout_ms,
+                idle_timeout_ms,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -699,12 +765,12 @@ fn validate_worker_max_delivery_attempts(value: u16) -> Result<u16, String> {
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub(super) enum RawObjectStorageConfig {
     Filesystem {
-        root: String,
+        quarantine_root: String,
+        evidence_root: String,
     },
     Gcs {
-        bucket: String,
-        endpoint_override: Option<String>,
-        credentials_mode: String,
+        quarantine_bucket: String,
+        evidence_bucket: String,
         object_key_prefix: String,
     },
 }
@@ -712,32 +778,65 @@ pub(super) enum RawObjectStorageConfig {
 impl RawObjectStorageConfig {
     pub(super) fn validate(self) -> Validation<ObjectStorageConfig, ConfigFieldError> {
         match self {
-            Self::Filesystem { root } => string_value(root)
-                .at("object_storage.root")
-                .map(PathBuf::from)
-                .map(|root| ObjectStorageConfig::Filesystem { root }),
+            Self::Filesystem {
+                quarantine_root: raw_quarantine_root,
+                evidence_root: raw_evidence_root,
+            } => validate! {
+                quarantine_root <- string_value(raw_quarantine_root)
+                    .at("object_storage.quarantine_root"),
+                evidence_root <- string_value(raw_evidence_root)
+                    .at("object_storage.evidence_root"),
+                => FilesystemObjectStorageConfig {
+                    quarantine_root: PathBuf::from(quarantine_root),
+                    evidence_root: PathBuf::from(evidence_root),
+                },
+            }
+            .and_then(|config| {
+                if config.quarantine_root == config.evidence_root {
+                    return separate_targets_error(
+                        "object_storage.evidence_root",
+                        "object_storage.quarantine_root",
+                    );
+                }
+                Validation::valid(ObjectStorageConfig::Filesystem(config))
+            }),
             Self::Gcs {
-                bucket: raw_bucket,
-                endpoint_override: raw_endpoint_override,
-                credentials_mode: raw_credentials_mode,
+                quarantine_bucket: raw_quarantine_bucket,
+                evidence_bucket: raw_evidence_bucket,
                 object_key_prefix: raw_object_key_prefix,
             } => validate! {
-                bucket <- string_value(raw_bucket).at("object_storage.bucket"),
-                endpoint_override <- optional_url(raw_endpoint_override)
-                    .at("object_storage.endpoint_override"),
-                credentials_mode <- gcs_credentials_mode(raw_credentials_mode)
-                    .at("object_storage.credentials_mode"),
-                object_key_prefix <- string_value(raw_object_key_prefix)
+                quarantine_bucket <- string_value(raw_quarantine_bucket)
+                    .at("object_storage.quarantine_bucket"),
+                evidence_bucket <- string_value(raw_evidence_bucket)
+                    .at("object_storage.evidence_bucket"),
+                object_key_prefix <- validate_object_key_prefix(raw_object_key_prefix)
                     .at("object_storage.object_key_prefix"),
-                => ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-                    bucket,
-                    endpoint_override,
-                    credentials_mode,
+                => GcsObjectStorageConfig {
+                    quarantine_bucket,
+                    evidence_bucket,
                     object_key_prefix,
-                }),
-            },
+                },
+            }
+            .and_then(|config| {
+                if config.quarantine_bucket == config.evidence_bucket {
+                    return separate_targets_error(
+                        "object_storage.evidence_bucket",
+                        "object_storage.quarantine_bucket",
+                    );
+                }
+                Validation::valid(ObjectStorageConfig::Gcs(config))
+            }),
         }
     }
+}
+
+/// One target for both stores puts unscanned bytes where the evidence lives and
+/// exposes the evidence to the quarantine expiry rule. Refuse to start.
+fn separate_targets_error<T>(path: &str, other_path: &str) -> Validation<T, ConfigFieldError> {
+    Validation::invalid(ConfigFieldError::new(
+        path,
+        format!("must not name the same target as {other_path}"),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

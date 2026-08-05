@@ -5,16 +5,18 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies, CreateAppError},
     authentication::{auth0::Auth0TokenVerifier, UserAuthenticator},
-    config, object_storage, observability, persistence,
+    config,
+    object_storage::{self, DocumentObjectStores},
+    observability, persistence,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{}", e);
+        error!("{:#}", anyhow::Error::from(e));
         std::process::exit(1);
     }
 }
@@ -24,8 +26,11 @@ enum Error {
     #[error("postgres connection error")]
     DatabaseConnection(#[from] persistence::connection::Error),
 
-    #[error("database migration error")]
-    Migrations(#[from] refinery::Error),
+    #[error("database pool error")]
+    DatabasePool(#[from] deadpool_postgres::PoolError),
+
+    #[error("database schema revision error")]
+    SchemaRevision(#[from] persistence::SchemaRevisionError),
 
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
@@ -44,26 +49,27 @@ async fn run() -> Result<(), Error> {
     let config = match config::load_from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{:#}", anyhow::Error::from(error));
             std::process::exit(1);
         }
     };
 
     if let Err(error) = observability::init_tracing(&config.observability) {
-        eprintln!("{error}");
+        eprintln!("{:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
-
-    debug!("running migrations");
-    persistence::migrate(&mut client).await?;
-    debug!("done running migrations");
-
-    // TODO: move the Postgres pool size into configuration.
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        &config.database.tls,
+        persistence::PoolBounds::from_config(&config.database.pool, persistence::PoolRuntime::Api),
+    )
+    .await?;
+    let client = pool.get().await?;
+    persistence::check_schema_revision(&client).await?;
+    drop(client);
     let postgres = Arc::new(persistence::Postgres::new(pool));
-    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let object_stores = DocumentObjectStores::from_config(&config.object_storage).await?;
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
@@ -78,7 +84,8 @@ async fn run() -> Result<(), Error> {
     let deps = AppDependencies {
         config,
         postgres,
-        object_store,
+        quarantine_store: object_stores.quarantine,
+        evidence_store: object_stores.evidence,
         metrics,
         user_authenticator,
         auditor_identity_provider: None,

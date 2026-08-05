@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct ControlReads<'a, E> {
     executor: &'a E,
@@ -34,7 +34,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
             .executor
             .query(
                 CONTROL_DETAIL_SQL,
-                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?;
         Ok(controls_from_joined_rows(rows)?.into_iter().next())
@@ -43,7 +46,7 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
     pub async fn list(&self) -> Result<Vec<ControlDetail>, Error> {
         let rows = self
             .executor
-            .query(CONTROL_LIST_SQL, &[&Uuid::from(self.workspace_id)])
+            .query(CONTROL_LIST_SQL, &[param(&Uuid::from(self.workspace_id))])
             .await?;
         controls_from_joined_rows(rows)
     }
@@ -56,7 +59,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
             .executor
             .query(
                 EVIDENCE_CONTROL_MAPPINGS_SQL,
-                &[&Uuid::from(evidence_id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(evidence_id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?;
         if rows.is_empty() {
@@ -76,7 +82,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
             .executor
             .query_opt(
                 "SELECT 1 FROM controls WHERE id = $1 AND workspace_id = $2",
-                &[&Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(control_id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?
             .is_none()
@@ -86,7 +95,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
         self.executor
             .query(
                 CONTROL_EVIDENCE_MAPPINGS_SQL,
-                &[&Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(control_id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?
             .into_iter()
@@ -118,7 +130,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
             .executor
             .query_opt(
                 "SELECT 1 FROM controls WHERE id = $1 AND workspace_id = $2",
-                &[&Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(control_id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?
             .is_none()
@@ -128,7 +143,10 @@ impl<E: ReadExecutor> ControlReads<'_, E> {
         self.executor
             .query(
                 CONTROL_POLICY_MAPPINGS_SQL,
-                &[&Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+                &[
+                    param(&Uuid::from(control_id)),
+                    param(&Uuid::from(self.workspace_id)),
+                ],
             )
             .await?
             .into_iter()
@@ -158,7 +176,7 @@ impl ControlReads<'_, TransactionalReadExecutor<'_>> {
     ) -> Result<Option<EvidenceControlMapping>, Error> {
         self.executor.query_opt(
             "SELECT e.id AS evidence_id, c.id AS control_id, c.code AS control_code, c.title AS control_title, c.description AS control_description, m.rationale, m.created_at FROM evidence_control_mappings m JOIN evidence e ON e.id = m.evidence_id AND e.workspace_id = $3 JOIN controls c ON c.id = m.control_id AND c.workspace_id = $3 WHERE m.evidence_id = $1 AND m.control_id = $2",
-            &[&Uuid::from(evidence_id), &Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+            &[param(&Uuid::from(evidence_id)), param(&Uuid::from(control_id)), param(&Uuid::from(self.workspace_id))],
         ).await?.map(evidence_control_mapping_from_row).transpose()
     }
 
@@ -170,7 +188,7 @@ impl ControlReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query(
                 "SELECT id FROM controls WHERE workspace_id = $1 AND id = ANY($2) FOR KEY SHARE",
-                &[&Uuid::from(self.workspace_id), &requested],
+                &[param(&Uuid::from(self.workspace_id)), param(&requested)],
             )
             .await?
             .into_iter()

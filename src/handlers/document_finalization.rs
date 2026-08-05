@@ -11,42 +11,34 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    object_storage::{ObjectKey, ObjectStore},
+    object_storage::{EvidenceObjectStore, ObjectKey, QuarantineObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{Postgres, TypedDocumentUploadWork},
     worker::{RetryableWorkerError, WorkerMessage},
 };
 
-pub struct DocumentFinalizationHandler<S> {
+#[derive(Clone)]
+pub struct DocumentFinalizationHandler {
     repository: Arc<Postgres>,
-    object_store: Arc<S>,
+    quarantine_store: QuarantineObjectStore,
+    evidence_store: EvidenceObjectStore,
     command_handler: FinalizeDocumentCommandHandler,
 }
 
-impl<S> Clone for DocumentFinalizationHandler<S> {
-    fn clone(&self) -> Self {
-        Self {
-            repository: self.repository.clone(),
-            object_store: self.object_store.clone(),
-            command_handler: self.command_handler.clone(),
-        }
-    }
-}
-
-impl<S> DocumentFinalizationHandler<S> {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<S>) -> Self {
+impl DocumentFinalizationHandler {
+    pub fn new(
+        repository: Arc<Postgres>,
+        quarantine_store: QuarantineObjectStore,
+        evidence_store: EvidenceObjectStore,
+    ) -> Self {
         Self {
             command_handler: FinalizeDocumentCommandHandler::new(repository.clone()),
             repository,
-            object_store,
+            quarantine_store,
+            evidence_store,
         }
     }
-}
 
-impl<S> DocumentFinalizationHandler<S>
-where
-    S: ObjectStore + Send + Sync,
-{
     pub async fn handle_finalization_requested(
         &self,
         message: WorkerMessage,
@@ -79,10 +71,29 @@ where
         tracing::debug!("finalizing document");
 
         let final_key = final_document_object_key(&work).map_err(retryable)?;
-        self.object_store
-            .copy_object(&payload.object_key, &final_key)
+        let copied = self
+            .quarantine_store
+            .promote(&self.evidence_store, &payload.object_key, &final_key)
             .await
             .map_err(retryable)?;
+
+        if copied.key != final_key
+            || copied.content_type != work.content_type
+            || copied.content_length != work.content_length as u64
+            || copied.sha256 != work.checksum_sha256
+        {
+            self.evidence_store
+                .delete_object(&final_key)
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to delete document object after finalization integrity mismatch"
+                    );
+                })
+                .ok();
+            return Err(retryable(StorageError::Integrity));
+        }
 
         tracing::debug!("object copied");
 
@@ -103,7 +114,7 @@ where
 
         if outcome == DocumentCommandOutcome::Applied {
             emit_worker_finalization_audit(&work, message.request_id);
-            self.object_store
+            self.quarantine_store
                 .delete_object(&payload.object_key)
                 .await
                 .inspect_err(|error| {
@@ -240,16 +251,257 @@ fn retryable(error: impl ToString) -> RetryableWorkerError {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{DocumentUploadStatus, WorkspaceId};
+    use bytes::Bytes;
+    use futures_util::stream;
+
+    use crate::{
+        config::{FilesystemObjectStorageConfig, ObjectStorageConfig},
+        domain::{DocumentUploadStatus, WorkspaceId},
+        object_storage::{DocumentObjectStores, PutObjectRequest, StorageError},
+        persistence::{param, test_support},
+    };
 
     use super::*;
+
+    #[tokio::test]
+    async fn mismatched_copied_metadata_leaves_the_document_finalizing() {
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
+        let workspace = test_support::workspace(&postgres, "Finalization owner").await;
+        let policy_id =
+            test_support::policy(&postgres, workspace.workspace_id, "Access policy").await;
+        let document_id = DocumentId::from(Uuid::new_v4());
+        let identity = DocumentIdentity::Policy {
+            policy_id,
+            document_id,
+        };
+        let quarantine_key = staged_key(workspace.workspace_id, policy_id);
+        let stores = document_stores("integrity").await;
+        stores
+            .quarantine
+            .put_object(PutObjectRequest {
+                key: quarantine_key.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: stream::once(async { Ok(Bytes::from_static(b"wrong")) }),
+            })
+            .await
+            .unwrap();
+
+        insert_finalizing_policy_document(
+            &postgres,
+            &workspace,
+            policy_id,
+            document_id,
+            &quarantine_key,
+            "f1b2f12c3f2c85eab7c8b2f87a735d66e4ebdc7a8e03c8bd421bd66c835033cd",
+        )
+        .await;
+        let message = finalization_message(policy_id, document_id, &quarantine_key);
+
+        let result = DocumentFinalizationHandler::new(
+            postgres.clone(),
+            stores.quarantine.clone(),
+            stores.evidence.clone(),
+        )
+        .handle_finalization_requested(message)
+        .await;
+
+        assert!(result.is_err(), "metadata mismatch remains retryable");
+        assert!(postgres
+            .reads()
+            .await
+            .unwrap()
+            .documents()
+            .load_finalizing_upload_work(identity, quarantine_key.as_str())
+            .await
+            .unwrap()
+            .is_some());
+        assert!(matches!(
+            stores
+                .evidence
+                .head_object(&final_key(workspace.workspace_id, policy_id, document_id))
+                .await,
+            Err(StorageError::NotFound)
+        ));
+        stores
+            .quarantine
+            .head_object(&quarantine_key)
+            .await
+            .expect("a failed finalization leaves the source for the retry");
+    }
+
+    /// The bucket boundary is invisible to an HTTP or MCP client, so it cannot
+    /// be proved in `tests/integration-v2/`. This is the lowest boundary that
+    /// observes all four cells: the document arrives in evidence and leaves
+    /// quarantine, and neither key appears in the other store.
+    #[tokio::test]
+    async fn finalization_moves_the_object_from_quarantine_into_evidence() {
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
+        let workspace = test_support::workspace(&postgres, "Finalization owner").await;
+        let policy_id =
+            test_support::policy(&postgres, workspace.workspace_id, "Access policy").await;
+        let document_id = DocumentId::from(Uuid::new_v4());
+        let identity = DocumentIdentity::Policy {
+            policy_id,
+            document_id,
+        };
+        let quarantine_key = staged_key(workspace.workspace_id, policy_id);
+        let final_key = final_key(workspace.workspace_id, policy_id, document_id);
+        let stores = document_stores("move").await;
+        let staged = stores
+            .quarantine
+            .put_object(PutObjectRequest {
+                key: quarantine_key.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: stream::once(async { Ok(Bytes::from_static(b"manual")) }),
+            })
+            .await
+            .unwrap();
+
+        insert_finalizing_policy_document(
+            &postgres,
+            &workspace,
+            policy_id,
+            document_id,
+            &quarantine_key,
+            &staged.sha256,
+        )
+        .await;
+
+        DocumentFinalizationHandler::new(
+            postgres.clone(),
+            stores.quarantine.clone(),
+            stores.evidence.clone(),
+        )
+        .handle_finalization_requested(finalization_message(
+            policy_id,
+            document_id,
+            &quarantine_key,
+        ))
+        .await
+        .expect("finalization succeeds");
+
+        let promoted = stores
+            .evidence
+            .head_object(&final_key)
+            .await
+            .expect("the document arrives in the evidence store");
+        assert_eq!(promoted.sha256, staged.sha256);
+        assert_eq!(promoted.content_length, staged.content_length);
+        assert!(matches!(
+            stores.quarantine.head_object(&quarantine_key).await,
+            Err(StorageError::NotFound)
+        ));
+        assert!(
+            postgres
+                .reads()
+                .await
+                .unwrap()
+                .documents()
+                .load_finalizing_upload_work(identity, quarantine_key.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "the document leaves the finalizing state"
+        );
+    }
+
+    async fn insert_finalizing_policy_document(
+        postgres: &Arc<Postgres>,
+        workspace: &test_support::TestWorkspace,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+        object_key: &ObjectKey,
+        checksum_sha256: &str,
+    ) {
+        let client = postgres.get().await.unwrap();
+        client
+            .execute_typed(
+                r#"
+INSERT INTO documents (
+    id, workspace_id, owner_type, owner_id, created_by_user_id, filename,
+    content_type, content_length, object_key, checksum_sha256, checksum_crc32c,
+    upload_status
+)
+VALUES ($1, $2, 'policy', $3, $4, 'manual.txt', 'text/plain', 6, $5, $6, 'ignored',
+        'finalizing')
+"#,
+                &[
+                    param(&Uuid::from(document_id)),
+                    param(&Uuid::from(workspace.workspace_id)),
+                    param(&Uuid::from(policy_id)),
+                    param(&Uuid::from(workspace.user_id)),
+                    param(&object_key.as_str()),
+                    param(&checksum_sha256),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    fn finalization_message(
+        policy_id: PolicyId,
+        document_id: DocumentId,
+        object_key: &ObjectKey,
+    ) -> WorkerMessage {
+        WorkerMessage {
+            message_id: Uuid::new_v4().to_string(),
+            event_type: "document.finalization_requested".to_owned(),
+            aggregate_type: "policy_document".to_owned(),
+            aggregate_id: Uuid::from(document_id).to_string(),
+            request_id: None,
+            payload: serde_json::json!({
+                "policy_id": Uuid::from(policy_id).to_string(),
+                "object_key": object_key.as_str(),
+            }),
+            delivery_attempt: Some(1),
+        }
+    }
+
+    async fn document_stores(name: &str) -> DocumentObjectStores {
+        let root =
+            std::env::temp_dir().join(format!("proofplane-finalization-{name}-{}", Uuid::new_v4()));
+        DocumentObjectStores::from_config(&ObjectStorageConfig::Filesystem(
+            FilesystemObjectStorageConfig {
+                quarantine_root: root.join("quarantine"),
+                evidence_root: root.join("evidence"),
+            },
+        ))
+        .await
+        .unwrap()
+    }
+
+    /// Staging names the upload, not the document, so a staged key and a final
+    /// key are never the same string.
+    fn staged_key(workspace_id: WorkspaceId, policy_id: PolicyId) -> ObjectKey {
+        ObjectKey::new(
+            workspace_id,
+            format!("policies/{policy_id}/documents/{}", Uuid::new_v4()),
+            "manual.txt",
+        )
+        .unwrap()
+    }
+
+    fn final_key(
+        workspace_id: WorkspaceId,
+        policy_id: PolicyId,
+        document_id: DocumentId,
+    ) -> ObjectKey {
+        ObjectKey::new(
+            workspace_id,
+            format!("policies/{policy_id}/documents/{document_id}"),
+            "manual.txt",
+        )
+        .unwrap()
+    }
 
     #[test]
     fn finalization_payload_parses_valid_message_and_rejects_invalid_message() {
         let document_id = Uuid::new_v4();
         let submission_id = Uuid::new_v4();
         let object_key = format!(
-            "workspaces/{}/quarantine/evidence-submissions/{submission_id}/documents/upload/manual.txt",
+            "workspaces/{}/evidence-submissions/{submission_id}/documents/upload/manual.txt",
             Uuid::new_v4()
         );
         let mut message = WorkerMessage {
