@@ -89,9 +89,10 @@ Split a ticket when it grows beyond roughly 6-8 tasks or a few days of work.
 
 Implementation status is the issue's open or closed state:
 
-- Open: not yet delivered. Unstarted and in-progress both look like this, and
-  the checkbox lists show which.
-- Closed as completed: all acceptance criteria are met.
+- Open: not yet delivered. An open ticket whose work has started also carries
+  the `doing` label, and its checkbox lists show how far it has got.
+- Closed as completed: all acceptance criteria are met. Remove `doing` when
+  closing.
 
 Triage is a separate axis carried by labels: `needs-triage`, `needs-info`,
 `ready-for-agent`, `ready-for-human`, and `wontfix`. Changing a triage label

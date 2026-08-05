@@ -41,8 +41,11 @@ guard. Client construction follows the SDK convention:
 - emulator variable absent: use application default credentials and the
   configured project.
 
-Topic and push-subscription provisioning remains idempotent. Production
-provisioning errors fail startup with actionable context.
+The application never provisions or reconciles topics, subscriptions, retry
+policies, dead-letter resources, or delivery IAM. Terraform is the exclusive
+owner of those resources in production, and local test setup remains the owner
+when the emulator is used. The dequeuer receives publisher-only permission for
+the configured application topics.
 
 Push endpoint authentication is deployment-owned for the MVP. The worker must
 document how Cloud Run/IAM or an equivalent ingress policy restricts the
@@ -78,6 +81,9 @@ verifies the configured Pub/Sub mode without a separate deployment smoke test.
 
 ## Revisions
 
+- 2026-08-05: Moved production topic, subscription, delivery, and IAM ownership
+  from dequeuer startup to Terraform. The runtime now publishes only; local
+  emulator test setup may still provision disposable resources.
 - 2026-06-11: Added the production Pub/Sub gap discovered while reconciling
   the original runtime plan with current code.
 - 2026-06-11: Removed the GCS emulator path. Local tests use filesystem storage;

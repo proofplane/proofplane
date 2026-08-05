@@ -4,3 +4,19 @@ target/
 
 .claude/settings.local.json
 .codex/hooks.json
+
+# Terraform local working data and operator inputs. Provider lock files stay
+# committed so local operators resolve the reviewed provider builds.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+/infra/gcp/bootstrap/backend.tf

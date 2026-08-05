@@ -92,8 +92,10 @@ Initial families:
 - MCP tool outcomes/duration;
 - audit-log emission outcomes.
 
-Metrics are per process. The MVP does not build a central collector; deployment
-documentation defines scrape endpoints.
+Metrics are per process. The MVP does not build a central collector. Initial
+production deployment relies on Cloud Run, Pub/Sub, job, and log-derived
+signals; application scrape endpoints remain available for local or manual use
+but are not centrally scraped at launch.
 
 ## Structured Audit Logs
 
@@ -175,6 +177,9 @@ deterministic alone and in the full `integration-v2` target.
 
 ## Revisions
 
+- 2026-08-05: Deferred central production scraping and continuous uptime probes
+  for the scale-to-zero launch. Initial alerts use passive platform and
+  log-derived signals while application metrics remain available locally.
 - 2026-08-01: Reconciled the metric prefix with the shipped `proofplane_`
   application families and added the agent-native upload lifecycle events.
 - 2026-06-11: Reconciled the plan with existing concrete worker rollback

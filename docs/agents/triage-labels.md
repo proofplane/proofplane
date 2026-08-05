@@ -22,3 +22,13 @@ carry no triage label; triage applies to the ticket issues beneath them.
 ```bash
 gh issue edit 98 --add-label ready-for-agent --remove-label needs-triage
 ```
+
+## The `doing` label
+
+`doing` is not a triage role. It is an implementation-progress marker meaning
+work on an open ticket has started, and its acceptance-criteria and task
+checkboxes show how far it has got. Remove it when the issue closes.
+
+It exists because open/closed alone cannot distinguish an untouched ticket from
+one that is half-built, and that difference is only otherwise visible by opening
+each issue.
