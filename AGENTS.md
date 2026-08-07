@@ -5,7 +5,7 @@
 Proofplane is a single Rust crate. Application code lives in `src/`, organized
 by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
 persistence in `repository/` and `store/`, types in `domain/`, and external
-adapters in `authentication`, `object_storage/`, `pubsub/`, and `scanner/`.
+adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
 and `seed`).
 
@@ -73,9 +73,9 @@ body. **Read `tests/integration-v2/README.md` before adding to it.**
 
 Recent commits use short, imperative summaries such as `Update outdated docs`.
 Keep commits focused. Pull requests should explain behavior changes, identify
-migrations or configuration effects, link the relevant issue or epic ticket, and
-list validation commands run. Update `docs/` and fixtures when contracts or
-setup steps change.
+migrations or configuration effects, link the relevant GitHub issue, and list
+validation commands run. Update `docs/` and fixtures when contracts or setup
+steps change.
 
 ## Configuration & Security
 
@@ -87,13 +87,14 @@ destructive: it removes Docker volumes and `.local/storage`.
 
 ### Issue tracker
 
-Work is tracked in local Markdown tickets under `docs/epics/<epic>/tickets/`.
-See `docs/agents/issue-tracker.md`.
+Work is tracked as GitHub issues in `proofplane/proofplane`: one `Epic: <Name>`
+issue per effort, with its tickets attached as sub-issues. Epic specs stay in the
+repository under `docs/epics/<epic>/spec.md`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Tickets retain their `Todo`/`Done` lifecycle status and use a separate five-role
-triage field. See `docs/agents/triage-labels.md`.
+Implementation status is the issue's open/closed state. Triage is a separate
+five-role GitHub label. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
