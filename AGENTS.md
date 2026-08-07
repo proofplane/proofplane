@@ -83,6 +83,13 @@ Do not commit credentials or production configuration. Override the default
 with `PROOFPLANE_CONFIG=path/to/config.yaml`. Treat `make reset-local` as
 destructive: it removes Docker volumes and `.local/storage`.
 
+Treat `make docker-clean` as destructive too. It removes leftover Testcontainers
+containers, then prunes dangling volumes machine-wide, which is not limited to
+Proofplane. The local dev database survives while the compose stack is running or
+merely stopped, but `make down` removes those containers and leaves
+`proofplane_proofplane-postgres-data` dangling, so running `make docker-clean`
+after `make down` deletes it.
+
 ## Agent skills
 
 ### Issue tracker

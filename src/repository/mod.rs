@@ -23,6 +23,8 @@ mod outbox;
 mod policies;
 mod policy_document_upload_grants;
 mod snapshot;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod users;
 mod workspace_memberships;
 mod workspaces;

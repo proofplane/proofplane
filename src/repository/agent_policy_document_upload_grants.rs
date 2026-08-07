@@ -227,11 +227,135 @@ impl TryFrom<&AgentPolicyDocumentUploadGrant> for GrantRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{GET_FOR_UPDATE_SQL, GET_SQL};
+    use chrono::{Duration, TimeZone};
+
+    use crate::{
+        domain::PolicyId,
+        repository::test_support::{self, TestWorkspace},
+    };
+
+    use super::*;
+
+    /// Deterministic so that two constructions compare equal: the aggregate is
+    /// `Eq` but not `Clone`, and the collision test needs an untouched copy of
+    /// what it saved.
+    fn grant(
+        workspace: &TestWorkspace,
+        policy_id: PolicyId,
+        id: AgentPolicyDocumentUploadGrantId,
+    ) -> AgentPolicyDocumentUploadGrant {
+        let issued_at = Utc.with_ymd_and_hms(2026, 7, 31, 12, 0, 0).unwrap();
+
+        AgentPolicyDocumentUploadGrant::issue(
+            id,
+            workspace.workspace_id,
+            policy_id,
+            AgentPolicyDocumentUploadDeclaration::new(
+                "policy.pdf".to_owned(),
+                "application/pdf".to_owned(),
+                3,
+                Some(hex::encode(Sha256Digest::digest(b"abc").as_bytes())),
+                100,
+            )
+            .into_result()
+            .expect("declaration is valid"),
+            workspace.user_id,
+            workspace.agent_connection_id,
+            issued_at,
+            issued_at + Duration::minutes(5),
+        )
+        .expect("policy machine grant issues")
+    }
+
+    async fn save(
+        postgres: &Postgres,
+        workspace: &TestWorkspace,
+        grant: AgentPolicyDocumentUploadGrant,
+    ) -> Result<(), Error> {
+        postgres
+            .in_agent_connection_workspace_context(
+                workspace.workspace_id,
+                workspace.user_id,
+                workspace.agent_connection_id,
+                async move |context| {
+                    let repository = context.agent_policy_document_upload_grants();
+                    repository.save(&grant).await
+                },
+            )
+            .await
+    }
 
     #[test]
     fn verification_and_transactional_reads_have_distinct_locking_sql() {
         assert!(!GET_SQL.contains("FOR UPDATE"));
         assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+
+    #[tokio::test]
+    async fn reads_are_scoped_to_the_owning_workspace_and_round_trip_the_full_snapshot() {
+        let postgres = test_support::database().await;
+        let owner = test_support::workspace(&postgres, "Owner").await;
+        let other = test_support::workspace(&postgres, "Other").await;
+        let policy_id = test_support::policy(&postgres, owner.workspace_id, "Access control").await;
+        let grant_id = AgentPolicyDocumentUploadGrantId::from(Uuid::new_v4());
+        let grant = grant(&owner, policy_id, grant_id);
+        let owner_workspace_id = owner.workspace_id;
+
+        let round_tripped = postgres
+            .in_agent_connection_workspace_context(
+                owner.workspace_id,
+                owner.user_id,
+                owner.agent_connection_id,
+                async move |context| {
+                    let repository = context.agent_policy_document_upload_grants();
+                    repository.save(&grant).await?;
+                    let reloaded = repository.get(grant_id, owner_workspace_id).await?;
+
+                    Ok(reloaded == Some(grant))
+                },
+            )
+            .await
+            .expect("full-snapshot save completes");
+        assert!(round_tripped);
+
+        assert!(postgres
+            .agent_policy_document_upload_grants()
+            .get(grant_id, other.workspace_id)
+            .await
+            .expect("tenant-scoped lookup succeeds")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn save_does_not_overwrite_a_same_id_grant_in_another_workspace() {
+        let postgres = test_support::database().await;
+        let owner = test_support::workspace(&postgres, "Owner").await;
+        let intruder = test_support::workspace(&postgres, "Intruder").await;
+        let owner_policy =
+            test_support::policy(&postgres, owner.workspace_id, "Access control").await;
+        let intruder_policy =
+            test_support::policy(&postgres, intruder.workspace_id, "Access control").await;
+        let grant_id = AgentPolicyDocumentUploadGrantId::from(Uuid::new_v4());
+
+        save(&postgres, &owner, grant(&owner, owner_policy, grant_id))
+            .await
+            .expect("owner grant saves");
+
+        let collision = save(
+            &postgres,
+            &intruder,
+            grant(&intruder, intruder_policy, grant_id),
+        )
+        .await;
+        assert!(matches!(collision, Err(Error::InvariantViolation(_))));
+
+        assert_eq!(
+            postgres
+                .agent_policy_document_upload_grants()
+                .get(grant_id, owner.workspace_id)
+                .await
+                .expect("owner grant loads"),
+            Some(grant(&owner, owner_policy, grant_id))
+        );
     }
 }

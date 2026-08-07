@@ -9,6 +9,9 @@ event-sourced reconstruction.
 Full rationale, schema, and decisions live in [spec.md](./spec.md), the source
 of technical depth. Tickets below are lean handoff units that link into it.
 
+[rebase-onto-main.md](./rebase-onto-main.md) records how this branch was moved onto
+the rewritten test suite on main, and what remains outstanding.
+
 ## Tickets
 
 | Ticket | Status | Notes |

@@ -54,6 +54,9 @@ use uuid::Uuid;
 
 const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
 const POSTGRES_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Must track the Postgres image in `docker-compose.yml`, so this suite covers
+/// the same major version the application runs against.
+const POSTGRES_IMAGE_TAG: &str = "17-alpine";
 const DOWNLOAD_AUDIENCE: &str = "proofplane-document-download";
 const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
 
@@ -90,6 +93,7 @@ impl Harness {
         auth0::start();
 
         let container = postgres::Postgres::default()
+            .with_tag(POSTGRES_IMAGE_TAG)
             .with_startup_timeout(POSTGRES_STARTUP_TIMEOUT)
             .start()
             .await

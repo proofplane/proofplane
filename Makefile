@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local migrate seed api worker dequeuer mcp
+.PHONY: help fmt fmt-check lint test check build up down health reset-local docker-clean migrate seed api worker dequeuer mcp
 
 PROOFPLANE_CONFIG ?= .local/config.yaml
 
@@ -15,6 +15,7 @@ help:
 		'  make down              Stop local Docker dependencies' \
 		'  make health            Check local dependency readiness' \
 		'  make reset-local       Destroy and recreate local dependency state' \
+		'  make docker-clean      Remove leftover test containers and dangling volumes' \
 		'  make migrate           Run migrations' \
 		'  make seed              Run seed binary' \
 		'  make api               Run API binary' \
@@ -53,6 +54,19 @@ reset-local:
 	rm -rf .local/storage
 	mkdir -p .local/storage
 	docker compose up -d
+
+# Testcontainers harnesses hold their containers for the life of the test
+# process, so `ContainerAsync`'s remove-on-drop never runs and every `cargo test`
+# leaves containers behind. This clears them on demand.
+docker-clean:
+	@ids="$$(docker ps -aq --filter label=org.testcontainers.managed-by=testcontainers)"; \
+	if [ -n "$$ids" ]; then \
+		docker rm --force --volumes $$ids; \
+	else \
+		echo 'No leftover test containers.'; \
+	fi
+	@echo 'Pruning dangling volumes (machine-wide, not only Proofplane).'
+	@docker volume prune --force
 
 migrate:
 	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed

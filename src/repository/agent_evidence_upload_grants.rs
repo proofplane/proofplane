@@ -232,11 +232,173 @@ impl TryFrom<&AgentEvidenceUploadGrant> for GrantRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{GET_FOR_UPDATE_SQL, GET_SQL};
+    use chrono::{Duration, TimeZone};
+
+    use crate::{
+        domain::{AgentEvidenceUploadGrantId, EvidenceId, EvidenceSubmissionId, Sha256Digest},
+        repository::test_support::{self, TestWorkspace},
+    };
+
+    use super::*;
+
+    /// Deterministic so that two constructions compare equal: the aggregate is
+    /// `Eq` but not `Clone`, and the collision test needs an untouched copy of
+    /// what it saved.
+    fn grant(
+        workspace: &TestWorkspace,
+        evidence_id: EvidenceId,
+        id: AgentEvidenceUploadGrantId,
+        submission_id: EvidenceSubmissionId,
+    ) -> AgentEvidenceUploadGrant {
+        let issued_at = Utc.with_ymd_and_hms(2026, 7, 31, 12, 0, 0).unwrap();
+
+        AgentEvidenceUploadGrant::issue(
+            id,
+            submission_id,
+            workspace.workspace_id,
+            evidence_id,
+            CoverageWindow::new(issued_at, issued_at + Duration::days(1))
+                .expect("coverage window is valid"),
+            AgentEvidenceUploadDeclaration::new(
+                "evidence.pdf".to_owned(),
+                "application/pdf".to_owned(),
+                3,
+                Some(hex::encode(Sha256Digest::digest(b"abc").as_bytes())),
+                100,
+            )
+            .into_result()
+            .expect("declaration is valid"),
+            workspace.user_id,
+            workspace.agent_connection_id,
+            issued_at,
+            issued_at + Duration::minutes(5),
+        )
+        .expect("machine grant issues")
+    }
+
+    async fn save(
+        postgres: &Postgres,
+        workspace: &TestWorkspace,
+        grant: AgentEvidenceUploadGrant,
+    ) -> Result<(), Error> {
+        postgres
+            .in_agent_connection_workspace_context(
+                workspace.workspace_id,
+                workspace.user_id,
+                workspace.agent_connection_id,
+                async move |context| {
+                    let repository = context.agent_evidence_upload_grants();
+                    repository.save(&grant).await
+                },
+            )
+            .await
+    }
 
     #[test]
     fn verification_and_transactional_reads_have_distinct_locking_sql() {
         assert!(!GET_SQL.contains("FOR UPDATE"));
         assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+
+    #[tokio::test]
+    async fn reads_are_scoped_to_the_owning_workspace_and_round_trip_the_full_snapshot() {
+        let postgres = test_support::database().await;
+        let owner = test_support::workspace(&postgres, "Owner").await;
+        let other = test_support::workspace(&postgres, "Other").await;
+        let evidence_id =
+            test_support::evidence(&postgres, owner.workspace_id, "Access review").await;
+        let grant_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
+        let grant = grant(
+            &owner,
+            evidence_id,
+            grant_id,
+            EvidenceSubmissionId::from(Uuid::new_v4()),
+        );
+        let owner_workspace_id = owner.workspace_id;
+
+        let round_tripped = postgres
+            .in_agent_connection_workspace_context(
+                owner.workspace_id,
+                owner.user_id,
+                owner.agent_connection_id,
+                async move |context| {
+                    let repository = context.agent_evidence_upload_grants();
+                    repository.save(&grant).await?;
+                    let reloaded = repository.get(grant_id, owner_workspace_id).await?;
+
+                    Ok(reloaded == Some(grant))
+                },
+            )
+            .await
+            .expect("full-snapshot save completes");
+        assert!(round_tripped);
+
+        assert!(postgres
+            .agent_evidence_upload_grants()
+            .get(grant_id, other.workspace_id)
+            .await
+            .expect("tenant-scoped lookup succeeds")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn save_does_not_overwrite_a_same_id_grant_in_another_workspace() {
+        let postgres = test_support::database().await;
+        let owner = test_support::workspace(&postgres, "Owner").await;
+        let intruder = test_support::workspace(&postgres, "Intruder").await;
+        let owner_evidence =
+            test_support::evidence(&postgres, owner.workspace_id, "Access review").await;
+        let intruder_evidence =
+            test_support::evidence(&postgres, intruder.workspace_id, "Access review").await;
+        let grant_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
+        let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
+
+        save(
+            &postgres,
+            &owner,
+            grant(&owner, owner_evidence, grant_id, submission_id),
+        )
+        .await
+        .expect("owner grant saves");
+
+        let collision = save(
+            &postgres,
+            &intruder,
+            grant(
+                &intruder,
+                intruder_evidence,
+                grant_id,
+                EvidenceSubmissionId::from(Uuid::new_v4()),
+            ),
+        )
+        .await;
+        assert!(matches!(collision, Err(Error::InvariantViolation(_))));
+
+        assert_eq!(
+            postgres
+                .agent_evidence_upload_grants()
+                .get(grant_id, owner.workspace_id)
+                .await
+                .expect("owner grant loads"),
+            Some(grant(&owner, owner_evidence, grant_id, submission_id))
+        );
+    }
+
+    #[tokio::test]
+    async fn save_requires_a_workspace_transaction() {
+        let postgres = test_support::database().await;
+        let owner = test_support::workspace(&postgres, "Owner").await;
+        let evidence_id =
+            test_support::evidence(&postgres, owner.workspace_id, "Access review").await;
+        let grant = grant(
+            &owner,
+            evidence_id,
+            AgentEvidenceUploadGrantId::from(Uuid::new_v4()),
+            EvidenceSubmissionId::from(Uuid::new_v4()),
+        );
+
+        let result = postgres.agent_evidence_upload_grants().save(&grant).await;
+
+        assert!(matches!(result, Err(Error::InvariantViolation(_))));
     }
 }

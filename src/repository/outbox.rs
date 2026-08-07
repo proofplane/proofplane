@@ -283,3 +283,133 @@ fn parse_message_kind(value: String) -> Result<IntegrationMessageKind, Error> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+
+    use crate::{
+        domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId},
+        messaging::LEGACY_DOCUMENT_SCAN_REQUESTED,
+        pubsub::MESSAGE_BUS_TOPIC,
+        repository::test_support,
+    };
+
+    use super::*;
+
+    fn scan_message(correlation_id: Option<Uuid>, causation_id: Option<Uuid>) -> NewOutboxMessage {
+        NewOutboxMessage::new(
+            TopicName::new(MESSAGE_BUS_TOPIC),
+            IntegrationMessage::scan_document(
+                DocumentIdentity::Evidence {
+                    evidence_submission_id: EvidenceSubmissionId::from(Uuid::new_v4()),
+                    document_id: DocumentId::from(Uuid::new_v4()),
+                },
+                "quarantine/document-1",
+                correlation_id,
+                causation_id,
+            ),
+        )
+    }
+
+    async fn append(postgres: &Postgres, message: NewOutboxMessage) -> OutboxMessage {
+        postgres
+            .in_transaction(async move |context| context.append_outbox_message(&message).await)
+            .await
+            .expect("outbox append commits")
+    }
+
+    #[tokio::test]
+    async fn append_persists_the_typed_envelope_and_mirrors_it_onto_legacy_columns() {
+        let postgres = test_support::database().await;
+        let correlation_id = Uuid::new_v4();
+        let causation_id = Uuid::new_v4();
+
+        let appended = append(
+            &postgres,
+            scan_message(Some(correlation_id), Some(causation_id)),
+        )
+        .await;
+
+        assert_eq!(appended.message_kind, IntegrationMessageKind::Command);
+        assert_eq!(appended.message_type, "ScanDocument");
+        assert_eq!(appended.message_version, 1);
+        assert_ne!(appended.message_id, Uuid::nil());
+        assert_eq!(appended.correlation_id, Some(correlation_id));
+        assert_eq!(appended.causation_id, Some(causation_id));
+
+        // The pre-CQRS columns still carry the same envelope so that consumers
+        // reading them keep working through the cutover.
+        assert_eq!(appended.event_type, LEGACY_DOCUMENT_SCAN_REQUESTED);
+        assert_eq!(appended.aggregate_type, "evidence_document");
+        assert_eq!(appended.aggregate_id, appended.subject);
+        assert_eq!(appended.request_id, Some(correlation_id));
+    }
+
+    #[tokio::test]
+    async fn append_rolls_back_with_the_domain_write() {
+        let postgres = test_support::database().await;
+        let message = scan_message(None, None);
+
+        let result = postgres
+            .in_transaction(async move |context| {
+                context.append_outbox_message(&message).await?;
+
+                Err::<(), Error>(Error::InvariantViolation("injected domain write failure"))
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(postgres
+            .list_due_outbox_messages(Utc::now(), 10)
+            .await
+            .expect("due outbox messages load")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn due_messages_are_listed_deleted_and_rescheduled_after_failure() {
+        let postgres = test_support::database().await;
+        let first = append(&postgres, scan_message(None, None)).await;
+        let second = append(&postgres, scan_message(None, None)).await;
+
+        let due = postgres
+            .list_due_outbox_messages(Utc::now(), 10)
+            .await
+            .expect("due outbox messages load");
+        assert_eq!(
+            due.iter().map(|message| message.id).collect::<Vec<_>>(),
+            vec![first.id, second.id]
+        );
+
+        assert!(postgres
+            .delete_outbox_message(first.id)
+            .await
+            .expect("published message deletes"));
+
+        let retry_at = Utc::now() + Duration::minutes(5);
+        assert!(postgres
+            .record_outbox_publish_failure(second.id, retry_at)
+            .await
+            .expect("publish failure records"));
+
+        assert!(postgres
+            .list_due_outbox_messages(Utc::now(), 10)
+            .await
+            .expect("due outbox messages load")
+            .is_empty());
+
+        let rescheduled = postgres
+            .list_due_outbox_messages(retry_at, 10)
+            .await
+            .expect("rescheduled outbox messages load");
+        assert_eq!(
+            rescheduled
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![second.id]
+        );
+        assert_eq!(rescheduled[0].attempt_count, 1);
+    }
+}
