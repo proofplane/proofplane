@@ -45,7 +45,7 @@ transactions or rehydrate mutable aggregates.
 Routes, MCP tools, OAuth endpoints, and workers receive only their required
 typed handlers from the composition root. During incremental migration a
 compatibility façade may delegate to a handler, but no new behavior is added to
-the façade and it is removed in ticket 013.
+the façade and it is removed in the adapter cutover ticket.
 
 ## Domain transition events
 
