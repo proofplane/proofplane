@@ -22,9 +22,9 @@ use proofplane::{
     app::AppDependencies,
     authentication::{
         paseto::{
-            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
-            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
-            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantDecryptor,
+            AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor,
+            DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
             UploadGrantEncryptor,
         },
@@ -353,12 +353,6 @@ fn build_mcp_server(
             &app_config.paseto.upload_grant,
         )
         .expect("agent evidence upload grant encryptor initializes"),
-        agent_upload_grant_decryptor: AgentEvidenceUploadGrantDecryptor::from_config(
-            issuer.clone(),
-            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-            &app_config.paseto.upload_grant,
-        )
-        .expect("agent evidence upload grant decryptor initializes"),
         agent_policy_upload_grant_encryptor: AgentPolicyDocumentUploadGrantEncryptor::from_config(
             issuer.clone(),
             AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
