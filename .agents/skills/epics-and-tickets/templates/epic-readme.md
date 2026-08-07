@@ -4,17 +4,16 @@ One paragraph describing what this project delivers and the core principle that
 shapes it.
 
 Full rationale, schema, and decisions live in [spec.md](./spec.md), the source
-of technical depth. Tickets below are lean handoff units that link into it.
+of technical depth.
 
-## Tickets
+## Tracking
 
-| Ticket                                  | Status | Notes                   |
-| --------------------------------------- | ------ | ----------------------- |
-| 001. [<Title>](./tickets/001-<slug>.md) | Todo   | One-line scope summary. |
-| 002. <Title>                            | Todo   | One-line scope summary. |
+Tickets live on GitHub, not in this directory.
 
-## Sequencing
+- Epic: [#NN Epic: <Epic Name>](https://github.com/proofplane/proofplane/issues/NN)
+- Tickets: attached to that issue as sub-issues, and labeled
+  [`epic:<epic-slug>`](https://github.com/proofplane/proofplane/issues?q=is%3Aissue+label%3Aepic%3A<epic-slug>)
 
-- **001** is foundational because ...
-- **002** depends on 001 because ...
-- Work that can proceed in parallel.
+The epic issue carries the ticket index, status, and sequencing. See
+[`docs/agents/issue-tracker.md`](../../agents/issue-tracker.md) for the
+workflow.

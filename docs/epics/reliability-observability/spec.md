@@ -10,10 +10,10 @@ for the API, dequeuer, worker, storage, and MCP runtimes.
 - `/readyz` checks Postgres with a timeout.
 - Authentication resolves persisted users, memberships, MCP OAuth agent
   connections, and permissions from Postgres. (`ppat_` API tokens were removed
-  in PR #42 — see the [Agent Connector
-  Onboarding](../agent-connector-onboarding/spec.md) 2026-07-09 decision
-  banner.) Authorization is local policy over that context; there is no separate
-  authorization service or synchronization path.
+  by the 2026-07-09 Agent Connector Onboarding decision, shipped in
+  [PR #42](https://github.com/proofplane/proofplane/pull/42); that epic's spec
+  has since been retired.) Authorization is local policy over that context;
+  there is no separate authorization service or synchronization path.
 - Outbox publish retry and worker delivery behavior have integration-v2
   coverage.
 - Document scan/finalization tests already cover concrete Postgres rollback,

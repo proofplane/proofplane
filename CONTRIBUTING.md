@@ -58,9 +58,7 @@ make seed
 
 Because there is no static token, exercising MCP locally means completing the
 OAuth flow with a real agent (or the MCP Inspector's OAuth mode). The setup
-below gets you there. See the
-[Agent Connector Onboarding spec](docs/epics/agent-connector-onboarding/spec.md)
-for the full design.
+below gets you there.
 
 ## Configuration
 
@@ -249,7 +247,8 @@ cargo test --test integration-v2 mcp::evidence
 - Application schema migrations live in `migrations/`.
 - Application code lives under `src/`, grouped by route, service, repository,
   domain, and external adapter responsibility.
-- MVP planning and tickets live in [`docs/epics/`](docs/epics/).
+- Epic specs live in [`docs/epics/`](docs/epics/); tickets are
+  [GitHub issues](https://github.com/proofplane/proofplane/issues).
 - The compliance data plane is exposed only through MCP; there is no REST data
   plane and no API tokens.
 - MCP authenticates with the Proofplane OAuth facade (PASETO access tokens);
