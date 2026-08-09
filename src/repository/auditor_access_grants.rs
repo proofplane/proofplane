@@ -24,11 +24,54 @@ pub struct AuditorAccessGrantRepository<'a> {
     connection: RepositoryConnection<'a>,
 }
 
+/// A digest-free grant view for read-side callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditorAccessGrantProjection {
+    pub id: AuditorAccessGrantId,
+    pub auditor_email: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub period: AuditReviewPeriod,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
 impl Postgres {
+    pub async fn list_auditor_access_grant_projections(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<Vec<AuditorAccessGrantProjection>, Error> {
+        let rows = self
+            .get()
+            .await?
+            .query(LIST_PROJECTIONS_SQL, &[&Uuid::from(workspace_id)])
+            .await?;
+        rows.into_iter()
+            .map(AuditorAccessGrantProjection::try_from)
+            .collect()
+    }
+
     pub fn auditor_access_grants(&self) -> AuditorAccessGrantRepository<'_> {
         AuditorAccessGrantRepository {
             connection: RepositoryConnection::Postgres(self),
         }
+    }
+}
+
+impl TryFrom<Row> for AuditorAccessGrantProjection {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: AuditorAccessGrantId::from(row.try_get::<_, Uuid>("id")?),
+            auditor_email: row.try_get("auditor_email")?,
+            created_at: row.try_get("created_at")?,
+            expires_at: row.try_get("expires_at")?,
+            period: AuditReviewPeriod::new(
+                row.try_get("period_start")?,
+                row.try_get("period_end")?,
+            )?,
+            revoked_at: row.try_get("revoked_at")?,
+        })
     }
 }
 
@@ -124,6 +167,7 @@ impl AuditorAccessGrantRepository<'_> {
 const COLUMNS: &str = "id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
 const GET_SQL: &str = "SELECT id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2";
 const GET_FOR_UPDATE_SQL: &str = "SELECT id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2 FOR UPDATE";
+const LIST_PROJECTIONS_SQL: &str = "SELECT id, auditor_email, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC";
 
 workspace_snapshot_record! {
     struct GrantRecord {
@@ -210,7 +254,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::{GrantRecord, GET_FOR_UPDATE_SQL, GET_SQL};
+    use super::{GrantRecord, GET_FOR_UPDATE_SQL, GET_SQL, LIST_PROJECTIONS_SQL};
     use crate::domain::{AuditReviewPeriod, AuditorAccessGrant, Sha256Digest};
 
     #[test]
@@ -219,6 +263,13 @@ mod tests {
         assert!(!GET_SQL.contains("FOR UPDATE"));
         assert!(GET_FOR_UPDATE_SQL.contains("workspace_id = $2"));
         assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+
+    #[test]
+    fn list_projection_is_ordered_and_conceals_the_secret_digest() {
+        assert!(LIST_PROJECTIONS_SQL.contains("workspace_id = $1"));
+        assert!(LIST_PROJECTIONS_SQL.contains("ORDER BY created_at DESC, id DESC"));
+        assert!(!LIST_PROJECTIONS_SQL.contains("secret_digest"));
     }
 
     #[test]
