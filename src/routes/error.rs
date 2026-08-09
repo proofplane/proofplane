@@ -7,11 +7,14 @@ use deadpool_postgres::PoolError;
 use serde::Serialize;
 
 use crate::{
+    application::commands::{
+        create_owned_workspace::CreateOwnedWorkspaceError,
+        remove_workspace_member::RemoveWorkspaceMemberError,
+    },
     domain::DomainError,
     object_storage::StorageError,
     repository::{ConflictKind, Error as RepositoryError},
     services::controls::ControlMutationError,
-    services::workspaces::{CreateWorkspaceError, MemberError},
     services::Error as ServiceError,
 };
 
@@ -136,28 +139,34 @@ impl From<ServiceError> for ApiError {
     }
 }
 
-impl From<MemberError> for ApiError {
-    fn from(error: MemberError) -> Self {
+impl From<RepositoryError> for ApiError {
+    fn from(error: RepositoryError) -> Self {
+        repository_error(error)
+    }
+}
+
+impl From<RemoveWorkspaceMemberError> for ApiError {
+    fn from(error: RemoveWorkspaceMemberError) -> Self {
         match error {
-            MemberError::Forbidden => ApiError::NotFound,
-            MemberError::NotFound => ApiError::NotFound,
-            MemberError::LastOwner => ApiError::Conflict {
+            RemoveWorkspaceMemberError::Unavailable => ApiError::NotFound,
+            RemoveWorkspaceMemberError::NotFound => ApiError::NotFound,
+            RemoveWorkspaceMemberError::LastOwner => ApiError::Conflict {
                 code: "last_owner",
                 message: "the workspace must retain at least one owner".to_owned(),
             },
-            MemberError::Repository(error) => repository_error(error),
+            RemoveWorkspaceMemberError::Repository(error) => repository_error(error),
         }
     }
 }
 
-impl From<CreateWorkspaceError> for ApiError {
-    fn from(error: CreateWorkspaceError) -> Self {
+impl From<CreateOwnedWorkspaceError> for ApiError {
+    fn from(error: CreateOwnedWorkspaceError) -> Self {
         match error {
-            CreateWorkspaceError::SlugTaken => conflict(ConflictKind::WorkspaceSlugTaken),
-            CreateWorkspaceError::UserAlreadyHasWorkspace => {
+            CreateOwnedWorkspaceError::SlugTaken => conflict(ConflictKind::WorkspaceSlugTaken),
+            CreateOwnedWorkspaceError::UserAlreadyHasWorkspace => {
                 conflict(ConflictKind::WorkspaceMembershipExists)
             }
-            CreateWorkspaceError::Repository(error) => repository_error(error),
+            CreateOwnedWorkspaceError::Repository(error) => repository_error(error),
         }
     }
 }
@@ -215,7 +224,7 @@ mod tests {
     use axum::{http::StatusCode, response::IntoResponse};
 
     use super::ApiError;
-    use crate::services::workspaces::CreateWorkspaceError;
+    use crate::application::commands::create_owned_workspace::CreateOwnedWorkspaceError;
 
     #[test]
     fn error_response_uses_stable_shape() {
@@ -226,7 +235,7 @@ mod tests {
 
     #[test]
     fn slug_conflict_maps_to_409_with_specific_code_and_message() {
-        let error = ApiError::from(CreateWorkspaceError::SlugTaken);
+        let error = ApiError::from(CreateOwnedWorkspaceError::SlugTaken);
 
         assert_eq!(error.status(), StatusCode::CONFLICT);
         assert_eq!(error.code(), "slug_taken");

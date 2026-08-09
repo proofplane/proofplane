@@ -10,6 +10,13 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::record_user_login::{
+            RecordUserLogin, RecordUserLoginError, RecordUserLoginHandler,
+        },
+        queries::get_user::{GetUser, GetUserHandler},
+        ExecutionMetadata,
+    },
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
         UserAuthenticator, UserContext,
@@ -17,18 +24,19 @@ use crate::{
     domain::User,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{authentication::authenticate_user, error::ApiError, request_context::RequestId},
-    services::user::UserService,
 };
 
 pub struct MeState<V: TokenVerifier<Claims = VerifiedClaims>> {
-    pub service: UserService,
+    pub get_user: GetUserHandler,
+    pub record_login: RecordUserLoginHandler,
     pub route_auth: UserRouteAuthState<V>,
 }
 
 impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for MeState<V> {
     fn clone(&self) -> Self {
         Self {
-            service: self.service.clone(),
+            get_user: self.get_user.clone(),
+            record_login: self.record_login.clone(),
             route_auth: self.route_auth.clone(),
         }
     }
@@ -74,8 +82,10 @@ async fn get_me<V: TokenVerifier<Claims = VerifiedClaims>>(
     Extension(user): Extension<UserContext>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let user = state
-        .service
-        .get_user(user.user_id)
+        .get_user
+        .handle(GetUser {
+            user_id: user.user_id,
+        })
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -88,10 +98,19 @@ async fn login<V: TokenVerifier<Claims = VerifiedClaims>>(
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let user = state
-        .service
-        .record_login(user.user_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+        .record_login
+        .handle(
+            RecordUserLogin {
+                user_id: user.user_id,
+                logged_in_at: Utc::now(),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
+        .await
+        .map_err(|error| match error {
+            RecordUserLoginError::Unavailable => ApiError::NotFound,
+            RecordUserLoginError::Repository(error) => ApiError::from(error),
+        })?;
 
     AuditEvent::new(
         "user.logged_in",

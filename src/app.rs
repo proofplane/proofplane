@@ -1,7 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    application::commands::issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+    application::{
+        commands::{
+            create_owned_workspace::CreateOwnedWorkspaceHandler,
+            issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+            record_user_login::RecordUserLoginHandler,
+            remove_workspace_member::RemoveWorkspaceMemberHandler,
+        },
+        queries::{get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler},
+    },
     authentication::{
         auth0::{
             Auth0AuditorIdentityProvider, SharedAuditorIdentityProvider, TokenVerifier,
@@ -63,8 +71,6 @@ use crate::{
         policy_documents::PolicyDocumentService,
         policy_upload_sessions::{PolicyUploadSessionTokenService, POLICY_UPLOAD_SESSION_AUDIENCE},
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
-        user::UserService,
-        workspaces::WorkspaceService,
     },
 };
 use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
@@ -326,13 +332,16 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             secure_cookie: secure_auditor_cookie,
         }))
         .merge(me::router(MeState {
-            service: UserService::new(dependencies.postgres.clone()),
+            get_user: GetUserHandler::new(dependencies.postgres.clone()),
+            record_login: RecordUserLoginHandler::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },
         }))
         .merge(workspaces::router(WorkspacesState {
-            service: WorkspaceService::new(dependencies.postgres.clone()),
+            create_owned: CreateOwnedWorkspaceHandler::new(dependencies.postgres.clone()),
+            get_for_user: GetWorkspaceForUserHandler::new(dependencies.postgres.clone()),
+            remove_member: RemoveWorkspaceMemberHandler::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },

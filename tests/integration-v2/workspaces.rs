@@ -185,6 +185,53 @@ async fn creating_a_second_workspace_returns_single_workspace_conflict() {
 }
 
 #[tokio::test]
+async fn concurrent_workspace_creates_choose_one_complete_workspace() {
+    let app = harness::app().await;
+    let alice = "auth0|alice-concurrent-workspaces";
+
+    ScenarioBuilder::new(&app).with_user(alice).build().await;
+
+    let first = app
+        .app_server()
+        .post("/workspace")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {alice}"))
+        .json(&json!({ "name": "Concurrent Alpha", "slug": "concurrent-alpha" }));
+    let second = app
+        .app_server()
+        .post("/workspace")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {alice}"))
+        .json(&json!({ "name": "Concurrent Beta", "slug": "concurrent-beta" }));
+    let (first, second) = tokio::join!(first, second);
+
+    let (created, conflict) = if first.status_code() == StatusCode::OK {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    created.assert_status_ok();
+    assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
+    assert_eq!(
+        conflict.json::<Value>(),
+        json!({
+            "error": {
+                "code": "user_already_has_workspace",
+                "message": "the user already belongs to a workspace",
+                "details": [],
+            }
+        })
+    );
+
+    let created = created.json::<Value>();
+    let current = app
+        .app_server()
+        .get("/workspace")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {alice}"))
+        .await;
+    current.assert_status_ok();
+    assert_eq!(current.json::<Value>(), created);
+}
+
+#[tokio::test]
 async fn workspace_mutations_emit_success_audit_logs_after_commit() {
     let app = harness::app().await;
     let alice_sub = String::from("auth0|alice-workspace-audit");

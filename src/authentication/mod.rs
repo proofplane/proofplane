@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
 use crate::{
+    application::{
+        commands::provision_user::{ProvisionUser, ProvisionUserError, ProvisionUserHandler},
+        ExecutionMetadata,
+    },
     authentication::auth0::{TokenVerifier, VerifiedClaims, VerifyError},
-    domain::{AgentConnectionId, ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermissions},
+    domain::{AgentConnectionId, UserId, WorkspaceId, WorkspacePermissions},
     repository,
 };
 
@@ -36,14 +40,14 @@ impl UserContext {
 
 pub struct UserAuthenticator<V: TokenVerifier<Claims = VerifiedClaims>> {
     verifier: Arc<V>,
-    repository: Arc<repository::Postgres>,
+    provision_user: ProvisionUserHandler,
 }
 
 impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for UserAuthenticator<V> {
     fn clone(&self) -> Self {
         Self {
             verifier: self.verifier.clone(),
-            repository: self.repository.clone(),
+            provision_user: self.provision_user.clone(),
         }
     }
 }
@@ -52,7 +56,7 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> UserAuthenticator<V> {
     pub fn new(verifier: Arc<V>, repository: Arc<repository::Postgres>) -> Self {
         Self {
             verifier,
-            repository,
+            provision_user: ProvisionUserHandler::new(repository),
         }
     }
 
@@ -64,14 +68,19 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> UserAuthenticator<V> {
             .map_err(AuthError::from_verify)?;
 
         let user = self
-            .repository
-            .upsert_user_by_auth0_sub(&ProvisionUserPayload {
-                auth0_sub: claims.sub,
-                email: claims.email,
-                name: claims.name,
-            })
+            .provision_user
+            .handle(
+                ProvisionUser {
+                    auth0_sub: claims.sub,
+                    email: claims.email,
+                    name: claims.name,
+                },
+                ExecutionMetadata::background(),
+            )
             .await
-            .map_err(AuthError::Repository)?;
+            .map_err(|error| match error {
+                ProvisionUserError::Repository(error) => AuthError::Repository(error),
+            })?;
 
         Ok(UserContext::new(user.id, user.auth0_sub))
     }

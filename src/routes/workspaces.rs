@@ -10,11 +10,19 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::{
+            create_owned_workspace::{CreateOwnedWorkspace, CreateOwnedWorkspaceHandler},
+            remove_workspace_member::{RemoveWorkspaceMember, RemoveWorkspaceMemberHandler},
+        },
+        queries::get_workspace_for_user::{GetWorkspaceForUser, GetWorkspaceForUserHandler},
+        ExecutionMetadata,
+    },
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
         UserContext,
     },
-    domain::{required_text, CreateWorkspacePayload, UserId, Workspace, WorkspaceWithRole},
+    domain::{required_text, UserId, Workspace, WorkspaceId, WorkspaceWithRole},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     routes::{
         authentication::authenticate_user,
@@ -22,18 +30,21 @@ use crate::{
         me::UserRouteAuthState,
         request_context::RequestId,
     },
-    services::workspaces::WorkspaceService,
 };
 
 pub struct WorkspacesState<V: TokenVerifier<Claims = VerifiedClaims>> {
-    pub service: WorkspaceService,
+    pub create_owned: CreateOwnedWorkspaceHandler,
+    pub get_for_user: GetWorkspaceForUserHandler,
+    pub remove_member: RemoveWorkspaceMemberHandler,
     pub route_auth: UserRouteAuthState<V>,
 }
 
 impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for WorkspacesState<V> {
     fn clone(&self) -> Self {
         Self {
-            service: self.service.clone(),
+            create_owned: self.create_owned.clone(),
+            get_for_user: self.get_for_user.clone(),
+            remove_member: self.remove_member.clone(),
             route_auth: self.route_auth.clone(),
         }
     }
@@ -76,13 +87,18 @@ async fn create_workspace<V: TokenVerifier<Claims = VerifiedClaims>>(
     let name = required_text("name", body.name)
         .into_result()
         .map_err(domain_errors)?;
-    let payload = CreateWorkspacePayload {
-        id: None,
+    let command = CreateOwnedWorkspace {
+        workspace_id: WorkspaceId::from(Uuid::new_v4()),
+        actor_user_id: user.user_id,
         slug: body.slug,
         name,
+        created_at: Utc::now(),
     };
 
-    let created = state.service.create_owned(user.user_id, payload).await?;
+    let created = state
+        .create_owned
+        .handle(command, ExecutionMetadata::for_request(request_id.0))
+        .await?;
     let workspace_id = Uuid::from(created.workspace.id);
     let user_id = Uuid::from(user.user_id);
 
@@ -117,8 +133,10 @@ async fn get_workspace<V: TokenVerifier<Claims = VerifiedClaims>>(
     Extension(user): Extension<UserContext>,
 ) -> Result<Json<WorkspaceWithRoleResponse>, ApiError> {
     let workspace = state
-        .service
-        .get_for_user(user.user_id)
+        .get_for_user
+        .handle(GetWorkspaceForUser {
+            user_id: user.user_id,
+        })
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -134,8 +152,14 @@ async fn remove_member<V: TokenVerifier<Claims = VerifiedClaims>>(
     let target_user_id = UserId::from(path.user_id);
 
     let workspace_id = state
-        .service
-        .remove_member(user.user_id, target_user_id)
+        .remove_member
+        .handle(
+            RemoveWorkspaceMember {
+                actor_user_id: user.user_id,
+                target_user_id,
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
         .await?;
     let workspace_id = Uuid::from(workspace_id);
 
