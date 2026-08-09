@@ -28,6 +28,7 @@ use crate::authentication::paseto::{
 use crate::{
     application::{
         commands::{
+            agent_connections::AuthorizeAgentConnectionHandler,
             create_control::CreateControlHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
@@ -56,7 +57,6 @@ use crate::{
         request_context::attach_request_id,
     },
     services::{
-        agent_connections::AgentConnectionService,
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
         controls::ControlService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
@@ -154,11 +154,12 @@ where
     );
     let controls = ControlService::new(dependencies.postgres.clone());
     let policies = PolicyService::new(dependencies.postgres.clone());
-    let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
+    let authorize_agent_connection =
+        AuthorizeAgentConnectionHandler::new(dependencies.postgres.clone());
     let protocol = protocol_router(
         dependencies.oauth_verifier,
         dependencies.resource.clone(),
-        agent_connections,
+        authorize_agent_connection,
         ProofplaneMcp::new(
             evidence,
             evidence_submissions,
@@ -246,7 +247,7 @@ where
 pub fn protocol_router<V>(
     oauth_verifier: Arc<V>,
     resource: Url,
-    agent_connections: AgentConnectionService,
+    authorize_agent_connection: AuthorizeAgentConnectionHandler,
     server: ProofplaneMcp,
     allowed_hosts: Vec<String>,
     cancellation_token: CancellationToken,
@@ -272,7 +273,7 @@ where
         .layer(middleware::from_fn_with_state(
             AuthenticationState {
                 auth0: oauth_verifier,
-                agent_connections,
+                authorize_agent_connection,
                 resource: resource.to_string(),
                 challenge,
             },

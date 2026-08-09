@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     application::{
         commands::{
+            agent_connections::RevokeAgentConnectionHandler,
             claim_auditor_auth_transaction::ClaimAuditorAuthTransactionHandler,
             complete_auditor_authentication::CompleteAuditorAuthenticationHandler,
             create_authenticated_auditor_session::CreateAuthenticatedAuditorSessionHandler,
@@ -16,7 +17,8 @@ use crate::{
             start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
         },
         queries::{
-            get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler,
+            agent_connections::ListUserAgentConnectionsHandler, get_user::GetUserHandler,
+            get_workspace_for_user::GetWorkspaceForUserHandler,
             read_auditor_portal::ReadAuditorPortalHandler,
             resolve_active_auditor_grant::ResolveActiveAuditorGrantHandler,
             resolve_auditor_grant_by_secret::ResolveAuditorGrantBySecretHandler,
@@ -60,7 +62,6 @@ use crate::{
         workspaces::{self, WorkspacesState},
     },
     services::{
-        agent_connections::AgentConnectionService,
         agent_evidence_upload_grants::AgentEvidenceUploadCredentialVerifier,
         agent_evidence_uploads::AgentEvidenceUploadService,
         agent_policy_document_upload_grants::{
@@ -344,7 +345,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             },
         }))
         .merge(agent_connections::router(AgentConnectionsState {
-            service: AgentConnectionService::new(dependencies.postgres.clone()),
+            list: ListUserAgentConnectionsHandler::new(dependencies.postgres.clone()),
+            revoke: RevokeAgentConnectionHandler::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },

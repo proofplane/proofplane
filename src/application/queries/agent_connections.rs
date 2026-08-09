@@ -1,8 +1,8 @@
 use crate::{
     authentication::AgentConnectionContext,
     domain::{
-        AgentConnectionId, AgentConnectionStatus, UserId, WorkspaceId, WorkspacePermission,
-        WorkspacePermissions,
+        canonical_permissions, AgentConnectionId, AgentConnectionStatus, UserId, WorkspaceId,
+        WorkspacePermission, WorkspacePermissions,
     },
     repository::{Error, Postgres},
 };
@@ -67,6 +67,9 @@ impl FindReusableAgentConnectionHandler {
         &self,
         query: FindReusableAgentConnection,
     ) -> Result<Option<ReusableAgentConnection>, Error> {
+        let expected_permissions = canonical_permissions(query.permissions).map_err(|_| {
+            Error::InvariantViolation("invalid requested agent connection permissions")
+        })?;
         let row = self
             .repository
             .get()
@@ -82,7 +85,7 @@ impl FindReusableAgentConnectionHandler {
             .await?;
         row.map(|row| {
             let permissions = permissions(row.try_get("permissions")?)?;
-            if permissions == query.permissions {
+            if permissions == expected_permissions {
                 Ok(Some(ReusableAgentConnection {
                     id: row.try_get::<_, Uuid>("id")?.into(),
                     user_id: row.try_get::<_, Uuid>("user_id")?.into(),

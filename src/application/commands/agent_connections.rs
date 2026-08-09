@@ -155,20 +155,6 @@ impl RequestAgentConnectionHandler {
         command: RequestAgentConnection,
         _metadata: ExecutionMetadata,
     ) -> Result<AgentConnection, AgentConnectionCommandError> {
-        let user = self
-            .repository
-            .get_user(command.user_id)
-            .await?
-            .ok_or(AgentConnectionCommandError::Denied)?;
-        if user.auth0_sub != command.auth0_subject
-            || self
-                .repository
-                .get_membership_role(command.workspace_id, command.user_id)
-                .await?
-                .is_none()
-        {
-            return Err(AgentConnectionCommandError::Denied);
-        }
         let permissions = canonical_permissions(command.permissions)
             .map_err(|_| AgentConnectionCommandError::Invalid)?;
         if permissions.is_empty() {
@@ -193,11 +179,30 @@ impl RequestAgentConnectionHandler {
         .map_err(|_| AgentConnectionCommandError::Invalid)?;
         self.repository
             .in_transaction(async move |context| {
+                let user = context.users().get(connection.user_id).await?.ok_or(
+                    RepositoryError::InvariantViolation("agent connection requester must exist"),
+                )?;
+                if user.auth0_sub != connection.auth0_subject
+                    || context
+                        .get_membership_role(connection.workspace_id, connection.user_id)
+                        .await?
+                        .is_none()
+                {
+                    return Err(RepositoryError::InvariantViolation(
+                        "agent connection requester is ineligible",
+                    ));
+                }
                 context.agent_connections().save(&connection).await?;
                 Ok(connection)
             })
             .await
-            .map_err(map_conflict)
+            .map_err(|error| match error {
+                RepositoryError::InvariantViolation(
+                    "agent connection requester must exist"
+                    | "agent connection requester is ineligible",
+                ) => AgentConnectionCommandError::Denied,
+                error => map_conflict(error),
+            })
     }
 }
 
@@ -282,6 +287,18 @@ impl ConsumeAgentConnectionContinuationHandler {
                 let Some(mut connection) = repository.get(id).await? else {
                     return Ok(ConsumeAgentConnectionOutcome::Invalid);
                 };
+                let user_is_eligible = context
+                    .users()
+                    .get(connection.user_id)
+                    .await?
+                    .is_some_and(|user| user.auth0_sub == connection.auth0_subject)
+                    && context
+                        .get_membership_role(connection.workspace_id, connection.user_id)
+                        .await?
+                        .is_some();
+                if !user_is_eligible {
+                    return Ok(ConsumeAgentConnectionOutcome::Invalid);
+                }
                 if connection.consume_continuation(continuation, digest(&command.nonce), Utc::now())
                     != AgentConnectionConsumption::Authorized
                 {
@@ -306,6 +323,13 @@ impl ActivateAgentConnectionHandler {
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(ActivateAgentConnectionOutcome::Rejected);
                 };
+                if context
+                    .get_membership_role(connection.workspace_id, connection.user_id)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(ActivateAgentConnectionOutcome::Rejected);
+                }
                 match connection.activate(Utc::now()) {
                     AgentConnectionActivation::Activated => {
                         repository.save(&connection).await?;
@@ -339,6 +363,18 @@ impl AuthorizeAgentConnectionHandler {
                     || connection.resource != command.resource
                     || connection.permissions != expected
                 {
+                    return Ok(None);
+                }
+                let user_is_eligible = context
+                    .users()
+                    .get(connection.user_id)
+                    .await?
+                    .is_some_and(|user| user.auth0_sub == connection.auth0_subject)
+                    && context
+                        .get_membership_role(connection.workspace_id, connection.user_id)
+                        .await?
+                        .is_some();
+                if !user_is_eligible {
                     return Ok(None);
                 }
                 match connection.activate(Utc::now()) {

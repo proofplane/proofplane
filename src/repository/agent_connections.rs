@@ -80,8 +80,8 @@ impl AgentConnectionRepository<'_> {
             context.transaction.execute("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[&record.id, &permission.as_str()]).await?;
         }
         context.transaction.execute(
-            "INSERT INTO agent_authorization_transactions (id, agent_connection_id, continuation_digest, nonce_digest, consumed_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (agent_connection_id) DO UPDATE SET id = EXCLUDED.id, continuation_digest = EXCLUDED.continuation_digest, nonce_digest = EXCLUDED.nonce_digest, consumed_at = EXCLUDED.consumed_at",
-            &[&Uuid::from(connection.authorization_transaction_id()), &record.id, &connection.continuation_digest().as_bytes().as_slice(), &connection.nonce_digest().as_bytes().as_slice(), &connection.continuation_consumed_at()]
+            "INSERT INTO agent_authorization_transactions (id, agent_connection_id, continuation_digest, nonce_digest, consumed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (agent_connection_id) DO UPDATE SET id = EXCLUDED.id, continuation_digest = EXCLUDED.continuation_digest, nonce_digest = EXCLUDED.nonce_digest, consumed_at = EXCLUDED.consumed_at",
+            &[&Uuid::from(connection.authorization_transaction_id()), &record.id, &connection.continuation_digest().as_bytes().as_slice(), &connection.nonce_digest().as_bytes().as_slice(), &connection.continuation_consumed_at(), &connection.created_at]
         ).await?;
         Ok(())
     }

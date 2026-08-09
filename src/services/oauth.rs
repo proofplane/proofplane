@@ -10,23 +10,29 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::agent_connections::{
+            AgentConnectionCommandError, AuthorizeAgentConnection, AuthorizeAgentConnectionHandler,
+            ConsumeAgentConnectionContinuation, ConsumeAgentConnectionContinuationHandler,
+            ConsumeAgentConnectionOutcome, RequestAgentConnection, RequestAgentConnectionHandler,
+        },
+        queries::agent_connections::{
+            FindReusableAgentConnection, FindReusableAgentConnectionHandler,
+        },
+        ExecutionMetadata,
+    },
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
     authentication::paseto::{
         IssuedPasetoToken, McpOAuthDecryptor, McpOAuthEncryptor, RegisteredClaims,
     },
     domain::{
-        canonical_permissions, AgentConnection, NewOAuthAuthorizationCode,
-        NewOAuthAuthorizationRequest, OAuthAuthorizationCode, OAuthAuthorizationRequest,
-        OAuthAuthorizationRequestId, WorkspacePermission,
+        canonical_permissions, NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest,
+        OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthAuthorizationRequestId,
+        WorkspacePermission,
     },
     repository::{Error as RepositoryError, Postgres},
 };
 
-use super::agent_connections::{
-    AgentConnectionError, AgentConnectionService, AuthorizeMcpConnectionPayload,
-    ConsumeContinuationOutcome, ConsumeContinuationPayload, CreatePendingConnectionPayload,
-    FindReusableConnectionPayload,
-};
 use super::client_resolver::{ClientResolutionError, ClientResolver};
 use crate::authentication::client_registration::{RegisterClientPayload, RegisteredClient};
 
@@ -37,7 +43,10 @@ const ACCESS_TOKEN_TTL: ChronoDuration = ChronoDuration::hours(24);
 #[derive(Clone)]
 pub struct OAuthService {
     repository: Arc<Postgres>,
-    agent_connections: AgentConnectionService,
+    find_reusable_agent_connection: FindReusableAgentConnectionHandler,
+    request_agent_connection: RequestAgentConnectionHandler,
+    consume_agent_connection: ConsumeAgentConnectionContinuationHandler,
+    authorize_agent_connection: AuthorizeAgentConnectionHandler,
     clients: ClientResolver,
     resource: Url,
     token_encryptor: McpOAuthEncryptor,
@@ -55,7 +64,7 @@ pub enum OAuthError {
     #[error("OAuth dependency failed")]
     Repository(#[from] RepositoryError),
     #[error("agent connection authorization failed")]
-    AgentConnection(#[from] AgentConnectionError),
+    AgentConnection(#[from] AgentConnectionCommandError),
     #[error("MCP OAuth token operation failed")]
     Token(#[from] crate::authentication::paseto::Error),
     #[error("client id could not be resolved")]
@@ -123,10 +132,16 @@ impl OAuthService {
         token_encryptor: McpOAuthEncryptor,
         token_decryptor: McpOAuthDecryptor,
     ) -> Self {
-        let agent_connections = AgentConnectionService::new(repository.clone());
         Self {
+            find_reusable_agent_connection: FindReusableAgentConnectionHandler::new(
+                repository.clone(),
+            ),
+            request_agent_connection: RequestAgentConnectionHandler::new(repository.clone()),
+            consume_agent_connection: ConsumeAgentConnectionContinuationHandler::new(
+                repository.clone(),
+            ),
+            authorize_agent_connection: AuthorizeAgentConnectionHandler::new(repository.clone()),
             repository,
-            agent_connections,
             clients,
             resource,
             token_encryptor,
@@ -188,8 +203,8 @@ impl OAuthService {
             .await?
             .ok_or(OAuthError::InvalidGrant)?;
         if let Some(connection) = self
-            .agent_connections
-            .find_reusable(FindReusableConnectionPayload {
+            .find_reusable_agent_connection
+            .handle(FindReusableAgentConnection {
                 auth0_subject,
                 auth0_client_id: request.client_id.clone(),
                 resource: request.resource.clone(),
@@ -198,7 +213,9 @@ impl OAuthService {
             .await?
         {
             return Ok(CallbackOutcome::Reusable {
-                redirect_uri: self.issue_code_redirect(&request, connection).await?,
+                redirect_uri: self
+                    .issue_code_redirect(&request, connection.id, connection.workspace_id)
+                    .await?,
             });
         }
         Ok(CallbackOutcome::ConsentRequired {
@@ -237,32 +254,39 @@ impl OAuthService {
             .ok_or(OAuthError::InvalidGrant)?;
         let continuation_token = random_secret(32)?;
         let nonce = random_secret(32)?;
-        self.agent_connections
-            .create_pending(CreatePendingConnectionPayload {
-                user_id,
-                workspace_id: workspace.workspace.id,
-                auth0_subject: auth0_subject.clone(),
-                auth0_client_id: request.client_id.clone(),
-                client_display_name: request.client_name.clone(),
-                resource: request.resource.clone(),
-                permissions: request.scopes.clone(),
-                expires_at: request.expires_at,
-                continuation_token: continuation_token.clone(),
-                nonce: nonce.clone(),
-            })
+        self.request_agent_connection
+            .handle(
+                RequestAgentConnection {
+                    user_id,
+                    workspace_id: workspace.workspace.id,
+                    auth0_subject: auth0_subject.clone(),
+                    auth0_client_id: request.client_id.clone(),
+                    client_display_name: request.client_name.clone(),
+                    resource: request.resource.clone(),
+                    permissions: request.scopes.clone(),
+                    expires_at: request.expires_at,
+                    continuation_token: continuation_token.clone(),
+                    nonce: nonce.clone(),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?;
         let connection = match self
-            .agent_connections
-            .consume_continuation(ConsumeContinuationPayload {
-                continuation_token,
-                nonce,
-            })
+            .consume_agent_connection
+            .handle(
+                ConsumeAgentConnectionContinuation {
+                    continuation_token,
+                    nonce,
+                },
+                ExecutionMetadata::background(),
+            )
             .await?
         {
-            ConsumeContinuationOutcome::Approved(connection) => connection,
-            ConsumeContinuationOutcome::Invalid => return Err(OAuthError::InvalidGrant),
+            ConsumeAgentConnectionOutcome::Approved(connection) => connection,
+            ConsumeAgentConnectionOutcome::Invalid => return Err(OAuthError::InvalidGrant),
         };
-        self.issue_code_redirect(&request, connection).await
+        self.issue_code_redirect(&request, connection.id, connection.workspace_id)
+            .await
     }
 
     pub async fn cancel_consent(
@@ -315,15 +339,16 @@ impl OAuthService {
     async fn issue_code_redirect(
         &self,
         request: &OAuthAuthorizationRequest,
-        connection: AgentConnection,
+        connection_id: crate::domain::AgentConnectionId,
+        workspace_id: crate::domain::WorkspaceId,
     ) -> Result<Url, OAuthError> {
         let code = random_secret(32)?;
         self.repository
             .create_oauth_authorization_code(&NewOAuthAuthorizationCode {
                 code: code.clone(),
                 request_id: request.id,
-                agent_connection_id: connection.id,
-                workspace_id: connection.workspace_id,
+                agent_connection_id: connection_id,
+                workspace_id,
                 client_id: request.client_id.clone(),
                 redirect_uri: request.redirect_uri.clone(),
                 code_challenge: request.code_challenge.clone(),
@@ -355,15 +380,18 @@ impl OAuthService {
         code: OAuthAuthorizationCode,
     ) -> Result<IssuedPasetoToken, OAuthError> {
         let Some(context) = self
-            .agent_connections
-            .authorize_mcp_connection(AuthorizeMcpConnectionPayload {
-                connection_id: code.agent_connection_id,
-                workspace_id: code.workspace_id,
-                auth0_subject: code.auth0_subject.clone(),
-                auth0_client_id: code.client_id.clone(),
-                resource: code.resource.clone(),
-                permissions: code.scopes.clone(),
-            })
+            .authorize_agent_connection
+            .handle(
+                AuthorizeAgentConnection {
+                    connection_id: code.agent_connection_id,
+                    workspace_id: code.workspace_id,
+                    auth0_subject: code.auth0_subject.clone(),
+                    auth0_client_id: code.client_id.clone(),
+                    resource: code.resource.clone(),
+                    permissions: code.scopes.clone(),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?
         else {
             return Err(OAuthError::InvalidGrant);

@@ -16,6 +16,22 @@ pub struct NewWorkspaceMembership {
 }
 
 impl TransactionContext<'_> {
+    pub async fn get_membership_role(
+        &self,
+        workspace_id: WorkspaceId,
+        user_id: UserId,
+    ) -> Result<Option<WorkspaceRole>, Error> {
+        let rows = self
+            .transaction
+            .query(
+                "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 FOR UPDATE",
+                &[&Uuid::from(workspace_id), &Uuid::from(user_id)],
+            )
+            .await?;
+
+        rows.into_iter().next().map(role_from_row).transpose()
+    }
+
     pub async fn insert_workspace_membership(
         &self,
         membership: &NewWorkspaceMembership,

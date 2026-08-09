@@ -6,9 +6,17 @@ use axum::{
 };
 use tracing::Span;
 
-use crate::authentication::auth0::{TokenVerifier, VerifiedMcpClaims};
-use crate::services::agent_connections::{
-    AgentConnectionContext, AgentConnectionService, AuthorizeMcpConnectionPayload,
+use crate::{
+    application::{
+        commands::agent_connections::{
+            AgentConnectionCommandError, AuthorizeAgentConnection, AuthorizeAgentConnectionHandler,
+        },
+        ExecutionMetadata,
+    },
+    authentication::{
+        auth0::{TokenVerifier, VerifiedMcpClaims},
+        AgentConnectionContext,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +26,7 @@ pub enum McpPrincipal {
 
 pub(crate) struct AuthenticationState<V> {
     pub auth0: std::sync::Arc<V>,
-    pub agent_connections: AgentConnectionService,
+    pub authorize_agent_connection: AuthorizeAgentConnectionHandler,
     pub resource: String,
     pub challenge: HeaderValue,
 }
@@ -27,7 +35,7 @@ impl<V> Clone for AuthenticationState<V> {
     fn clone(&self) -> Self {
         Self {
             auth0: self.auth0.clone(),
-            agent_connections: self.agent_connections.clone(),
+            authorize_agent_connection: self.authorize_agent_connection.clone(),
             resource: self.resource.clone(),
             challenge: self.challenge.clone(),
         }
@@ -73,7 +81,7 @@ pub(crate) async fn authenticate_request<V: TokenVerifier<Claims = VerifiedMcpCl
 
 enum AgentConnectionAuthError {
     Rejected,
-    Unavailable(crate::services::agent_connections::AgentConnectionError),
+    Unavailable(AgentConnectionCommandError),
 }
 
 async fn agent_connection_principal<V: TokenVerifier<Claims = VerifiedMcpClaims>>(
@@ -83,15 +91,18 @@ async fn agent_connection_principal<V: TokenVerifier<Claims = VerifiedMcpClaims>
     match (claims.connection_id, claims.workspace_id) {
         (Some(connection_id), Some(workspace_id)) => {
             let context = state
-                .agent_connections
-                .authorize_mcp_connection(AuthorizeMcpConnectionPayload {
-                    connection_id,
-                    workspace_id,
-                    auth0_subject: claims.subject.clone(),
-                    auth0_client_id: claims.client_id.clone(),
-                    resource: state.resource.clone(),
-                    permissions: claims.scopes.clone(),
-                })
+                .authorize_agent_connection
+                .handle(
+                    AuthorizeAgentConnection {
+                        connection_id,
+                        workspace_id,
+                        auth0_subject: claims.subject.clone(),
+                        auth0_client_id: claims.client_id.clone(),
+                        resource: state.resource.clone(),
+                        permissions: claims.scopes.clone(),
+                    },
+                    ExecutionMetadata::background(),
+                )
                 .await
                 .map_err(AgentConnectionAuthError::Unavailable)?
                 .ok_or(AgentConnectionAuthError::Rejected)?;
