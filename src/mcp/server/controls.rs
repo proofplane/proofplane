@@ -48,14 +48,17 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{
-        duplicate_ids, required_text, validate_batch, Control, ControlEvidenceMappingItem,
-        ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
+        duplicate_ids, required_text, validate_batch, ControlEvidenceMappingItem, ControlId,
+        CreateControlEvidenceMappingsPayload, CreateControlPayload,
         CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
         DeleteControlEvidenceMappingsPayload, DeleteEvidenceControlMappingsPayload,
-        EvidenceControlMapping, EvidenceControlMappingItem, EvidenceId, Framework, FrameworkId,
-        FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload, WorkspacePermission,
+        EvidenceControlMappingItem, EvidenceId, FrameworkId, FrameworkRequirementId,
+        UpdateControlPayload, WorkspacePermission,
     },
     mcp::server::common::McpArgumentError,
+    projections::{
+        ControlDetail, EvidenceControlMapping, FrameworkDetail, FrameworkRequirementDetail,
+    },
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -735,8 +738,8 @@ struct FrameworkResponseDTO {
     description: String,
 }
 
-impl From<Framework> for FrameworkResponseDTO {
-    fn from(framework: Framework) -> Self {
+impl From<FrameworkDetail> for FrameworkResponseDTO {
+    fn from(framework: FrameworkDetail) -> Self {
         Self {
             id: framework.id.to_string(),
             code: framework.code,
@@ -763,8 +766,8 @@ struct ControlResponseDTO {
     updated_at: String,
 }
 
-impl From<Control> for ControlResponseDTO {
-    fn from(control: Control) -> Self {
+impl From<ControlDetail> for ControlResponseDTO {
+    fn from(control: ControlDetail) -> Self {
         Self {
             id: control.id.to_string(),
             workspace_id: control.workspace_id.to_string(),
@@ -791,8 +794,8 @@ struct FrameworkRequirementResponseDTO {
     description: String,
 }
 
-impl From<FrameworkRequirement> for FrameworkRequirementResponseDTO {
-    fn from(requirement: FrameworkRequirement) -> Self {
+impl From<FrameworkRequirementDetail> for FrameworkRequirementResponseDTO {
+    fn from(requirement: FrameworkRequirementDetail) -> Self {
         Self {
             id: requirement.id.to_string(),
             framework_id: requirement.framework_id.to_string(),

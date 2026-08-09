@@ -33,7 +33,7 @@ use crate::{
         UpdatePolicyPayload, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
+    projections::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
     repository::Error as RepositoryError,
     services::Error as ServiceError,
     validate,
@@ -89,12 +89,7 @@ impl ProofplaneMcp {
             .map_err(policy_catalog_error)?
             .ok_or_else(not_found)?;
 
-        emit_policy_audit(
-            &context,
-            "policy.read",
-            "get_policy",
-            Some(policy.policy.id),
-        );
+        emit_policy_audit(&context, "policy.read", "get_policy", Some(policy.id));
 
         Ok(Json(policy.into()))
     }
@@ -126,12 +121,7 @@ impl ProofplaneMcp {
             .map_err(policy_mutation_error)?;
         let policy = policy.policy;
 
-        emit_policy_audit(
-            &context,
-            "policy.created",
-            "create_policy",
-            Some(policy.policy.id),
-        );
+        emit_policy_audit(&context, "policy.created", "create_policy", Some(policy.id));
 
         Ok(Json(policy.into()))
     }
@@ -163,12 +153,7 @@ impl ProofplaneMcp {
             .map_err(policy_mutation_error)?
             .policy;
 
-        emit_policy_audit(
-            &context,
-            "policy.updated",
-            "update_policy",
-            Some(policy.policy.id),
-        );
+        emit_policy_audit(&context, "policy.updated", "update_policy", Some(policy.id));
 
         Ok(Json(policy.into()))
     }
@@ -587,12 +572,11 @@ struct PolicyDetailResponse {
 
 impl From<PolicyDetail> for PolicyDetailResponse {
     fn from(detail: PolicyDetail) -> Self {
-        let policy = detail.policy;
         Self {
-            id: policy.id.to_string(),
-            name: policy.name,
-            description: policy.description,
-            controls: policy
+            id: detail.id.to_string(),
+            name: detail.name,
+            description: detail.description,
+            controls: detail
                 .control_mappings
                 .into_iter()
                 .map(|mapping| PolicyControlSummaryResponse {
@@ -603,8 +587,8 @@ impl From<PolicyDetail> for PolicyDetailResponse {
                 })
                 .collect(),
             document: detail.document.map(Into::into),
-            created_at: format_datetime(policy.created_at),
-            updated_at: format_datetime(policy.updated_at),
+            created_at: format_datetime(detail.created_at),
+            updated_at: format_datetime(detail.updated_at),
         }
     }
 }

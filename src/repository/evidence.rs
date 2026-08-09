@@ -4,9 +4,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, Evidence, EvidenceAggregate, EvidenceControlMapping,
-        EvidenceControlMappingState, EvidenceDefinition, EvidenceId, EvidenceStatus, WorkspaceId,
+        ControlId, Evidence, EvidenceControlMappingState, EvidenceDefinition, EvidenceId,
+        EvidenceStatus, WorkspaceId,
     },
+    projections::{ControlSummary, EvidenceControlMapping, EvidenceDetail},
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
@@ -27,7 +28,7 @@ impl<'a> WorkspaceTransactionContext<'a> {
 }
 
 impl EvidenceRepository<'_> {
-    pub async fn get(&self, id: EvidenceId) -> Result<Option<EvidenceAggregate>, Error> {
+    pub async fn get(&self, id: EvidenceId) -> Result<Option<Evidence>, Error> {
         let Some(row) = self.context.transaction.query_opt(
             "SELECT id, workspace_id, title, description, collection_instructions, status, created_at, updated_at FROM evidence WHERE id = $1 AND workspace_id = $2 FOR UPDATE",
             &[&Uuid::from(id), &Uuid::from(self.context.workspace_id)],
@@ -41,7 +42,7 @@ impl EvidenceRepository<'_> {
     }
 
     /// Persists the aggregate's complete definition, status, and mapping snapshot.
-    pub async fn save(&self, evidence: &EvidenceAggregate) -> Result<(), Error> {
+    pub async fn save(&self, evidence: &Evidence) -> Result<(), Error> {
         if evidence.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
                 "evidence workspace must match its transaction",
@@ -67,7 +68,7 @@ impl EvidenceRepository<'_> {
 }
 
 impl WorkspaceTransactionContext<'_> {
-    pub async fn get_evidence_control_mapping(
+    pub(super) async fn load_evidence_control_mapping(
         &self,
         evidence_id: EvidenceId,
         control_id: ControlId,
@@ -157,10 +158,7 @@ impl TryFrom<Row> for EvidenceRecord {
 }
 
 impl EvidenceRecord {
-    fn into_aggregate(
-        self,
-        mappings: Vec<EvidenceControlMappingState>,
-    ) -> Result<EvidenceAggregate, Error> {
+    fn into_aggregate(self, mappings: Vec<EvidenceControlMappingState>) -> Result<Evidence, Error> {
         let definition =
             EvidenceDefinition::new(self.title, self.description, self.collection_instructions)
                 .into_result()
@@ -168,7 +166,7 @@ impl EvidenceRecord {
                     Error::InvariantViolation("persisted evidence definition is invalid")
                 })?;
         let status = self.status.parse::<EvidenceStatus>()?;
-        EvidenceAggregate::rehydrate(
+        Evidence::rehydrate(
             self.id.into(),
             self.workspace_id.into(),
             definition,
@@ -181,8 +179,8 @@ impl EvidenceRecord {
     }
 }
 
-impl From<&EvidenceAggregate> for EvidenceRecord {
-    fn from(evidence: &EvidenceAggregate) -> Self {
+impl From<&Evidence> for EvidenceRecord {
+    fn from(evidence: &Evidence) -> Self {
         Self {
             id: evidence.id().into(),
             workspace_id: evidence.workspace_id().into(),
@@ -207,7 +205,10 @@ fn mapping_from_row(row: Row) -> Result<EvidenceControlMappingState, Error> {
 }
 
 impl WorkspaceTransactionContext<'_> {
-    pub async fn get_evidence(&self, id: EvidenceId) -> Result<Option<Evidence>, Error> {
+    pub(super) async fn load_evidence_detail(
+        &self,
+        id: EvidenceId,
+    ) -> Result<Option<EvidenceDetail>, Error> {
         let rows = self
             .transaction
             .query(
@@ -235,7 +236,10 @@ FOR KEY SHARE
 }
 
 impl WorkspaceReadContext {
-    pub async fn get_evidence(&self, id: EvidenceId) -> Result<Option<Evidence>, Error> {
+    pub(super) async fn load_evidence_detail(
+        &self,
+        id: EvidenceId,
+    ) -> Result<Option<EvidenceDetail>, Error> {
         let rows = self
             .client
             .query(
@@ -260,7 +264,7 @@ WHERE id = $1
         rows.into_iter().next().map(evidence_from_row).transpose()
     }
 
-    pub async fn list_evidence(&self) -> Result<Vec<Evidence>, Error> {
+    pub(super) async fn load_evidence_details(&self) -> Result<Vec<EvidenceDetail>, Error> {
         let rows = self
             .client
             .query(
@@ -286,13 +290,13 @@ ORDER BY title
     }
 }
 
-fn evidence_from_row(row: Row) -> Result<Evidence, Error> {
+fn evidence_from_row(row: Row) -> Result<EvidenceDetail, Error> {
     let status = row
         .try_get::<_, String>("status")?
         .parse::<EvidenceStatus>()?;
     let workspace_id = WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?);
 
-    Ok(Evidence {
+    Ok(EvidenceDetail {
         id: EvidenceId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id,
         title: row.try_get("title")?,
@@ -311,8 +315,8 @@ mod tests {
 
     use crate::{
         domain::{
-            ControlId, EvidenceAggregate, EvidenceControlMappingState, EvidenceDefinition,
-            EvidenceId, EvidenceStatus,
+            ControlId, Evidence, EvidenceControlMappingState, EvidenceDefinition, EvidenceId,
+            EvidenceStatus,
         },
         repository::test_support,
     };
@@ -332,7 +336,7 @@ mod tests {
             .unwrap();
         let created_at = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
         let evidence_id = EvidenceId::from(Uuid::new_v4());
-        let mut aggregate = EvidenceAggregate::define(
+        let mut aggregate = Evidence::define(
             evidence_id,
             workspace.workspace_id,
             EvidenceDefinition::new("Evidence".into(), "Description".into(), "Collect".into())

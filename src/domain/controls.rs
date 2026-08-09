@@ -45,7 +45,7 @@ impl ControlDefinition {
 
 /// Complete mutable snapshot for one workspace control.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ControlAggregate {
+pub struct Control {
     id: ControlId,
     workspace_id: WorkspaceId,
     definition: ControlDefinition,
@@ -54,14 +54,14 @@ pub struct ControlAggregate {
     updated_at: DateTime<Utc>,
 }
 
-impl ControlAggregate {
+impl Control {
     pub fn define(
         id: ControlId,
         workspace_id: WorkspaceId,
         definition: ControlDefinition,
         framework_requirement_ids: Vec<FrameworkRequirementId>,
         created_at: DateTime<Utc>,
-    ) -> Result<Self, ControlAggregateError> {
+    ) -> Result<Self, ControlError> {
         let framework_requirement_ids =
             normalize_framework_requirement_ids(framework_requirement_ids)?;
         Ok(Self {
@@ -81,9 +81,9 @@ impl ControlAggregate {
         framework_requirement_ids: Vec<FrameworkRequirementId>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
-    ) -> Result<Self, ControlAggregateError> {
+    ) -> Result<Self, ControlError> {
         if updated_at < created_at {
-            return Err(ControlAggregateError::InvalidRehydration);
+            return Err(ControlError::InvalidRehydration);
         }
         let mut control = Self::define(
             id,
@@ -101,11 +101,11 @@ impl ControlAggregate {
         definition: ControlDefinition,
         framework_requirement_ids: Vec<FrameworkRequirementId>,
         updated_at: DateTime<Utc>,
-    ) -> Result<(), ControlAggregateError> {
+    ) -> Result<(), ControlError> {
         let framework_requirement_ids =
             normalize_framework_requirement_ids(framework_requirement_ids)?;
         if updated_at < self.created_at {
-            return Err(ControlAggregateError::InvalidReplacementTime);
+            return Err(ControlError::InvalidReplacementTime);
         }
         self.definition = definition;
         self.framework_requirement_ids = framework_requirement_ids;
@@ -148,75 +148,25 @@ impl ControlAggregate {
 
 fn normalize_framework_requirement_ids(
     mut ids: Vec<FrameworkRequirementId>,
-) -> Result<Vec<FrameworkRequirementId>, ControlAggregateError> {
+) -> Result<Vec<FrameworkRequirementId>, ControlError> {
     ids.sort_unstable_by_key(|id| Uuid::from(*id));
     let mut seen = std::collections::HashSet::with_capacity(ids.len());
     for id in &ids {
         if !seen.insert(*id) {
-            return Err(ControlAggregateError::DuplicateFrameworkRequirementReference(*id));
+            return Err(ControlError::DuplicateFrameworkRequirementReference(*id));
         }
     }
     Ok(ids)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum ControlAggregateError {
+pub enum ControlError {
     #[error("framework requirement reference is duplicated")]
     DuplicateFrameworkRequirementReference(FrameworkRequirementId),
     #[error("persisted control snapshot is inconsistent")]
     InvalidRehydration,
     #[error("control replacement predates its creation")]
     InvalidReplacementTime,
-}
-
-/**
- * A Framework is a specific set of rules an organization wants to adhere to.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Framework {
-    pub id: FrameworkId,
-    pub code: String,
-    pub name: String,
-    pub description: String,
-}
-
-/**
- * A FrameworkRequirement is a specific rule inside a framework.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FrameworkRequirement {
-    pub id: FrameworkRequirementId,
-    pub framework_id: FrameworkId,
-    pub framework_code: String,
-    pub framework_name: String,
-    pub code: String,
-    pub title: String,
-    pub description: String,
-}
-
-/**
- * A Control is an organization's way of ensuring they are adhering to
- * a requirement. Sometimes, different frameworks have similar requirements
- * so it can be useful to use the same control for multiple requirements.
- */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Control {
-    pub id: ControlId,
-    pub workspace_id: WorkspaceId,
-    pub code: String,
-    pub title: String,
-    pub description: String,
-    pub framework_requirements: Vec<FrameworkRequirement>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ControlSummary {
-    pub id: ControlId,
-    pub code: String,
-    pub title: String,
-    pub description: String,
 }
 
 impl BatchKey for FrameworkRequirementId {
@@ -239,14 +189,6 @@ pub struct UpdateControlPayload {
     pub title: String,
     pub description: String,
     pub framework_requirement_ids: Vec<FrameworkRequirementId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceControlMapping {
-    pub evidence_id: EvidenceId,
-    pub control: ControlSummary,
-    pub rationale: String,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,8 +258,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        ControlAggregate, ControlAggregateError, ControlDefinition, ControlId, FrameworkId,
-        FrameworkRequirementId,
+        Control, ControlDefinition, ControlError, ControlId, FrameworkId, FrameworkRequirementId,
     };
 
     #[test]
@@ -342,7 +283,7 @@ mod tests {
         let updated_at = created_at + Duration::minutes(5);
         let first_requirement = FrameworkRequirementId::from(Uuid::new_v4());
         let second_requirement = FrameworkRequirementId::from(Uuid::new_v4());
-        let mut control = ControlAggregate::define(
+        let mut control = Control::define(
             ControlId::from(Uuid::new_v4()),
             Uuid::new_v4().into(),
             ControlDefinition::new(
@@ -383,7 +324,7 @@ mod tests {
     fn duplicate_framework_references_are_rejected_without_changing_the_snapshot() {
         let now = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
         let requirement = FrameworkRequirementId::from(Uuid::new_v4());
-        let mut control = ControlAggregate::define(
+        let mut control = Control::define(
             ControlId::from(Uuid::new_v4()),
             Uuid::new_v4().into(),
             ControlDefinition::new(
@@ -411,7 +352,9 @@ mod tests {
                 vec![requirement, requirement],
                 now + Duration::minutes(1),
             ),
-            Err(ControlAggregateError::DuplicateFrameworkRequirementReference(requirement))
+            Err(ControlError::DuplicateFrameworkRequirementReference(
+                requirement
+            ))
         );
         assert_eq!(control, before);
     }

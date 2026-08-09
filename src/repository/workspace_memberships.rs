@@ -2,8 +2,9 @@ use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{
-    UserId, Workspace, WorkspaceId, WorkspaceMembership, WorkspaceRole, WorkspaceWithRole,
+use crate::{
+    domain::{UserId, WorkspaceId, WorkspaceMembership, WorkspaceRole},
+    projections::{WorkspaceDetails, WorkspaceWithRole},
 };
 
 use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
@@ -74,7 +75,7 @@ impl Postgres {
         rows.into_iter().next().map(role_from_row).transpose()
     }
 
-    pub async fn get_workspace_with_role_for_user(
+    pub(super) async fn load_workspace_with_role_for_user(
         &self,
         user_id: UserId,
     ) -> Result<Option<WorkspaceWithRole>, Error> {
@@ -118,7 +119,7 @@ fn role_from_row(row: Row) -> Result<WorkspaceRole, Error> {
 
 fn workspace_with_role_from_row(row: Row) -> Result<WorkspaceWithRole, Error> {
     Ok(WorkspaceWithRole {
-        workspace: Workspace {
+        workspace: WorkspaceDetails {
             id: WorkspaceId::from(row.try_get::<_, Uuid>("id")?),
             slug: row.try_get("slug")?,
             name: row.try_get("name")?,

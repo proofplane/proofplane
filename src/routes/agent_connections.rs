@@ -16,10 +16,7 @@ use crate::{
         commands::agent_connections::{
             AgentConnectionCommandError, RevokeAgentConnection, RevokeAgentConnectionHandler,
         },
-        queries::agent_connections::{
-            ListUserAgentConnections, ListUserAgentConnectionsHandler,
-            UserAgentConnectionProjection,
-        },
+        queries::agent_connections::{ListUserAgentConnections, ListUserAgentConnectionsHandler},
         ExecutionMetadata,
     },
     authentication::{
@@ -28,6 +25,7 @@ use crate::{
     },
     domain::AgentConnectionId,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    projections::UserAgentConnectionSummary,
     routes::{
         authentication::authenticate_user, error::ApiError, me::UserRouteAuthState,
         request_context::RequestId,
@@ -155,8 +153,8 @@ struct AgentConnectionResponse {
     last_used_at: Option<DateTime<Utc>>,
 }
 
-impl From<UserAgentConnectionProjection> for AgentConnectionResponse {
-    fn from(connection: UserAgentConnectionProjection) -> Self {
+impl From<UserAgentConnectionSummary> for AgentConnectionResponse {
+    fn from(connection: UserAgentConnectionSummary) -> Self {
         Self {
             id: connection.id.into(),
             client_name: connection.client_name,

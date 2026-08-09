@@ -300,15 +300,6 @@ pub struct NewPendingAgentConnection {
     pub nonce_digest: Sha256Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserAgentConnection {
-    pub id: AgentConnectionId,
-    pub client_name: String,
-    pub status: AgentConnectionStatus,
-    pub authorized_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

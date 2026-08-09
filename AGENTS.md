@@ -56,6 +56,14 @@ narrow `get` and `save` operations: `get` rehydrates the complete aggregate,
 and `save` persists its complete current snapshot. Snapshot `save` methods must
 not add aggregate-specific eligibility or relationship queries.
 
+Name aggregate roots with the bare ubiquitous-language noun, such as `Control`
+or `Evidence`; do not use an `Aggregate` suffix. Read-only shapes live under
+`src/projections/` and use names that describe their role, such as `ControlDetail`
+or `PolicyCatalogEntry`. Aggregate repositories return aggregates only. Lists,
+details, summaries, reverse mappings, and other read shapes must be loaded by a
+dedicated projection repository, including when a command needs a projection
+from its current transaction.
+
 ## Testing Guidelines
 
 Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,

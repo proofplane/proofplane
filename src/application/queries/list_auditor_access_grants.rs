@@ -3,9 +3,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    authentication::AgentConnectionContext,
-    domain::WorkspacePermission,
-    repository::{AuditorAccessGrantProjection, Postgres},
+    authentication::AgentConnectionContext, domain::WorkspacePermission,
+    projections::AuditorAccessGrantSummary, repository::Postgres,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -34,12 +33,13 @@ impl ListAuditorAccessGrantsHandler {
     pub async fn handle(
         &self,
         query: ListAuditorAccessGrants,
-    ) -> Result<Vec<AuditorAccessGrantProjection>, ListAuditorAccessGrantsError> {
+    ) -> Result<Vec<AuditorAccessGrantSummary>, ListAuditorAccessGrantsError> {
         authorize(&query.connection)?;
 
         Ok(self
             .repository
-            .list_auditor_access_grant_projections(query.connection.workspace_id)
+            .auditor_access_grant_projections()
+            .list(query.connection.workspace_id)
             .await?)
     }
 }

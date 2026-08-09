@@ -7,10 +7,10 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        ControlId, PolicyAggregateError, PolicyControlMapping, PolicyControlMappingState,
-        PolicyDefinition, PolicyId, WorkspacePermission,
+        ControlId, Policy, PolicyControlMappingState, PolicyDefinition, PolicyError, PolicyId,
+        WorkspacePermission,
     },
-    projections::policy_projection::PolicyDetail,
+    projections::{PolicyControlMapping, PolicyDetail},
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
 
@@ -75,12 +75,8 @@ impl CreatePolicyHandler {
                     if !unknown.is_empty() {
                         return Ok(CreateOutcome::Rejected { unknown });
                     }
-                    let mut policy = crate::domain::PolicyAggregate::define(
-                        id,
-                        context.workspace_id,
-                        definition,
-                        Utc::now(),
-                    );
+                    let mut policy =
+                        Policy::define(id, context.workspace_id, definition, Utc::now());
                     policy
                         .replace_mappings(
                             requested
@@ -92,7 +88,7 @@ impl CreatePolicyHandler {
                         .map_err(invariant)?;
                     context.policies().save(&policy).await?;
                     Ok(CreateOutcome::Created(Box::new(
-                        context.get_policy_detail(id).await?.ok_or(
+                        context.policy_projections().get(id).await?.ok_or(
                             RepositoryError::InvariantViolation(
                                 "created policy must be readable in its transaction",
                             ),
@@ -161,7 +157,7 @@ impl ReplacePolicyHandler {
                     }
                     policy.replace(definition, Utc::now()).map_err(invariant)?;
                     repository.save(&policy).await?;
-                    context.get_policy_detail(id).await
+                    context.policy_projections().get(id).await
                 },
             )
             .await?;
@@ -441,7 +437,8 @@ async fn change_mappings(
                     for id in &requested {
                         mappings.push(
                             context
-                                .get_policy_control_mapping(policy_id, *id)
+                                .policy_projections()
+                                .get_control_mapping(policy_id, *id)
                                 .await?
                                 .ok_or(RepositoryError::InvariantViolation(
                                     "saved policy mapping must be readable",
@@ -603,9 +600,9 @@ fn authorize(connection: AgentConnectionContext) -> Result<(), PolicyCommandErro
         Err(PolicyCommandError::Unavailable)
     }
 }
-fn invariant(error: PolicyAggregateError) -> RepositoryError {
+fn invariant(error: PolicyError) -> RepositoryError {
     match error {
-        PolicyAggregateError::Archived => {
+        PolicyError::Archived => {
             RepositoryError::InvariantViolation("archived policy cannot be mutated")
         }
         _ => RepositoryError::InvariantViolation("policy snapshot is invalid"),

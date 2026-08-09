@@ -5,10 +5,8 @@ use chrono::Utc;
 use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
-    domain::{
-        Evidence, EvidenceAggregateError, EvidenceDefinition, EvidenceId, EvidenceStatus,
-        WorkspacePermission,
-    },
+    domain::{EvidenceDefinition, EvidenceError, EvidenceId, EvidenceStatus, WorkspacePermission},
+    projections::EvidenceDetail,
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -23,7 +21,7 @@ pub struct ReplaceEvidence {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplacedEvidence {
-    pub evidence: Evidence,
+    pub evidence: EvidenceDetail,
 }
 #[derive(Clone)]
 pub struct ReplaceEvidenceHandler {
@@ -67,16 +65,16 @@ impl ReplaceEvidenceHandler {
                     evidence
                         .replace(definition, command.status, Utc::now())
                         .map_err(|error| match error {
-                            EvidenceAggregateError::InvalidRehydration
-                            | EvidenceAggregateError::InvalidReplacementTime => {
+                            EvidenceError::InvalidRehydration
+                            | EvidenceError::InvalidReplacementTime => {
                                 RepositoryError::InvariantViolation("evidence snapshot is invalid")
                             }
-                            EvidenceAggregateError::DuplicateControlMapping(_) => {
+                            EvidenceError::DuplicateControlMapping(_) => {
                                 RepositoryError::InvariantViolation("evidence mappings are invalid")
                             }
                         })?;
                     repository.save(&evidence).await?;
-                    context.get_evidence(evidence_id).await
+                    context.evidence_projections().get(evidence_id).await
                 },
             )
             .await?;

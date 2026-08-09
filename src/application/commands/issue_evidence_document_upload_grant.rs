@@ -98,7 +98,12 @@ impl IssueEvidenceDocumentUploadGrantHandler {
                 command.connection.user_id,
                 command.connection.connection_id,
                 async move |context| {
-                    if context.get_evidence(command.evidence_id).await?.is_none() {
+                    if context
+                        .evidence_projections()
+                        .get(command.evidence_id)
+                        .await?
+                        .is_none()
+                    {
                         return Ok(IssueOutcome::Unavailable);
                     }
                     let issued_at = Utc::now();

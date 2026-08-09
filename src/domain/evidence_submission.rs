@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, AgentConnectionId, Document, DomainError, EvidenceId, UserId};
+use super::{ids::uuid_id, AgentConnectionId, DomainError, EvidenceId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(DocumentUploadGrantId);
@@ -105,12 +105,6 @@ pub struct CreateEvidenceSubmissionPayload {
     pub id: EvidenceSubmissionId,
     pub evidence_id: EvidenceId,
     pub coverage: CoverageWindow,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceSubmissionDetail {
-    pub submission: EvidenceSubmission,
-    pub document: Document,
 }
 
 #[cfg(test)]

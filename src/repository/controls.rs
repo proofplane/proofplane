@@ -6,9 +6,12 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        Control, ControlAggregate, ControlDefinition, ControlId, ControlSummary,
-        EvidenceControlMapping, EvidenceId, Framework, FrameworkId, FrameworkRequirement,
-        FrameworkRequirementId, WorkspaceId,
+        Control, ControlDefinition, ControlId, EvidenceId, FrameworkId, FrameworkRequirementId,
+        WorkspaceId,
+    },
+    projections::{
+        ControlDetail, ControlSummary, EvidenceControlMapping, FrameworkDetail,
+        FrameworkRequirementDetail,
     },
     repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -31,7 +34,7 @@ impl<'a> WorkspaceTransactionContext<'a> {
 }
 
 impl ControlRepository<'_> {
-    pub async fn get(&self, id: ControlId) -> Result<Option<ControlAggregate>, Error> {
+    pub async fn get(&self, id: ControlId) -> Result<Option<Control>, Error> {
         let Some(row) = self
             .context
             .transaction
@@ -75,7 +78,7 @@ ORDER BY framework_requirement_id
     }
 
     /// Persists the aggregate's complete definition and reference snapshot.
-    pub async fn save(&self, control: &ControlAggregate) -> Result<(), Error> {
+    pub async fn save(&self, control: &Control) -> Result<(), Error> {
         if control.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
                 "control workspace must match its transaction",
@@ -155,11 +158,11 @@ impl ControlRecord {
     fn into_aggregate(
         self,
         requirement_ids: Vec<FrameworkRequirementId>,
-    ) -> Result<ControlAggregate, Error> {
+    ) -> Result<Control, Error> {
         let definition = ControlDefinition::new(self.code, self.title, self.description)
             .into_result()
             .map_err(|_| Error::InvariantViolation("persisted control definition is invalid"))?;
-        ControlAggregate::rehydrate(
+        Control::rehydrate(
             self.id.into(),
             self.workspace_id.into(),
             definition,
@@ -171,8 +174,8 @@ impl ControlRecord {
     }
 }
 
-impl From<&ControlAggregate> for ControlRecord {
-    fn from(control: &ControlAggregate) -> Self {
+impl From<&Control> for ControlRecord {
+    fn from(control: &Control) -> Self {
         Self {
             id: control.id().into(),
             workspace_id: control.workspace_id().into(),
@@ -186,7 +189,7 @@ impl From<&ControlAggregate> for ControlRecord {
 }
 
 impl Postgres {
-    pub async fn list_frameworks(&self) -> Result<Vec<Framework>, Error> {
+    pub(super) async fn load_frameworks(&self) -> Result<Vec<FrameworkDetail>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
@@ -202,10 +205,10 @@ ORDER BY code
         rows.into_iter().map(framework_from_row).collect()
     }
 
-    pub async fn list_framework_requirements(
+    pub(super) async fn load_framework_requirements(
         &self,
         framework_id: FrameworkId,
-    ) -> Result<Vec<FrameworkRequirement>, Error> {
+    ) -> Result<Vec<FrameworkRequirementDetail>, Error> {
         let client = self.get().await?;
         let rows = client
             .query(
@@ -286,10 +289,10 @@ WHERE id = ANY($1)
         Ok(found == requested.len() as i64)
     }
 
-    pub(crate) async fn get_control_in_transaction(
+    pub(super) async fn load_control_detail(
         &self,
         id: ControlId,
-    ) -> Result<Option<Control>, Error> {
+    ) -> Result<Option<ControlDetail>, Error> {
         let rows = self
             .transaction
             .query(
@@ -326,7 +329,7 @@ ORDER BY fr.code
 }
 
 impl WorkspaceReadContext {
-    pub async fn list_controls(&self) -> Result<Vec<Control>, Error> {
+    pub(super) async fn load_control_details(&self) -> Result<Vec<ControlDetail>, Error> {
         let rows = self
             .client
             .query(
@@ -360,7 +363,10 @@ ORDER BY c.code, fr.code
         controls_from_joined_rows(rows)
     }
 
-    pub async fn get_control(&self, id: ControlId) -> Result<Option<Control>, Error> {
+    pub(super) async fn load_control_detail(
+        &self,
+        id: ControlId,
+    ) -> Result<Option<ControlDetail>, Error> {
         let rows = self
             .client
             .query(
@@ -395,7 +401,7 @@ ORDER BY fr.code
         Ok(controls_from_joined_rows(rows)?.into_iter().next())
     }
 
-    pub async fn list_evidence_control_mappings(
+    pub(super) async fn load_evidence_control_mappings(
         &self,
         evidence_id: EvidenceId,
     ) -> Result<Option<Vec<EvidenceControlMapping>>, Error> {
@@ -433,8 +439,8 @@ ORDER BY c.code
     }
 }
 
-fn framework_from_row(row: Row) -> Result<Framework, Error> {
-    Ok(Framework {
+fn framework_from_row(row: Row) -> Result<FrameworkDetail, Error> {
+    Ok(FrameworkDetail {
         id: FrameworkId::from(row.try_get::<_, Uuid>("id")?),
         code: row.try_get("code")?,
         name: row.try_get("name")?,
@@ -442,8 +448,8 @@ fn framework_from_row(row: Row) -> Result<Framework, Error> {
     })
 }
 
-fn framework_requirement_from_row(row: Row) -> Result<FrameworkRequirement, Error> {
-    Ok(FrameworkRequirement {
+fn framework_requirement_from_row(row: Row) -> Result<FrameworkRequirementDetail, Error> {
+    Ok(FrameworkRequirementDetail {
         id: FrameworkRequirementId::from(row.try_get::<_, Uuid>("id")?),
         framework_id: FrameworkId::from(row.try_get::<_, Uuid>("framework_id")?),
         framework_code: row.try_get("framework_code")?,
@@ -454,8 +460,8 @@ fn framework_requirement_from_row(row: Row) -> Result<FrameworkRequirement, Erro
     })
 }
 
-fn control_from_row(row: &Row) -> Result<Control, Error> {
-    Ok(Control {
+fn control_from_row(row: &Row) -> Result<ControlDetail, Error> {
+    Ok(ControlDetail {
         id: ControlId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         code: row.try_get("code")?,
@@ -467,7 +473,7 @@ fn control_from_row(row: &Row) -> Result<Control, Error> {
     })
 }
 
-fn controls_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Control>, Error> {
+fn controls_from_joined_rows(rows: Vec<Row>) -> Result<Vec<ControlDetail>, Error> {
     let mut controls = Vec::new();
     let mut current_control_id = None;
     let mut current_control_index = None;
@@ -488,22 +494,24 @@ fn controls_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Control>, Error> {
     Ok(controls)
 }
 
-fn push_joined_framework_requirement(control: &mut Control, row: &Row) -> Result<(), Error> {
+fn push_joined_framework_requirement(control: &mut ControlDetail, row: &Row) -> Result<(), Error> {
     let Some(requirement_id) = row.try_get::<_, Option<Uuid>>("framework_requirement_id")? else {
         return Ok(());
     };
 
-    control.framework_requirements.push(FrameworkRequirement {
-        id: FrameworkRequirementId::from(requirement_id),
-        framework_id: FrameworkId::from(
-            row.try_get::<_, Uuid>("framework_requirement_framework_id")?,
-        ),
-        framework_code: row.try_get("framework_requirement_framework_code")?,
-        framework_name: row.try_get("framework_requirement_framework_name")?,
-        code: row.try_get("framework_requirement_code")?,
-        title: row.try_get("framework_requirement_title")?,
-        description: row.try_get("framework_requirement_description")?,
-    });
+    control
+        .framework_requirements
+        .push(FrameworkRequirementDetail {
+            id: FrameworkRequirementId::from(requirement_id),
+            framework_id: FrameworkId::from(
+                row.try_get::<_, Uuid>("framework_requirement_framework_id")?,
+            ),
+            framework_code: row.try_get("framework_requirement_framework_code")?,
+            framework_name: row.try_get("framework_requirement_framework_name")?,
+            code: row.try_get("framework_requirement_code")?,
+            title: row.try_get("framework_requirement_title")?,
+            description: row.try_get("framework_requirement_description")?,
+        });
 
     Ok(())
 }

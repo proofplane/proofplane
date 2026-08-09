@@ -22,6 +22,7 @@ mod oauth;
 mod outbox;
 mod policies;
 mod policy_document_upload_grants;
+mod projections;
 mod snapshot;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -32,7 +33,7 @@ mod workspaces;
 pub use agent_connections::AgentConnectionRepository;
 pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
 pub use agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantRepository;
-pub use auditor_access_grants::{AuditorAccessGrantProjection, AuditorAccessGrantRepository};
+pub use auditor_access_grants::AuditorAccessGrantRepository;
 pub use auditor_access_sessions::AuditorSessionRepository;
 pub use auditor_auth_transactions::AuditorAuthTransactionRepository;
 pub use constraints::ConflictKind;

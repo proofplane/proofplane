@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
-    domain::{ControlId, EvidenceAggregate, EvidenceId, WorkspacePermission},
+    domain::{ControlId, Evidence, EvidenceId, WorkspacePermission},
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -57,7 +57,7 @@ impl UnmapControlFromEvidenceHandler {
                         return Ok(UnmapOutcome::ControlNotFound);
                     }
                     let repository = context.evidence();
-                    let mut evidence = Vec::<EvidenceAggregate>::new();
+                    let mut evidence = Vec::<Evidence>::new();
                     for evidence_id in lock_order {
                         if let Some(aggregate) = repository.get(evidence_id).await? {
                             evidence.push(aggregate);

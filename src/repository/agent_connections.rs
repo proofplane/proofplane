@@ -7,7 +7,10 @@ use super::{
     snapshot::{save_workspace_snapshot, workspace_snapshot_record},
     Error, Postgres, TransactionContext,
 };
-use crate::domain::{AgentConnection, AgentConnectionId, Sha256Digest, WorkspacePermission};
+use crate::{
+    domain::{AgentConnection, AgentConnectionId, Sha256Digest, UserId, WorkspacePermission},
+    projections::UserAgentConnectionSummary,
+};
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
@@ -184,6 +187,33 @@ impl From<&AgentConnection> for ConnectionRecord {
     }
 }
 
+impl Postgres {
+    pub(super) async fn load_user_agent_connection_summaries(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<UserAgentConnectionSummary>, Error> {
+        self.get()
+            .await?
+            .query(LIST_SUMMARIES_SQL, &[&Uuid::from(user_id)])
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(UserAgentConnectionSummary {
+                    id: row.try_get::<_, Uuid>("id")?.into(),
+                    client_name: row.try_get("client_display_name")?,
+                    status: row.try_get::<_, String>("status")?.parse().map_err(|_| {
+                        Error::InvariantViolation("unknown agent connection status")
+                    })?,
+                    authorized_at: row.try_get("authorized_at")?,
+                    last_used_at: row.try_get("last_used_at")?,
+                })
+            })
+            .collect()
+    }
+}
+
+const LIST_SUMMARIES_SQL: &str = "SELECT c.id, c.client_display_name, c.status, t.consumed_at AS authorized_at, c.last_used_at FROM agent_connections c JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id WHERE c.user_id = $1 AND c.status IN ('authorized', 'active') AND t.consumed_at IS NOT NULL ORDER BY t.consumed_at DESC, c.id DESC";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +226,10 @@ mod tests {
     fn snapshot_query_loads_digests_and_canonical_permissions() {
         assert!(GET_SQL.contains("continuation_digest"));
         assert!(GET_SQL.contains("array_position"));
+    }
+    #[test]
+    fn summary_query_is_a_safe_audit_projection() {
+        assert!(!LIST_SUMMARIES_SQL.contains("digest"));
+        assert!(LIST_SUMMARIES_SQL.contains("ORDER BY t.consumed_at DESC, c.id DESC"));
     }
 }

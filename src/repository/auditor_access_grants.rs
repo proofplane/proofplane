@@ -7,6 +7,7 @@ use crate::{
     domain::{
         AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest, WorkspaceId,
     },
+    projections::AuditorAccessGrantSummary,
 };
 
 use super::{
@@ -24,29 +25,18 @@ pub struct AuditorAccessGrantRepository<'a> {
     connection: RepositoryConnection<'a>,
 }
 
-/// A digest-free grant view for read-side callers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditorAccessGrantProjection {
-    pub id: AuditorAccessGrantId,
-    pub auditor_email: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub period: AuditReviewPeriod,
-    pub revoked_at: Option<DateTime<Utc>>,
-}
-
 impl Postgres {
-    pub async fn list_auditor_access_grant_projections(
+    pub(super) async fn load_auditor_access_grant_summaries(
         &self,
         workspace_id: WorkspaceId,
-    ) -> Result<Vec<AuditorAccessGrantProjection>, Error> {
+    ) -> Result<Vec<AuditorAccessGrantSummary>, Error> {
         let rows = self
             .get()
             .await?
             .query(LIST_PROJECTIONS_SQL, &[&Uuid::from(workspace_id)])
             .await?;
         rows.into_iter()
-            .map(AuditorAccessGrantProjection::try_from)
+            .map(AuditorAccessGrantSummary::try_from)
             .collect()
     }
 
@@ -57,7 +47,7 @@ impl Postgres {
     }
 }
 
-impl TryFrom<Row> for AuditorAccessGrantProjection {
+impl TryFrom<Row> for AuditorAccessGrantSummary {
     type Error = Error;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {

@@ -6,10 +6,12 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
-        AuditorPortalPolicyDocument, AuditorPortalSubmission, Control, ControlId, ControlSummary,
-        DocumentUploadStatus, Evidence, EvidenceId, EvidenceStatus, EvidenceSubmission,
+        ControlId, DocumentUploadStatus, EvidenceId, EvidenceStatus, EvidenceSubmission,
         EvidenceSubmissionId, EvidenceSubmitter, PolicyId, WorkspaceId,
+    },
+    projections::{
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
+        AuditorPortalPolicyDocument, AuditorPortalSubmission, ControlSummary, EvidenceDetail,
     },
     repository::WorkspaceReadContext,
 };
@@ -17,7 +19,9 @@ use crate::{
 use super::Error;
 
 impl WorkspaceReadContext {
-    pub async fn auditor_portal_policies(&self) -> Result<Vec<AuditorPortalPolicy>, Error> {
+    pub(super) async fn load_auditor_portal_policies(
+        &self,
+    ) -> Result<Vec<AuditorPortalPolicy>, Error> {
         let rows = self
             .client
             .query(
@@ -60,13 +64,14 @@ ORDER BY lower(p.name), p.id, lower(c.code), c.id
         auditor_portal_policies_from_rows(rows)
     }
 
-    pub async fn auditor_portal_controls(
+    pub(super) async fn load_auditor_portal_controls(
         &self,
         period_start: DateTime<Utc>,
         period_end: DateTime<Utc>,
     ) -> Result<Vec<AuditorPortalControl>, Error> {
         let mut controls = self
-            .list_controls()
+            .control_projections()
+            .list()
             .await?
             .into_iter()
             .map(AuditorPortalControl::from)
@@ -199,11 +204,11 @@ struct AuditorPortalEvidenceMapping {
     control_id: ControlId,
     rationale: String,
     created_at: DateTime<Utc>,
-    evidence: Evidence,
+    evidence: EvidenceDetail,
 }
 
-impl From<Control> for AuditorPortalControl {
-    fn from(control: Control) -> Self {
+impl From<crate::projections::ControlDetail> for AuditorPortalControl {
+    fn from(control: crate::projections::ControlDetail) -> Self {
         Self {
             id: control.id,
             code: control.code,
@@ -289,8 +294,8 @@ fn auditor_portal_evidence_mapping_from_row(
     })
 }
 
-fn evidence_from_row(row: &Row) -> Result<Evidence, Error> {
-    Ok(Evidence {
+fn evidence_from_row(row: &Row) -> Result<EvidenceDetail, Error> {
+    Ok(EvidenceDetail {
         id: EvidenceId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         title: row.try_get("title")?,

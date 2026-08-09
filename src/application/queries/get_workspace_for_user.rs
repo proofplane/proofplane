@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    domain::{UserId, WorkspaceWithRole},
-    repository::Postgres,
-};
+use crate::{domain::UserId, projections::WorkspaceWithRole, repository::Postgres};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GetWorkspaceForUser {
@@ -25,7 +22,8 @@ impl GetWorkspaceForUserHandler {
         query: GetWorkspaceForUser,
     ) -> Result<Option<WorkspaceWithRole>, crate::repository::Error> {
         self.repository
-            .get_workspace_with_role_for_user(query.user_id)
+            .workspace_projections()
+            .get_for_user(query.user_id)
             .await
     }
 }

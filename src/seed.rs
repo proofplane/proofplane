@@ -9,7 +9,7 @@ use crate::{
     authentication::AgentConnectionContext,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        AgentConnectionId, EvidenceAggregate, EvidenceDefinition, EvidenceId, EvidenceStatus,
+        AgentConnectionId, Evidence, EvidenceDefinition, EvidenceId, EvidenceStatus,
         ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions,
         WorkspaceRole,
     },
@@ -243,7 +243,9 @@ async fn seed_evidence(
     let workspace_id = local_workspace_id();
     let seeds = demo_evidence()?;
     let existing = repository
-        .in_workspace_context_read(workspace_id, async |context| context.list_evidence().await)
+        .in_workspace_context_read(workspace_id, async |context| {
+            context.evidence_projections().list().await
+        })
         .await?;
 
     repository
@@ -284,7 +286,7 @@ async fn seed_evidence(
                             })?;
                         evidence.save(&aggregate).await?;
                     } else {
-                        let aggregate = EvidenceAggregate::define(
+                        let aggregate = Evidence::define(
                             EvidenceId::from(Uuid::new_v4()),
                             workspace_id,
                             definition,

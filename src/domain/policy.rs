@@ -6,9 +6,7 @@ use crate::{validate, validation::Validation};
 
 use uuid::Uuid;
 
-use super::{
-    ids::uuid_id, optional_text, BatchKey, ControlId, ControlSummary, DomainError, WorkspaceId,
-};
+use super::{ids::uuid_id, optional_text, BatchKey, ControlId, DomainError, WorkspaceId};
 
 uuid_id!(PolicyId);
 uuid_id!(PolicyDocumentUploadGrantId);
@@ -19,28 +17,9 @@ impl BatchKey for PolicyId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Policy {
-    pub id: PolicyId,
-    pub workspace_id: WorkspaceId,
-    pub name: String,
-    pub description: Option<String>,
-    pub control_mappings: Vec<PolicyControlMapping>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub archived_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyControlMapping {
-    pub policy_id: PolicyId,
-    pub control: ControlSummary,
-    pub created_at: DateTime<Utc>,
-}
-
 /// Complete mutable snapshot for a policy and its control mappings.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyAggregate {
+pub struct Policy {
     id: PolicyId,
     workspace_id: WorkspaceId,
     definition: PolicyDefinition,
@@ -92,7 +71,7 @@ impl PolicyControlMappingState {
     }
 }
 
-impl PolicyAggregate {
+impl Policy {
     pub fn define(
         id: PolicyId,
         workspace_id: WorkspaceId,
@@ -117,9 +96,9 @@ impl PolicyAggregate {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
         archived_at: Option<DateTime<Utc>>,
-    ) -> Result<Self, PolicyAggregateError> {
+    ) -> Result<Self, PolicyError> {
         if updated_at < created_at || archived_at.is_some_and(|at| at < created_at) {
-            return Err(PolicyAggregateError::InvalidRehydration);
+            return Err(PolicyError::InvalidRehydration);
         }
         let mut policy = Self::define(id, workspace_id, definition, created_at);
         policy.replace_mappings(mappings)?;
@@ -131,19 +110,19 @@ impl PolicyAggregate {
         &mut self,
         definition: PolicyDefinition,
         at: DateTime<Utc>,
-    ) -> Result<(), PolicyAggregateError> {
+    ) -> Result<(), PolicyError> {
         self.ensure_active()?;
         if at < self.created_at {
-            return Err(PolicyAggregateError::InvalidReplacementTime);
+            return Err(PolicyError::InvalidReplacementTime);
         }
         self.definition = definition;
         self.updated_at = at;
         Ok(())
     }
-    pub fn archive(&mut self, at: DateTime<Utc>) -> Result<(), PolicyAggregateError> {
+    pub fn archive(&mut self, at: DateTime<Utc>) -> Result<(), PolicyError> {
         self.ensure_active()?;
         if at < self.created_at {
-            return Err(PolicyAggregateError::InvalidReplacementTime);
+            return Err(PolicyError::InvalidReplacementTime);
         }
         self.archived_at = Some(at);
         self.updated_at = at;
@@ -152,21 +131,21 @@ impl PolicyAggregate {
     pub fn replace_mappings(
         &mut self,
         mut mappings: Vec<PolicyControlMappingState>,
-    ) -> Result<(), PolicyAggregateError> {
+    ) -> Result<(), PolicyError> {
         self.ensure_active()?;
         mappings.sort_unstable_by_key(|m| Uuid::from(m.control_id()));
         if mappings
             .windows(2)
             .any(|pair| pair[0].control_id() == pair[1].control_id())
         {
-            return Err(PolicyAggregateError::DuplicateControlMapping);
+            return Err(PolicyError::DuplicateControlMapping);
         }
         self.mappings = mappings;
         Ok(())
     }
-    fn ensure_active(&self) -> Result<(), PolicyAggregateError> {
+    fn ensure_active(&self) -> Result<(), PolicyError> {
         if self.archived_at.is_some() {
-            Err(PolicyAggregateError::Archived)
+            Err(PolicyError::Archived)
         } else {
             Ok(())
         }
@@ -198,7 +177,7 @@ impl PolicyAggregate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PolicyAggregateError {
+pub enum PolicyError {
     #[error("policy is archived")]
     Archived,
     #[error("control mapping is duplicated")]
@@ -278,8 +257,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        validate_policy_name, validate_unique_policy_control_ids, PolicyAggregate,
-        PolicyAggregateError, PolicyDefinition, PolicyId,
+        validate_policy_name, validate_unique_policy_control_ids, Policy, PolicyDefinition,
+        PolicyError, PolicyId,
     };
     use crate::domain::{ControlId, DomainError, WorkspaceId};
 
@@ -328,7 +307,7 @@ mod tests {
     #[test]
     fn archive_rejects_later_definition_and_mapping_mutations() {
         let created_at = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
-        let mut policy = PolicyAggregate::define(
+        let mut policy = Policy::define(
             PolicyId::from(Uuid::new_v4()),
             WorkspaceId::from(Uuid::new_v4()),
             PolicyDefinition::new("  Security  ".into(), Some("  Description  ".into()))
@@ -339,7 +318,7 @@ mod tests {
         policy.archive(created_at).unwrap();
         assert_eq!(
             policy.replace_mappings(Vec::new()),
-            Err(PolicyAggregateError::Archived)
+            Err(PolicyError::Archived)
         );
         assert_eq!(
             policy.replace(
@@ -348,7 +327,7 @@ mod tests {
                     .unwrap(),
                 created_at,
             ),
-            Err(PolicyAggregateError::Archived)
+            Err(PolicyError::Archived)
         );
         assert_eq!(policy.name(), "Security");
         assert_eq!(policy.description(), Some("Description"));

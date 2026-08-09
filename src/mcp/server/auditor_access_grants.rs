@@ -34,7 +34,7 @@ use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
     mcp::server::common::McpArgumentError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::AuditorAccessGrantProjection,
+    projections::AuditorAccessGrantSummary,
     services::Error as ServiceError,
     validate,
     validation::Validation,
@@ -216,8 +216,8 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
     }
 }
 
-impl From<AuditorAccessGrantProjection> for AuditorAccessGrantResponse {
-    fn from(grant: AuditorAccessGrantProjection) -> Self {
+impl From<AuditorAccessGrantSummary> for AuditorAccessGrantResponse {
+    fn from(grant: AuditorAccessGrantSummary) -> Self {
         Self {
             id: grant.id.to_string(),
             auditor_email: grant.auditor_email,

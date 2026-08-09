@@ -6,12 +6,12 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, Document, DocumentId, DocumentIdentity, DocumentUploadStatus,
-        Policy, PolicyAggregate, PolicyControlMapping, PolicyControlMappingState, PolicyDefinition,
-        PolicyId, WorkspaceId,
+        ControlId, Document, DocumentId, DocumentIdentity, DocumentUploadStatus, Policy,
+        PolicyControlMappingState, PolicyDefinition, PolicyId, WorkspaceId,
     },
-    projections::policy_projection::{
-        PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
+    projections::{
+        ControlSummary, PolicyCatalogEntry, PolicyControlMapping, PolicyDetail,
+        PolicyDocumentDetail, PolicyDocumentStatus,
     },
     repository::{
         DocumentDownloadCandidate, TransactionContext, WorkspaceReadContext,
@@ -59,7 +59,7 @@ impl<'a> WorkspaceTransactionContext<'a> {
 }
 
 impl PolicyRepository<'_> {
-    pub async fn get(&self, id: PolicyId) -> Result<Option<PolicyAggregate>, Error> {
+    pub async fn get(&self, id: PolicyId) -> Result<Option<Policy>, Error> {
         let Some(row) = self.context.transaction.query_opt("SELECT id, workspace_id, name, description, created_at, updated_at, archived_at FROM policies WHERE id = $1 AND workspace_id = $2 FOR UPDATE", &[&Uuid::from(id), &Uuid::from(self.context.workspace_id)]).await? else { return Ok(None) };
         let record = PolicyRecord::try_from(row)?;
         let mappings = self.context.transaction.query("SELECT control_id, created_at FROM policy_control_mappings WHERE policy_id = $1 ORDER BY control_id", &[&Uuid::from(id)]).await?.into_iter().map(policy_mapping_from_row).collect::<Result<Vec<_>, _>>()?;
@@ -67,7 +67,7 @@ impl PolicyRepository<'_> {
     }
 
     /// Persists the aggregate's complete definition, archive lifecycle, and mapping snapshot.
-    pub async fn save(&self, policy: &PolicyAggregate) -> Result<(), Error> {
+    pub async fn save(&self, policy: &Policy) -> Result<(), Error> {
         if policy.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
                 "policy workspace must match its transaction",
@@ -110,14 +110,11 @@ impl TryFrom<Row> for PolicyRecord {
     }
 }
 impl PolicyRecord {
-    fn into_aggregate(
-        self,
-        mappings: Vec<PolicyControlMappingState>,
-    ) -> Result<PolicyAggregate, Error> {
+    fn into_aggregate(self, mappings: Vec<PolicyControlMappingState>) -> Result<Policy, Error> {
         let definition = PolicyDefinition::new(self.name, self.description)
             .into_result()
             .map_err(|_| Error::InvariantViolation("persisted policy definition is invalid"))?;
-        PolicyAggregate::rehydrate(
+        Policy::rehydrate(
             self.id.into(),
             self.workspace_id.into(),
             definition,
@@ -129,8 +126,8 @@ impl PolicyRecord {
         .map_err(|_| Error::InvariantViolation("persisted policy snapshot is inconsistent"))
     }
 }
-impl From<&PolicyAggregate> for PolicyRecord {
-    fn from(policy: &PolicyAggregate) -> Self {
+impl From<&Policy> for PolicyRecord {
+    fn from(policy: &Policy) -> Self {
         Self {
             id: policy.id().into(),
             workspace_id: policy.workspace_id().into(),
@@ -219,7 +216,7 @@ FOR UPDATE OF p
         }))
     }
 
-    pub async fn get_policy_detail(
+    pub(super) async fn load_policy_detail(
         &self,
         policy_id: PolicyId,
     ) -> Result<Option<PolicyDetail>, Error> {
@@ -233,7 +230,7 @@ FOR UPDATE OF p
         policy_detail_from_joined_rows(rows)
     }
 
-    pub async fn get_policy_control_mapping(
+    pub(super) async fn load_policy_control_mapping(
         &self,
         policy_id: PolicyId,
         control_id: ControlId,
@@ -357,7 +354,7 @@ WHERE p.id = $1
             .transpose()
     }
 
-    pub async fn list_policy_catalog(&self) -> Result<Vec<PolicyCatalogEntry>, Error> {
+    pub(super) async fn load_policy_catalog(&self) -> Result<Vec<PolicyCatalogEntry>, Error> {
         let rows = self
             .client
             .query(POLICY_CATALOG_QUERY, &[&Uuid::from(self.workspace_id)])
@@ -367,7 +364,7 @@ WHERE p.id = $1
             .collect()
     }
 
-    pub async fn get_policy_detail(
+    pub(super) async fn load_policy_detail(
         &self,
         policy_id: PolicyId,
     ) -> Result<Option<PolicyDetail>, Error> {
@@ -450,7 +447,7 @@ GROUP BY p.id, a.upload_status
 ORDER BY lower(p.name), p.id
 "#;
 
-fn policies_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Policy>, Error> {
+fn policies_from_joined_rows(rows: Vec<Row>) -> Result<Vec<PolicyDetail>, Error> {
     let mut policies = Vec::new();
     let mut current_policy_id = None;
 
@@ -473,8 +470,8 @@ fn policies_from_joined_rows(rows: Vec<Row>) -> Result<Vec<Policy>, Error> {
     Ok(policies)
 }
 
-fn policy_from_row(row: &Row) -> Result<Policy, Error> {
-    Ok(Policy {
+fn policy_from_row(row: &Row) -> Result<PolicyDetail, Error> {
+    Ok(PolicyDetail {
         id: PolicyId::from(row.try_get::<_, Uuid>("id")?),
         workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         name: row.try_get("name")?,
@@ -483,6 +480,7 @@ fn policy_from_row(row: &Row) -> Result<Policy, Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         archived_at: row.try_get("archived_at")?,
+        document: None,
     })
 }
 
@@ -494,7 +492,10 @@ fn policy_detail_from_joined_rows(rows: Vec<Row>) -> Result<Option<PolicyDetail>
         .flatten();
     let policy = policies_from_joined_rows(rows)?.into_iter().next();
 
-    Ok(policy.map(|policy| PolicyDetail { policy, document }))
+    Ok(policy.map(|mut policy| {
+        policy.document = document;
+        policy
+    }))
 }
 
 fn policy_document_detail_from_row(row: &Row) -> Result<Option<PolicyDocumentDetail>, Error> {

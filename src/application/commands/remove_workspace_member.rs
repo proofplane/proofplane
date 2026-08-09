@@ -30,12 +30,12 @@ impl RemoveWorkspaceMemberHandler {
         let outcome = self
             .repository
             .in_transaction(async move |context| {
-                let repository = context.workspace_aggregates();
+                let repository = context.workspaces();
                 let Some(mut aggregate) = repository.get_for_member(command.actor_user_id).await?
                 else {
                     return Ok(RemoveOutcome::Unavailable);
                 };
-                let workspace_id = aggregate.workspace().id;
+                let workspace_id = aggregate.id();
                 match aggregate.remove_member(command.actor_user_id, command.target_user_id) {
                     Ok(()) => {
                         repository.save(&aggregate).await?;

@@ -4,7 +4,6 @@ mod agent_policy_document_upload_grant;
 mod auditor_access_grant;
 mod auditor_access_session;
 mod auditor_auth_transaction;
-mod auditor_portal;
 mod batch;
 mod controls;
 mod declared_upload_file;
@@ -26,7 +25,7 @@ mod workspace;
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionActivation,
     AgentConnectionConsumption, AgentConnectionId, AgentConnectionRevocation,
-    AgentConnectionStatus, AgentConnectionUse, NewPendingAgentConnection, UserAgentConnection,
+    AgentConnectionStatus, AgentConnectionUse, NewPendingAgentConnection,
 };
 pub use agent_evidence_upload_grant::{
     AgentEvidenceUploadAuthority, AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant,
@@ -47,19 +46,13 @@ pub use auditor_access_session::{
 pub use auditor_auth_transaction::{
     AuditorAuthTransaction, AuditorAuthTransactionId, AuditorAuthTransactionLifecycleError,
 };
-pub use auditor_portal::{
-    AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
-    AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
-    AuditorPortalReadModel, AuditorPortalSubmission,
-};
 pub use batch::{duplicate_ids, validate_batch, BatchError, BatchKey, MAX_BATCH_ITEMS};
 pub use controls::{
-    Control, ControlAggregate, ControlAggregateError, ControlDefinition,
-    ControlEvidenceMappingItem, ControlId, ControlSummary, CreateControlEvidenceMappingsPayload,
-    CreateControlPayload, CreateEvidenceControlMappingPayload,
-    CreateEvidenceControlMappingsPayload, DeleteControlEvidenceMappingsPayload,
-    DeleteEvidenceControlMappingsPayload, EvidenceControlMapping, EvidenceControlMappingItem,
-    Framework, FrameworkId, FrameworkRequirement, FrameworkRequirementId, UpdateControlPayload,
+    Control, ControlDefinition, ControlError, ControlEvidenceMappingItem, ControlId,
+    CreateControlEvidenceMappingsPayload, CreateControlPayload,
+    CreateEvidenceControlMappingPayload, CreateEvidenceControlMappingsPayload,
+    DeleteControlEvidenceMappingsPayload, DeleteEvidenceControlMappingsPayload,
+    EvidenceControlMappingItem, FrameworkId, FrameworkRequirementId, UpdateControlPayload,
 };
 pub use declared_upload_file::{DeclaredUploadFile, DeclaredUploadFileError};
 pub use document::{
@@ -69,9 +62,8 @@ pub use document::{
 };
 pub use error::DomainError;
 pub use evidence::{
-    CreateEvidencePayload, Evidence, EvidenceAggregate, EvidenceAggregateError,
-    EvidenceControlMappingState, EvidenceDefinition, EvidenceId, EvidenceStatus,
-    UpdateEvidencePayload,
+    CreateEvidencePayload, Evidence, EvidenceControlMappingState, EvidenceDefinition,
+    EvidenceError, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
 };
 pub use evidence_document_upload_grant::{
     EvidenceDocumentUploadGrant, EvidenceDocumentUploadGrantAuthority,
@@ -79,8 +71,8 @@ pub use evidence_document_upload_grant::{
 };
 pub use evidence_submission::{
     CoverageWindow, CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
-    EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmissionTransition,
-    EvidenceSubmissionTransitionOutcome, EvidenceSubmitter,
+    EvidenceSubmissionId, EvidenceSubmissionTransition, EvidenceSubmissionTransitionOutcome,
+    EvidenceSubmitter,
 };
 pub use oauth::{
     NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,
@@ -91,9 +83,8 @@ pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermis
 pub use policy::{
     validate_policy_name, validate_unique_policy_control_ids, CreateControlPolicyMappingsPayload,
     CreatePolicyControlMappingsPayload, CreatePolicyPayload, DeleteControlPolicyMappingsPayload,
-    DeletePolicyControlMappingsPayload, Policy, PolicyAggregate, PolicyAggregateError,
-    PolicyControlMapping, PolicyControlMappingState, PolicyDefinition, PolicyDocumentUploadGrantId,
-    PolicyId, UpdatePolicyPayload,
+    DeletePolicyControlMappingsPayload, Policy, PolicyControlMappingState, PolicyDefinition,
+    PolicyDocumentUploadGrantId, PolicyError, PolicyId, UpdatePolicyPayload,
 };
 pub use policy_document_upload_grant::{
     PolicyDocumentUploadGrant, PolicyDocumentUploadGrantAuthority, PolicyDocumentUploadGrantError,
@@ -102,7 +93,6 @@ pub use sha256_digest::Sha256Digest;
 pub use user::{ProvisionUserPayload, User, UserError, UserId, UserTransition};
 pub use validation::{optional_text, required_text, validate_document_filename};
 pub use workspace::{
-    CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceAggregate,
-    WorkspaceAggregateError, WorkspaceId, WorkspaceMemberError, WorkspaceMembership, WorkspaceRole,
-    WorkspaceWithRole,
+    CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceError, WorkspaceId,
+    WorkspaceMemberError, WorkspaceMembership, WorkspaceRole,
 };

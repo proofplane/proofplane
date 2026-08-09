@@ -6,8 +6,9 @@ use uuid::Uuid;
 use crate::{
     domain::{
         CoverageWindow, Document, DocumentId, DocumentIdentity, EvidenceId, EvidenceSubmission,
-        EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
+        EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
     },
+    projections::EvidenceSubmissionDetail,
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
 
@@ -267,7 +268,7 @@ LIMIT 1
         Ok(!rows.is_empty())
     }
 
-    pub async fn get_evidence_submission(
+    pub(super) async fn load_evidence_submission_detail(
         &self,
         id: EvidenceSubmissionId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
@@ -297,7 +298,7 @@ WHERE s.id = $1
             .transpose()
     }
 
-    pub async fn list_evidence_submissions(
+    pub(super) async fn load_evidence_submission_details(
         &self,
         evidence_id: EvidenceId,
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
@@ -328,7 +329,7 @@ ORDER BY s.received_at DESC, s.id DESC
             .collect()
     }
 
-    pub async fn list_evidence_submissions_for_coverage(
+    pub(super) async fn load_evidence_submission_details_for_coverage(
         &self,
         evidence_id: EvidenceId,
         coverage: CoverageWindow,
@@ -367,7 +368,7 @@ ORDER BY s.received_at DESC, s.id DESC
             .collect()
     }
 
-    pub async fn latest_evidence_submission_for_evidence(
+    pub(super) async fn load_latest_evidence_submission_detail(
         &self,
         evidence_id: EvidenceId,
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {

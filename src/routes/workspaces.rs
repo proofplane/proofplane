@@ -22,8 +22,9 @@ use crate::{
         auth0::{TokenVerifier, VerifiedClaims},
         UserContext,
     },
-    domain::{required_text, UserId, Workspace, WorkspaceId, WorkspaceWithRole},
+    domain::{required_text, UserId, WorkspaceId},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    projections::{WorkspaceDetails, WorkspaceWithRole},
     routes::{
         authentication::authenticate_user,
         error::{domain_errors, ApiError},
@@ -205,7 +206,7 @@ type WorkspaceWithRoleResponse = WorkspaceWithRoleResponseDTO;
 
 impl From<WorkspaceWithRole> for WorkspaceWithRoleResponseDTO {
     fn from(value: WorkspaceWithRole) -> Self {
-        let Workspace {
+        let WorkspaceDetails {
             id,
             slug,
             name,

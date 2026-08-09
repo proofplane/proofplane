@@ -6,10 +6,8 @@ use uuid::Uuid;
 use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
-    domain::{
-        Evidence, EvidenceAggregate, EvidenceDefinition, EvidenceId, EvidenceStatus,
-        WorkspacePermission,
-    },
+    domain::{Evidence, EvidenceDefinition, EvidenceId, EvidenceStatus, WorkspacePermission},
+    projections::EvidenceDetail,
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -24,7 +22,7 @@ pub struct CreateEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedEvidence {
-    pub evidence: Evidence,
+    pub evidence: EvidenceDetail,
 }
 
 #[derive(Clone)]
@@ -57,7 +55,7 @@ impl CreateEvidenceHandler {
         .into_result()
         .map_err(CreateEvidenceError::InvalidDefinition)?;
         let id = EvidenceId::from(Uuid::new_v4());
-        let aggregate = EvidenceAggregate::define(
+        let evidence = Evidence::define(
             id,
             command.connection.workspace_id,
             definition,
@@ -71,13 +69,12 @@ impl CreateEvidenceHandler {
                 command.connection.user_id,
                 command.connection.connection_id,
                 async move |context| {
-                    context.evidence().save(&aggregate).await?;
-                    context
-                        .get_evidence(id)
-                        .await?
-                        .ok_or(RepositoryError::InvariantViolation(
+                    context.evidence().save(&evidence).await?;
+                    context.evidence_projections().get(id).await?.ok_or(
+                        RepositoryError::InvariantViolation(
                             "created evidence must be readable in its transaction",
-                        ))
+                        ),
+                    )
                 },
             )
             .await?;

@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::{
     authentication::AgentConnectionContext,
-    domain::{Control, ControlId, WorkspacePermission},
+    domain::{ControlId, WorkspacePermission},
+    projections::ControlDetail,
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -21,7 +22,10 @@ impl ListControlsHandler {
         Self { repository }
     }
 
-    pub async fn handle(&self, query: ListControls) -> Result<Vec<Control>, ListControlsError> {
+    pub async fn handle(
+        &self,
+        query: ListControls,
+    ) -> Result<Vec<ControlDetail>, ListControlsError> {
         if !query
             .connection
             .permissions
@@ -32,7 +36,7 @@ impl ListControlsHandler {
         Ok(self
             .repository
             .in_workspace_context_read(query.connection.workspace_id, async |context| {
-                context.list_controls().await
+                context.control_projections().list().await
             })
             .await?)
     }
@@ -62,7 +66,10 @@ impl GetControlHandler {
         Self { repository }
     }
 
-    pub async fn handle(&self, query: GetControl) -> Result<Option<Control>, GetControlError> {
+    pub async fn handle(
+        &self,
+        query: GetControl,
+    ) -> Result<Option<ControlDetail>, GetControlError> {
         if !query
             .connection
             .permissions
@@ -73,7 +80,7 @@ impl GetControlHandler {
         Ok(self
             .repository
             .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context.get_control(query.control_id).await
+                context.control_projections().get(query.control_id).await
             })
             .await?)
     }

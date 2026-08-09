@@ -45,34 +45,23 @@ pub struct WorkspaceMembership {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceWithRole {
-    pub workspace: Workspace,
-    pub role: WorkspaceRole,
-}
-
 /**
  * Workspace is the tenant boundary. Most things are basically scoped
  * to workspaces, excepting global things like frameworks which are universal.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
-    pub id: WorkspaceId,
+    id: WorkspaceId,
     // TODO: settle workspace identity. Slug should be the ID when tenant
     // isolation moves to domain names.
-    pub slug: Option<String>,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceAggregate {
-    workspace: Workspace,
+    slug: Option<String>,
+    name: String,
+    created_at: DateTime<Utc>,
     memberships: Vec<WorkspaceMembership>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum WorkspaceAggregateError {
+pub enum WorkspaceError {
     #[error("workspace membership snapshot is inconsistent")]
     InvalidMemberships,
     #[error("the user already belongs to the workspace")]
@@ -89,27 +78,39 @@ pub enum WorkspaceMemberError {
     LastOwner,
 }
 
-impl WorkspaceAggregate {
-    pub fn create_owned(workspace: Workspace, owner_user_id: UserId) -> Self {
+impl Workspace {
+    pub fn create_owned(
+        id: WorkspaceId,
+        slug: Option<String>,
+        name: String,
+        created_at: DateTime<Utc>,
+        owner_user_id: UserId,
+    ) -> Self {
         let owner = WorkspaceMembership {
             user_id: owner_user_id,
-            workspace_id: workspace.id,
+            workspace_id: id,
             role: WorkspaceRole::Owner,
-            created_at: workspace.created_at,
+            created_at,
         };
         Self {
-            workspace,
+            id,
+            slug,
+            name,
+            created_at,
             memberships: vec![owner],
         }
     }
 
     pub fn rehydrate(
-        workspace: Workspace,
+        id: WorkspaceId,
+        slug: Option<String>,
+        name: String,
+        created_at: DateTime<Utc>,
         memberships: Vec<WorkspaceMembership>,
-    ) -> Result<Self, WorkspaceAggregateError> {
+    ) -> Result<Self, WorkspaceError> {
         let scoped = memberships
             .iter()
-            .all(|membership| membership.workspace_id == workspace.id);
+            .all(|membership| membership.workspace_id == id);
         let unique_users = memberships
             .iter()
             .map(|membership| membership.user_id)
@@ -120,16 +121,31 @@ impl WorkspaceAggregate {
             .iter()
             .any(|membership| membership.role == WorkspaceRole::Owner);
         if !scoped || !unique_users || !has_owner {
-            return Err(WorkspaceAggregateError::InvalidMemberships);
+            return Err(WorkspaceError::InvalidMemberships);
         }
         Ok(Self {
-            workspace,
+            id,
+            slug,
+            name,
+            created_at,
             memberships,
         })
     }
 
-    pub fn workspace(&self) -> &Workspace {
-        &self.workspace
+    pub fn id(&self) -> WorkspaceId {
+        self.id
+    }
+
+    pub fn slug(&self) -> Option<&str> {
+        self.slug.as_deref()
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
     }
 
     pub fn memberships(&self) -> &[WorkspaceMembership] {
@@ -148,13 +164,13 @@ impl WorkspaceAggregate {
         user_id: UserId,
         role: WorkspaceRole,
         created_at: DateTime<Utc>,
-    ) -> Result<(), WorkspaceAggregateError> {
+    ) -> Result<(), WorkspaceError> {
         if self.role_for(user_id).is_some() {
-            return Err(WorkspaceAggregateError::AlreadyMember);
+            return Err(WorkspaceError::AlreadyMember);
         }
         self.memberships.push(WorkspaceMembership {
             user_id,
-            workspace_id: self.workspace.id,
+            workspace_id: self.id,
             role,
             created_at,
         });
@@ -212,7 +228,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::{Workspace, WorkspaceAggregate, WorkspaceId, WorkspaceMemberError, WorkspaceRole};
+    use super::{Workspace, WorkspaceId, WorkspaceMemberError, WorkspaceRole};
     use crate::domain::UserId;
 
     #[test]
@@ -273,14 +289,12 @@ mod tests {
         assert_eq!(workspace, after);
     }
 
-    fn owned_workspace(owner_id: UserId) -> WorkspaceAggregate {
-        WorkspaceAggregate::create_owned(
-            Workspace {
-                id: WorkspaceId::from(Uuid::new_v4()),
-                slug: Some("workspace".to_owned()),
-                name: "Workspace".to_owned(),
-                created_at: timestamp(),
-            },
+    fn owned_workspace(owner_id: UserId) -> Workspace {
+        Workspace::create_owned(
+            WorkspaceId::from(Uuid::new_v4()),
+            Some("workspace".to_owned()),
+            "Workspace".to_owned(),
+            timestamp(),
             owner_id,
         )
     }

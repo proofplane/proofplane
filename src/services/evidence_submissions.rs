@@ -12,10 +12,10 @@ use crate::{
     authentication::AgentConnectionContext,
     domain::{
         AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload, Document, DocumentId,
-        DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionDetail,
-        EvidenceSubmissionId, WorkspaceId,
+        DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
+    projections::EvidenceSubmissionDetail,
     repository::{ArchiveDocumentResult, Postgres},
     services::Error,
 };
@@ -80,7 +80,7 @@ impl EvidenceSubmissionService {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.get_evidence_submission(id).await
+                context.evidence_submission_projections().get(id).await
             })
             .await?)
     }
@@ -93,7 +93,10 @@ impl EvidenceSubmissionService {
         Ok(self
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.list_evidence_submissions(evidence_id).await
+                context
+                    .evidence_submission_projections()
+                    .list_for_evidence(evidence_id)
+                    .await
             })
             .await?)
     }
@@ -108,7 +111,8 @@ impl EvidenceSubmissionService {
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context
-                    .list_evidence_submissions_for_coverage(evidence_id, coverage)
+                    .evidence_submission_projections()
+                    .list_for_coverage(evidence_id, coverage)
                     .await
             })
             .await?)
@@ -123,7 +127,8 @@ impl EvidenceSubmissionService {
             .repository
             .in_workspace_context_read(connection.workspace_id, async move |context| {
                 context
-                    .latest_evidence_submission_for_evidence(evidence_id)
+                    .evidence_submission_projections()
+                    .latest_for_evidence(evidence_id)
                     .await
             })
             .await?)

@@ -7,9 +7,10 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        Control, ControlAggregate, ControlDefinition, ControlId, DomainError,
-        FrameworkRequirementId, WorkspacePermission,
+        Control, ControlDefinition, ControlId, DomainError, FrameworkRequirementId,
+        WorkspacePermission,
     },
+    projections::ControlDetail,
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
 
@@ -24,7 +25,7 @@ pub struct CreateControl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedControl {
-    pub control: Control,
+    pub control: ControlDetail,
 }
 
 #[derive(Clone)]
@@ -53,7 +54,7 @@ impl CreateControlHandler {
             .into_result()
             .map_err(CreateControlError::InvalidDefinition)?;
         let control_id = ControlId::from(Uuid::new_v4());
-        let control = ControlAggregate::define(
+        let control = Control::define(
             control_id,
             command.connection.workspace_id,
             definition,
@@ -76,12 +77,11 @@ impl CreateControlHandler {
                         return Ok(CreateOutcome::InvalidFrameworkRequirementReferences);
                     }
                     context.controls().save(&control).await?;
-                    let projection = context
-                        .get_control_in_transaction(control_id)
-                        .await?
-                        .ok_or(RepositoryError::InvariantViolation(
+                    let projection = context.control_projections().get(control_id).await?.ok_or(
+                        RepositoryError::InvariantViolation(
                             "created control must be readable in its transaction",
-                        ))?;
+                        ),
+                    )?;
                     Ok(CreateOutcome::Created(projection))
                 },
             )
@@ -98,7 +98,7 @@ impl CreateControlHandler {
 }
 
 enum CreateOutcome {
-    Created(Control),
+    Created(ControlDetail),
     InvalidFrameworkRequirementReferences,
 }
 

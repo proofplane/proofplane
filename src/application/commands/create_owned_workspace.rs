@@ -4,9 +4,8 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     application::ExecutionMetadata,
-    domain::{
-        UserId, Workspace, WorkspaceAggregate, WorkspaceId, WorkspaceRole, WorkspaceWithRole,
-    },
+    domain::{UserId, Workspace, WorkspaceId, WorkspaceRole},
+    projections::{WorkspaceDetails, WorkspaceWithRole},
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
 
@@ -36,9 +35,9 @@ impl CreateOwnedWorkspaceHandler {
     ) -> Result<WorkspaceWithRole, CreateOwnedWorkspaceError> {
         self.repository
             .in_transaction(async move |context| {
-                let repository = context.workspace_aggregates();
+                let repository = context.workspaces();
                 if let Some(existing) = repository.get_for_member(command.actor_user_id).await? {
-                    if existing.workspace().id != command.workspace_id {
+                    if existing.id() != command.workspace_id {
                         return Err(RepositoryError::Conflict(
                             ConflictKind::WorkspaceMembershipExists,
                         ));
@@ -49,18 +48,21 @@ impl CreateOwnedWorkspaceHandler {
                     return workspace_for_replayed_command(&existing, &command);
                 }
 
-                let aggregate = WorkspaceAggregate::create_owned(
-                    Workspace {
-                        id: command.workspace_id,
-                        slug: command.slug,
-                        name: command.name,
-                        created_at: command.created_at,
-                    },
+                let workspace = Workspace::create_owned(
+                    command.workspace_id,
+                    command.slug,
+                    command.name,
+                    command.created_at,
                     command.actor_user_id,
                 );
-                repository.save(&aggregate).await?;
+                repository.save(&workspace).await?;
                 Ok(WorkspaceWithRole {
-                    workspace: aggregate.workspace().clone(),
+                    workspace: WorkspaceDetails {
+                        id: workspace.id(),
+                        slug: workspace.slug().map(str::to_owned),
+                        name: workspace.name().to_owned(),
+                        created_at: workspace.created_at(),
+                    },
                     role: WorkspaceRole::Owner,
                 })
             })
@@ -70,17 +72,21 @@ impl CreateOwnedWorkspaceHandler {
 }
 
 fn workspace_for_replayed_command(
-    existing: &WorkspaceAggregate,
+    existing: &Workspace,
     command: &CreateOwnedWorkspace,
 ) -> Result<WorkspaceWithRole, RepositoryError> {
-    let workspace = existing.workspace();
-    if workspace.slug == command.slug
-        && workspace.name == command.name
-        && workspace.created_at == command.created_at
+    if existing.slug() == command.slug.as_deref()
+        && existing.name() == command.name
+        && existing.created_at() == command.created_at
         && existing.role_for(command.actor_user_id) == Some(WorkspaceRole::Owner)
     {
         return Ok(WorkspaceWithRole {
-            workspace: workspace.clone(),
+            workspace: WorkspaceDetails {
+                id: existing.id(),
+                slug: existing.slug().map(str::to_owned),
+                name: existing.name().to_owned(),
+                created_at: existing.created_at(),
+            },
             role: WorkspaceRole::Owner,
         });
     }

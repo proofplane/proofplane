@@ -6,9 +6,9 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        ControlId, EvidenceAggregateError, EvidenceControlMapping, EvidenceControlMappingState,
-        EvidenceId, WorkspacePermission,
+        ControlId, EvidenceControlMappingState, EvidenceError, EvidenceId, WorkspacePermission,
     },
+    projections::EvidenceControlMapping,
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -103,7 +103,7 @@ impl MapEvidenceToControlsHandler {
                     evidence
                         .replace_mappings(combined)
                         .map_err(|error| match error {
-                            EvidenceAggregateError::DuplicateControlMapping(_) => {
+                            EvidenceError::DuplicateControlMapping(_) => {
                                 RepositoryError::InvariantViolation(
                                     "duplicate evidence control mapping",
                                 )
@@ -113,17 +113,17 @@ impl MapEvidenceToControlsHandler {
                             }
                         })?;
                     repository.save(&evidence).await?;
-                    let mappings = requested_ids
-                        .iter()
-                        .map(|control_id| {
-                            context.get_evidence_control_mapping(evidence_id, *control_id)
-                        })
-                        .collect::<Vec<_>>();
-                    let mut saved = Vec::with_capacity(mappings.len());
-                    for mapping in mappings {
-                        saved.push(mapping.await?.ok_or(RepositoryError::InvariantViolation(
-                            "saved evidence mapping must be readable",
-                        ))?);
+                    let projections = context.control_projections();
+                    let mut saved = Vec::with_capacity(requested_ids.len());
+                    for control_id in requested_ids.iter().copied() {
+                        saved.push(
+                            projections
+                                .get_evidence_mapping(evidence_id, control_id)
+                                .await?
+                                .ok_or(RepositoryError::InvariantViolation(
+                                    "saved evidence mapping must be readable",
+                                ))?,
+                        );
                     }
                     Ok(MapOutcome::Mapped {
                         requested_ids,
@@ -234,7 +234,10 @@ mod tests {
         ));
         let mappings = postgres
             .in_workspace_context_read(workspace.workspace_id, async |context| {
-                context.list_evidence_control_mappings(evidence_id).await
+                context
+                    .control_projections()
+                    .list_evidence_mappings(evidence_id)
+                    .await
             })
             .await
             .unwrap()

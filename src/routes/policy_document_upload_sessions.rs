@@ -51,7 +51,7 @@ use crate::{
         WorkspacePermissions,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::policy_projection::PolicyDetail,
+    projections::PolicyDetail,
     repository::{ArchiveDocumentResult, CreatePolicyDocumentResult},
     routes::{
         document_downloads::content_disposition,
@@ -796,7 +796,7 @@ fn escape_html(value: &str) -> String {
 impl From<PolicyDetail> for PolicyUploadPage {
     fn from(detail: PolicyDetail) -> Self {
         Self {
-            policy_name: detail.policy.name,
+            policy_name: detail.name,
             document: detail
                 .document
                 .map(|document| PolicyUploadDocumentResponse {

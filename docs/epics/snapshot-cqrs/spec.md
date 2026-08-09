@@ -29,10 +29,14 @@ locator. A composition-root catalog may group concrete handlers for wiring.
 | Auditor access | Grant, session, and authentication-transaction roots |
 | OAuthAuthorizationFlow | Request, subject, consent, code, cancellation, and consumption |
 
-Repositories expose narrow complete-snapshot `get` and `save` operations.
-Authorization, parent eligibility, relationships, and orchestration remain in
-handlers. Lists, details, reverse mappings, portal views, catalogs, downloads,
-and authority resolution are query models.
+Aggregate repositories expose narrow complete-snapshot `get` and `save`
+operations and return only aggregates named with the bare domain noun.
+Read-only shapes live in the projections boundary, use role-specific names,
+and are returned by projection repositories. Transaction-scoped projection
+repositories support command responses that must observe an aggregate save
+before commit. Authorization, parent eligibility, relationships, and
+orchestration remain in handlers. Lists, details, reverse mappings, portal
+views, catalogs, downloads, and authority resolution are query models.
 
 ## Commands, queries, and execution metadata
 

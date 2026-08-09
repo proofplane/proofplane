@@ -40,9 +40,10 @@ use crate::{
     authentication::AgentConnectionContext,
     domain::{
         validate_document_filename, CoverageWindow, Document, DocumentId, DocumentUploadStatus,
-        EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceId, EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    projections::EvidenceSubmissionDetail,
     repository::ArchiveDocumentResult,
     routes::{
         error::{domain_errors, ApiError},

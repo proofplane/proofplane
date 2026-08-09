@@ -1,16 +1,17 @@
 use chrono::{DateTime, Utc};
 
-use super::{
-    ControlId, ControlSummary, DocumentId, DocumentUploadStatus, Evidence, EvidenceSubmission,
-    FrameworkRequirement, PolicyId, UserId, WorkspaceId,
+use crate::domain::{
+    ControlId, DocumentId, DocumentUploadStatus, EvidenceSubmission, PolicyId, UserId, WorkspaceId,
 };
+
+use super::{ControlSummary, EvidenceDetail, FrameworkRequirementDetail};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditorPortalReadModel {
     pub workspace_id: WorkspaceId,
     pub workspace_name: String,
     pub auditor_email: String,
-    pub framework_requirements: Vec<FrameworkRequirement>,
+    pub framework_requirements: Vec<FrameworkRequirementDetail>,
     pub controls: Vec<AuditorPortalControl>,
     pub policies: Vec<AuditorPortalPolicy>,
 }
@@ -21,7 +22,7 @@ pub struct AuditorPortalControl {
     pub code: String,
     pub title: String,
     pub description: String,
-    pub framework_requirements: Vec<FrameworkRequirement>,
+    pub framework_requirements: Vec<FrameworkRequirementDetail>,
     pub evidence: Vec<AuditorPortalEvidence>,
     pub policies: Vec<AuditorPortalPolicySummary>,
 }
@@ -69,7 +70,7 @@ pub struct AuditorPortalPolicyDocument {
 pub struct AuditorPortalEvidence {
     pub mapping_rationale: String,
     pub mapping_created_at: DateTime<Utc>,
-    pub evidence: Evidence,
+    pub evidence: EvidenceDetail,
     pub submissions: Vec<AuditorPortalSubmission>,
 }
 

@@ -55,18 +55,6 @@ impl FromStr for EvidenceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Evidence {
-    pub id: EvidenceId,
-    pub workspace_id: WorkspaceId,
-    pub title: String,
-    pub description: String,
-    pub collection_instructions: String,
-    pub status: EvidenceStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceDefinition {
     title: String,
     description: String,
@@ -131,7 +119,7 @@ impl EvidenceControlMappingState {
 
 /// Complete mutable snapshot for one workspace evidence item and its mappings.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceAggregate {
+pub struct Evidence {
     id: EvidenceId,
     workspace_id: WorkspaceId,
     definition: EvidenceDefinition,
@@ -141,7 +129,7 @@ pub struct EvidenceAggregate {
     updated_at: DateTime<Utc>,
 }
 
-impl EvidenceAggregate {
+impl Evidence {
     pub fn define(
         id: EvidenceId,
         workspace_id: WorkspaceId,
@@ -168,9 +156,9 @@ impl EvidenceAggregate {
         mappings: Vec<EvidenceControlMappingState>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
-    ) -> Result<Self, EvidenceAggregateError> {
+    ) -> Result<Self, EvidenceError> {
         if updated_at < created_at {
-            return Err(EvidenceAggregateError::InvalidRehydration);
+            return Err(EvidenceError::InvalidRehydration);
         }
         let mut evidence = Self::define(id, workspace_id, definition, status, created_at);
         evidence.replace_mappings(mappings)?;
@@ -183,9 +171,9 @@ impl EvidenceAggregate {
         definition: EvidenceDefinition,
         status: EvidenceStatus,
         updated_at: DateTime<Utc>,
-    ) -> Result<(), EvidenceAggregateError> {
+    ) -> Result<(), EvidenceError> {
         if updated_at < self.created_at {
-            return Err(EvidenceAggregateError::InvalidReplacementTime);
+            return Err(EvidenceError::InvalidReplacementTime);
         }
         self.definition = definition;
         self.status = status;
@@ -196,7 +184,7 @@ impl EvidenceAggregate {
     pub fn replace_mappings(
         &mut self,
         mappings: Vec<EvidenceControlMappingState>,
-    ) -> Result<(), EvidenceAggregateError> {
+    ) -> Result<(), EvidenceError> {
         let mappings = normalize_mappings(mappings)?;
         self.mappings = mappings;
         Ok(())
@@ -233,20 +221,18 @@ impl EvidenceAggregate {
 
 fn normalize_mappings(
     mut mappings: Vec<EvidenceControlMappingState>,
-) -> Result<Vec<EvidenceControlMappingState>, EvidenceAggregateError> {
+) -> Result<Vec<EvidenceControlMappingState>, EvidenceError> {
     mappings.sort_unstable_by_key(|mapping| Uuid::from(mapping.control_id()));
     for pair in mappings.windows(2) {
         if pair[0].control_id() == pair[1].control_id() {
-            return Err(EvidenceAggregateError::DuplicateControlMapping(
-                pair[0].control_id(),
-            ));
+            return Err(EvidenceError::DuplicateControlMapping(pair[0].control_id()));
         }
     }
     Ok(mappings)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum EvidenceAggregateError {
+pub enum EvidenceError {
     #[error("control mapping is duplicated")]
     DuplicateControlMapping(ControlId),
     #[error("persisted evidence snapshot is inconsistent")]
@@ -279,8 +265,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        EvidenceAggregate, EvidenceAggregateError, EvidenceControlMappingState, EvidenceDefinition,
-        EvidenceId, EvidenceStatus,
+        Evidence, EvidenceControlMappingState, EvidenceDefinition, EvidenceError, EvidenceId,
+        EvidenceStatus,
     };
     use crate::domain::{ControlId, DomainError, WorkspaceId};
 
@@ -322,7 +308,7 @@ mod tests {
     #[test]
     fn replacement_preserves_status_rules_and_rejects_time_before_creation() {
         let created_at = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
-        let mut evidence = EvidenceAggregate::define(
+        let mut evidence = Evidence::define(
             EvidenceId::from(Uuid::new_v4()),
             WorkspaceId::from(Uuid::new_v4()),
             definition(),
@@ -345,7 +331,7 @@ mod tests {
                 EvidenceStatus::Paused,
                 created_at - Duration::seconds(1)
             ),
-            Err(EvidenceAggregateError::InvalidReplacementTime)
+            Err(EvidenceError::InvalidReplacementTime)
         ));
     }
 
@@ -354,7 +340,7 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
         let first = ControlId::from(Uuid::from_u128(1));
         let second = ControlId::from(Uuid::from_u128(2));
-        let mut evidence = EvidenceAggregate::define(
+        let mut evidence = Evidence::define(
             EvidenceId::from(Uuid::new_v4()),
             WorkspaceId::from(Uuid::new_v4()),
             definition(),
@@ -376,7 +362,7 @@ mod tests {
         );
         assert!(matches!(
             evidence.replace_mappings(vec![mapping(first, now), mapping(first, now)]),
-            Err(EvidenceAggregateError::DuplicateControlMapping(id)) if id == first
+            Err(EvidenceError::DuplicateControlMapping(id)) if id == first
         ));
     }
 

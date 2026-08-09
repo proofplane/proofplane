@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-
 use crate::{
     authentication::AgentConnectionContext,
-    domain::{ControlId, Evidence, EvidenceControlMapping, EvidenceId, WorkspacePermission},
+    domain::{ControlId, EvidenceId, WorkspacePermission},
+    projections::{ControlEvidenceMapping, EvidenceControlMapping, EvidenceDetail},
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -23,12 +22,15 @@ impl ListEvidenceHandler {
         Self { repository }
     }
 
-    pub async fn handle(&self, query: ListEvidence) -> Result<Vec<Evidence>, EvidenceCatalogError> {
+    pub async fn handle(
+        &self,
+        query: ListEvidence,
+    ) -> Result<Vec<EvidenceDetail>, EvidenceCatalogError> {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
             .in_workspace_context_read(query.connection.workspace_id, async |context| {
-                context.list_evidence().await
+                context.evidence_projections().list().await
             })
             .await?)
     }
@@ -53,12 +55,12 @@ impl GetEvidenceHandler {
     pub async fn handle(
         &self,
         query: GetEvidence,
-    ) -> Result<Option<Evidence>, EvidenceCatalogError> {
+    ) -> Result<Option<EvidenceDetail>, EvidenceCatalogError> {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
             .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context.get_evidence(query.evidence_id).await
+                context.evidence_projections().get(query.evidence_id).await
             })
             .await?)
     }
@@ -95,7 +97,8 @@ impl ListEvidenceControlMappingsHandler {
             .repository
             .in_workspace_context_read(query.connection.workspace_id, async move |context| {
                 context
-                    .list_evidence_control_mappings(query.evidence_id)
+                    .control_projections()
+                    .list_evidence_mappings(query.evidence_id)
                     .await
             })
             .await?)
@@ -106,13 +109,6 @@ impl ListEvidenceControlMappingsHandler {
 pub struct ListControlEvidenceMappings {
     pub connection: AgentConnectionContext,
     pub control_id: ControlId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ControlEvidenceMappingProjection {
-    pub evidence: Evidence,
-    pub rationale: String,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -128,7 +124,7 @@ impl ListControlEvidenceMappingsHandler {
     pub async fn handle(
         &self,
         query: ListControlEvidenceMappings,
-    ) -> Result<Option<Vec<ControlEvidenceMappingProjection>>, EvidenceCatalogError> {
+    ) -> Result<Option<Vec<ControlEvidenceMapping>>, EvidenceCatalogError> {
         if !query
             .connection
             .permissions
@@ -136,63 +132,17 @@ impl ListControlEvidenceMappingsHandler {
         {
             return Err(EvidenceCatalogError::Unavailable);
         }
-        let client = self.repository.get().await.map_err(RepositoryError::from)?;
-        if client
-            .query_opt(
-                "SELECT 1 FROM controls WHERE id = $1 AND workspace_id = $2",
-                &[
-                    &uuid::Uuid::from(query.control_id),
-                    &uuid::Uuid::from(query.connection.workspace_id),
-                ],
-            )
-            .await
-            .map_err(RepositoryError::from)?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        client
-            .query(
-                REVERSE_MAPPINGS_SQL,
-                &[
-                    &uuid::Uuid::from(query.control_id),
-                    &uuid::Uuid::from(query.connection.workspace_id),
-                ],
-            )
-            .await
-            .map_err(RepositoryError::from)?
-            .into_iter()
-            .map(|row| {
-                Ok(ControlEvidenceMappingProjection {
-                    evidence: Evidence {
-                        id: row.try_get::<_, uuid::Uuid>("id")?.into(),
-                        workspace_id: row.try_get::<_, uuid::Uuid>("workspace_id")?.into(),
-                        title: row.try_get("title")?,
-                        description: row.try_get("description")?,
-                        collection_instructions: row.try_get("collection_instructions")?,
-                        status: row.try_get::<_, String>("status")?.parse()?,
-                        created_at: row.try_get("evidence_created_at")?,
-                        updated_at: row.try_get("updated_at")?,
-                    },
-                    rationale: row.try_get("rationale")?,
-                    created_at: row.try_get("mapping_created_at")?,
-                })
+        Ok(self
+            .repository
+            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
+                context
+                    .control_projections()
+                    .list_evidence_for_control(query.control_id)
+                    .await
             })
-            .collect::<Result<Vec<_>, RepositoryError>>()
-            .map(Some)
-            .map_err(Into::into)
+            .await?)
     }
 }
-
-const REVERSE_MAPPINGS_SQL: &str = r#"
-SELECT e.id, e.workspace_id, e.title, e.description, e.collection_instructions,
-       e.status, e.created_at AS evidence_created_at, e.updated_at,
-       m.rationale, m.created_at AS mapping_created_at
-FROM evidence_control_mappings m
-JOIN evidence e ON e.id = m.evidence_id AND e.workspace_id = $2
-WHERE m.control_id = $1
-ORDER BY e.title, e.id
-"#;
 
 fn authorize_evidence(connection: AgentConnectionContext) -> Result<(), EvidenceCatalogError> {
     if connection
@@ -246,13 +196,6 @@ mod tests {
 
         assert!(matches!(list, Err(EvidenceCatalogError::Unavailable)));
         assert!(matches!(detail, Err(EvidenceCatalogError::Unavailable)));
-    }
-
-    #[test]
-    fn reverse_mapping_query_is_read_only_workspace_scoped_and_ordered() {
-        assert!(!super::REVERSE_MAPPINGS_SQL.contains("UPDATE"));
-        assert!(super::REVERSE_MAPPINGS_SQL.contains("e.workspace_id = $2"));
-        assert!(super::REVERSE_MAPPINGS_SQL.contains("ORDER BY e.title, e.id"));
     }
 
     fn repository() -> Arc<Postgres> {

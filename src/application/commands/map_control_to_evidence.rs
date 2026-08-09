@@ -5,9 +5,7 @@ use chrono::Utc;
 use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
-    domain::{
-        ControlId, EvidenceAggregate, EvidenceControlMappingState, EvidenceId, WorkspacePermission,
-    },
+    domain::{ControlId, Evidence, EvidenceControlMappingState, EvidenceId, WorkspacePermission},
     repository::{Error as RepositoryError, Postgres},
 };
 
@@ -76,7 +74,7 @@ impl MapControlToEvidenceHandler {
                         return Ok(MapOutcome::ControlNotFound);
                     }
                     let repository = context.evidence();
-                    let mut evidence = Vec::<EvidenceAggregate>::new();
+                    let mut evidence = Vec::<Evidence>::new();
                     for evidence_id in lock_order {
                         if let Some(aggregate) = repository.get(evidence_id).await? {
                             evidence.push(aggregate);

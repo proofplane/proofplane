@@ -1,12 +1,11 @@
 use crate::{
     authentication::AgentConnectionContext,
     domain::{
-        canonical_permissions, AgentConnectionId, AgentConnectionStatus, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions,
+        canonical_permissions, AgentConnectionId, UserId, WorkspaceId, WorkspacePermission,
+        WorkspacePermissions,
     },
     repository::{Error, Postgres},
 };
-use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -38,14 +37,6 @@ pub struct AgentConnectionAuthority {
     pub auth0_subject: String,
     pub auth0_client_id: String,
     pub resource: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserAgentConnectionProjection {
-    pub id: AgentConnectionId,
-    pub client_name: String,
-    pub status: AgentConnectionStatus,
-    pub authorized_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
 }
 #[derive(Clone)]
 pub struct FindReusableAgentConnectionHandler {
@@ -137,25 +128,11 @@ impl ListUserAgentConnectionsHandler {
     pub async fn handle(
         &self,
         query: ListUserAgentConnections,
-    ) -> Result<Vec<UserAgentConnectionProjection>, Error> {
+    ) -> Result<Vec<crate::projections::UserAgentConnectionSummary>, Error> {
         self.repository
-            .get()
-            .await?
-            .query(LIST_SQL, &[&Uuid::from(query.user_id)])
-            .await?
-            .into_iter()
-            .map(|row| {
-                Ok(UserAgentConnectionProjection {
-                    id: row.try_get::<_, Uuid>("id")?.into(),
-                    client_name: row.try_get("client_display_name")?,
-                    status: row.try_get::<_, String>("status")?.parse().map_err(|_| {
-                        Error::InvariantViolation("unknown agent connection status")
-                    })?,
-                    authorized_at: row.try_get("authorized_at")?,
-                    last_used_at: row.try_get("last_used_at")?,
-                })
-            })
-            .collect()
+            .agent_connection_projections()
+            .list_for_user(query.user_id)
+            .await
     }
 }
 fn permissions(values: Vec<String>) -> Result<Vec<WorkspacePermission>, Error> {
@@ -170,7 +147,6 @@ fn permissions(values: Vec<String>) -> Result<Vec<WorkspacePermission>, Error> {
 }
 const REUSABLE_SQL: &str = "SELECT c.id, c.user_id, c.workspace_id, COALESCE(array_agg(p.permission ORDER BY array_position(ARRAY['read_evidence','write_evidence','read_evidence_submissions','write_evidence_submissions','read_controls','write_controls','manage_auditor_access'], p.permission)) FILTER (WHERE p.permission IS NOT NULL), ARRAY[]::text[]) AS permissions FROM agent_connections c JOIN users u ON u.id = c.user_id AND u.auth0_sub = c.auth0_subject JOIN workspace_memberships m ON m.user_id = c.user_id AND m.workspace_id = c.workspace_id LEFT JOIN agent_connection_permissions p ON p.agent_connection_id = c.id WHERE c.auth0_subject = $1 AND c.auth0_client_id = $2 AND c.resource = $3 AND c.status IN ('authorized', 'active') GROUP BY c.id";
 const AUTHORITY_SQL: &str = "SELECT c.user_id, c.workspace_id, c.auth0_subject, c.auth0_client_id, c.resource, COALESCE(array_agg(p.permission ORDER BY array_position(ARRAY['read_evidence','write_evidence','read_evidence_submissions','write_evidence_submissions','read_controls','write_controls','manage_auditor_access'], p.permission)) FILTER (WHERE p.permission IS NOT NULL), ARRAY[]::text[]) AS permissions FROM agent_connections c JOIN users u ON u.id = c.user_id AND u.auth0_sub = c.auth0_subject JOIN workspace_memberships m ON m.user_id = c.user_id AND m.workspace_id = c.workspace_id LEFT JOIN agent_connection_permissions p ON p.agent_connection_id = c.id WHERE c.id = $1 AND c.status = 'active' GROUP BY c.id";
-const LIST_SQL: &str = "SELECT c.id, c.client_display_name, c.status, t.consumed_at AS authorized_at, c.last_used_at FROM agent_connections c JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id WHERE c.user_id = $1 AND c.status IN ('authorized', 'active') AND t.consumed_at IS NOT NULL ORDER BY t.consumed_at DESC, c.id DESC";
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,10 +159,5 @@ mod tests {
     fn authority_query_conceals_digests_and_revoked_connections() {
         assert!(!AUTHORITY_SQL.contains("digest"));
         assert!(AUTHORITY_SQL.contains("c.status = 'active'"));
-    }
-    #[test]
-    fn list_query_is_a_safe_audit_projection() {
-        assert!(!LIST_SQL.contains("digest"));
-        assert!(LIST_SQL.contains("ORDER BY t.consumed_at DESC, c.id DESC"));
     }
 }

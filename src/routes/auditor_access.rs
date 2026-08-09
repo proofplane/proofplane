@@ -46,14 +46,15 @@ use crate::{
         },
         ExecutionMetadata,
     },
-    domain::{
-        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
-        AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
-        AuditorPortalReadModel, AuditorPortalSubmission, AuditorSessionTransition, ControlSummary,
-        Document, Evidence, EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement,
-    },
+    domain::{AuditorSessionTransition, Document, EvidenceSubmission, EvidenceSubmissionId},
     object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    projections::{
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
+        AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
+        AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, EvidenceDetail,
+        FrameworkRequirementDetail,
+    },
     routes::{error::ApiError, request_context::RequestId},
     services::document_downloads::{DocumentDownloadService, DownloadError},
 };
@@ -1017,7 +1018,7 @@ fn control_detail_path(model: &AuditorPortalReadModel, control_id: Uuid) -> Stri
 
 fn render_requirement_row(
     model: &AuditorPortalReadModel,
-    requirement: &FrameworkRequirement,
+    requirement: &FrameworkRequirementDetail,
 ) -> String {
     let controls = controls_for_requirement(model, Uuid::from(requirement.id));
     let evidence_count = controls
@@ -1102,7 +1103,7 @@ fn render_requirement_page(model: &AuditorPortalReadModel, requirement_id: Uuid)
 }
 
 fn render_control_row(
-    requirement: &FrameworkRequirement,
+    requirement: &FrameworkRequirementDetail,
     control: &AuditorPortalControl,
 ) -> String {
     let evidence_count = control.evidence.len();
@@ -1162,7 +1163,7 @@ fn render_standalone_control_page(
 
 fn render_control_detail_page(
     model: &AuditorPortalReadModel,
-    requirement: Option<&FrameworkRequirement>,
+    requirement: Option<&FrameworkRequirementDetail>,
     control: &AuditorPortalControl,
 ) -> String {
     let submission_count = control
@@ -2150,8 +2151,8 @@ struct FrameworkRequirementResponse {
     description: String,
 }
 
-impl From<FrameworkRequirement> for FrameworkRequirementResponse {
-    fn from(requirement: FrameworkRequirement) -> Self {
+impl From<FrameworkRequirementDetail> for FrameworkRequirementResponse {
+    fn from(requirement: FrameworkRequirementDetail) -> Self {
         Self {
             id: Uuid::from(requirement.id),
             framework_id: Uuid::from(requirement.framework_id),
@@ -2194,8 +2195,8 @@ struct EvidenceResponse {
     updated_at: DateTime<Utc>,
 }
 
-impl From<Evidence> for EvidenceResponse {
-    fn from(evidence: Evidence) -> Self {
+impl From<EvidenceDetail> for EvidenceResponse {
+    fn from(evidence: EvidenceDetail) -> Self {
         Self {
             id: Uuid::from(evidence.id),
             title: evidence.title,

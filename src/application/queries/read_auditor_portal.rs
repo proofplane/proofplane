@@ -4,7 +4,7 @@ use crate::{
     application::{
         queries::resolve_auditor_session_by_digest::ResolvedAuditorSession, ExecutionMetadata,
     },
-    domain::{
+    projections::{
         AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary, AuditorPortalReadModel,
     },
     repository::{Error, Postgres},
@@ -31,10 +31,11 @@ impl ReadAuditorPortalHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<AuditorPortalReadModel, Error> {
         let mut framework_requirements = Vec::new();
-        for framework in self.repository.list_frameworks().await? {
+        for framework in self.repository.framework_projections().list().await? {
             framework_requirements.extend(
                 self.repository
-                    .list_framework_requirements(framework.id)
+                    .framework_projections()
+                    .list_requirements(framework.id)
                     .await?,
             );
         }
@@ -44,9 +45,10 @@ impl ReadAuditorPortalHandler {
             .repository
             .in_workspace_context_read(session.workspace_id, async |context| {
                 let controls = context
-                    .auditor_portal_controls(session.period.start, session.period.end)
+                    .auditor_portal_projections()
+                    .controls(session.period.start, session.period.end)
                     .await?;
-                let policies = context.auditor_portal_policies().await?;
+                let policies = context.auditor_portal_projections().policies().await?;
                 Ok((controls, policies))
             })
             .await?;
@@ -79,7 +81,8 @@ impl ReadAuditorPortalHandler {
 
         let workspace = self
             .repository
-            .get_workspace(session.workspace_id)
+            .workspace_projections()
+            .get(session.workspace_id)
             .await?
             .ok_or(Error::InvariantViolation(
                 "auditor session workspace is missing",

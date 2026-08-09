@@ -6,9 +6,10 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        Control, ControlAggregateError, ControlDefinition, ControlId, DomainError,
-        FrameworkRequirementId, WorkspacePermission,
+        ControlDefinition, ControlError, ControlId, DomainError, FrameworkRequirementId,
+        WorkspacePermission,
     },
+    projections::ControlDetail,
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
 
@@ -24,7 +25,7 @@ pub struct ReplaceControl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplacedControl {
-    pub control: Control,
+    pub control: ControlDetail,
 }
 
 #[derive(Clone)]
@@ -74,12 +75,11 @@ impl ReplaceControlHandler {
                     };
                     match control.replace(definition, requirement_ids, Utc::now()) {
                         Ok(()) => {}
-                        Err(ControlAggregateError::DuplicateFrameworkRequirementReference(_)) => {
+                        Err(ControlError::DuplicateFrameworkRequirementReference(_)) => {
                             return Ok(ReplaceOutcome::InvalidFrameworkRequirementReferences);
                         }
                         Err(
-                            ControlAggregateError::InvalidRehydration
-                            | ControlAggregateError::InvalidReplacementTime,
+                            ControlError::InvalidRehydration | ControlError::InvalidReplacementTime,
                         ) => {
                             return Err(RepositoryError::InvariantViolation(
                                 "replacement control snapshot is invalid",
@@ -87,12 +87,11 @@ impl ReplaceControlHandler {
                         }
                     }
                     repository.save(&control).await?;
-                    let projection = context
-                        .get_control_in_transaction(control_id)
-                        .await?
-                        .ok_or(RepositoryError::InvariantViolation(
+                    let projection = context.control_projections().get(control_id).await?.ok_or(
+                        RepositoryError::InvariantViolation(
                             "replaced control must be readable in its transaction",
-                        ))?;
+                        ),
+                    )?;
                     Ok(ReplaceOutcome::Replaced(projection))
                 },
             )
@@ -110,7 +109,7 @@ impl ReplaceControlHandler {
 }
 
 enum ReplaceOutcome {
-    Replaced(Control),
+    Replaced(ControlDetail),
     Unavailable,
     InvalidFrameworkRequirementReferences,
 }

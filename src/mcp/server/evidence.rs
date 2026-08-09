@@ -23,10 +23,10 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{
-        required_text, CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus,
-        WorkspacePermission,
+        required_text, CreateEvidencePayload, EvidenceId, EvidenceStatus, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    projections::EvidenceDetail,
     validate,
 };
 use uuid::Uuid;
@@ -199,8 +199,8 @@ struct EvidenceResponseDTO {
     updated_at: String,
 }
 
-impl From<Evidence> for EvidenceResponseDTO {
-    fn from(evidence: Evidence) -> Self {
+impl From<EvidenceDetail> for EvidenceResponseDTO {
+    fn from(evidence: EvidenceDetail) -> Self {
         Self {
             id: evidence.id.to_string(),
             workspace_id: evidence.workspace_id.to_string(),

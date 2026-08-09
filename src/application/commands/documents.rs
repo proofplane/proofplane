@@ -217,7 +217,12 @@ impl CreateEvidenceSubmissionDocumentHandler {
                 command.connection.user_id,
                 command.connection.connection_id,
                 async move |context| {
-                    if context.get_evidence(command.evidence_id).await?.is_none() {
+                    if context
+                        .evidence_projections()
+                        .get(command.evidence_id)
+                        .await?
+                        .is_none()
+                    {
                         return Ok(None);
                     }
                     let submissions = context.evidence_submissions();
@@ -380,7 +385,12 @@ impl CompleteAgentEvidenceUploadHandler {
                         Ok(None) => {}
                         Err(_) => return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable),
                     }
-                    if context.get_evidence(grant.evidence_id()).await?.is_none() {
+                    if context
+                        .evidence_projections()
+                        .get(grant.evidence_id())
+                        .await?
+                        .is_none()
+                    {
                         return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable);
                     }
                     let submissions = context.evidence_submissions();
