@@ -29,13 +29,20 @@ use crate::{
     application::{
         commands::{
             agent_connections::AuthorizeAgentConnectionHandler,
-            create_control::CreateControlHandler, create_evidence::CreateEvidenceHandler,
+            create_control::CreateControlHandler,
+            create_evidence::CreateEvidenceHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
             map_control_to_evidence::MapControlToEvidenceHandler,
             map_evidence_to_controls::MapEvidenceToControlsHandler,
+            policies::{
+                ArchivePolicyHandler, AttachControlToPoliciesHandler,
+                AttachPolicyToControlsHandler, CreatePolicyHandler,
+                DetachControlFromPoliciesHandler, DetachPolicyFromControlsHandler,
+                ReplacePolicyHandler,
+            },
             replace_control::ReplaceControlHandler,
             revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
             unmap_control_from_evidence::UnmapControlFromEvidenceHandler,
@@ -48,6 +55,7 @@ use crate::{
             },
             framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
             list_auditor_access_grants::ListAuditorAccessGrantsHandler,
+            policy_catalog::{GetPolicyHandler, ListPoliciesHandler},
         },
     },
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
@@ -65,7 +73,7 @@ use crate::{
     },
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
+        evidence_submissions::EvidenceSubmissionService,
     },
 };
 use url::Url;
@@ -157,7 +165,6 @@ where
         dependencies.public_api_base_url.clone(),
         dependencies.policy_upload_grant_encryptor,
     );
-    let policies = PolicyService::new(dependencies.postgres.clone());
     let authorize_agent_connection =
         AuthorizeAgentConnectionHandler::new(dependencies.postgres.clone());
     let protocol = protocol_router(
@@ -208,7 +215,25 @@ where
                     ),
                 },
             },
-            policies,
+            super::server::PolicyHandlers {
+                create: CreatePolicyHandler::new(dependencies.postgres.clone()),
+                replace: ReplacePolicyHandler::new(dependencies.postgres.clone()),
+                archive: ArchivePolicyHandler::new(dependencies.postgres.clone()),
+                attach_to_controls: AttachPolicyToControlsHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                attach_control_to_policies: AttachControlToPoliciesHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                detach_from_controls: DetachPolicyFromControlsHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                detach_control_from_policies: DetachControlFromPoliciesHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                list: ListPoliciesHandler::new(dependencies.postgres.clone()),
+                get: GetPolicyHandler::new(dependencies.postgres.clone()),
+            },
             dependencies.public_api_base_url,
         ),
         dependencies.allowed_hosts,

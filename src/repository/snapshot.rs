@@ -38,7 +38,8 @@ pub(super) async fn save_workspace_snapshot(
     let sql = build_upsert_sql(snapshot.metadata)?;
     let affected = client
         .execute(sql.as_str(), snapshot.values.as_slice())
-        .await?;
+        .await
+        .map_err(super::constraints::classify_db_error)?;
     if affected != 1 {
         return Err(Error::InvariantViolation(
             "workspace snapshot save crossed a workspace boundary",

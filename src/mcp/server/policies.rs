@@ -17,6 +17,15 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::policies::{
+            ArchivePolicy, ArchivePolicyError, AttachControlToPolicies, AttachPolicyToControls,
+            ControlPolicyCommandError, CreatePolicy, DetachControlFromPolicies,
+            DetachPolicyFromControls, PolicyCommandError, ReplacePolicy,
+        },
+        queries::policy_catalog::{GetPolicy, ListPolicies, PolicyCatalogError},
+        ExecutionMetadata,
+    },
     domain::{
         validate_batch, ControlId, CreateControlPolicyMappingsPayload,
         CreatePolicyControlMappingsPayload, CreatePolicyPayload,
@@ -25,7 +34,7 @@ use crate::{
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
-    repository::ArchivePolicyResult,
+    repository::Error as RepositoryError,
     services::{
         policies::{
             AttachControlToPoliciesError, AttachPolicyToControlsError,
@@ -49,9 +58,13 @@ impl ProofplaneMcp {
     ) -> Result<Json<ListPoliciesResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let policies = self
-            .policies
-            .list(context.agent_connection_context())
-            .await?;
+            .policy_handlers
+            .list
+            .handle(ListPolicies {
+                connection: context.agent_connection_context(),
+            })
+            .await
+            .map_err(policy_catalog_error)?;
 
         emit_policy_audit(&context, "policy.listed", "list_policies", None);
 
@@ -72,9 +85,14 @@ impl ProofplaneMcp {
         let policy_id = parse_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let policy = self
-            .policies
-            .get(context.agent_connection_context(), policy_id)
-            .await?
+            .policy_handlers
+            .get
+            .handle(GetPolicy {
+                connection: context.agent_connection_context(),
+                policy_id,
+            })
+            .await
+            .map_err(policy_catalog_error)?
             .ok_or_else(not_found)?;
 
         emit_policy_audit(
@@ -99,9 +117,20 @@ impl ProofplaneMcp {
         let payload = parse_create_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let policy = self
-            .policies
-            .create(context.agent_connection_context(), payload)
-            .await?;
+            .policy_handlers
+            .create
+            .handle(
+                CreatePolicy {
+                    connection: context.agent_connection_context(),
+                    name: payload.name,
+                    description: payload.description,
+                    control_ids: payload.control_ids,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(policy_mutation_error)?;
+        let policy = policy.policy;
 
         emit_policy_audit(
             &context,
@@ -125,10 +154,20 @@ impl ProofplaneMcp {
         let (policy_id, payload) = parse_update_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let policy = self
-            .policies
-            .update(context.agent_connection_context(), policy_id, payload)
-            .await?
-            .ok_or_else(not_found)?;
+            .policy_handlers
+            .replace
+            .handle(
+                ReplacePolicy {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                    name: payload.name,
+                    description: payload.description,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(policy_mutation_error)?
+            .policy;
 
         emit_policy_audit(
             &context,
@@ -151,30 +190,19 @@ impl ProofplaneMcp {
     ) -> Result<Json<ArchivePolicyResponse>, ErrorData> {
         let policy_id = parse_policy_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let result = self
-            .policies
-            .archive(context.agent_connection_context(), policy_id)
-            .await?;
-
-        let ArchivePolicyResult::Archived {
-            policy_id,
-            archived_at,
-        } = result
-        else {
-            return Err(match result {
-                ArchivePolicyResult::NotFound => not_found(),
-                ArchivePolicyResult::DocumentInProgress => policy_document_in_progress(),
-                ArchivePolicyResult::Archived { .. } => ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                ),
-            });
-        };
+        let archived = self
+            .policy_handlers
+            .archive
+            .handle(
+                ArchivePolicy {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(archive_policy_error)?;
+        let archived_at = archived.archived_at;
 
         emit_policy_audit(
             &context,
@@ -201,10 +229,23 @@ impl ProofplaneMcp {
         let (policy_id, control_id) = parse_policy_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let mapping = self
-            .policies
-            .attach_to_control(context.agent_connection_context(), policy_id, control_id)
-            .await?
-            .ok_or_else(not_found)?;
+            .policy_handlers
+            .attach_to_controls
+            .handle(
+                AttachPolicyToControls {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                    control_ids: vec![control_id],
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(attach_policy_single_error)?;
+        let mapping = mapping
+            .mappings
+            .into_iter()
+            .next()
+            .ok_or_else(|| dependency_failure("saved policy mapping was not returned"))?;
 
         emit_policy_control_audit(
             &context,
@@ -231,13 +272,18 @@ impl ProofplaneMcp {
     ) -> Result<Json<PolicyControlResponse>, ErrorData> {
         let (policy_id, control_id) = parse_policy_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
-        let detached = self
-            .policies
-            .detach_from_control(context.agent_connection_context(), policy_id, control_id)
-            .await?;
-        if !detached {
-            return Err(not_found());
-        }
+        self.policy_handlers
+            .detach_from_controls
+            .handle(
+                DetachPolicyFromControls {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                    control_ids: vec![control_id],
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(detach_policy_single_error)?;
 
         emit_policy_control_audit(
             &context,
@@ -267,9 +313,19 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let policy_id = payload.policy_id;
         let control_ids = self
-            .policies
-            .attach_to_controls(context.agent_connection_context(), payload)
-            .await?;
+            .policy_handlers
+            .attach_to_controls
+            .handle(
+                AttachPolicyToControls {
+                    connection: context.agent_connection_context(),
+                    policy_id: payload.policy_id,
+                    control_ids: payload.control_ids,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(attach_policy_batch_error)?;
+        let control_ids = control_ids.control_ids;
 
         let control_id_strings = control_ids
             .iter()
@@ -312,9 +368,19 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let control_id = payload.control_id;
         let policy_ids = self
-            .policies
-            .attach_control_to_policies(context.agent_connection_context(), payload)
-            .await?;
+            .policy_handlers
+            .attach_control_to_policies
+            .handle(
+                AttachControlToPolicies {
+                    connection: context.agent_connection_context(),
+                    control_id: payload.control_id,
+                    policy_ids: payload.policy_ids,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(attach_control_batch_error)?;
+        let policy_ids = policy_ids.policy_ids;
 
         let policy_id_strings = policy_ids
             .iter()
@@ -357,9 +423,19 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let policy_id = payload.policy_id;
         let control_ids = self
-            .policies
-            .detach_policy_from_controls(context.agent_connection_context(), payload)
-            .await?;
+            .policy_handlers
+            .detach_from_controls
+            .handle(
+                DetachPolicyFromControls {
+                    connection: context.agent_connection_context(),
+                    policy_id: payload.policy_id,
+                    control_ids: payload.control_ids,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(detach_policy_batch_error)?;
+        let control_ids = control_ids.control_ids;
 
         let control_id_strings = control_ids
             .iter()
@@ -402,9 +478,19 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let control_id = payload.control_id;
         let policy_ids = self
-            .policies
-            .detach_control_from_policies(context.agent_connection_context(), payload)
-            .await?;
+            .policy_handlers
+            .detach_control_from_policies
+            .handle(
+                DetachControlFromPolicies {
+                    connection: context.agent_connection_context(),
+                    control_id: payload.control_id,
+                    policy_ids: payload.policy_ids,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(detach_control_batch_error)?;
+        let policy_ids = policy_ids.policy_ids;
 
         let policy_id_strings = policy_ids
             .iter()
@@ -819,6 +905,152 @@ fn optional_control_ids(
     } else {
         Validation::invalid_many(errors)
     }
+}
+
+fn policy_catalog_error(error: PolicyCatalogError) -> ErrorData {
+    match error {
+        PolicyCatalogError::Unavailable => not_found(),
+        PolicyCatalogError::Repository(error) => repository_error(error),
+    }
+}
+
+fn policy_mutation_error(error: PolicyCommandError) -> ErrorData {
+    match error {
+        PolicyCommandError::Unavailable => not_found(),
+        PolicyCommandError::InvalidDefinition(errors) => domain_errors(errors),
+        PolicyCommandError::NameTaken => PolicyMutationError::NameTaken.into(),
+        PolicyCommandError::Rejected { unknown, .. } => {
+            if unknown.is_empty() {
+                dependency_failure("policy mapping command was unexpectedly rejected")
+            } else {
+                PolicyMutationError::InvalidControlReferences.into()
+            }
+        }
+        PolicyCommandError::Repository(error) => repository_error(error),
+    }
+}
+
+fn archive_policy_error(error: ArchivePolicyError) -> ErrorData {
+    match error {
+        ArchivePolicyError::Unavailable => not_found(),
+        ArchivePolicyError::DocumentInProgress => policy_document_in_progress(),
+        ArchivePolicyError::Repository(error) => repository_error(error),
+    }
+}
+
+fn attach_policy_single_error(error: PolicyCommandError) -> ErrorData {
+    match error {
+        PolicyCommandError::Rejected {
+            unknown,
+            already_mapped: _,
+        } if !unknown.is_empty() => PolicyMutationError::InvalidControlReferences.into(),
+        PolicyCommandError::Rejected { already_mapped, .. } if !already_mapped.is_empty() => {
+            PolicyMutationError::MappingExists.into()
+        }
+        other => policy_mutation_error(other),
+    }
+}
+
+fn detach_policy_single_error(error: PolicyCommandError) -> ErrorData {
+    match error {
+        PolicyCommandError::Rejected { .. } | PolicyCommandError::Unavailable => not_found(),
+        other => policy_mutation_error(other),
+    }
+}
+
+fn attach_policy_batch_error(error: PolicyCommandError) -> ErrorData {
+    match error {
+        PolicyCommandError::Unavailable => AttachPolicyToControlsError::PolicyNotFound.into(),
+        PolicyCommandError::Rejected {
+            unknown,
+            already_mapped,
+        } => AttachPolicyToControlsError::Rejected {
+            unknown,
+            already_mapped,
+        }
+        .into(),
+        PolicyCommandError::Repository(error) => {
+            AttachPolicyToControlsError::Repository(error).into()
+        }
+        other => policy_mutation_error(other),
+    }
+}
+
+fn detach_policy_batch_error(error: PolicyCommandError) -> ErrorData {
+    match error {
+        PolicyCommandError::Unavailable => DetachPolicyFromControlsError::PolicyNotFound.into(),
+        PolicyCommandError::Rejected {
+            unknown,
+            already_mapped,
+        } => DetachPolicyFromControlsError::Rejected {
+            unknown,
+            not_mapped: already_mapped,
+        }
+        .into(),
+        PolicyCommandError::Repository(error) => {
+            DetachPolicyFromControlsError::Repository(error).into()
+        }
+        other => policy_mutation_error(other),
+    }
+}
+
+fn attach_control_batch_error(error: ControlPolicyCommandError) -> ErrorData {
+    match error {
+        ControlPolicyCommandError::Unavailable => {
+            AttachControlToPoliciesError::ControlNotFound.into()
+        }
+        ControlPolicyCommandError::Rejected {
+            unknown,
+            archived,
+            invalid,
+        } => AttachControlToPoliciesError::Rejected {
+            unknown,
+            archived,
+            already_mapped: invalid,
+        }
+        .into(),
+        ControlPolicyCommandError::Repository(error) => {
+            AttachControlToPoliciesError::Repository(error).into()
+        }
+    }
+}
+
+fn detach_control_batch_error(error: ControlPolicyCommandError) -> ErrorData {
+    match error {
+        ControlPolicyCommandError::Unavailable => {
+            DetachControlFromPoliciesError::ControlNotFound.into()
+        }
+        ControlPolicyCommandError::Rejected {
+            unknown,
+            archived,
+            invalid,
+        } => DetachControlFromPoliciesError::Rejected {
+            unknown,
+            archived,
+            not_mapped: invalid,
+        }
+        .into(),
+        ControlPolicyCommandError::Repository(error) => {
+            DetachControlFromPoliciesError::Repository(error).into()
+        }
+    }
+}
+
+fn repository_error(error: RepositoryError) -> ErrorData {
+    ServiceError::Repository(error).into()
+}
+
+fn dependency_failure(context: &'static str) -> ErrorData {
+    tracing::error!(context, "MCP policy dependency invariant failed");
+    ErrorData::internal_error(
+        "dependency failure",
+        Some(json!({
+            "problem": {
+                "code": "dependency_failed",
+                "message": "a dependency failed while handling the tool call",
+            }
+        })),
+    )
 }
 
 impl From<PolicyMutationError> for ErrorData {

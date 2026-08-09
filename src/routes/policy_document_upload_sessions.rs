@@ -38,6 +38,7 @@ use crate::{
                 RedeemPolicyDocumentUploadGrant, RedeemPolicyDocumentUploadGrantHandler,
             },
         },
+        queries::policy_catalog::{GetPolicy, GetPolicyHandler},
         queries::resolve_policy_document_upload_grant_authority::{
             ResolvePolicyDocumentUploadGrantAuthority,
             ResolvePolicyDocumentUploadGrantAuthorityHandler,
@@ -59,7 +60,6 @@ use crate::{
     services::{
         agent_connections::AgentConnectionContext,
         document_downloads::{DocumentDownloadService, DownloadError},
-        policies::PolicyService,
         policy_documents::{PolicyDocumentService, UploadPolicyDocumentPayload},
         policy_upload_sessions::{
             PolicyUploadSessionError, PolicyUploadSessionTokenService, VerifiedPolicyUploadSession,
@@ -77,7 +77,7 @@ pub struct PolicyDocumentUploadSessionState {
     pub redeem_grant: RedeemPolicyDocumentUploadGrantHandler,
     pub downloads: DocumentDownloadService,
     pub sessions: PolicyUploadSessionTokenService,
-    pub policies: PolicyService,
+    pub get_policy: GetPolicyHandler,
     pub documents: PolicyDocumentService,
     pub secure_cookie: bool,
     pub max_document_bytes: usize,
@@ -406,9 +406,16 @@ async fn inventory(
     session: &VerifiedPolicyUploadSession,
 ) -> Result<Option<PolicyUploadPage>, ApiError> {
     let detail = state
-        .policies
-        .get(session_context(session), session.policy_id)
-        .await?;
+        .get_policy
+        .handle(GetPolicy {
+            connection: session_context(session),
+            policy_id: session.policy_id,
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "policy upload inventory query failed");
+            ApiError::Internal
+        })?;
     Ok(detail.map(Into::into))
 }
 

@@ -39,9 +39,24 @@ impl CreatePolicyHandler {
         _: ExecutionMetadata,
     ) -> Result<CreatedPolicy, PolicyCommandError> {
         authorize(command.connection)?;
-        let definition = PolicyDefinition::new(command.name, command.description)
-            .into_result()
-            .map_err(PolicyCommandError::InvalidDefinition)?;
+        let mut definition_errors = Vec::new();
+        let definition =
+            match PolicyDefinition::new(command.name, command.description).into_result() {
+                Ok(definition) => Some(definition),
+                Err(mut errors) => {
+                    definition_errors.append(&mut errors);
+                    None
+                }
+            };
+        if has_duplicates(&command.control_ids) {
+            definition_errors.push(crate::domain::DomainError::DuplicatePolicyControlId);
+        }
+        if !definition_errors.is_empty() {
+            return Err(PolicyCommandError::InvalidDefinition(definition_errors));
+        }
+        let definition = definition.ok_or(PolicyCommandError::Repository(
+            RepositoryError::InvariantViolation("validated policy definition must be present"),
+        ))?;
         let id = PolicyId::from(Uuid::new_v4());
         let requested = command.control_ids;
         let outcome = self
@@ -57,7 +72,7 @@ impl CreatePolicyHandler {
                         .copied()
                         .filter(|id| !present.contains(id))
                         .collect::<Vec<_>>();
-                    if !unknown.is_empty() || has_duplicates(&requested) {
+                    if !unknown.is_empty() {
                         return Ok(CreateOutcome::Rejected { unknown });
                     }
                     let mut policy = crate::domain::PolicyAggregate::define(
@@ -141,6 +156,9 @@ impl ReplacePolicyHandler {
                     let Some(mut policy) = repository.get(id).await? else {
                         return Ok(None);
                     };
+                    if policy.archived_at().is_some() {
+                        return Ok(None);
+                    }
                     policy.replace(definition, Utc::now()).map_err(invariant)?;
                     repository.save(&policy).await?;
                     context.get_policy_detail(id).await
@@ -189,6 +207,9 @@ impl ArchivePolicyHandler {
                     let Some(mut policy) = repository.get(id).await? else {
                         return Ok(None);
                     };
+                    if policy.archived_at().is_some() {
+                        return Ok(None);
+                    }
                     if context.policy_document_in_progress(id).await? {
                         return Ok(Some(Err(())));
                     }
@@ -239,6 +260,79 @@ pub struct AttachPolicyToControlsHandler {
 #[derive(Clone)]
 pub struct DetachPolicyFromControlsHandler {
     repository: Arc<Postgres>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttachControlToPolicies {
+    pub connection: AgentConnectionContext,
+    pub control_id: ControlId,
+    pub policy_ids: Vec<PolicyId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DetachControlFromPolicies {
+    pub connection: AgentConnectionContext,
+    pub control_id: ControlId,
+    pub policy_ids: Vec<PolicyId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedControlPolicies {
+    pub policy_ids: Vec<PolicyId>,
+}
+
+#[derive(Clone)]
+pub struct AttachControlToPoliciesHandler {
+    repository: Arc<Postgres>,
+}
+
+#[derive(Clone)]
+pub struct DetachControlFromPoliciesHandler {
+    repository: Arc<Postgres>,
+}
+
+impl AttachControlToPoliciesHandler {
+    pub fn new(repository: Arc<Postgres>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn handle(
+        &self,
+        command: AttachControlToPolicies,
+        metadata: ExecutionMetadata,
+    ) -> Result<ChangedControlPolicies, ControlPolicyCommandError> {
+        change_control_policies(
+            &self.repository,
+            command.connection,
+            command.control_id,
+            command.policy_ids,
+            true,
+            metadata,
+        )
+        .await
+    }
+}
+
+impl DetachControlFromPoliciesHandler {
+    pub fn new(repository: Arc<Postgres>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn handle(
+        &self,
+        command: DetachControlFromPolicies,
+        metadata: ExecutionMetadata,
+    ) -> Result<ChangedControlPolicies, ControlPolicyCommandError> {
+        change_control_policies(
+            &self.repository,
+            command.connection,
+            command.control_id,
+            command.policy_ids,
+            false,
+            metadata,
+        )
+        .await
+    }
 }
 impl AttachPolicyToControlsHandler {
     pub fn new(repository: Arc<Postgres>) -> Self {
@@ -300,6 +394,9 @@ async fn change_mappings(
                 let Some(mut policy) = repository.get(policy_id).await? else {
                     return Ok(None);
                 };
+                if policy.archived_at().is_some() {
+                    return Ok(None);
+                }
                 let existing = context.existing_control_ids(&requested).await?;
                 let unknown = requested
                     .iter()
@@ -340,15 +437,17 @@ async fn change_mappings(
                 policy.replace_mappings(next).map_err(invariant)?;
                 repository.save(&policy).await?;
                 let mut mappings = Vec::new();
-                for id in &requested {
-                    mappings.push(
-                        context
-                            .get_policy_control_mapping(policy_id, *id)
-                            .await?
-                            .ok_or(RepositoryError::InvariantViolation(
-                                "saved policy mapping must be readable",
-                            ))?,
-                    );
+                if attach {
+                    for id in &requested {
+                        mappings.push(
+                            context
+                                .get_policy_control_mapping(policy_id, *id)
+                                .await?
+                                .ok_or(RepositoryError::InvariantViolation(
+                                    "saved policy mapping must be readable",
+                                ))?,
+                        );
+                    }
                 }
                 Ok(Some(Ok(mappings)))
             },
@@ -366,7 +465,131 @@ async fn change_mappings(
         }),
     }
 }
+
+async fn change_control_policies(
+    repository: &Arc<Postgres>,
+    connection: AgentConnectionContext,
+    control_id: ControlId,
+    requested: Vec<PolicyId>,
+    attach: bool,
+    _: ExecutionMetadata,
+) -> Result<ChangedControlPolicies, ControlPolicyCommandError> {
+    authorize(connection).map_err(|_| ControlPolicyCommandError::Unavailable)?;
+    let response_policy_ids = requested.clone();
+    let outcome = repository
+        .in_agent_connection_workspace_context(
+            connection.workspace_id,
+            connection.user_id,
+            connection.connection_id,
+            async move |context| {
+                if !context
+                    .existing_control_ids(&[control_id])
+                    .await?
+                    .contains(&control_id)
+                {
+                    return Ok(ControlPolicyOutcome::ControlUnavailable);
+                }
+
+                let policy_repository = context.policies();
+                let mut lock_order = requested.clone();
+                lock_order.sort_unstable_by_key(|id| Uuid::from(*id));
+                let mut policies = Vec::with_capacity(lock_order.len());
+                let mut unknown = Vec::new();
+                let mut archived = Vec::new();
+                let mut invalid = Vec::new();
+
+                for policy_id in lock_order {
+                    let Some(policy) = policy_repository.get(policy_id).await? else {
+                        unknown.push(policy_id);
+                        continue;
+                    };
+                    if policy.archived_at().is_some() {
+                        archived.push(policy_id);
+                        continue;
+                    }
+                    let mapped = policy
+                        .mappings()
+                        .iter()
+                        .any(|mapping| mapping.control_id() == control_id);
+                    if (attach && mapped) || (!attach && !mapped) {
+                        invalid.push(policy_id);
+                    }
+                    policies.push(policy);
+                }
+
+                if !unknown.is_empty()
+                    || !archived.is_empty()
+                    || !invalid.is_empty()
+                    || has_policy_duplicates(&requested)
+                {
+                    return Ok(ControlPolicyOutcome::Rejected {
+                        unknown,
+                        archived,
+                        invalid,
+                    });
+                }
+
+                for mut policy in policies {
+                    let next = if attach {
+                        policy
+                            .mappings()
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(PolicyControlMappingState::new(
+                                control_id,
+                                Utc::now(),
+                            )))
+                            .collect()
+                    } else {
+                        policy
+                            .mappings()
+                            .iter()
+                            .filter(|mapping| mapping.control_id() != control_id)
+                            .cloned()
+                            .collect()
+                    };
+                    policy.replace_mappings(next).map_err(invariant)?;
+                    policy_repository.save(&policy).await?;
+                }
+
+                Ok(ControlPolicyOutcome::Changed)
+            },
+        )
+        .await?;
+
+    match outcome {
+        ControlPolicyOutcome::Changed => Ok(ChangedControlPolicies {
+            policy_ids: response_policy_ids,
+        }),
+        ControlPolicyOutcome::ControlUnavailable => Err(ControlPolicyCommandError::Unavailable),
+        ControlPolicyOutcome::Rejected {
+            unknown,
+            archived,
+            invalid,
+        } => Err(ControlPolicyCommandError::Rejected {
+            unknown,
+            archived,
+            invalid,
+        }),
+    }
+}
+
+enum ControlPolicyOutcome {
+    Changed,
+    ControlUnavailable,
+    Rejected {
+        unknown: Vec<PolicyId>,
+        archived: Vec<PolicyId>,
+        invalid: Vec<PolicyId>,
+    },
+}
+
 fn has_duplicates(ids: &[ControlId]) -> bool {
+    let mut seen = HashSet::new();
+    ids.iter().any(|id| !seen.insert(*id))
+}
+
+fn has_policy_duplicates(ids: &[PolicyId]) -> bool {
     let mut seen = HashSet::new();
     ids.iter().any(|id| !seen.insert(*id))
 }
@@ -418,6 +641,20 @@ pub enum ArchivePolicyError {
     Unavailable,
     #[error("policy document is in progress")]
     DocumentInProgress,
+    #[error("repository error")]
+    Repository(#[from] RepositoryError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ControlPolicyCommandError {
+    #[error("control is unavailable")]
+    Unavailable,
+    #[error("policy mappings are invalid")]
+    Rejected {
+        unknown: Vec<PolicyId>,
+        archived: Vec<PolicyId>,
+        invalid: Vec<PolicyId>,
+    },
     #[error("repository error")]
     Repository(#[from] RepositoryError),
 }
