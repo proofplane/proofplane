@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -6,56 +7,241 @@ use crate::{
     domain::{
         AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest, WorkspaceId,
     },
-    repository::WorkspaceTransactionContext,
 };
 
-use super::{Error, Postgres};
+use super::{
+    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    Error, Postgres, TransactionContext, WorkspaceTransactionContext,
+};
 
-const AUDITOR_ACCESS_GRANT_COLUMNS: &str = "id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
+enum RepositoryConnection<'a> {
+    Postgres(&'a Postgres),
+    Transaction(&'a TransactionContext<'a>),
+    WorkspaceTransaction(&'a WorkspaceTransactionContext<'a>),
+}
 
-impl WorkspaceTransactionContext<'_> {
+pub struct AuditorAccessGrantRepository<'a> {
+    connection: RepositoryConnection<'a>,
+}
+
+impl Postgres {
+    pub fn auditor_access_grants(&self) -> AuditorAccessGrantRepository<'_> {
+        AuditorAccessGrantRepository {
+            connection: RepositoryConnection::Postgres(self),
+        }
+    }
+}
+
+impl<'a> TransactionContext<'a> {
+    pub fn auditor_access_grants(&'a self) -> AuditorAccessGrantRepository<'a> {
+        AuditorAccessGrantRepository {
+            connection: RepositoryConnection::Transaction(self),
+        }
+    }
+}
+
+impl<'a> WorkspaceTransactionContext<'a> {
+    pub fn auditor_access_grants(&'a self) -> AuditorAccessGrantRepository<'a> {
+        AuditorAccessGrantRepository {
+            connection: RepositoryConnection::WorkspaceTransaction(self),
+        }
+    }
+
     pub async fn create_auditor_access_grant(
         &self,
         grant: AuditorAccessGrant,
     ) -> Result<AuditorAccessGrant, Error> {
-        let secret_digest = grant.secret_digest();
-        let digest: &[u8] = secret_digest.as_bytes();
-        let agent_connection_id = self.credential.agent_connection_uuid();
-        let row = self
-            .transaction
-            .query_one(
-                &format!(
-                    r#"
-INSERT INTO auditor_access_grants (
-    id,
-    workspace_id,
-    auditor_email,
-    secret_digest,
-    created_by_user_id,
-    created_via_agent_connection_id,
-    expires_at,
-    period_start,
-    period_end
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
-"#
-                ),
-                &[
-                    &Uuid::from(grant.id),
-                    &Uuid::from(self.workspace_id),
-                    &grant.auditor_email,
-                    &digest,
-                    &Uuid::from(self.user_id),
-                    &agent_connection_id,
-                    &grant.expires_at,
-                    &grant.period.start,
-                    &grant.period.end,
-                ],
-            )
-            .await?;
+        let repository = self.auditor_access_grants();
+        repository.save(&grant).await?;
+        repository
+            .get(grant.id, self.workspace_id)
+            .await?
+            .ok_or(Error::InvariantViolation(
+                "saved auditor access grant must be readable",
+            ))
+    }
+}
 
-        auditor_access_grant_from_row(&row)
+impl AuditorAccessGrantRepository<'_> {
+    pub async fn get(
+        &self,
+        grant_id: AuditorAccessGrantId,
+        workspace_id: WorkspaceId,
+    ) -> Result<Option<AuditorAccessGrant>, Error> {
+        let id = Uuid::from(grant_id);
+        let workspace_id = Uuid::from(workspace_id);
+        let rows = match self.connection {
+            RepositoryConnection::Postgres(postgres) => {
+                postgres
+                    .get()
+                    .await?
+                    .query(GET_SQL, &[&id, &workspace_id])
+                    .await?
+            }
+            RepositoryConnection::Transaction(context) => {
+                context
+                    .transaction
+                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .await?
+            }
+            RepositoryConnection::WorkspaceTransaction(context) => {
+                if workspace_id != Uuid::from(context.workspace_id) {
+                    return Ok(None);
+                }
+                context
+                    .transaction
+                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .await?
+            }
+        };
+        rows.into_iter()
+            .next()
+            .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
+            .transpose()
+    }
+
+    pub async fn save(&self, grant: &AuditorAccessGrant) -> Result<(), Error> {
+        let record = GrantRecord::from(grant);
+        match self.connection {
+            RepositoryConnection::Postgres(_) => Err(Error::InvariantViolation(
+                "auditor access grants must be saved in a transaction",
+            )),
+            RepositoryConnection::Transaction(context) => {
+                save_workspace_snapshot(&context.transaction, record.as_workspace_snapshot()).await
+            }
+            RepositoryConnection::WorkspaceTransaction(context) => {
+                if grant.workspace_id != context.workspace_id {
+                    return Err(Error::InvariantViolation(
+                        "auditor access grant workspace must match its transaction",
+                    ));
+                }
+                save_workspace_snapshot(&context.transaction, record.as_workspace_snapshot()).await
+            }
+        }
+    }
+}
+
+const COLUMNS: &str = "id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at";
+const GET_SQL: &str = "SELECT id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2";
+const GET_FOR_UPDATE_SQL: &str = "SELECT id, workspace_id, auditor_email, secret_digest, created_by_user_id, created_via_agent_connection_id, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2 FOR UPDATE";
+
+workspace_snapshot_record! {
+    struct GrantRecord {
+        id: Uuid,
+        workspace_id: Uuid,
+        auditor_email: String,
+        secret_digest: Vec<u8>,
+        created_by_user_id: Uuid,
+        created_via_agent_connection_id: Uuid,
+        created_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+        period_start: DateTime<Utc>,
+        period_end: DateTime<Utc>,
+        revoked_at: Option<DateTime<Utc>>,
+    }
+    table: auditor_access_grants,
+    conflict: id,
+    scope: workspace_id,
+}
+
+impl TryFrom<Row> for GrantRecord {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            auditor_email: row.try_get("auditor_email")?,
+            secret_digest: row.try_get("secret_digest")?,
+            created_by_user_id: row.try_get("created_by_user_id")?,
+            created_via_agent_connection_id: row.try_get("created_via_agent_connection_id")?,
+            created_at: row.try_get("created_at")?,
+            expires_at: row.try_get("expires_at")?,
+            period_start: row.try_get("period_start")?,
+            period_end: row.try_get("period_end")?,
+            revoked_at: row.try_get("revoked_at")?,
+        })
+    }
+}
+
+impl TryFrom<GrantRecord> for AuditorAccessGrant {
+    type Error = Error;
+
+    fn try_from(record: GrantRecord) -> Result<Self, Self::Error> {
+        let digest = record.secret_digest.try_into().map_err(|_| {
+            Error::InvariantViolation("auditor access grant digest must contain 32 bytes")
+        })?;
+        AuditorAccessGrant::rehydrate(
+            record.id.into(),
+            record.workspace_id.into(),
+            record.auditor_email,
+            Sha256Digest::from_bytes(digest),
+            record.created_by_user_id.into(),
+            record.created_via_agent_connection_id.into(),
+            record.created_at,
+            record.expires_at,
+            AuditReviewPeriod::new(record.period_start, record.period_end)?,
+            record.revoked_at,
+        )
+        .map_err(|_| Error::InvariantViolation("persisted auditor access grant is inconsistent"))
+    }
+}
+
+impl From<&AuditorAccessGrant> for GrantRecord {
+    fn from(grant: &AuditorAccessGrant) -> Self {
+        Self {
+            id: grant.id.into(),
+            workspace_id: grant.workspace_id.into(),
+            auditor_email: grant.auditor_email.clone(),
+            secret_digest: grant.secret_digest().as_bytes().to_vec(),
+            created_by_user_id: grant.created_by_user_id.into(),
+            created_via_agent_connection_id: grant.created_via_agent_connection_id.into(),
+            created_at: grant.created_at,
+            expires_at: grant.expires_at,
+            period_start: grant.period.start,
+            period_end: grant.period.end,
+            revoked_at: grant.revoked_at,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+    use uuid::Uuid;
+
+    use super::{GrantRecord, GET_FOR_UPDATE_SQL, GET_SQL};
+    use crate::domain::{AuditReviewPeriod, AuditorAccessGrant, Sha256Digest};
+
+    #[test]
+    fn verification_and_transactional_reads_are_workspace_scoped_and_lock_distinctly() {
+        assert!(GET_SQL.contains("workspace_id = $2"));
+        assert!(!GET_SQL.contains("FOR UPDATE"));
+        assert!(GET_FOR_UPDATE_SQL.contains("workspace_id = $2"));
+        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+
+    #[test]
+    fn record_round_trip_preserves_a_revoked_grant_snapshot() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let mut grant = AuditorAccessGrant::issue(
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            "auditor@example.com".to_owned(),
+            Sha256Digest::digest(b"secret"),
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            created_at,
+            created_at + Duration::days(30),
+            AuditReviewPeriod::new(created_at - Duration::days(90), created_at).unwrap(),
+        )
+        .unwrap();
+        grant.revoke(created_at + Duration::seconds(1)).unwrap();
+
+        assert_eq!(
+            AuditorAccessGrant::try_from(GrantRecord::from(&grant)).unwrap(),
+            grant
+        );
     }
 }
 
@@ -64,48 +250,37 @@ impl Postgres {
         &self,
         grant_id: AuditorAccessGrantId,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
-                &format!(
-                    r#"
-SELECT {AUDITOR_ACCESS_GRANT_COLUMNS}
-FROM auditor_access_grants
-WHERE id = $1
-  AND revoked_at IS NULL
-  AND expires_at > now()
-"#
-                ),
+        let row = self
+            .get()
+            .await?
+            .query_opt(
+                &format!("SELECT {COLUMNS} FROM auditor_access_grants WHERE id = $1"),
                 &[&Uuid::from(grant_id)],
             )
             .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_access_grant_from_row(&row))
-            .transpose()
+        let grant = row
+            .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
+            .transpose()?;
+        Ok(grant.filter(|grant| grant.ensure_active_at(Utc::now()).is_ok()))
     }
 
     pub async fn list_auditor_access_grants(
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<Vec<AuditorAccessGrant>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let rows = self
+            .get()
+            .await?
             .query(
                 &format!(
-                    r#"
-SELECT {AUDITOR_ACCESS_GRANT_COLUMNS}
-FROM auditor_access_grants
-WHERE workspace_id = $1
-ORDER BY created_at DESC, id DESC
-"#
+                    "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC"
                 ),
                 &[&Uuid::from(workspace_id)],
             )
             .await?;
-
-        rows.iter().map(auditor_access_grant_from_row).collect()
+        rows.into_iter()
+            .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
+            .collect()
     }
 
     pub async fn revoke_auditor_access_grant(
@@ -113,25 +288,21 @@ ORDER BY created_at DESC, id DESC
         workspace_id: WorkspaceId,
         grant_id: AuditorAccessGrantId,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
-                &format!(
-                    r#"
-UPDATE auditor_access_grants
-SET revoked_at = COALESCE(revoked_at, now())
-WHERE workspace_id = $1 AND id = $2
-RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
-"#
-                ),
-                &[&Uuid::from(workspace_id), &Uuid::from(grant_id)],
-            )
-            .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_access_grant_from_row(&row))
-            .transpose()
+        self.in_transaction(async move |context| {
+            let repository = context.auditor_access_grants();
+            let Some(mut grant) = repository.get(grant_id, workspace_id).await? else {
+                return Ok(None);
+            };
+            if grant.workspace_id != workspace_id {
+                return Ok(None);
+            }
+            grant
+                .revoke(Utc::now())
+                .map_err(|_| Error::InvariantViolation("auditor grant revocation is invalid"))?;
+            repository.save(&grant).await?;
+            Ok(Some(grant))
+        })
+        .await
     }
 
     pub async fn get_active_auditor_access_grant_by_digest(
@@ -139,48 +310,20 @@ RETURNING {AUDITOR_ACCESS_GRANT_COLUMNS}
         workspace_id: WorkspaceId,
         digest: AuditorInviteSecretDigest,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
-        let client = self.get().await?;
         let digest: &[u8] = digest.as_bytes();
-        let rows = client
-            .query(
+        let row = self
+            .get()
+            .await?
+            .query_opt(
                 &format!(
-                    r#"
-SELECT {AUDITOR_ACCESS_GRANT_COLUMNS}
-FROM auditor_access_grants
-WHERE workspace_id = $1
-  AND secret_digest = $2
-  AND revoked_at IS NULL
-  AND expires_at > now()
-"#
+                    "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 AND secret_digest = $2"
                 ),
                 &[&Uuid::from(workspace_id), &digest],
             )
             .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_access_grant_from_row(&row))
-            .transpose()
+        let grant = row
+            .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
+            .transpose()?;
+        Ok(grant.filter(|grant| grant.ensure_active_at(Utc::now()).is_ok()))
     }
-}
-
-fn auditor_access_grant_from_row(row: &Row) -> Result<AuditorAccessGrant, Error> {
-    let secret_digest = row.try_get::<_, Vec<u8>>("secret_digest")?;
-    let secret_digest = secret_digest.try_into().map_err(|_| {
-        Error::InvariantViolation("auditor access grant digest must contain 32 bytes")
-    })?;
-    AuditorAccessGrant::rehydrate(
-        row.try_get::<_, Uuid>("id")?.into(),
-        row.try_get::<_, Uuid>("workspace_id")?.into(),
-        row.try_get("auditor_email")?,
-        Sha256Digest::from_bytes(secret_digest),
-        row.try_get::<_, Uuid>("created_by_user_id")?.into(),
-        row.try_get::<_, Uuid>("created_via_agent_connection_id")?
-            .into(),
-        row.try_get("created_at")?,
-        row.try_get("expires_at")?,
-        AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
-        row.try_get("revoked_at")?,
-    )
-    .map_err(|_| Error::InvariantViolation("persisted auditor access grant is inconsistent"))
 }
