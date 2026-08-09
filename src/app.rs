@@ -6,9 +6,15 @@ use crate::{
             create_owned_workspace::CreateOwnedWorkspaceHandler,
             issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
             record_user_login::RecordUserLoginHandler,
+            redeem_evidence_document_upload_grant::RedeemEvidenceDocumentUploadGrantHandler,
+            redeem_policy_document_upload_grant::RedeemPolicyDocumentUploadGrantHandler,
             remove_workspace_member::RemoveWorkspaceMemberHandler,
         },
-        queries::{get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler},
+        queries::{
+            get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler,
+            resolve_evidence_document_upload_grant_authority::ResolveEvidenceDocumentUploadGrantAuthorityHandler,
+            resolve_policy_document_upload_grant_authority::ResolvePolicyDocumentUploadGrantAuthorityHandler,
+        },
     },
     authentication::{
         auth0::{
@@ -19,9 +25,8 @@ use crate::{
             AgentEvidenceUploadGrantDecryptor, AgentPolicyDocumentUploadGrantDecryptor,
             AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor,
             DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
-            PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, PolicyUploadSessionDecryptor,
-            PolicyUploadSessionEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
-            UploadSessionDecryptor, UploadSessionEncryptor,
+            PolicyUploadGrantDecryptor, PolicyUploadSessionDecryptor, PolicyUploadSessionEncryptor,
+            UploadGrantDecryptor, UploadSessionDecryptor, UploadSessionEncryptor,
         },
         Error as AuthenticationError, UserAuthenticator,
     },
@@ -61,13 +66,10 @@ use crate::{
         client_resolver::ClientResolver,
         controls::ControlService,
         document_downloads::DocumentDownloadService,
-        document_upload_grants::DocumentUploadGrantService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
         policies::PolicyService,
-        policy_document_upload_grants::{
-            PolicyDocumentUploadGrantService, POLICY_UPLOAD_GRANT_AUDIENCE,
-        },
+        policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
         policy_documents::PolicyDocumentService,
         policy_upload_sessions::{PolicyUploadSessionTokenService, POLICY_UPLOAD_SESSION_AUDIENCE},
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
@@ -154,12 +156,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         download_grant_encryptor,
         download_grant_decryptor,
     );
-    let upload_grant_encryptor = UploadGrantEncryptor::from_config(
-        dependencies.config.server.public_api_base_url.clone(),
-        "proofplane-document-upload-grant",
-        &dependencies.config.paseto.upload_grant,
-    )
-    .map_err(AuthenticationError::from)?;
     let upload_grant_decryptor = UploadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         "proofplane-document-upload-grant",
@@ -178,20 +174,12 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(AuthenticationError::from)?;
-    let document_upload_grant_service = DocumentUploadGrantService::new(
-        dependencies.postgres.clone(),
-        dependencies.config.server.public_api_base_url.clone(),
-        upload_grant_encryptor,
-        upload_grant_decryptor,
-    );
+    let resolve_evidence_document_upload_grant =
+        ResolveEvidenceDocumentUploadGrantAuthorityHandler::new(upload_grant_decryptor);
+    let redeem_evidence_document_upload_grant =
+        RedeemEvidenceDocumentUploadGrantHandler::new(dependencies.postgres.clone());
     let upload_session_service =
         UploadSessionTokenService::new(upload_session_encryptor, upload_session_decryptor);
-    let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
-        dependencies.config.server.public_api_base_url.clone(),
-        POLICY_UPLOAD_GRANT_AUDIENCE,
-        &dependencies.config.paseto.upload_grant,
-    )
-    .map_err(AuthenticationError::from)?;
     let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         POLICY_UPLOAD_GRANT_AUDIENCE,
@@ -210,12 +198,10 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         &dependencies.config.paseto.upload_grant,
     )
     .map_err(AuthenticationError::from)?;
-    let policy_document_upload_grant_service = PolicyDocumentUploadGrantService::new(
-        dependencies.postgres.clone(),
-        dependencies.config.server.public_api_base_url.clone(),
-        policy_upload_grant_encryptor,
-        policy_upload_grant_decryptor,
-    );
+    let resolve_policy_document_upload_grant =
+        ResolvePolicyDocumentUploadGrantAuthorityHandler::new(policy_upload_grant_decryptor);
+    let redeem_policy_document_upload_grant =
+        RedeemPolicyDocumentUploadGrantHandler::new(dependencies.postgres.clone());
     let policy_upload_session_service = PolicyUploadSessionTokenService::new(
         policy_upload_session_encryptor,
         policy_upload_session_decryptor,
@@ -302,7 +288,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         ))
         .merge(document_upload_sessions::router(
             DocumentUploadSessionState {
-                grants: document_upload_grant_service,
+                resolve_grant: resolve_evidence_document_upload_grant,
+                redeem_grant: redeem_evidence_document_upload_grant,
                 downloads: document_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
@@ -313,7 +300,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         ))
         .merge(policy_document_upload_sessions::router(
             PolicyDocumentUploadSessionState {
-                grants: policy_document_upload_grant_service,
+                resolve_grant: resolve_policy_document_upload_grant,
+                redeem_grant: redeem_policy_document_upload_grant,
                 downloads: document_download_service.clone(),
                 sessions: policy_upload_session_service,
                 policies: PolicyService::new(dependencies.postgres.clone()),

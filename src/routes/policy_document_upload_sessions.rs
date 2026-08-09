@@ -26,10 +26,24 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use futures_util::stream;
+use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::{
+            issue_policy_document_upload_grant::PolicyDocumentUploadGrantHandlerError,
+            redeem_policy_document_upload_grant::{
+                RedeemPolicyDocumentUploadGrant, RedeemPolicyDocumentUploadGrantHandler,
+            },
+        },
+        queries::resolve_policy_document_upload_grant_authority::{
+            ResolvePolicyDocumentUploadGrantAuthority,
+            ResolvePolicyDocumentUploadGrantAuthorityHandler,
+        },
+        ExecutionMetadata,
+    },
     domain::{
         validate_document_filename, DocumentId, DocumentUploadStatus, PolicyId,
         WorkspacePermissions,
@@ -46,7 +60,6 @@ use crate::{
         agent_connections::AgentConnectionContext,
         document_downloads::{DocumentDownloadService, DownloadError},
         policies::PolicyService,
-        policy_document_upload_grants::{PolicyDocumentUploadGrantService, PolicyUploadGrantError},
         policy_documents::{PolicyDocumentService, UploadPolicyDocumentPayload},
         policy_upload_sessions::{
             PolicyUploadSessionError, PolicyUploadSessionTokenService, VerifiedPolicyUploadSession,
@@ -60,7 +73,8 @@ const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 
 #[derive(Clone)]
 pub struct PolicyDocumentUploadSessionState {
-    pub grants: PolicyDocumentUploadGrantService,
+    pub resolve_grant: ResolvePolicyDocumentUploadGrantAuthorityHandler,
+    pub redeem_grant: RedeemPolicyDocumentUploadGrantHandler,
     pub downloads: DocumentDownloadService,
     pub sessions: PolicyUploadSessionTokenService,
     pub policies: PolicyService,
@@ -314,10 +328,35 @@ async fn redeem_grant(
     if token.is_empty() {
         return Ok(unavailable_response());
     }
-    let grant = match state.grants.redeem(&token).await {
+    let authority = match state
+        .resolve_grant
+        .handle(
+            ResolvePolicyDocumentUploadGrantAuthority {
+                credential: SecretString::from(token),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
+        .await
+    {
+        Ok(authority) => authority,
+        Err(_) => return Ok(unavailable_response()),
+    };
+    let grant = match state
+        .redeem_grant
+        .handle(
+            RedeemPolicyDocumentUploadGrant { authority },
+            ExecutionMetadata::for_request(request_id.0),
+        )
+        .await
+    {
         Ok(grant) => grant,
-        Err(PolicyUploadGrantError::Unavailable) => return Ok(unavailable_response()),
-        Err(error @ (PolicyUploadGrantError::Internal | PolicyUploadGrantError::Repository(_))) => {
+        Err(PolicyDocumentUploadGrantHandlerError::Unavailable) => {
+            return Ok(unavailable_response());
+        }
+        Err(
+            error @ (PolicyDocumentUploadGrantHandlerError::Internal
+            | PolicyDocumentUploadGrantHandlerError::Repository(_)),
+        ) => {
             tracing::error!(%error, "policy document upload grant redemption failed");
             return Err(ApiError::Internal);
         }

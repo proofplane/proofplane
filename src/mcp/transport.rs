@@ -30,6 +30,8 @@ use crate::{
         commands::{
             create_control::CreateControlHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
+            issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
             replace_control::ReplaceControlHandler,
         },
         queries::{
@@ -54,9 +56,8 @@ use crate::{
         agent_connections::AgentConnectionService,
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
-        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
-        policy_document_upload_grants::PolicyDocumentUploadGrantService,
+        evidence::EvidenceService, evidence_submissions::EvidenceSubmissionService,
+        policies::PolicyService,
     },
 };
 use url::Url;
@@ -130,11 +131,10 @@ where
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let document_upload_grants = DocumentUploadGrantService::new(
+    let issue_evidence_document_upload_grant = IssueEvidenceDocumentUploadGrantHandler::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
         dependencies.upload_grant_encryptor,
-        dependencies.upload_grant_decryptor,
     );
     let issue_agent_evidence_upload_grant = IssueAgentEvidenceUploadGrantHandler::new(
         dependencies.postgres.clone(),
@@ -145,11 +145,10 @@ where
         dependencies.agent_policy_upload_grant_encryptor,
         dependencies.agent_policy_upload_grant_decryptor,
     );
-    let policy_document_upload_grants = PolicyDocumentUploadGrantService::new(
+    let issue_policy_document_upload_grant = IssuePolicyDocumentUploadGrantHandler::new(
         dependencies.postgres.clone(),
         dependencies.public_api_base_url.clone(),
         dependencies.policy_upload_grant_encryptor,
-        dependencies.policy_upload_grant_decryptor,
     );
     let auditor_access_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
     let controls = ControlService::new(dependencies.postgres.clone());
@@ -163,8 +162,8 @@ where
             evidence,
             evidence_submissions,
             UploadDependencies {
-                evidence_grants: document_upload_grants,
-                policy_document_grants: policy_document_upload_grants,
+                issue_evidence_grant: issue_evidence_document_upload_grant,
+                issue_policy_grant: issue_policy_document_upload_grant,
                 issue_agent_evidence_grant: issue_agent_evidence_upload_grant,
                 agent_policy_document_grants: agent_policy_document_upload_grants,
                 max_document_bytes: dependencies.max_document_bytes,

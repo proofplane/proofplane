@@ -27,6 +27,8 @@ use crate::{
         commands::{
             create_control::CreateControlHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
+            issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
             replace_control::ReplaceControlHandler,
         },
         queries::{
@@ -38,9 +40,8 @@ use crate::{
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
         auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
-        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
-        policy_document_upload_grants::PolicyDocumentUploadGrantService,
+        evidence::EvidenceService, evidence_submissions::EvidenceSubmissionService,
+        policies::PolicyService,
     },
     VERSION,
 };
@@ -82,8 +83,8 @@ pub struct ProofplaneMcp {
     evidence_submissions: EvidenceSubmissionService,
     issue_agent_evidence_upload_grant: IssueAgentEvidenceUploadGrantHandler,
     agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
-    document_upload_grants: DocumentUploadGrantService,
-    policy_document_upload_grants: PolicyDocumentUploadGrantService,
+    issue_evidence_document_upload_grant: IssueEvidenceDocumentUploadGrantHandler,
+    issue_policy_document_upload_grant: IssuePolicyDocumentUploadGrantHandler,
     auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
     control_handlers: ControlHandlers,
@@ -94,8 +95,8 @@ pub struct ProofplaneMcp {
 }
 
 pub(super) struct UploadDependencies {
-    pub evidence_grants: DocumentUploadGrantService,
-    pub policy_document_grants: PolicyDocumentUploadGrantService,
+    pub issue_evidence_grant: IssueEvidenceDocumentUploadGrantHandler,
+    pub issue_policy_grant: IssuePolicyDocumentUploadGrantHandler,
     pub issue_agent_evidence_grant: IssueAgentEvidenceUploadGrantHandler,
     pub agent_policy_document_grants: AgentPolicyDocumentUploadGrantService,
     pub max_document_bytes: u64,
@@ -131,8 +132,8 @@ impl ProofplaneMcp {
             evidence_submissions,
             issue_agent_evidence_upload_grant: uploads.issue_agent_evidence_grant,
             agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
-            document_upload_grants: uploads.evidence_grants,
-            policy_document_upload_grants: uploads.policy_document_grants,
+            issue_evidence_document_upload_grant: uploads.issue_evidence_grant,
+            issue_policy_document_upload_grant: uploads.issue_policy_grant,
             auditor_access_grants,
             control_handlers: controls.handlers,
             controls: controls.service,

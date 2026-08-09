@@ -16,10 +16,24 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use futures_util::stream;
+use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::{
+            issue_evidence_document_upload_grant::EvidenceDocumentUploadGrantHandlerError,
+            redeem_evidence_document_upload_grant::{
+                RedeemEvidenceDocumentUploadGrant, RedeemEvidenceDocumentUploadGrantHandler,
+            },
+        },
+        queries::resolve_evidence_document_upload_grant_authority::{
+            ResolveEvidenceDocumentUploadGrantAuthority,
+            ResolveEvidenceDocumentUploadGrantAuthorityHandler,
+        },
+        ExecutionMetadata,
+    },
     domain::{
         validate_document_filename, CoverageWindow, Document, DocumentId, DocumentUploadStatus,
         EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
@@ -35,7 +49,6 @@ use crate::{
         controls::ControlService,
         document_downloads::DownloadGrantIssuer,
         document_downloads::{DocumentDownloadService, DownloadError},
-        document_upload_grants::{DocumentUploadGrantService, UploadGrantError},
         evidence_submissions::{
             EvidenceSubmissionService, StageEvidenceDocumentInput, StagedEvidenceDocument,
         },
@@ -55,7 +68,8 @@ enum DocumentUploadDigest {
 
 #[derive(Clone)]
 pub struct DocumentUploadSessionState {
-    pub grants: DocumentUploadGrantService,
+    pub resolve_grant: ResolveEvidenceDocumentUploadGrantAuthorityHandler,
+    pub redeem_grant: RedeemEvidenceDocumentUploadGrantHandler,
     pub downloads: DocumentDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
@@ -352,10 +366,35 @@ async fn redeem_grant(
         return Ok(unavailable_response());
     }
 
-    let grant = match state.grants.redeem(&token).await {
+    let authority = match state
+        .resolve_grant
+        .handle(
+            ResolveEvidenceDocumentUploadGrantAuthority {
+                credential: SecretString::from(token),
+            },
+            ExecutionMetadata::background(),
+        )
+        .await
+    {
+        Ok(authority) => authority,
+        Err(_) => return Ok(unavailable_response()),
+    };
+    let grant = match state
+        .redeem_grant
+        .handle(
+            RedeemEvidenceDocumentUploadGrant { authority },
+            ExecutionMetadata::background(),
+        )
+        .await
+    {
         Ok(grant) => grant,
-        Err(UploadGrantError::Unavailable) => return Ok(unavailable_response()),
-        Err(UploadGrantError::Internal | UploadGrantError::Repository(_)) => {
+        Err(EvidenceDocumentUploadGrantHandlerError::Unavailable) => {
+            return Ok(unavailable_response());
+        }
+        Err(
+            EvidenceDocumentUploadGrantHandlerError::Internal
+            | EvidenceDocumentUploadGrantHandlerError::Repository(_),
+        ) => {
             return Err(ApiError::Internal);
         }
     };
