@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        queries::read_auditor_portal::{ReadAuditorPortal, ReadAuditorPortalHandler},
+        ExecutionMetadata,
+    },
     domain::{
         AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
         AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
-        AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, Document, Evidence,
-        EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement,
+        AuditorPortalReadModel, AuditorPortalSubmission, AuditorSession, ControlSummary, Document,
+        Evidence, EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement,
     },
     object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
@@ -30,7 +34,6 @@ use crate::{
         auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
         auditor_auth_transactions::{AuditorAuthTransactionError, AuditorAuthTransactionService},
         auditor_authentication::{AuditorAuthenticationError, AuditorAuthenticationService},
-        auditor_portal::AuditorPortalReadModelService,
         document_downloads::{DocumentDownloadService, DownloadError},
     },
 };
@@ -45,7 +48,7 @@ pub struct AuditorAccessState {
     pub auth_transactions: AuditorAuthTransactionService,
     pub authentication: AuditorAuthenticationService,
     pub sessions: AuditorAccessSessionService,
-    pub portal: AuditorPortalReadModelService,
+    pub read_portal: ReadAuditorPortalHandler,
     pub downloads: DocumentDownloadService,
     pub secure_cookie: bool,
 }
@@ -313,11 +316,7 @@ async fn portal_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -342,11 +341,7 @@ async fn policies_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -381,11 +376,7 @@ async fn policy_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -423,11 +414,7 @@ async fn standalone_control_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -456,11 +443,7 @@ async fn requirement_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -489,11 +472,7 @@ async fn control_page(
         Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
         Err(error) => return Err(session_error(error)),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -519,11 +498,7 @@ async fn portal_data(
         .load_session(raw_session)
         .await
         .map_err(session_error)?;
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -1905,7 +1880,24 @@ fn session_error(error: AuditorAccessSessionError) -> ApiError {
     }
 }
 
-fn portal_error(error: crate::services::Error) -> ApiError {
+async fn read_portal(
+    state: &AuditorAccessState,
+    session: &AuditorSession,
+    request_id: Uuid,
+) -> Result<AuditorPortalReadModel, ApiError> {
+    state
+        .read_portal
+        .handle(
+            ReadAuditorPortal {
+                session: session.clone(),
+            },
+            ExecutionMetadata::for_request(request_id),
+        )
+        .await
+        .map_err(portal_error)
+}
+
+fn portal_error(error: crate::repository::Error) -> ApiError {
     tracing::error!(%error, "auditor portal read model failure");
     ApiError::Internal
 }

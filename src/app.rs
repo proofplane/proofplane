@@ -12,6 +12,7 @@ use crate::{
         },
         queries::{
             get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler,
+            read_auditor_portal::ReadAuditorPortalHandler,
             resolve_evidence_document_upload_grant_authority::ResolveEvidenceDocumentUploadGrantAuthorityHandler,
             resolve_policy_document_upload_grant_authority::ResolvePolicyDocumentUploadGrantAuthorityHandler,
         },
@@ -62,7 +63,6 @@ use crate::{
         auditor_access_sessions::AuditorAccessSessionService,
         auditor_auth_transactions::AuditorAuthTransactionService,
         auditor_authentication::AuditorAuthenticationService,
-        auditor_portal::AuditorPortalReadModelService,
         client_resolver::ClientResolver,
         controls::ControlService,
         document_downloads::DocumentDownloadService,
@@ -315,7 +315,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             auth_transactions: auditor_auth_transactions,
             authentication: auditor_authentication,
             sessions: auditor_sessions,
-            portal: AuditorPortalReadModelService::new(dependencies.postgres.clone()),
+            read_portal: ReadAuditorPortalHandler::new(dependencies.postgres.clone()),
             downloads: document_download_service,
             secure_cookie: secure_auditor_cookie,
         }))
