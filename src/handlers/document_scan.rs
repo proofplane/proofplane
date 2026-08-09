@@ -5,12 +5,17 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::documents::{
+            DocumentCommandOutcome, ScanDocument,
+            ScanDocumentHandler as ScanDocumentCommandHandler, ScanDocumentResult,
+        },
+        ExecutionMetadata,
+    },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    messaging::IntegrationMessage,
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{NewOutboxMessage, Postgres, TypedDocumentUploadWork},
+    repository::{Postgres, TypedDocumentUploadWork},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
     worker::{RetryableWorkerError, WorkerMessage},
 };
@@ -22,6 +27,7 @@ pub struct DocumentScanHandler {
     object_store: Arc<FilesystemObjectStore>,
     scanner: Arc<ClamAvMalwareScanner>,
     max_delivery_attempts: u16,
+    command_handler: ScanDocumentCommandHandler,
 }
 
 impl Clone for DocumentScanHandler {
@@ -31,6 +37,7 @@ impl Clone for DocumentScanHandler {
             object_store: self.object_store.clone(),
             scanner: self.scanner.clone(),
             max_delivery_attempts: self.max_delivery_attempts,
+            command_handler: self.command_handler.clone(),
         }
     }
 }
@@ -43,6 +50,7 @@ impl DocumentScanHandler {
         max_delivery_attempts: u16,
     ) -> Self {
         Self {
+            command_handler: ScanDocumentCommandHandler::new(repository.clone()),
             repository,
             object_store,
             scanner,
@@ -91,7 +99,7 @@ impl DocumentScanHandler {
             Ok(object) => object,
             Err(StorageError::NotFound) => {
                 let updated = self
-                    .mark_failed(&work, MISSING_OBJECT_FAILURE_REASON)
+                    .mark_failed(&work, MISSING_OBJECT_FAILURE_REASON, &message)
                     .await?;
                 if updated {
                     emit_worker_document_audit(
@@ -105,7 +113,7 @@ impl DocumentScanHandler {
                 return Ok(());
             }
             Err(error) if final_delivery => {
-                let updated = self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string(), &message).await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
@@ -128,7 +136,7 @@ impl DocumentScanHandler {
                 reason: "stored object metadata does not match document metadata".to_owned(),
             };
             if final_delivery {
-                let updated = self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string(), &message).await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
@@ -154,7 +162,7 @@ impl DocumentScanHandler {
         let scan_result = match scan_result {
             Ok(scan_result) => scan_result,
             Err(error) if final_delivery => {
-                let updated = self.mark_failed(&work, error.to_string()).await?;
+                let updated = self.mark_failed(&work, error.to_string(), &message).await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
@@ -170,43 +178,27 @@ impl DocumentScanHandler {
             Err(error) => return Err(scan_error(error)),
         };
 
-        let causation_id = Uuid::parse_str(&message.message_id).ok();
-        self.apply_scan_result(work, scan_result, message.request_id, causation_id)
-            .await
+        self.apply_scan_result(work, scan_result, &message).await
     }
 
     async fn apply_scan_result(
         &self,
         work: TypedDocumentUploadWork,
         scan_result: MalwareScanResult,
-        request_id: Option<Uuid>,
-        causation_id: Option<Uuid>,
+        message: &WorkerMessage,
     ) -> Result<(), RetryableWorkerError> {
         match scan_result.outcome {
             MalwareScanOutcome::Clean => {
                 tracing::debug!("got clean scan, requesting finalization");
-                let message =
-                    document_finalization_requested_message(&work, request_id, causation_id);
-                let transaction_work = work.clone();
                 let updated = self
-                    .repository
-                    .in_transaction(async move |transaction| {
-                        let updated = transaction
-                            .request_typed_document_finalization(&transaction_work)
-                            .await?;
-                        if updated {
-                            transaction.append_outbox_message(&message).await?;
-                        }
-                        Ok(updated)
-                    })
-                    .await
-                    .map_err(retryable)?;
+                    .apply_result(&work, ScanDocumentResult::Clean, message)
+                    .await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
                         AuditOutcome::Success,
                         &work,
-                        request_id,
+                        message.request_id,
                         "finalizing",
                     );
                 }
@@ -214,13 +206,13 @@ impl DocumentScanHandler {
             }
             MalwareScanOutcome::Malicious { reason } => {
                 tracing::debug!("scan found a virus, marking document as malicious");
-                let updated = self.mark_malicious(&work, reason).await?;
+                let updated = self.mark_malicious(&work, reason, message).await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
                         AuditOutcome::Failure,
                         &work,
-                        request_id,
+                        message.request_id,
                         "contains_virus",
                     );
                 }
@@ -228,13 +220,13 @@ impl DocumentScanHandler {
             }
             MalwareScanOutcome::Failed { reason } => {
                 tracing::debug!("scan failed");
-                let updated = self.mark_failed(&work, reason).await?;
+                let updated = self.mark_failed(&work, reason, message).await?;
                 if updated {
                     emit_worker_document_audit(
                         scan_event_name(work.identity),
                         AuditOutcome::Failure,
                         &work,
-                        request_id,
+                        message.request_id,
                         "failed_upload",
                     );
                 }
@@ -247,12 +239,11 @@ impl DocumentScanHandler {
         &self,
         work: &TypedDocumentUploadWork,
         _reason: impl AsRef<str>,
+        message: &WorkerMessage,
     ) -> Result<bool, RetryableWorkerError> {
         let updated = self
-            .repository
-            .mark_typed_document_contains_virus(work)
-            .await
-            .map_err(retryable)?;
+            .apply_result(work, ScanDocumentResult::Malicious, message)
+            .await?;
         tracing::warn!(
             document_id = %work.identity.document_uuid(),
             "document scan detected malicious content"
@@ -264,17 +255,37 @@ impl DocumentScanHandler {
         &self,
         work: &TypedDocumentUploadWork,
         _reason: impl AsRef<str>,
+        message: &WorkerMessage,
     ) -> Result<bool, RetryableWorkerError> {
         let updated = self
-            .repository
-            .mark_typed_document_upload_failed(work)
-            .await
-            .map_err(retryable)?;
+            .apply_result(work, ScanDocumentResult::Failed, message)
+            .await?;
         tracing::warn!(
             document_id = %work.identity.document_uuid(),
             "document scan failed terminally"
         );
         Ok(updated)
+    }
+
+    async fn apply_result(
+        &self,
+        work: &TypedDocumentUploadWork,
+        result: ScanDocumentResult,
+        message: &WorkerMessage,
+    ) -> Result<bool, RetryableWorkerError> {
+        let outcome = self
+            .command_handler
+            .handle(
+                ScanDocument {
+                    identity: work.identity,
+                    object_key: work.object_key.clone(),
+                    result,
+                },
+                worker_metadata(message),
+            )
+            .await
+            .map_err(retryable)?;
+        Ok(outcome == DocumentCommandOutcome::Applied)
     }
 }
 
@@ -322,20 +333,15 @@ fn emit_worker_document_audit(
     event.emit();
 }
 
-fn document_finalization_requested_message(
-    work: &TypedDocumentUploadWork,
-    correlation_id: Option<Uuid>,
-    causation_id: Option<Uuid>,
-) -> NewOutboxMessage {
-    NewOutboxMessage::new(
-        TopicName::new(MESSAGE_BUS_TOPIC),
-        IntegrationMessage::finalize_document(
-            work.identity,
-            work.object_key.clone(),
-            correlation_id,
-            causation_id,
-        ),
-    )
+fn worker_metadata(message: &WorkerMessage) -> ExecutionMetadata {
+    let mut metadata = ExecutionMetadata::background();
+    if let Some(correlation_id) = message.request_id {
+        metadata = metadata.with_correlation_id(correlation_id);
+    }
+    if let Ok(causation_id) = Uuid::parse_str(&message.message_id) {
+        metadata = metadata.with_causation_id(causation_id);
+    }
+    metadata
 }
 
 fn scan_event_name(identity: DocumentIdentity) -> &'static str {

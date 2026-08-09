@@ -4,13 +4,17 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        CoverageWindow, CreateDocumentPayload, Document, DocumentEvent, DocumentId,
-        DocumentIdentity, DocumentOwner, DocumentTransitionOutcome, EvidenceId, EvidenceSubmission,
-        EvidenceSubmissionId, EvidenceSubmitter, PolicyId, WorkspacePermission,
+        AgentEvidenceUploadAuthority, AgentEvidenceUploadGrant, AgentPolicyDocumentUploadAuthority,
+        AgentPolicyDocumentUploadGrant, CoverageWindow, CreateDocumentPayload, Document,
+        DocumentEvent, DocumentId, DocumentIdentity, DocumentOwner, DocumentTransitionOutcome,
+        EvidenceId, EvidenceSubmission, EvidenceSubmissionId, EvidenceSubmitter, PolicyId,
+        WorkspacePermission,
     },
     messaging::IntegrationMessage,
     pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{Error as RepositoryError, NewOutboxMessage, Postgres},
+    repository::{
+        Error as RepositoryError, NewOutboxMessage, PolicyDocumentUploadEligibility, Postgres,
+    },
 };
 use chrono::{DateTime, Utc};
 
@@ -61,10 +65,64 @@ pub struct FinalizeDocument {
     pub final_object_key: String,
 }
 
+pub struct CompleteAgentEvidenceUpload {
+    pub grant: AgentEvidenceUploadGrant,
+    pub authority: AgentEvidenceUploadAuthority,
+    pub staged_submission_id: EvidenceSubmissionId,
+    pub document_id: DocumentId,
+    pub document: CreateDocumentPayload,
+    pub completed_at: DateTime<Utc>,
+}
+
+pub struct CompleteAgentPolicyDocumentUpload {
+    pub grant: AgentPolicyDocumentUploadGrant,
+    pub authority: AgentPolicyDocumentUploadAuthority,
+    pub policy_id: PolicyId,
+    pub document_id: DocumentId,
+    pub document: CreateDocumentPayload,
+    pub completed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreatedDocument {
     Created(Document),
     Replayed(Document),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreatePolicyDocumentOutcome {
+    Created(Document),
+    Replayed(Document),
+    PolicyUnavailable,
+    CurrentDocument,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveDocumentOutcome {
+    Archived,
+    Unavailable,
+    NotTerminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompleteAgentEvidenceUploadOutcome {
+    Created {
+        submission_id: EvidenceSubmissionId,
+        document: Document,
+    },
+    Replayed {
+        submission_id: EvidenceSubmissionId,
+        document_id: DocumentId,
+    },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompleteAgentPolicyDocumentUploadOutcome {
+    Created(Document),
+    Replayed(DocumentId),
+    CurrentDocument,
+    Unavailable,
 }
 impl CreatedDocument {
     pub fn document(&self) -> &Document {
@@ -101,6 +159,14 @@ pub struct ScanDocumentHandler {
 pub struct FinalizeDocumentHandler {
     repository: Arc<Postgres>,
 }
+#[derive(Clone)]
+pub struct CompleteAgentEvidenceUploadHandler {
+    repository: Arc<Postgres>,
+}
+#[derive(Clone)]
+pub struct CompleteAgentPolicyDocumentUploadHandler {
+    repository: Arc<Postgres>,
+}
 
 macro_rules! handlers { ($($handler:ident),+ $(,)?) => { $(impl $handler { pub fn new(repository: Arc<Postgres>) -> Self { Self { repository } } })+ }; }
 handlers!(
@@ -108,7 +174,9 @@ handlers!(
     CreatePolicyDocumentHandler,
     ArchiveDocumentHandler,
     ScanDocumentHandler,
-    FinalizeDocumentHandler
+    FinalizeDocumentHandler,
+    CompleteAgentEvidenceUploadHandler,
+    CompleteAgentPolicyDocumentUploadHandler
 );
 
 #[derive(Debug, thiserror::Error)]
@@ -152,7 +220,17 @@ impl CreateEvidenceSubmissionDocumentHandler {
                         return Ok(None);
                     }
                     let submissions = context.evidence_submissions();
-                    if submissions.get(command.submission_id).await?.is_some() {
+                    if let Some(existing) = submissions.get(command.submission_id).await? {
+                        if existing.evidence_id != command.evidence_id
+                            || existing.coverage() != command.coverage
+                            || existing.submitted_by
+                                != (EvidenceSubmitter::AgentConnection {
+                                    agent_connection_id: command.connection.connection_id,
+                                    user_id: command.connection.user_id,
+                                })
+                        {
+                            return Ok(None);
+                        }
                         let documents = context.documents();
                         return documents
                             .get(identity)
@@ -197,7 +275,7 @@ impl CreatePolicyDocumentHandler {
         &self,
         command: CreatePolicyDocument,
         metadata: ExecutionMetadata,
-    ) -> Result<CreatedDocument, DocumentCommandError> {
+    ) -> Result<CreatePolicyDocumentOutcome, DocumentCommandError> {
         if !command
             .connection
             .permissions
@@ -212,8 +290,7 @@ impl CreatePolicyDocumentHandler {
         if command.document.owner != identity.owner() {
             return Err(DocumentCommandError::Invalid);
         }
-        let outcome = self
-            .repository
+        self.repository
             .in_agent_connection_workspace_context(
                 command.connection.workspace_id,
                 command.connection.user_id,
@@ -221,18 +298,22 @@ impl CreatePolicyDocumentHandler {
                 async move |context| {
                     let documents = context.documents();
                     if let Some(document) = documents.get(identity).await? {
-                        return Ok(Some(CreatedDocument::Replayed(document)));
+                        return Ok(CreatePolicyDocumentOutcome::Replayed(document));
                     }
                     if context.policies().get(command.policy_id).await?.is_none() {
-                        return Ok(None);
+                        return Ok(CreatePolicyDocumentOutcome::PolicyUnavailable);
                     }
-                    if !matches!(
-                        context
-                            .lock_policy_document_upload_eligibility(command.policy_id)
-                            .await?,
-                        Some(crate::repository::PolicyDocumentUploadEligibility::Eligible)
-                    ) {
-                        return Ok(None);
+                    match context
+                        .lock_policy_document_upload_eligibility(command.policy_id)
+                        .await?
+                    {
+                        Some(crate::repository::PolicyDocumentUploadEligibility::Eligible) => {}
+                        Some(
+                            crate::repository::PolicyDocumentUploadEligibility::CurrentDocument,
+                        ) => {
+                            return Ok(CreatePolicyDocumentOutcome::CurrentDocument);
+                        }
+                        None => return Ok(CreatePolicyDocumentOutcome::PolicyUnavailable),
                     }
                     let (document, transition) = Document::create(
                         identity,
@@ -247,11 +328,184 @@ impl CreatePolicyDocumentHandler {
                     })?;
                     documents.save(&document).await?;
                     append_transition_message(context, transition.event, metadata).await?;
-                    Ok(Some(CreatedDocument::Created(document)))
+                    Ok(CreatePolicyDocumentOutcome::Created(document))
                 },
             )
-            .await?;
-        outcome.ok_or(DocumentCommandError::Unavailable)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl CompleteAgentEvidenceUploadHandler {
+    pub async fn handle(
+        &self,
+        command: CompleteAgentEvidenceUpload,
+        metadata: ExecutionMetadata,
+    ) -> Result<CompleteAgentEvidenceUploadOutcome, DocumentCommandError> {
+        let workspace_id = command.grant.workspace_id();
+        let user_id = command.grant.issued_by_user_id();
+        let connection_id = command.grant.issued_via_agent_connection_id();
+        let upload_id = command.grant.id();
+        self.repository
+            .in_agent_connection_workspace_context(
+                workspace_id,
+                user_id,
+                connection_id,
+                async move |context| {
+                    let grants = context.agent_evidence_upload_grants();
+                    let Some(mut grant) = grants.get(upload_id, workspace_id).await? else {
+                        return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable);
+                    };
+                    if grant.matches_authority(&command.authority).is_err()
+                        || grant
+                            .validate_staged_file(
+                                command.document.content_length,
+                                &command.document.checksum_sha256,
+                            )
+                            .is_err()
+                        || command.staged_submission_id != grant.submission_id()
+                        || command.document.owner
+                            != DocumentOwner::EvidenceSubmission(grant.submission_id())
+                    {
+                        return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable);
+                    }
+                    match grant.completed_document_at(command.completed_at) {
+                        Ok(Some(document_id)) => {
+                            return Ok(CompleteAgentEvidenceUploadOutcome::Replayed {
+                                submission_id: grant.submission_id(),
+                                document_id,
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(_) => return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable),
+                    }
+                    if context.get_evidence(grant.evidence_id()).await?.is_none() {
+                        return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable);
+                    }
+                    let submissions = context.evidence_submissions();
+                    if submissions.get(grant.submission_id()).await?.is_some() {
+                        return Ok(CompleteAgentEvidenceUploadOutcome::Unavailable);
+                    }
+                    let (submission, _) = EvidenceSubmission::create(
+                        grant.submission_id(),
+                        grant.evidence_id(),
+                        EvidenceSubmitter::AgentConnection {
+                            agent_connection_id: connection_id,
+                            user_id,
+                        },
+                        grant.coverage(),
+                        command.completed_at,
+                    );
+                    submissions.save(&submission).await?;
+                    let identity = DocumentIdentity::Evidence {
+                        evidence_submission_id: grant.submission_id(),
+                        document_id: command.document_id,
+                    };
+                    let (document, transition) =
+                        Document::create(identity, user_id, command.document, command.completed_at)
+                            .map_err(|_| {
+                                RepositoryError::InvariantViolation(
+                                    "validated machine evidence document is invalid",
+                                )
+                            })?;
+                    context.documents().save(&document).await?;
+                    append_transition_message(context, transition.event, metadata).await?;
+                    grant
+                        .complete(document.id(), command.completed_at)
+                        .map_err(|_| {
+                            RepositoryError::InvariantViolation(
+                                "machine upload grant changed during completion",
+                            )
+                        })?;
+                    grants.save(&grant).await?;
+                    Ok(CompleteAgentEvidenceUploadOutcome::Created {
+                        submission_id: grant.submission_id(),
+                        document,
+                    })
+                },
+            )
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl CompleteAgentPolicyDocumentUploadHandler {
+    pub async fn handle(
+        &self,
+        command: CompleteAgentPolicyDocumentUpload,
+        metadata: ExecutionMetadata,
+    ) -> Result<CompleteAgentPolicyDocumentUploadOutcome, DocumentCommandError> {
+        let workspace_id = command.grant.workspace_id();
+        let user_id = command.grant.issued_by_user_id();
+        let connection_id = command.grant.issued_via_agent_connection_id();
+        let upload_id = command.grant.id();
+        self.repository
+            .in_agent_connection_workspace_context(
+                workspace_id,
+                user_id,
+                connection_id,
+                async move |context| {
+                    let grants = context.agent_policy_document_upload_grants();
+                    let Some(mut grant) = grants.get(upload_id, workspace_id).await? else {
+                        return Ok(CompleteAgentPolicyDocumentUploadOutcome::Unavailable);
+                    };
+                    if grant.matches_authority(&command.authority).is_err()
+                        || grant
+                            .validate_staged_file(
+                                command.document.content_length,
+                                &command.document.checksum_sha256,
+                            )
+                            .is_err()
+                        || command.policy_id != grant.policy_id()
+                        || command.document.owner != DocumentOwner::Policy(grant.policy_id())
+                    {
+                        return Ok(CompleteAgentPolicyDocumentUploadOutcome::Unavailable);
+                    }
+                    match grant.completed_document_at(command.completed_at) {
+                        Ok(Some(document_id)) => {
+                            return Ok(CompleteAgentPolicyDocumentUploadOutcome::Replayed(
+                                document_id,
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(_) => return Ok(CompleteAgentPolicyDocumentUploadOutcome::Unavailable),
+                    }
+                    match context
+                        .lock_policy_document_upload_eligibility(grant.policy_id())
+                        .await?
+                    {
+                        Some(PolicyDocumentUploadEligibility::Eligible) => {}
+                        Some(PolicyDocumentUploadEligibility::CurrentDocument) => {
+                            return Ok(CompleteAgentPolicyDocumentUploadOutcome::CurrentDocument);
+                        }
+                        None => return Ok(CompleteAgentPolicyDocumentUploadOutcome::Unavailable),
+                    }
+                    let identity = DocumentIdentity::Policy {
+                        policy_id: grant.policy_id(),
+                        document_id: command.document_id,
+                    };
+                    let (document, transition) =
+                        Document::create(identity, user_id, command.document, command.completed_at)
+                            .map_err(|_| {
+                                RepositoryError::InvariantViolation(
+                                    "validated machine policy document is invalid",
+                                )
+                            })?;
+                    context.documents().save(&document).await?;
+                    append_transition_message(context, transition.event, metadata).await?;
+                    grant
+                        .complete(document.id(), command.completed_at)
+                        .map_err(|_| {
+                            RepositoryError::InvariantViolation(
+                                "policy machine upload grant changed during completion",
+                            )
+                        })?;
+                    grants.save(&grant).await?;
+                    Ok(CompleteAgentPolicyDocumentUploadOutcome::Created(document))
+                },
+            )
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -260,7 +514,7 @@ impl ArchiveDocumentHandler {
         &self,
         command: ArchiveDocument,
         _: ExecutionMetadata,
-    ) -> Result<DocumentCommandOutcome, DocumentCommandError> {
+    ) -> Result<ArchiveDocumentOutcome, DocumentCommandError> {
         let permission = match command.identity.owner() {
             DocumentOwner::EvidenceSubmission(_) => WorkspacePermission::WriteEvidenceSubmissions,
             DocumentOwner::Policy(_) => WorkspacePermission::WriteEvidence,
@@ -277,13 +531,22 @@ impl ArchiveDocumentHandler {
                 async move |context| {
                     let documents = context.documents();
                     let Some(mut document) = documents.get(identity).await? else {
-                        return Ok(DocumentCommandOutcome::Rejected);
+                        return Ok(ArchiveDocumentOutcome::Unavailable);
                     };
                     let transition = document.archive();
                     if transition.changed() {
                         documents.save(&document).await?;
                     }
-                    Ok(outcome(transition.outcome))
+                    Ok(match transition.outcome {
+                        DocumentTransitionOutcome::Archived
+                        | DocumentTransitionOutcome::Ignored => ArchiveDocumentOutcome::Archived,
+                        DocumentTransitionOutcome::Rejected => ArchiveDocumentOutcome::NotTerminal,
+                        _ => {
+                            return Err(RepositoryError::InvariantViolation(
+                                "archive transition returned an unrelated outcome",
+                            ));
+                        }
+                    })
                 },
             )
             .await
@@ -414,6 +677,7 @@ fn message_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{domain::WorkspacePermissions, repository::test_support};
     #[test]
     fn ignored_and_rejected_transitions_have_no_side_effect_outcome() {
         assert_eq!(
@@ -424,5 +688,52 @@ mod tests {
             outcome(DocumentTransitionOutcome::Rejected),
             DocumentCommandOutcome::Rejected
         );
+    }
+
+    #[tokio::test]
+    async fn evidence_submission_and_document_snapshot_are_created_atomically() {
+        let postgres = Arc::new(test_support::database().await);
+        let workspace = test_support::workspace(&postgres, "Evidence owner").await;
+        let evidence_id =
+            test_support::evidence(&postgres, workspace.workspace_id, "Bank statement").await;
+        let submission_id = EvidenceSubmissionId::from(uuid::Uuid::new_v4());
+        let document_id = DocumentId::from(uuid::Uuid::new_v4());
+        let identity = DocumentIdentity::Evidence {
+            evidence_submission_id: submission_id,
+            document_id,
+        };
+        let outcome = CreateEvidenceSubmissionDocumentHandler::new(postgres)
+            .handle(
+                CreateEvidenceSubmissionDocument {
+                    connection: AgentConnectionContext {
+                        user_id: workspace.user_id,
+                        connection_id: workspace.agent_connection_id,
+                        workspace_id: workspace.workspace_id,
+                        permissions: WorkspacePermissions::all(),
+                    },
+                    submission_id,
+                    evidence_id,
+                    coverage: CoverageWindow::new(
+                        Utc::now(),
+                        Utc::now() + chrono::Duration::days(1),
+                    )
+                    .expect("test coverage is valid"),
+                    document_id,
+                    document: CreateDocumentPayload {
+                        owner: identity.owner(),
+                        filename: "statement.pdf".to_owned(),
+                        content_type: "application/pdf".to_owned(),
+                        content_length: 1,
+                        object_key: format!("quarantine/{}", uuid::Uuid::new_v4()),
+                        checksum_sha256: "sha".to_owned(),
+                        checksum_crc32c: "crc".to_owned(),
+                    },
+                    received_at: Utc::now(),
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .expect("evidence document command succeeds");
+        assert!(matches!(outcome, CreatedDocument::Created(_)));
     }
 }

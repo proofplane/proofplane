@@ -187,18 +187,11 @@ impl WorkspaceTransactionContext<'_> {
         &self,
         policy_id: PolicyId,
     ) -> Result<Option<PolicyDocumentUploadEligibility>, Error> {
-        let row = self
+        let policy = self
             .transaction
             .query_opt(
                 r#"
-SELECT EXISTS (
-    SELECT 1
-    FROM documents d
-    WHERE d.owner_type = 'policy'
-      AND d.owner_id = p.id
-      AND d.workspace_id = p.workspace_id
-      AND d.archived = false
-) AS current_document
+SELECT id
 FROM policies p
 WHERE p.id = $1
   AND p.workspace_id = $2
@@ -208,14 +201,28 @@ FOR UPDATE OF p
                 &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
             )
             .await?;
-        row.map(|row| {
-            if row.try_get::<_, bool>("current_document")? {
-                Ok(PolicyDocumentUploadEligibility::CurrentDocument)
-            } else {
-                Ok(PolicyDocumentUploadEligibility::Eligible)
-            }
-        })
-        .transpose()
+        if policy.is_none() {
+            return Ok(None);
+        }
+        let current_document = self
+            .transaction
+            .query_one(
+                r#"SELECT EXISTS (
+    SELECT 1 FROM documents d
+    WHERE d.owner_type = 'policy'
+      AND d.owner_id = $1
+      AND d.workspace_id = $2
+      AND d.archived = false
+) AS current_document"#,
+                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?
+            .try_get::<_, bool>("current_document")?;
+        Ok(Some(if current_document {
+            PolicyDocumentUploadEligibility::CurrentDocument
+        } else {
+            PolicyDocumentUploadEligibility::Eligible
+        }))
     }
 
     pub async fn create_policy_document(

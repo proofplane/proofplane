@@ -6,11 +6,18 @@ use futures_core::Stream;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::documents::{
+            CompleteAgentEvidenceUpload, CompleteAgentEvidenceUploadHandler,
+            CompleteAgentEvidenceUploadOutcome, DocumentCommandError,
+        },
+        ExecutionMetadata,
+    },
     domain::{
         AgentEvidenceUploadAuthority, AgentEvidenceUploadGrant,
         AgentEvidenceUploadGrantError as DomainGrantError, AgentEvidenceUploadGrantId,
-        CreateDocumentPayload, CreateEvidenceSubmissionPayload, Document, DocumentId,
-        DocumentOwner, EvidenceSubmissionId, WorkspaceId,
+        CreateDocumentPayload, Document, DocumentId, DocumentOwner, EvidenceSubmissionId,
+        WorkspaceId,
     },
     object_storage::StorageError,
     observability::{
@@ -26,9 +33,7 @@ use super::{
     agent_evidence_upload_grants::{
         AgentEvidenceUploadCredentialVerifier, AgentEvidenceUploadGrantError,
     },
-    evidence_submissions::{
-        document_scan_requested_message, EvidenceSubmissionService, StagedEvidenceDocument,
-    },
+    evidence_submissions::{EvidenceSubmissionService, StagedEvidenceDocument},
     Error as ServiceError,
 };
 
@@ -38,6 +43,7 @@ pub struct AgentEvidenceUploadService {
     submissions: EvidenceSubmissionService,
     credential_verifier: AgentEvidenceUploadCredentialVerifier,
     max_document_bytes: usize,
+    complete_upload: CompleteAgentEvidenceUploadHandler,
 }
 
 pub struct AgentEvidenceUploadResult {
@@ -66,6 +72,7 @@ impl AgentEvidenceUploadService {
         max_document_bytes: usize,
     ) -> Self {
         Self {
+            complete_upload: CompleteAgentEvidenceUploadHandler::new(repository.clone()),
             repository,
             submissions,
             credential_verifier,
@@ -204,87 +211,37 @@ impl AgentEvidenceUploadService {
         let user_id = grant.issued_by_user_id();
         let agent_connection_id = grant.issued_via_agent_connection_id();
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                workspace_id,
-                grant.issued_by_user_id(),
-                grant.issued_via_agent_connection_id(),
-                async move |context| {
-                    let repository = context.agent_evidence_upload_grants();
-                    let Some(mut locked_grant) = repository.get(upload_id, workspace_id).await?
-                    else {
-                        return Ok(None);
-                    };
-                    if locked_grant.matches_authority(&authority).is_err()
-                        || locked_grant
-                            .validate_staged_file(staged.content_length, &staged.checksum_sha256)
-                            .is_err()
-                    {
-                        return Ok(None);
-                    }
-
-                    let completed_document = match locked_grant.completed_document_at(Utc::now()) {
-                        Ok(completed_document) => completed_document,
-                        Err(_) => return Ok(None),
-                    };
-                    if let Some(document_id) = completed_document {
-                        return Ok(Some(CompletionTransactionResult::Replayed {
-                            submission_id: locked_grant.submission_id(),
-                            document_id,
-                        }));
-                    }
-                    if staged.evidence_submission_id != locked_grant.submission_id() {
-                        return Ok(None);
-                    }
-
-                    let submission = CreateEvidenceSubmissionPayload {
-                        id: locked_grant.submission_id(),
-                        evidence_id: locked_grant.evidence_id(),
-                        coverage: locked_grant.coverage(),
-                    };
-                    if context
-                        .create_evidence_submission(&submission)
-                        .await?
-                        .is_none()
-                    {
-                        return Ok(None);
-                    }
-                    let document = context
-                        .create_evidence_document(&CreateDocumentPayload {
-                            owner: DocumentOwner::EvidenceSubmission(locked_grant.submission_id()),
-                            filename: staged.filename,
-                            content_type: staged.content_type,
-                            content_length: staged.content_length,
-                            object_key: staged.object_key,
-                            checksum_sha256: staged.checksum_sha256,
-                            checksum_crc32c: staged.checksum_crc32c,
-                        })
-                        .await?;
-                    context
-                        .append_outbox_message(&document_scan_requested_message(
-                            &document, request_id,
-                        ))
-                        .await?;
-                    locked_grant
-                        .complete(document.id(), Utc::now())
-                        .map_err(|_| {
-                            RepositoryError::InvariantViolation(
-                                "machine upload grant changed during completion",
-                            )
-                        })?;
-                    repository.save(&locked_grant).await?;
-                    Ok(Some(CompletionTransactionResult::Created(
-                        AgentEvidenceUploadResult {
-                            submission_id: locked_grant.submission_id(),
-                            document,
-                        },
-                    )))
+            .complete_upload
+            .handle(
+                CompleteAgentEvidenceUpload {
+                    grant,
+                    authority,
+                    staged_submission_id: staged.evidence_submission_id,
+                    document_id: DocumentId::from(Uuid::new_v4()),
+                    document: CreateDocumentPayload {
+                        owner: DocumentOwner::EvidenceSubmission(staged.evidence_submission_id),
+                        filename: staged.filename,
+                        content_type: staged.content_type,
+                        content_length: staged.content_length,
+                        object_key: staged.object_key,
+                        checksum_sha256: staged.checksum_sha256,
+                        checksum_crc32c: staged.checksum_crc32c,
+                    },
+                    completed_at: Utc::now(),
                 },
+                ExecutionMetadata::for_request(request_id),
             )
             .await;
 
         match result {
-            Ok(Some(CompletionTransactionResult::Created(result))) => {
+            Ok(CompleteAgentEvidenceUploadOutcome::Created {
+                submission_id,
+                document,
+            }) => {
+                let result = AgentEvidenceUploadResult {
+                    submission_id,
+                    document,
+                };
                 record_attempt(AgentEvidenceUploadAttemptResult::Created);
                 AuditEvent::new(
                     "agent_evidence_upload.completed",
@@ -309,10 +266,10 @@ impl AgentEvidenceUploadService {
                 .emit();
                 Ok(AgentEvidenceUploadOutcome::Created(result))
             }
-            Ok(Some(CompletionTransactionResult::Replayed {
+            Ok(CompleteAgentEvidenceUploadOutcome::Replayed {
                 submission_id,
                 document_id,
-            })) => {
+            }) => {
                 let result = self
                     .load_completed_result_by_id(workspace_id, submission_id, document_id)
                     .await;
@@ -328,7 +285,8 @@ impl AgentEvidenceUploadService {
                     }
                 }
             }
-            Ok(None) => {
+            Ok(CompleteAgentEvidenceUploadOutcome::Unavailable)
+            | Err(DocumentCommandError::Unavailable | DocumentCommandError::Invalid) => {
                 self.delete_staged(&object_key, request_id).await;
                 record_attempt(AgentEvidenceUploadAttemptResult::Unavailable);
                 Err(AgentEvidenceUploadError::Unavailable)
@@ -336,7 +294,12 @@ impl AgentEvidenceUploadService {
             Err(error) => {
                 self.delete_staged(&object_key, request_id).await;
                 record_attempt(AgentEvidenceUploadAttemptResult::DatabaseFailed);
-                Err(error.into())
+                Err(match error {
+                    DocumentCommandError::Repository(error) => error.into(),
+                    DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+                        AgentEvidenceUploadError::Unavailable
+                    }
+                })
             }
         }
     }
@@ -382,14 +345,6 @@ impl AgentEvidenceUploadService {
             document,
         })
     }
-}
-
-enum CompletionTransactionResult {
-    Created(AgentEvidenceUploadResult),
-    Replayed {
-        submission_id: EvidenceSubmissionId,
-        document_id: DocumentId,
-    },
 }
 
 #[derive(Debug, thiserror::Error)]

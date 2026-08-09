@@ -57,9 +57,15 @@ FOR UPDATE OF s"#,
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE SET evidence_id = EXCLUDED.evidence_id,
  submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
- received_at = EXCLUDED.received_at, valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until"#,
+ received_at = EXCLUDED.received_at, valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until
+WHERE EXISTS (
+    SELECT 1 FROM evidence existing_evidence
+    WHERE existing_evidence.id = evidence_submissions.evidence_id
+      AND existing_evidence.workspace_id = $7
+)"#,
             &[&Uuid::from(submission.id), &Uuid::from(submission.evidence_id), &Uuid::from(agent_connection_id),
-              &submission.received_at, &submission.valid_from, &submission.valid_until],
+              &submission.received_at, &submission.valid_from, &submission.valid_until,
+              &Uuid::from(self.context.workspace_id)],
         ).await?;
         if changed != 1 {
             return Err(Error::InvariantViolation(

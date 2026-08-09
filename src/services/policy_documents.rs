@@ -5,15 +5,20 @@ use futures_core::Stream;
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId, DocumentOwner,
-        PolicyId, WorkspaceId,
+    application::{
+        commands::documents::{
+            ArchiveDocument, ArchiveDocumentHandler, ArchiveDocumentOutcome, CreatePolicyDocument,
+            CreatePolicyDocumentHandler, CreatePolicyDocumentOutcome, DocumentCommandError,
+        },
+        ExecutionMetadata,
     },
-    messaging::IntegrationMessage,
+    domain::{
+        AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId,
+        DocumentIdentity, DocumentOwner, PolicyId, WorkspaceId,
+    },
     object_storage::{FilesystemObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{ArchiveDocumentResult, CreatePolicyDocumentResult, NewOutboxMessage, Postgres},
+    repository::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
 };
 
 use super::{
@@ -28,6 +33,8 @@ use super::{
 pub struct PolicyDocumentService {
     repository: Arc<Postgres>,
     object_store: Arc<FilesystemObjectStore>,
+    create_document: CreatePolicyDocumentHandler,
+    archive_document: ArchiveDocumentHandler,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +51,8 @@ pub struct UploadPolicyDocumentPayload {
 impl PolicyDocumentService {
     pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
         Self {
+            create_document: CreatePolicyDocumentHandler::new(repository.clone()),
+            archive_document: ArchiveDocumentHandler::new(repository.clone()),
             repository,
             object_store,
         }
@@ -141,7 +150,7 @@ impl PolicyDocumentService {
         mut payload: UploadPolicyDocumentPayload,
     ) -> Result<CreatePolicyDocumentResult, Error> {
         payload.policy_id = policy_id;
-        let create_payload = CreateDocumentPayload {
+        let document = CreateDocumentPayload {
             owner: DocumentOwner::Policy(policy_id),
             filename: payload.filename,
             content_type: payload.content_type,
@@ -152,27 +161,21 @@ impl PolicyDocumentService {
         };
 
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let result = context.create_policy_document(&create_payload).await?;
-                    if let CreatePolicyDocumentResult::Created(document) = &result {
-                        context
-                            .append_outbox_message(&policy_document_scan_requested_message(
-                                document, request_id,
-                            ))
-                            .await?;
-                    }
-                    Ok(result)
+            .create_document
+            .handle(
+                CreatePolicyDocument {
+                    connection: *connection,
+                    policy_id,
+                    document_id: DocumentId::from(Uuid::new_v4()),
+                    document,
+                    created_at: chrono::Utc::now(),
                 },
+                ExecutionMetadata::for_request(request_id),
             )
             .await;
 
         match result {
-            Ok(CreatePolicyDocumentResult::Created(document)) => {
+            Ok(CreatePolicyDocumentOutcome::Created(document)) => {
                 emit_document_audit(
                     "policy_document.accepted",
                     "accept_policy_document",
@@ -183,13 +186,21 @@ impl PolicyDocumentService {
                 );
                 Ok(CreatePolicyDocumentResult::Created(document))
             }
-            Ok(result) => {
+            Ok(CreatePolicyDocumentOutcome::PolicyUnavailable) => {
                 self.delete_staged_object(&payload.object_key).await?;
-                Ok(result)
+                Ok(CreatePolicyDocumentResult::PolicyNotFound)
+            }
+            Ok(CreatePolicyDocumentOutcome::CurrentDocument) => {
+                self.delete_staged_object(&payload.object_key).await?;
+                Ok(CreatePolicyDocumentResult::DocumentExists)
+            }
+            Ok(CreatePolicyDocumentOutcome::Replayed(_)) => {
+                self.delete_staged_object(&payload.object_key).await?;
+                Ok(CreatePolicyDocumentResult::DocumentExists)
             }
             Err(error) => {
                 self.delete_staged_object(&payload.object_key).await?;
-                Err(error.into())
+                Err(command_error(error))
             }
         }
     }
@@ -215,18 +226,24 @@ impl PolicyDocumentService {
         document_id: DocumentId,
     ) -> Result<ArchiveDocumentResult, Error> {
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    context
-                        .archive_policy_document(policy_id, document_id)
-                        .await
+            .archive_document
+            .handle(
+                ArchiveDocument {
+                    connection: *connection,
+                    identity: DocumentIdentity::Policy {
+                        policy_id,
+                        document_id,
+                    },
                 },
+                ExecutionMetadata::for_request(request_id),
             )
-            .await?;
+            .await
+            .map_err(command_error)?;
+        let result = match result {
+            ArchiveDocumentOutcome::Archived => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Unavailable => ArchiveDocumentResult::NotFound,
+            ArchiveDocumentOutcome::NotTerminal => ArchiveDocumentResult::NotTerminal,
+        };
         if result == ArchiveDocumentResult::Archived {
             AuditEvent::new(
                 "policy_document.archived",
@@ -250,19 +267,15 @@ impl PolicyDocumentService {
     }
 }
 
-pub(crate) fn policy_document_scan_requested_message(
-    document: &Document,
-    request_id: Uuid,
-) -> NewOutboxMessage {
-    NewOutboxMessage::new(
-        TopicName::new(MESSAGE_BUS_TOPIC),
-        IntegrationMessage::scan_document(
-            document.identity,
-            document.object_key.clone(),
-            Some(request_id),
-            None,
-        ),
-    )
+fn command_error(error: DocumentCommandError) -> super::Error {
+    match error {
+        DocumentCommandError::Repository(error) => super::Error::Repository(error),
+        DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+            super::Error::Repository(crate::repository::Error::InvariantViolation(
+                "validated document command was rejected",
+            ))
+        }
+    }
 }
 
 fn emit_document_audit(
