@@ -249,53 +249,6 @@ impl From<&AuditorAccessGrant> for GrantRecord {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use chrono::{Duration, TimeZone, Utc};
-    use uuid::Uuid;
-
-    use super::{GrantRecord, GET_FOR_UPDATE_SQL, GET_SQL, LIST_PROJECTIONS_SQL};
-    use crate::domain::{AuditReviewPeriod, AuditorAccessGrant, Sha256Digest};
-
-    #[test]
-    fn verification_and_transactional_reads_are_workspace_scoped_and_lock_distinctly() {
-        assert!(GET_SQL.contains("workspace_id = $2"));
-        assert!(!GET_SQL.contains("FOR UPDATE"));
-        assert!(GET_FOR_UPDATE_SQL.contains("workspace_id = $2"));
-        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
-    }
-
-    #[test]
-    fn list_projection_is_ordered_and_conceals_the_secret_digest() {
-        assert!(LIST_PROJECTIONS_SQL.contains("workspace_id = $1"));
-        assert!(LIST_PROJECTIONS_SQL.contains("ORDER BY created_at DESC, id DESC"));
-        assert!(!LIST_PROJECTIONS_SQL.contains("secret_digest"));
-    }
-
-    #[test]
-    fn record_round_trip_preserves_a_revoked_grant_snapshot() {
-        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
-        let mut grant = AuditorAccessGrant::issue(
-            Uuid::new_v4().into(),
-            Uuid::new_v4().into(),
-            "auditor@example.com".to_owned(),
-            Sha256Digest::digest(b"secret"),
-            Uuid::new_v4().into(),
-            Uuid::new_v4().into(),
-            created_at,
-            created_at + Duration::days(30),
-            AuditReviewPeriod::new(created_at - Duration::days(90), created_at).unwrap(),
-        )
-        .unwrap();
-        grant.revoke(created_at + Duration::seconds(1)).unwrap();
-
-        assert_eq!(
-            AuditorAccessGrant::try_from(GrantRecord::from(&grant)).unwrap(),
-            grant
-        );
-    }
-}
-
 impl Postgres {
     pub async fn get_active_auditor_access_grant_by_id(
         &self,
@@ -376,5 +329,52 @@ impl Postgres {
             .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
             .transpose()?;
         Ok(grant.filter(|grant| grant.ensure_active_at(Utc::now()).is_ok()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+    use uuid::Uuid;
+
+    use super::{GrantRecord, GET_FOR_UPDATE_SQL, GET_SQL, LIST_PROJECTIONS_SQL};
+    use crate::domain::{AuditReviewPeriod, AuditorAccessGrant, Sha256Digest};
+
+    #[test]
+    fn verification_and_transactional_reads_are_workspace_scoped_and_lock_distinctly() {
+        assert!(GET_SQL.contains("workspace_id = $2"));
+        assert!(!GET_SQL.contains("FOR UPDATE"));
+        assert!(GET_FOR_UPDATE_SQL.contains("workspace_id = $2"));
+        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE"));
+    }
+
+    #[test]
+    fn list_projection_is_ordered_and_conceals_the_secret_digest() {
+        assert!(LIST_PROJECTIONS_SQL.contains("workspace_id = $1"));
+        assert!(LIST_PROJECTIONS_SQL.contains("ORDER BY created_at DESC, id DESC"));
+        assert!(!LIST_PROJECTIONS_SQL.contains("secret_digest"));
+    }
+
+    #[test]
+    fn record_round_trip_preserves_a_revoked_grant_snapshot() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let mut grant = AuditorAccessGrant::issue(
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            "auditor@example.com".to_owned(),
+            Sha256Digest::digest(b"secret"),
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            created_at,
+            created_at + Duration::days(30),
+            AuditReviewPeriod::new(created_at - Duration::days(90), created_at).unwrap(),
+        )
+        .unwrap();
+        grant.revoke(created_at + Duration::seconds(1)).unwrap();
+
+        assert_eq!(
+            AuditorAccessGrant::try_from(GrantRecord::from(&grant)).unwrap(),
+            grant
+        );
     }
 }
