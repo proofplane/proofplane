@@ -6,8 +6,8 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        ControlId, EvidenceAggregateError, EvidenceControlMappingState, EvidenceId,
-        WorkspacePermission,
+        ControlId, EvidenceAggregateError, EvidenceControlMapping, EvidenceControlMappingState,
+        EvidenceId, WorkspacePermission,
     },
     repository::{Error as RepositoryError, Postgres},
 };
@@ -16,16 +16,17 @@ use crate::{
 pub struct MapEvidenceToControls {
     pub connection: AgentConnectionContext,
     pub evidence_id: EvidenceId,
-    pub mappings: Vec<EvidenceControlMapping>,
+    pub mappings: Vec<EvidenceControlMappingInput>,
 }
 #[derive(Debug, Clone)]
-pub struct EvidenceControlMapping {
+pub struct EvidenceControlMappingInput {
     pub control_id: ControlId,
     pub rationale: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedEvidenceToControls {
     pub control_ids: Vec<ControlId>,
+    pub mappings: Vec<EvidenceControlMapping>,
 }
 #[derive(Clone)]
 pub struct MapEvidenceToControlsHandler {
@@ -61,17 +62,33 @@ impl MapEvidenceToControlsHandler {
                         return Ok(MapOutcome::Unavailable);
                     };
                     let mut combined = evidence.mappings().to_vec();
-                    let mut already_mapped = Vec::new();
                     let mut requested_ids = Vec::with_capacity(requested.len());
-                    for mapping in requested {
+                    for mapping in &requested {
                         requested_ids.push(mapping.control_id);
-                        if combined
-                            .iter()
-                            .any(|existing| existing.control_id() == mapping.control_id)
-                        {
-                            already_mapped.push(mapping.control_id);
-                            continue;
-                        }
+                    }
+                    let existing_controls = context.existing_control_ids(&requested_ids).await?;
+                    let unknown = requested_ids
+                        .iter()
+                        .copied()
+                        .filter(|id| !existing_controls.contains(id))
+                        .collect::<Vec<_>>();
+                    let already_mapped = requested_ids
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            evidence
+                                .mappings()
+                                .iter()
+                                .any(|mapping| mapping.control_id() == *id)
+                        })
+                        .collect::<Vec<_>>();
+                    if !unknown.is_empty() || !already_mapped.is_empty() {
+                        return Ok(MapOutcome::Rejected {
+                            unknown,
+                            already_mapped,
+                        });
+                    }
+                    for mapping in requested {
                         let mapping = EvidenceControlMappingState::new(
                             mapping.control_id,
                             mapping.rationale,
@@ -82,10 +99,6 @@ impl MapEvidenceToControlsHandler {
                             RepositoryError::InvariantViolation("evidence mapping is invalid")
                         })?;
                         combined.push(mapping);
-                    }
-                    if !already_mapped.is_empty() || !context.controls_exist(&requested_ids).await?
-                    {
-                        return Ok(MapOutcome::Rejected);
                     }
                     evidence
                         .replace_mappings(combined)
@@ -100,28 +113,66 @@ impl MapEvidenceToControlsHandler {
                             }
                         })?;
                     repository.save(&evidence).await?;
-                    Ok(MapOutcome::Mapped(requested_ids))
+                    let mappings = requested_ids
+                        .iter()
+                        .map(|control_id| {
+                            context.get_evidence_control_mapping(evidence_id, *control_id)
+                        })
+                        .collect::<Vec<_>>();
+                    let mut saved = Vec::with_capacity(mappings.len());
+                    for mapping in mappings {
+                        saved.push(mapping.await?.ok_or(RepositoryError::InvariantViolation(
+                            "saved evidence mapping must be readable",
+                        ))?);
+                    }
+                    Ok(MapOutcome::Mapped {
+                        requested_ids,
+                        mappings: saved,
+                    })
                 },
             )
             .await?;
         match result {
-            MapOutcome::Mapped(control_ids) => Ok(MappedEvidenceToControls { control_ids }),
-            MapOutcome::Unavailable => Err(MapEvidenceToControlsError::Unavailable),
-            MapOutcome::Rejected => Err(MapEvidenceToControlsError::Rejected),
+            MapOutcome::Mapped {
+                requested_ids: control_ids,
+                mappings,
+            } => Ok(MappedEvidenceToControls {
+                control_ids,
+                mappings,
+            }),
+            MapOutcome::Unavailable => Err(MapEvidenceToControlsError::EvidenceNotFound),
+            MapOutcome::Rejected {
+                unknown,
+                already_mapped,
+            } => Err(MapEvidenceToControlsError::Rejected {
+                unknown,
+                already_mapped,
+            }),
         }
     }
 }
 enum MapOutcome {
-    Mapped(Vec<ControlId>),
+    Mapped {
+        requested_ids: Vec<ControlId>,
+        mappings: Vec<EvidenceControlMapping>,
+    },
     Unavailable,
-    Rejected,
+    Rejected {
+        unknown: Vec<ControlId>,
+        already_mapped: Vec<ControlId>,
+    },
 }
 #[derive(Debug, thiserror::Error)]
 pub enum MapEvidenceToControlsError {
     #[error("evidence is unavailable")]
     Unavailable,
+    #[error("evidence was not found")]
+    EvidenceNotFound,
     #[error("control mappings are invalid")]
-    Rejected,
+    Rejected {
+        unknown: Vec<ControlId>,
+        already_mapped: Vec<ControlId>,
+    },
     #[error("repository error")]
     Repository(#[from] RepositoryError),
 }
@@ -140,7 +191,7 @@ mod tests {
     };
 
     use super::{
-        EvidenceControlMapping, MapEvidenceToControls, MapEvidenceToControlsError,
+        EvidenceControlMappingInput, MapEvidenceToControls, MapEvidenceToControlsError,
         MapEvidenceToControlsHandler,
     };
 
@@ -167,7 +218,7 @@ mod tests {
                 MapEvidenceToControls {
                     connection: connection(&workspace),
                     evidence_id,
-                    mappings: vec![EvidenceControlMapping {
+                    mappings: vec![EvidenceControlMappingInput {
                         control_id: ControlId::from(foreign_control_id),
                         rationale: "Foreign control".into(),
                     }],
@@ -176,7 +227,11 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, Err(MapEvidenceToControlsError::Rejected)));
+        assert!(matches!(
+            result,
+            Err(MapEvidenceToControlsError::Rejected { unknown, already_mapped })
+                if unknown == vec![ControlId::from(foreign_control_id)] && already_mapped.is_empty()
+        ));
         let mappings = postgres
             .in_workspace_context_read(workspace.workspace_id, async |context| {
                 context.list_evidence_control_mappings(evidence_id).await

@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use super::{
     common::{
-        argument_errors, authorize_token_workspace, batch_rejected, domain_errors, format_datetime,
-        not_found, parse_uuid_arg, required_uuid,
+        argument_errors, authorize_token_workspace, batch_rejected, conflict, domain_errors,
+        format_datetime, not_found, parse_uuid_arg, required_uuid,
     },
     evidence::{parse_evidence_arg, EvidenceArg},
     ProofplaneMcp,
@@ -21,13 +21,28 @@ use crate::{
     application::{
         commands::{
             create_control::{CreateControl, CreateControlError},
+            map_control_to_evidence::{
+                ControlEvidenceMapping as CommandControlEvidenceMapping, MapControlToEvidence,
+                MapControlToEvidenceError,
+            },
+            map_evidence_to_controls::{
+                EvidenceControlMappingInput as CommandEvidenceControlMapping,
+                MapEvidenceToControls, MapEvidenceToControlsError,
+            },
             replace_control::{ReplaceControl, ReplaceControlError},
+            unmap_control_from_evidence::{
+                UnmapControlFromEvidence, UnmapControlFromEvidenceError,
+            },
+            unmap_evidence_from_controls::{
+                UnmapEvidenceFromControls, UnmapEvidenceFromControlsError,
+            },
         },
         queries::{
             control_catalog::{
                 GetControl as GetControlQuery, GetControlError, ListControls as ListControlsQuery,
                 ListControlsError,
             },
+            evidence_catalog::ListEvidenceControlMappings,
             framework_catalog::{FrameworkCatalogError, ListFrameworkRequirements, ListFrameworks},
         },
         ExecutionMetadata,
@@ -44,10 +59,7 @@ use crate::{
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::controls::{
-        ControlMutationError, MapControlToEvidenceError, MapEvidenceToControlsError,
-        UnmapControlFromEvidenceError, UnmapEvidenceFromControlsError,
-    },
+    services::controls::ControlMutationError,
     validate,
     validation::Validation,
 };
@@ -252,8 +264,12 @@ impl ProofplaneMcp {
         let evidence_id = parse_evidence_arg(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let mappings = self
-            .controls
-            .list_evidence_control_mappings(context.agent_connection_context(), evidence_id)
+            .evidence_handlers
+            .list_control_mappings
+            .handle(ListEvidenceControlMappings {
+                connection: context.agent_connection_context(),
+                evidence_id,
+            })
             .await?
             .ok_or_else(not_found)?;
 
@@ -274,11 +290,27 @@ impl ProofplaneMcp {
         let payload = parse_map_evidence_to_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
-        let mapping = self
-            .controls
-            .create_evidence_control_mapping(context.agent_connection_context(), payload)
-            .await?
-            .ok_or_else(not_found)?;
+        let mapped = self
+            .evidence_handlers
+            .map_to_controls
+            .handle(
+                MapEvidenceToControls {
+                    connection: context.agent_connection_context(),
+                    evidence_id: payload.evidence_id,
+                    mappings: vec![CommandEvidenceControlMapping {
+                        control_id: payload.control_id,
+                        rationale: payload.rationale,
+                    }],
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await
+            .map_err(map_singular_evidence_control_error)?;
+        let mapping = mapped
+            .mappings
+            .into_iter()
+            .next()
+            .ok_or_else(|| ErrorData::internal_error("dependency failure", None))?;
 
         AuditEvent::new(
             "evidence_control_mapping.created",
@@ -314,9 +346,25 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let evidence_id = payload.evidence_id;
         let control_ids = self
-            .controls
-            .map_evidence_to_controls(context.agent_connection_context(), payload)
-            .await?;
+            .evidence_handlers
+            .map_to_controls
+            .handle(
+                MapEvidenceToControls {
+                    connection: context.agent_connection_context(),
+                    evidence_id: payload.evidence_id,
+                    mappings: payload
+                        .items
+                        .into_iter()
+                        .map(|item| CommandEvidenceControlMapping {
+                            control_id: item.control_id,
+                            rationale: item.rationale,
+                        })
+                        .collect(),
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?
+            .control_ids;
 
         let control_id_strings = control_ids
             .iter()
@@ -359,9 +407,25 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let control_id = payload.control_id;
         let evidence_ids = self
-            .controls
-            .map_control_to_evidence(context.agent_connection_context(), payload)
-            .await?;
+            .evidence_handlers
+            .map_control_to_evidence
+            .handle(
+                MapControlToEvidence {
+                    connection: context.agent_connection_context(),
+                    control_id: payload.control_id,
+                    mappings: payload
+                        .items
+                        .into_iter()
+                        .map(|item| CommandControlEvidenceMapping {
+                            evidence_id: item.evidence_id,
+                            rationale: item.rationale,
+                        })
+                        .collect(),
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?
+            .evidence_ids;
 
         let evidence_id_strings = evidence_ids
             .iter()
@@ -404,9 +468,18 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let evidence_id = payload.evidence_id;
         let control_ids = self
-            .controls
-            .unmap_evidence_from_controls(context.agent_connection_context(), payload)
-            .await?;
+            .evidence_handlers
+            .unmap_from_controls
+            .handle(
+                UnmapEvidenceFromControls {
+                    connection: context.agent_connection_context(),
+                    evidence_id: payload.evidence_id,
+                    control_ids: payload.control_ids,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?
+            .control_ids;
 
         let control_id_strings = control_ids
             .iter()
@@ -449,9 +522,18 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let control_id = payload.control_id;
         let evidence_ids = self
-            .controls
-            .unmap_control_from_evidence(context.agent_connection_context(), payload)
-            .await?;
+            .evidence_handlers
+            .unmap_control_from_evidence
+            .handle(
+                UnmapControlFromEvidence {
+                    connection: context.agent_connection_context(),
+                    control_id: payload.control_id,
+                    evidence_ids: payload.evidence_ids,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?
+            .evidence_ids;
 
         let evidence_id_strings = evidence_ids
             .iter()
@@ -492,18 +574,18 @@ impl ProofplaneMcp {
         let (evidence_id, control_id) = parse_remove_evidence_control_mapping_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
-        let deleted = self
-            .controls
-            .delete_evidence_control_mapping(
-                context.agent_connection_context(),
-                evidence_id,
-                control_id,
+        self.evidence_handlers
+            .unmap_from_controls
+            .handle(
+                UnmapEvidenceFromControls {
+                    connection: context.agent_connection_context(),
+                    evidence_id,
+                    control_ids: vec![control_id],
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
             )
-            .await?;
-
-        if !deleted {
-            return Err(not_found());
-        }
+            .await
+            .map_err(map_singular_evidence_control_unmap_error)?;
 
         AuditEvent::new(
             "evidence_control_mapping.deleted",
@@ -908,6 +990,7 @@ fn parse_unmap_control_from_evidence_request(
 impl From<UnmapControlFromEvidenceError> for ErrorData {
     fn from(error: UnmapControlFromEvidenceError) -> Self {
         match error {
+            UnmapControlFromEvidenceError::Unavailable => not_found(),
             UnmapControlFromEvidenceError::Rejected {
                 unknown,
                 not_mapped,
@@ -942,6 +1025,7 @@ impl From<UnmapControlFromEvidenceError> for ErrorData {
 impl From<UnmapEvidenceFromControlsError> for ErrorData {
     fn from(error: UnmapEvidenceFromControlsError) -> Self {
         match error {
+            UnmapEvidenceFromControlsError::Unavailable => not_found(),
             UnmapEvidenceFromControlsError::Rejected {
                 unknown,
                 not_mapped,
@@ -976,6 +1060,7 @@ impl From<UnmapEvidenceFromControlsError> for ErrorData {
 impl From<MapEvidenceToControlsError> for ErrorData {
     fn from(error: MapEvidenceToControlsError) -> Self {
         match error {
+            MapEvidenceToControlsError::Unavailable => not_found(),
             MapEvidenceToControlsError::Rejected {
                 unknown,
                 already_mapped,
@@ -1010,6 +1095,7 @@ impl From<MapEvidenceToControlsError> for ErrorData {
 impl From<MapControlToEvidenceError> for ErrorData {
     fn from(error: MapControlToEvidenceError) -> Self {
         match error {
+            MapControlToEvidenceError::Unavailable => not_found(),
             MapControlToEvidenceError::Rejected {
                 unknown,
                 already_mapped,
@@ -1037,6 +1123,37 @@ impl From<MapControlToEvidenceError> for ErrorData {
                     })),
                 )
             }
+        }
+    }
+}
+
+fn map_singular_evidence_control_error(error: MapEvidenceToControlsError) -> ErrorData {
+    match error {
+        MapEvidenceToControlsError::Rejected {
+            unknown,
+            already_mapped,
+        } if unknown.is_empty() && already_mapped.len() == 1 => conflict(
+            "evidence_control_mapping_exists",
+            "this control is already mapped to the evidence",
+        ),
+        MapEvidenceToControlsError::EvidenceNotFound
+        | MapEvidenceToControlsError::Unavailable
+        | MapEvidenceToControlsError::Rejected { .. } => not_found(),
+        MapEvidenceToControlsError::Repository(error) => {
+            tracing::error!(%error, "MCP evidence control mapping repository failure");
+            ErrorData::internal_error("dependency failure", None)
+        }
+    }
+}
+
+fn map_singular_evidence_control_unmap_error(error: UnmapEvidenceFromControlsError) -> ErrorData {
+    match error {
+        UnmapEvidenceFromControlsError::EvidenceNotFound
+        | UnmapEvidenceFromControlsError::Unavailable
+        | UnmapEvidenceFromControlsError::Rejected { .. } => not_found(),
+        UnmapEvidenceFromControlsError::Repository(error) => {
+            tracing::error!(%error, "MCP evidence control unmapping repository failure");
+            ErrorData::internal_error("dependency failure", None)
         }
     }
 }

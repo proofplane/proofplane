@@ -25,16 +25,23 @@ use rmcp::{
 use crate::{
     application::{
         commands::{
-            create_control::CreateControlHandler,
+            create_control::CreateControlHandler, create_evidence::CreateEvidenceHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
+            map_control_to_evidence::MapControlToEvidenceHandler,
+            map_evidence_to_controls::MapEvidenceToControlsHandler,
             replace_control::ReplaceControlHandler,
             revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
+            unmap_control_from_evidence::UnmapControlFromEvidenceHandler,
+            unmap_evidence_from_controls::UnmapEvidenceFromControlsHandler,
         },
         queries::{
             control_catalog::{GetControlHandler, ListControlsHandler},
+            evidence_catalog::{
+                GetEvidenceHandler, ListEvidenceControlMappingsHandler, ListEvidenceHandler,
+            },
             framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
             list_auditor_access_grants::ListAuditorAccessGrantsHandler,
         },
@@ -42,7 +49,6 @@ use crate::{
     mcp::server::common::authorize_connection,
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        controls::ControlService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
     },
     VERSION,
@@ -81,14 +87,13 @@ fn server_instructions() -> String {
 
 #[derive(Clone)]
 pub struct ProofplaneMcp {
-    evidence: EvidenceService,
+    evidence_handlers: EvidenceHandlers,
     evidence_submissions: EvidenceSubmissionService,
     issue_agent_evidence_upload_grant: IssueAgentEvidenceUploadGrantHandler,
     agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
     issue_evidence_document_upload_grant: IssueEvidenceDocumentUploadGrantHandler,
     issue_policy_document_upload_grant: IssuePolicyDocumentUploadGrantHandler,
     auditor_access_grants: AuditorGrantHandlers,
-    controls: ControlService,
     control_handlers: ControlHandlers,
     policies: PolicyService,
     public_api_base_url: Url,
@@ -115,8 +120,19 @@ pub(super) struct ControlHandlers {
 }
 
 pub(super) struct ControlDependencies {
-    pub service: ControlService,
     pub handlers: ControlHandlers,
+}
+
+#[derive(Clone)]
+pub(super) struct EvidenceHandlers {
+    pub create: CreateEvidenceHandler,
+    pub list: ListEvidenceHandler,
+    pub get: GetEvidenceHandler,
+    pub list_control_mappings: ListEvidenceControlMappingsHandler,
+    pub map_to_controls: MapEvidenceToControlsHandler,
+    pub map_control_to_evidence: MapControlToEvidenceHandler,
+    pub unmap_from_controls: UnmapEvidenceFromControlsHandler,
+    pub unmap_control_from_evidence: UnmapControlFromEvidenceHandler,
 }
 
 #[derive(Clone)]
@@ -128,7 +144,7 @@ pub(super) struct AuditorGrantHandlers {
 
 impl ProofplaneMcp {
     pub(super) fn new(
-        evidence: EvidenceService,
+        evidence_handlers: EvidenceHandlers,
         evidence_submissions: EvidenceSubmissionService,
         uploads: UploadDependencies,
         auditor_access_grants: AuditorGrantHandlers,
@@ -137,7 +153,7 @@ impl ProofplaneMcp {
         public_api_base_url: Url,
     ) -> Self {
         Self {
-            evidence,
+            evidence_handlers,
             evidence_submissions,
             issue_agent_evidence_upload_grant: uploads.issue_agent_evidence_grant,
             agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
@@ -145,7 +161,6 @@ impl ProofplaneMcp {
             issue_policy_document_upload_grant: uploads.issue_policy_grant,
             auditor_access_grants,
             control_handlers: controls.handlers,
-            controls: controls.service,
             policies,
             public_api_base_url,
             max_document_bytes: uploads.max_document_bytes,

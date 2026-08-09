@@ -29,16 +29,23 @@ use crate::{
     application::{
         commands::{
             agent_connections::AuthorizeAgentConnectionHandler,
-            create_control::CreateControlHandler,
+            create_control::CreateControlHandler, create_evidence::CreateEvidenceHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
+            map_control_to_evidence::MapControlToEvidenceHandler,
+            map_evidence_to_controls::MapEvidenceToControlsHandler,
             replace_control::ReplaceControlHandler,
             revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
+            unmap_control_from_evidence::UnmapControlFromEvidenceHandler,
+            unmap_evidence_from_controls::UnmapEvidenceFromControlsHandler,
         },
         queries::{
             control_catalog::{GetControlHandler, ListControlsHandler},
+            evidence_catalog::{
+                GetEvidenceHandler, ListEvidenceControlMappingsHandler, ListEvidenceHandler,
+            },
             framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
             list_auditor_access_grants::ListAuditorAccessGrantsHandler,
         },
@@ -58,7 +65,6 @@ use crate::{
     },
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        controls::ControlService, evidence::EvidenceService,
         evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
     },
 };
@@ -128,7 +134,6 @@ pub fn create_app<V>(dependencies: McpAppDependencies<V>) -> Result<Router, McpA
 where
     V: TokenVerifier<Claims = VerifiedMcpClaims> + 'static,
 {
-    let evidence = EvidenceService::new(dependencies.postgres.clone());
     let evidence_submissions = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
@@ -152,7 +157,6 @@ where
         dependencies.public_api_base_url.clone(),
         dependencies.policy_upload_grant_encryptor,
     );
-    let controls = ControlService::new(dependencies.postgres.clone());
     let policies = PolicyService::new(dependencies.postgres.clone());
     let authorize_agent_connection =
         AuthorizeAgentConnectionHandler::new(dependencies.postgres.clone());
@@ -161,7 +165,24 @@ where
         dependencies.resource.clone(),
         authorize_agent_connection,
         ProofplaneMcp::new(
-            evidence,
+            super::server::EvidenceHandlers {
+                create: CreateEvidenceHandler::new(dependencies.postgres.clone()),
+                list: ListEvidenceHandler::new(dependencies.postgres.clone()),
+                get: GetEvidenceHandler::new(dependencies.postgres.clone()),
+                list_control_mappings: ListEvidenceControlMappingsHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                map_to_controls: MapEvidenceToControlsHandler::new(dependencies.postgres.clone()),
+                map_control_to_evidence: MapControlToEvidenceHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                unmap_from_controls: UnmapEvidenceFromControlsHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+                unmap_control_from_evidence: UnmapControlFromEvidenceHandler::new(
+                    dependencies.postgres.clone(),
+                ),
+            },
             evidence_submissions,
             UploadDependencies {
                 issue_evidence_grant: issue_evidence_document_upload_grant,
@@ -176,7 +197,6 @@ where
                 revoke: RevokeAuditorAccessGrantHandler::new(dependencies.postgres.clone()),
             },
             super::server::ControlDependencies {
-                service: controls,
                 handlers: super::server::ControlHandlers {
                     create: CreateControlHandler::new(dependencies.postgres.clone()),
                     replace: ReplaceControlHandler::new(dependencies.postgres.clone()),

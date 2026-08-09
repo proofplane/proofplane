@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, CreateEvidencePayload, Evidence, EvidenceAggregate, EvidenceControlMappingState,
-        EvidenceDefinition, EvidenceId, EvidenceStatus, UpdateEvidencePayload, WorkspaceId,
+        ControlId, ControlSummary, CreateEvidencePayload, Evidence, EvidenceAggregate,
+        EvidenceControlMapping, EvidenceControlMappingState, EvidenceDefinition, EvidenceId,
+        EvidenceStatus, UpdateEvidencePayload, WorkspaceId,
     },
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -67,26 +68,60 @@ impl EvidenceRepository<'_> {
 }
 
 impl WorkspaceTransactionContext<'_> {
-    pub async fn controls_exist(&self, ids: &[ControlId]) -> Result<bool, Error> {
+    pub async fn get_evidence_control_mapping(
+        &self,
+        evidence_id: EvidenceId,
+        control_id: ControlId,
+    ) -> Result<Option<EvidenceControlMapping>, Error> {
+        self.transaction
+            .query_opt(
+                "SELECT c.code, c.title, c.description, m.rationale, m.created_at FROM evidence_control_mappings m JOIN evidence e ON e.id = m.evidence_id AND e.workspace_id = $3 JOIN controls c ON c.id = m.control_id AND c.workspace_id = $3 WHERE m.evidence_id = $1 AND m.control_id = $2",
+                &[&Uuid::from(evidence_id), &Uuid::from(control_id), &Uuid::from(self.workspace_id)],
+            )
+            .await?
+            .map(|row| {
+                Ok(EvidenceControlMapping {
+                    evidence_id,
+                    control: ControlSummary {
+                        id: control_id,
+                        code: row.try_get("code")?,
+                        title: row.try_get("title")?,
+                        description: row.try_get("description")?,
+                    },
+                    rationale: row.try_get("rationale")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn existing_control_ids(
+        &self,
+        ids: &[ControlId],
+    ) -> Result<std::collections::HashSet<ControlId>, Error> {
         if ids.is_empty() {
-            return Ok(true);
+            return Ok(std::collections::HashSet::new());
         }
-        let requested = ids
-            .iter()
-            .copied()
-            .map(Uuid::from)
-            .collect::<std::collections::HashSet<_>>();
-        let row = self
+        let requested = ids.iter().copied().map(Uuid::from).collect::<Vec<_>>();
+        let rows = self
             .transaction
-            .query_one(
-                "SELECT count(DISTINCT id) FROM controls WHERE workspace_id = $1 AND id = ANY($2)",
-                &[
-                    &Uuid::from(self.workspace_id),
-                    &requested.iter().copied().collect::<Vec<_>>(),
-                ],
+            .query(
+                "SELECT id FROM controls WHERE workspace_id = $1 AND id = ANY($2) FOR KEY SHARE",
+                &[&Uuid::from(self.workspace_id), &requested],
             )
             .await?;
-        Ok(row.try_get::<_, i64>(0)? == requested.len() as i64)
+        rows.into_iter()
+            .map(|row| Ok(ControlId::from(row.try_get::<_, Uuid>("id")?)))
+            .collect()
+    }
+
+    pub async fn controls_exist(&self, ids: &[ControlId]) -> Result<bool, Error> {
+        Ok(self.existing_control_ids(ids).await?.len()
+            == ids
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len())
     }
 }
 
