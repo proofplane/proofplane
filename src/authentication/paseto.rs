@@ -31,8 +31,12 @@ const POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] =
 const MCP_OAUTH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 const AGENT_EVIDENCE_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
+const EVIDENCE_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
+const POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
 
 pub const AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-agent-evidence-upload-grant";
+pub const EVIDENCE_DOCUMENT_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
+pub const POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-policy-document-upload-grant";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredClaims {
@@ -140,6 +144,192 @@ fn parse_agent_evidence_upload_grant_uuid(
     value: &str,
 ) -> Result<Uuid, InvalidAgentEvidenceUploadGrantClaims> {
     Uuid::parse_str(value).map_err(|_| InvalidAgentEvidenceUploadGrantClaims)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct EvidenceDocumentUploadGrantClaims {
+    version: u8,
+    grant_id: String,
+    workspace_id: String,
+    evidence_id: String,
+    valid_from: String,
+    valid_until: String,
+    issued_by_user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issued_via_api_token_id: Option<String>,
+    issued_via_agent_connection_id: Option<String>,
+}
+
+impl EvidenceDocumentUploadGrantClaims {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        grant_id: Uuid,
+        workspace_id: Uuid,
+        evidence_id: Uuid,
+        valid_from: DateTime<Utc>,
+        valid_until: DateTime<Utc>,
+        issued_by_user_id: Uuid,
+        issued_via_agent_connection_id: Uuid,
+    ) -> Self {
+        Self {
+            version: EVIDENCE_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION,
+            grant_id: grant_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            evidence_id: evidence_id.to_string(),
+            valid_from: valid_from.to_rfc3339(),
+            valid_until: valid_until.to_rfc3339(),
+            issued_by_user_id: issued_by_user_id.to_string(),
+            issued_via_api_token_id: None,
+            issued_via_agent_connection_id: Some(issued_via_agent_connection_id.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerifiedEvidenceDocumentUploadGrantClaims {
+    pub(crate) grant_id: Uuid,
+    pub(crate) workspace_id: Uuid,
+    pub(crate) evidence_id: Uuid,
+    pub(crate) valid_from: DateTime<Utc>,
+    pub(crate) valid_until: DateTime<Utc>,
+    pub(crate) issued_by_user_id: Uuid,
+    pub(crate) issued_via_agent_connection_id: Uuid,
+    pub(crate) expires_at: DateTime<Utc>,
+}
+
+impl TryFrom<VerifiedPasetoToken<EvidenceDocumentUploadGrantClaims>>
+    for VerifiedEvidenceDocumentUploadGrantClaims
+{
+    type Error = InvalidEvidenceDocumentUploadGrantClaims;
+
+    fn try_from(
+        token: VerifiedPasetoToken<EvidenceDocumentUploadGrantClaims>,
+    ) -> Result<Self, Self::Error> {
+        let claims = token.claims;
+        if claims.version != EVIDENCE_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION {
+            return Err(InvalidEvidenceDocumentUploadGrantClaims);
+        }
+        let grant_id = parse_evidence_document_upload_grant_uuid(&claims.grant_id)?;
+        let issued_by_user_id =
+            parse_evidence_document_upload_grant_uuid(&claims.issued_by_user_id)?;
+        if grant_id != token.token_id || issued_by_user_id != token.subject {
+            return Err(InvalidEvidenceDocumentUploadGrantClaims);
+        }
+        let issued_via_agent_connection_id = match (
+            claims.issued_via_api_token_id.as_deref(),
+            claims.issued_via_agent_connection_id.as_deref(),
+        ) {
+            (None, Some(id)) => parse_evidence_document_upload_grant_uuid(id)?,
+            _ => return Err(InvalidEvidenceDocumentUploadGrantClaims),
+        };
+
+        Ok(Self {
+            grant_id,
+            workspace_id: parse_evidence_document_upload_grant_uuid(&claims.workspace_id)?,
+            evidence_id: parse_evidence_document_upload_grant_uuid(&claims.evidence_id)?,
+            valid_from: parse_evidence_document_upload_grant_timestamp(&claims.valid_from)?,
+            valid_until: parse_evidence_document_upload_grant_timestamp(&claims.valid_until)?,
+            issued_by_user_id,
+            issued_via_agent_connection_id,
+            expires_at: token.expires_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InvalidEvidenceDocumentUploadGrantClaims;
+
+fn parse_evidence_document_upload_grant_uuid(
+    value: &str,
+) -> Result<Uuid, InvalidEvidenceDocumentUploadGrantClaims> {
+    Uuid::parse_str(value).map_err(|_| InvalidEvidenceDocumentUploadGrantClaims)
+}
+
+fn parse_evidence_document_upload_grant_timestamp(
+    value: &str,
+) -> Result<DateTime<Utc>, InvalidEvidenceDocumentUploadGrantClaims> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| InvalidEvidenceDocumentUploadGrantClaims)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PolicyDocumentUploadGrantClaims {
+    version: u8,
+    grant_id: String,
+    workspace_id: String,
+    policy_id: String,
+    issued_by_user_id: String,
+    issued_via_agent_connection_id: String,
+}
+
+impl PolicyDocumentUploadGrantClaims {
+    pub(crate) fn new(
+        grant_id: Uuid,
+        workspace_id: Uuid,
+        policy_id: Uuid,
+        issued_by_user_id: Uuid,
+        issued_via_agent_connection_id: Uuid,
+    ) -> Self {
+        Self {
+            version: POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION,
+            grant_id: grant_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            policy_id: policy_id.to_string(),
+            issued_by_user_id: issued_by_user_id.to_string(),
+            issued_via_agent_connection_id: issued_via_agent_connection_id.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerifiedPolicyDocumentUploadGrantClaims {
+    pub(crate) grant_id: Uuid,
+    pub(crate) workspace_id: Uuid,
+    pub(crate) policy_id: Uuid,
+    pub(crate) issued_by_user_id: Uuid,
+    pub(crate) issued_via_agent_connection_id: Uuid,
+    pub(crate) expires_at: DateTime<Utc>,
+}
+
+impl TryFrom<VerifiedPasetoToken<PolicyDocumentUploadGrantClaims>>
+    for VerifiedPolicyDocumentUploadGrantClaims
+{
+    type Error = InvalidPolicyDocumentUploadGrantClaims;
+
+    fn try_from(
+        token: VerifiedPasetoToken<PolicyDocumentUploadGrantClaims>,
+    ) -> Result<Self, Self::Error> {
+        let claims = token.claims;
+        if claims.version != POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION {
+            return Err(InvalidPolicyDocumentUploadGrantClaims);
+        }
+        let grant_id = parse_policy_document_upload_grant_uuid(&claims.grant_id)?;
+        let issued_by_user_id = parse_policy_document_upload_grant_uuid(&claims.issued_by_user_id)?;
+        if grant_id != token.token_id || issued_by_user_id != token.subject {
+            return Err(InvalidPolicyDocumentUploadGrantClaims);
+        }
+
+        Ok(Self {
+            grant_id,
+            workspace_id: parse_policy_document_upload_grant_uuid(&claims.workspace_id)?,
+            policy_id: parse_policy_document_upload_grant_uuid(&claims.policy_id)?,
+            issued_by_user_id,
+            issued_via_agent_connection_id: parse_policy_document_upload_grant_uuid(
+                &claims.issued_via_agent_connection_id,
+            )?,
+            expires_at: token.expires_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InvalidPolicyDocumentUploadGrantClaims;
+
+fn parse_policy_document_upload_grant_uuid(
+    value: &str,
+) -> Result<Uuid, InvalidPolicyDocumentUploadGrantClaims> {
+    Uuid::parse_str(value).map_err(|_| InvalidPolicyDocumentUploadGrantClaims)
 }
 
 #[derive(Clone)]
@@ -1128,6 +1318,115 @@ mod tests {
         let mut invalid_workspace = verified_agent_evidence_upload_token();
         invalid_workspace.claims.workspace_id = "invalid".to_owned();
         assert!(VerifiedAgentEvidenceUploadGrantClaims::try_from(invalid_workspace).is_err());
+    }
+
+    fn verified_evidence_document_upload_grant_token(
+    ) -> VerifiedPasetoToken<EvidenceDocumentUploadGrantClaims> {
+        let grant_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let now = Utc::now();
+        VerifiedPasetoToken {
+            subject: user_id,
+            token_id: grant_id,
+            key_id: "test-key".to_owned(),
+            expires_at: now + ChronoDuration::minutes(5),
+            claims: EvidenceDocumentUploadGrantClaims::new(
+                grant_id,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                now,
+                now + ChronoDuration::days(30),
+                user_id,
+                Uuid::new_v4(),
+            ),
+        }
+    }
+
+    #[test]
+    fn evidence_document_upload_grant_claims_preserve_the_legacy_format_and_bind_authority() {
+        let valid = verified_evidence_document_upload_grant_token();
+        let serialized = serde_json::to_value(&valid.claims).unwrap();
+        assert_eq!(
+            serialized
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "evidence_id",
+                "grant_id",
+                "issued_by_user_id",
+                "issued_via_agent_connection_id",
+                "valid_from",
+                "valid_until",
+                "version",
+                "workspace_id",
+            ]
+        );
+        assert!(VerifiedEvidenceDocumentUploadGrantClaims::try_from(valid).is_ok());
+
+        let mut wrong_token_id = verified_evidence_document_upload_grant_token();
+        wrong_token_id.token_id = Uuid::new_v4();
+        assert!(VerifiedEvidenceDocumentUploadGrantClaims::try_from(wrong_token_id).is_err());
+
+        let mut invalid_issuer = verified_evidence_document_upload_grant_token();
+        invalid_issuer.claims.issued_via_api_token_id = Some(Uuid::new_v4().to_string());
+        assert!(VerifiedEvidenceDocumentUploadGrantClaims::try_from(invalid_issuer).is_err());
+
+        let mut invalid_coverage = verified_evidence_document_upload_grant_token();
+        invalid_coverage.claims.valid_until = "not-a-timestamp".to_owned();
+        assert!(VerifiedEvidenceDocumentUploadGrantClaims::try_from(invalid_coverage).is_err());
+    }
+
+    fn verified_policy_document_upload_grant_token(
+    ) -> VerifiedPasetoToken<PolicyDocumentUploadGrantClaims> {
+        let grant_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        VerifiedPasetoToken {
+            subject: user_id,
+            token_id: grant_id,
+            key_id: "test-key".to_owned(),
+            expires_at: Utc::now() + ChronoDuration::minutes(5),
+            claims: PolicyDocumentUploadGrantClaims::new(
+                grant_id,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                user_id,
+                Uuid::new_v4(),
+            ),
+        }
+    }
+
+    #[test]
+    fn policy_document_upload_grant_claims_preserve_the_legacy_format_and_bind_authority() {
+        let valid = verified_policy_document_upload_grant_token();
+        let serialized = serde_json::to_value(&valid.claims).unwrap();
+        assert_eq!(
+            serialized
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "grant_id",
+                "issued_by_user_id",
+                "issued_via_agent_connection_id",
+                "policy_id",
+                "version",
+                "workspace_id",
+            ]
+        );
+        assert!(VerifiedPolicyDocumentUploadGrantClaims::try_from(valid).is_ok());
+
+        let mut wrong_subject = verified_policy_document_upload_grant_token();
+        wrong_subject.subject = Uuid::new_v4();
+        assert!(VerifiedPolicyDocumentUploadGrantClaims::try_from(wrong_subject).is_err());
+
+        let mut invalid_policy = verified_policy_document_upload_grant_token();
+        invalid_policy.claims.policy_id = "invalid".to_owned();
+        assert!(VerifiedPolicyDocumentUploadGrantClaims::try_from(invalid_policy).is_err());
     }
 
     fn download_config(active_id: &str) -> PasetoDownloadConfig {

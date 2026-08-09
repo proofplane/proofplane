@@ -16,10 +16,34 @@ use crate::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
     },
     repository::{
-        ArchiveDocumentResult, DocumentDownloadCandidate, WorkspaceReadContext,
+        ArchiveDocumentResult, DocumentDownloadCandidate, TransactionContext, WorkspaceReadContext,
         WorkspaceTransactionContext,
     },
 };
+
+impl TransactionContext<'_> {
+    pub async fn policy_is_active(
+        &self,
+        workspace_id: WorkspaceId,
+        policy_id: PolicyId,
+    ) -> Result<bool, Error> {
+        self.transaction
+            .query_opt(
+                r#"
+SELECT id
+FROM policies
+WHERE id = $1
+  AND workspace_id = $2
+  AND archived_at IS NULL
+FOR KEY SHARE
+"#,
+                &[&Uuid::from(policy_id), &Uuid::from(workspace_id)],
+            )
+            .await
+            .map(|row| row.is_some())
+            .map_err(Into::into)
+    }
+}
 
 use super::{
     constraints::classify_db_error, controls::ids_present_in, documents::document_from_row,
