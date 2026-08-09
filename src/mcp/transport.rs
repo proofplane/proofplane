@@ -30,13 +30,16 @@ use crate::{
         commands::{
             create_control::CreateControlHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
             replace_control::ReplaceControlHandler,
+            revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
         },
         queries::{
             control_catalog::{GetControlHandler, ListControlsHandler},
             framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
+            list_auditor_access_grants::ListAuditorAccessGrantsHandler,
         },
     },
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
@@ -55,9 +58,8 @@ use crate::{
     services::{
         agent_connections::AgentConnectionService,
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        evidence::EvidenceService, evidence_submissions::EvidenceSubmissionService,
-        policies::PolicyService,
+        controls::ControlService, evidence::EvidenceService,
+        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
     },
 };
 use url::Url;
@@ -150,7 +152,6 @@ where
         dependencies.public_api_base_url.clone(),
         dependencies.policy_upload_grant_encryptor,
     );
-    let auditor_access_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
     let controls = ControlService::new(dependencies.postgres.clone());
     let policies = PolicyService::new(dependencies.postgres.clone());
     let agent_connections = AgentConnectionService::new(dependencies.postgres.clone());
@@ -168,7 +169,11 @@ where
                 agent_policy_document_grants: agent_policy_document_upload_grants,
                 max_document_bytes: dependencies.max_document_bytes,
             },
-            auditor_access_grants,
+            super::server::AuditorGrantHandlers {
+                issue: IssueAuditorAccessGrantHandler::new(dependencies.postgres.clone()),
+                list: ListAuditorAccessGrantsHandler::new(dependencies.postgres.clone()),
+                revoke: RevokeAuditorAccessGrantHandler::new(dependencies.postgres.clone()),
+            },
             super::server::ControlDependencies {
                 service: controls,
                 handlers: super::server::ControlHandlers {

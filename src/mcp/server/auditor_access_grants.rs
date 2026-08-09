@@ -17,15 +17,25 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::{
+            issue_auditor_access_grant::{
+                IssueAuditorAccessGrant, IssueAuditorAccessGrantError, IssuedAuditorAccessGrant,
+            },
+            revoke_auditor_access_grant::{
+                RevokeAuditorAccessGrant, RevokeAuditorAccessGrantError,
+            },
+        },
+        queries::list_auditor_access_grants::{
+            ListAuditorAccessGrants, ListAuditorAccessGrantsError,
+        },
+        ExecutionMetadata,
+    },
     domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
     mcp::server::common::McpArgumentError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::{
-        auditor_access_grants::{
-            AuditorAccessGrantError, CreateAuditorAccessGrantRequest, IssuedAuditorAccessGrant,
-        },
-        Error as ServiceError,
-    },
+    repository::AuditorAccessGrantProjection,
+    services::Error as ServiceError,
     validate,
     validation::Validation,
 };
@@ -46,7 +56,16 @@ impl ProofplaneMcp {
         let workspace_id = context.connection.workspace_id;
         let issued = self
             .auditor_access_grants
-            .create(&context.connection, request)
+            .issue
+            .handle(
+                IssueAuditorAccessGrant {
+                    connection: context.connection,
+                    auditor_email: request.auditor_email,
+                    expires_at: request.expires_at,
+                    period: request.period,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await?;
 
         emit_auditor_grant_audit(
@@ -72,7 +91,13 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListAuditorAccessLinksResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
-        let grants = self.auditor_access_grants.list(&context.connection).await?;
+        let grants = self
+            .auditor_access_grants
+            .list
+            .handle(ListAuditorAccessGrants {
+                connection: context.connection,
+            })
+            .await?;
 
         Ok(Json(ListAuditorAccessLinksResponse {
             grants: grants
@@ -95,7 +120,14 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ManageAuditorAccess)?;
         let grant = self
             .auditor_access_grants
-            .revoke(&context.connection, grant_id)
+            .revoke
+            .handle(
+                RevokeAuditorAccessGrant {
+                    connection: context.connection,
+                    grant_id,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await?;
 
         emit_auditor_grant_audit(
@@ -184,9 +216,29 @@ impl From<AuditorAccessGrant> for AuditorAccessGrantResponse {
     }
 }
 
+impl From<AuditorAccessGrantProjection> for AuditorAccessGrantResponse {
+    fn from(grant: AuditorAccessGrantProjection) -> Self {
+        Self {
+            id: grant.id.to_string(),
+            auditor_email: grant.auditor_email,
+            created_at: format_datetime(grant.created_at),
+            expires_at: format_datetime(grant.expires_at),
+            period_start: format_datetime(grant.period.start),
+            period_end: format_datetime(grant.period.end),
+            revoked_at: grant.revoked_at.map(format_datetime),
+        }
+    }
+}
+
+struct ParsedCreateAuditorAccessGrant {
+    auditor_email: String,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    period: AuditReviewPeriod,
+}
+
 fn parse_create_request(
     args: CreateAuditorAccessLinkRequest,
-) -> Result<CreateAuditorAccessGrantRequest, ErrorData> {
+) -> Result<ParsedCreateAuditorAccessGrant, ErrorData> {
     let email = args.email.filter(|value| !value.trim().is_empty());
     let (auditor_email, expires_at, period_start, period_end) = validate! {
         auditor_email <- match email {
@@ -206,7 +258,7 @@ fn parse_create_request(
     let period = AuditReviewPeriod::new(period_start, period_end)
         .map_err(|error| domain_errors(vec![error]))?;
 
-    Ok(CreateAuditorAccessGrantRequest {
+    Ok(ParsedCreateAuditorAccessGrant {
         auditor_email,
         expires_at,
         period,
@@ -222,21 +274,41 @@ fn parse_revoke_request(
         .map_err(argument_errors)
 }
 
-impl From<AuditorAccessGrantError> for ErrorData {
-    fn from(error: AuditorAccessGrantError) -> Self {
+impl From<IssueAuditorAccessGrantError> for ErrorData {
+    fn from(error: IssueAuditorAccessGrantError) -> Self {
         match error {
-            AuditorAccessGrantError::Denied | AuditorAccessGrantError::Unavailable => not_found(),
-            AuditorAccessGrantError::ExpiresAtInPast => {
+            IssueAuditorAccessGrantError::Denied => not_found(),
+            IssueAuditorAccessGrantError::ExpiresAtInPast => {
                 invalid_field("expires_at", "expires_at must be in the future")
             }
-            AuditorAccessGrantError::InvalidEmail => {
+            IssueAuditorAccessGrantError::InvalidEmail => {
                 invalid_field("email", "auditor_email is invalid")
             }
-            AuditorAccessGrantError::Secret(error) => {
+            IssueAuditorAccessGrantError::Secret(error) => {
                 tracing::error!(%error, "MCP auditor access grant secret failure");
                 ErrorData::internal_error("internal error", None)
             }
-            AuditorAccessGrantError::Repository(error) => ServiceError::from(error).into(),
+            IssueAuditorAccessGrantError::Repository(error) => ServiceError::from(error).into(),
+        }
+    }
+}
+
+impl From<ListAuditorAccessGrantsError> for ErrorData {
+    fn from(error: ListAuditorAccessGrantsError) -> Self {
+        match error {
+            ListAuditorAccessGrantsError::Denied => not_found(),
+            ListAuditorAccessGrantsError::Repository(error) => ServiceError::from(error).into(),
+        }
+    }
+}
+
+impl From<RevokeAuditorAccessGrantError> for ErrorData {
+    fn from(error: RevokeAuditorAccessGrantError) -> Self {
+        match error {
+            RevokeAuditorAccessGrantError::Unavailable | RevokeAuditorAccessGrantError::Denied => {
+                not_found()
+            }
+            RevokeAuditorAccessGrantError::Repository(error) => ServiceError::from(error).into(),
         }
     }
 }

@@ -27,21 +27,23 @@ use crate::{
         commands::{
             create_control::CreateControlHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
             replace_control::ReplaceControlHandler,
+            revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
         },
         queries::{
             control_catalog::{GetControlHandler, ListControlsHandler},
             framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
+            list_auditor_access_grants::ListAuditorAccessGrantsHandler,
         },
     },
     mcp::server::common::authorize_connection,
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        evidence::EvidenceService, evidence_submissions::EvidenceSubmissionService,
-        policies::PolicyService,
+        controls::ControlService, evidence::EvidenceService,
+        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
     },
     VERSION,
 };
@@ -85,7 +87,7 @@ pub struct ProofplaneMcp {
     agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
     issue_evidence_document_upload_grant: IssueEvidenceDocumentUploadGrantHandler,
     issue_policy_document_upload_grant: IssuePolicyDocumentUploadGrantHandler,
-    auditor_access_grants: AuditorAccessGrantService,
+    auditor_access_grants: AuditorGrantHandlers,
     controls: ControlService,
     control_handlers: ControlHandlers,
     policies: PolicyService,
@@ -117,12 +119,19 @@ pub(super) struct ControlDependencies {
     pub handlers: ControlHandlers,
 }
 
+#[derive(Clone)]
+pub(super) struct AuditorGrantHandlers {
+    pub issue: IssueAuditorAccessGrantHandler,
+    pub list: ListAuditorAccessGrantsHandler,
+    pub revoke: RevokeAuditorAccessGrantHandler,
+}
+
 impl ProofplaneMcp {
     pub(super) fn new(
         evidence: EvidenceService,
         evidence_submissions: EvidenceSubmissionService,
         uploads: UploadDependencies,
-        auditor_access_grants: AuditorAccessGrantService,
+        auditor_access_grants: AuditorGrantHandlers,
         controls: ControlDependencies,
         policies: PolicyService,
         public_api_base_url: Url,
