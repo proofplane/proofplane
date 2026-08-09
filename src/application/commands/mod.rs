@@ -2,6 +2,8 @@
 //!
 //! Each child module owns its command, concrete handler, result, and error.
 
+pub mod claim_auditor_auth_transaction;
+pub mod create_authenticated_auditor_session;
 pub mod create_control;
 pub mod create_owned_workspace;
 pub mod issue_agent_evidence_upload_grant;
@@ -15,3 +17,5 @@ pub mod redeem_policy_document_upload_grant;
 pub mod remove_workspace_member;
 pub mod replace_control;
 pub mod revoke_auditor_access_grant;
+pub mod revoke_auditor_session;
+pub mod start_auditor_auth_transaction;

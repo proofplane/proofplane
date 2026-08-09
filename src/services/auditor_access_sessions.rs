@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
+use crate::application::{
+    commands::create_authenticated_auditor_session::{
+        CreateAuthenticatedAuditorSession, CreateAuthenticatedAuditorSessionError,
+        CreateAuthenticatedAuditorSessionHandler,
+    },
+    ExecutionMetadata,
+};
+use chrono::Utc;
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::{
-    domain::{AuditorAccessGrant, AuditorSession, AuditorSessionId},
-    repository::{NewAuditorSession, Postgres},
+    domain::{AuditorAccessGrant, AuditorSession, Sha256Digest},
+    repository::Postgres,
 };
-
-const SESSION_TTL_DAYS: i64 = 7;
 
 #[derive(Clone)]
 pub struct AuditorAccessSessionService {
@@ -48,23 +50,20 @@ impl AuditorAccessSessionService {
             return Err(AuditorAccessSessionError::Unavailable);
         }
 
-        let raw_session = generate_session_token()?;
-        let session = self
-            .repository
-            .create_active_auditor_session(NewAuditorSession {
-                id: AuditorSessionId::from(Uuid::new_v4()),
-                grant_id: grant.id,
-                session_digest: digest(&raw_session),
-                auditor_email: grant.auditor_email.clone(),
-                auth0_subject,
-                expires_at: seven_days_from_now(),
-            })
-            .await?
-            .ok_or(AuditorAccessSessionError::Unavailable)?;
-
+        let created = CreateAuthenticatedAuditorSessionHandler::new(self.repository.clone())
+            .handle(
+                CreateAuthenticatedAuditorSession {
+                    workspace_id: grant.workspace_id,
+                    grant_id: grant.id,
+                    auth0_subject,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(map_create_error)?;
         Ok(CreatedAuditorSession {
-            session,
-            raw_session,
+            session: created.session,
+            raw_session: created.raw_session,
         })
     }
 
@@ -72,8 +71,19 @@ impl AuditorAccessSessionService {
         &self,
         raw_session: &str,
     ) -> Result<AuditorSession, AuditorAccessSessionError> {
+        let digest = Sha256Digest::digest(raw_session.as_bytes());
+        let now = Utc::now();
         self.repository
-            .get_active_auditor_session_by_digest(digest(raw_session))
+            .in_transaction(async move |context| {
+                let Some(mut session) = context.auditor_sessions().get(digest).await? else {
+                    return Ok(None);
+                };
+                if session.touch(now).is_err() {
+                    return Ok(None);
+                }
+                context.auditor_sessions().save(&session).await?;
+                Ok(Some(session))
+            })
             .await?
             .ok_or(AuditorAccessSessionError::Unavailable)
     }
@@ -82,25 +92,34 @@ impl AuditorAccessSessionService {
         &self,
         raw_session: &str,
     ) -> Result<Option<AuditorSession>, AuditorAccessSessionError> {
-        Ok(self
-            .repository
-            .revoke_auditor_session_by_digest(digest(raw_session))
-            .await?)
+        let digest = Sha256Digest::digest(raw_session.as_bytes());
+        let now = Utc::now();
+        self.repository
+            .in_transaction(async move |context| {
+                let Some(mut session) = context.auditor_sessions().get(digest).await? else {
+                    return Ok(None);
+                };
+                let _ = session.revoke(now).map_err(|_| {
+                    crate::repository::Error::InvariantViolation(
+                        "auditor session revocation is invalid",
+                    )
+                })?;
+                context.auditor_sessions().save(&session).await?;
+                Ok(Some(session))
+            })
+            .await
+            .map_err(Into::into)
     }
 }
 
-fn seven_days_from_now() -> DateTime<Utc> {
-    Utc::now() + chrono::Duration::days(SESSION_TTL_DAYS)
-}
-
-fn digest(value: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    hasher.finalize().into()
-}
-
-fn generate_session_token() -> Result<String, AuditorAccessSessionError> {
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes).map_err(|_| AuditorAccessSessionError::Random)?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
+fn map_create_error(error: CreateAuthenticatedAuditorSessionError) -> AuditorAccessSessionError {
+    match error {
+        CreateAuthenticatedAuditorSessionError::Unavailable => {
+            AuditorAccessSessionError::Unavailable
+        }
+        CreateAuthenticatedAuditorSessionError::Random => AuditorAccessSessionError::Random,
+        CreateAuthenticatedAuditorSessionError::Repository(error) => {
+            AuditorAccessSessionError::Repository(error)
+        }
+    }
 }

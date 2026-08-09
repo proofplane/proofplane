@@ -4,138 +4,130 @@ use uuid::Uuid;
 
 use crate::domain::{
     AuditReviewPeriod, AuditorAccessGrantId, AuditorSession, AuditorSessionId, Sha256Digest,
+    WorkspaceId,
 };
 
-use super::{Error, Postgres};
+use super::{Error, TransactionContext};
 
-const SESSION_COLUMNS: &str = "s.id, s.grant_id, g.workspace_id, s.session_digest, s.auditor_email, s.auth0_subject, s.expires_at, g.period_start, g.period_end, s.revoked_at, s.last_used_at, s.created_at";
-
-pub struct NewAuditorSession {
-    pub id: AuditorSessionId,
-    pub grant_id: AuditorAccessGrantId,
-    pub session_digest: [u8; 32],
-    pub auditor_email: String,
-    pub auth0_subject: String,
-    pub expires_at: DateTime<Utc>,
+/// Complete-snapshot persistence for the auditor session aggregate.
+pub struct AuditorSessionRepository<'a> {
+    context: &'a TransactionContext<'a>,
 }
 
-impl Postgres {
-    pub async fn create_active_auditor_session(
-        &self,
-        session: NewAuditorSession,
-    ) -> Result<Option<AuditorSession>, Error> {
-        let client = self.get().await?;
-        let session_digest: &[u8] = &session.session_digest;
-        let rows = client
-            .query(
-                &format!(
-                    r#"
-WITH inserted AS (
-    INSERT INTO auditor_sessions (
-        id, grant_id, session_digest, auditor_email, auth0_subject, expires_at
-    )
-    SELECT $1, g.id, $3, g.auditor_email, $4, $5
-    FROM auditor_access_grants g
-    WHERE g.id = $2
-      AND g.revoked_at IS NULL
-      AND g.expires_at > now()
-      AND g.auditor_email = $6
-      AND btrim($4) <> ''
-    RETURNING id, grant_id, auditor_email, auth0_subject, expires_at, revoked_at, last_used_at, created_at
-)
-SELECT {SESSION_COLUMNS}
-FROM inserted s
-JOIN auditor_access_grants g ON g.id = s.grant_id
-"#
-                ),
+impl<'a> TransactionContext<'a> {
+    pub fn auditor_sessions(&'a self) -> AuditorSessionRepository<'a> {
+        AuditorSessionRepository { context: self }
+    }
+}
+
+impl AuditorSessionRepository<'_> {
+    /// Locks and rehydrates the complete session selected by its secret digest.
+    pub async fn get(&self, session_digest: Sha256Digest) -> Result<Option<AuditorSession>, Error> {
+        let digest: &[u8] = session_digest.as_bytes();
+        self.context
+            .transaction
+            .query_opt(GET_FOR_UPDATE_SQL, &[&digest])
+            .await?
+            .map(session_from_row)
+            .transpose()
+    }
+
+    /// Persists every mutable and immutable field owned by a session snapshot.
+    pub async fn save(&self, session: &AuditorSession) -> Result<(), Error> {
+        let record = SessionRecord::from(session);
+        let affected = self
+            .context
+            .transaction
+            .execute(
+                SAVE_SQL,
                 &[
-                    &Uuid::from(session.id),
-                    &Uuid::from(session.grant_id),
-                    &session_digest,
-                    &session.auth0_subject,
-                    &session.expires_at,
-                    &session.auditor_email,
+                    &record.id,
+                    &record.grant_id,
+                    &record.session_digest,
+                    &record.auditor_email,
+                    &record.auth0_subject,
+                    &record.expires_at,
+                    &record.revoked_at,
+                    &record.last_used_at,
+                    &record.created_at,
                 ],
             )
             .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_session_from_row(&row))
-            .transpose()
-    }
-
-    pub async fn get_active_auditor_session_by_digest(
-        &self,
-        session_digest: [u8; 32],
-    ) -> Result<Option<AuditorSession>, Error> {
-        let client = self.get().await?;
-        let digest: &[u8] = &session_digest;
-        let rows = client
-            .query(
-                &format!(
-                    r#"
-UPDATE auditor_sessions s
-SET last_used_at = now(), updated_at = now()
-FROM auditor_access_grants g
-WHERE s.grant_id = g.id
-  AND s.session_digest = $1
-  AND s.revoked_at IS NULL
-  AND s.expires_at > now()
-  AND g.revoked_at IS NULL
-  AND g.expires_at > now()
-RETURNING {SESSION_COLUMNS}
-"#
-                ),
-                &[&digest],
-            )
-            .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_session_from_row(&row))
-            .transpose()
-    }
-
-    pub async fn revoke_auditor_session_by_digest(
-        &self,
-        session_digest: [u8; 32],
-    ) -> Result<Option<AuditorSession>, Error> {
-        let client = self.get().await?;
-        let digest: &[u8] = &session_digest;
-        let rows = client
-            .query(
-                &format!(
-                    r#"
-UPDATE auditor_sessions s
-SET revoked_at = COALESCE(s.revoked_at, now()), updated_at = now()
-FROM auditor_access_grants g
-WHERE s.grant_id = g.id AND s.session_digest = $1
-RETURNING {SESSION_COLUMNS}
-"#
-                ),
-                &[&digest],
-            )
-            .await?;
-
-        rows.into_iter()
-            .next()
-            .map(|row| auditor_session_from_row(&row))
-            .transpose()
+        if affected != 1 {
+            return Err(Error::InvariantViolation(
+                "auditor session snapshot save affected an unexpected row count",
+            ));
+        }
+        Ok(())
     }
 }
 
-fn auditor_session_from_row(row: &Row) -> Result<AuditorSession, Error> {
-    let session_digest = row.try_get::<_, Vec<u8>>("session_digest")?;
-    let session_digest = session_digest
+const GET_FOR_UPDATE_SQL: &str = r#"
+SELECT s.id, s.grant_id, g.workspace_id, s.session_digest, s.auditor_email,
+       s.auth0_subject, s.expires_at, g.period_start, g.period_end, s.revoked_at,
+       s.last_used_at, s.created_at
+FROM auditor_sessions s
+JOIN auditor_access_grants g ON g.id = s.grant_id
+WHERE s.session_digest = $1
+FOR UPDATE OF s
+"#;
+
+const SAVE_SQL: &str = r#"
+INSERT INTO auditor_sessions (
+    id, grant_id, session_digest, auditor_email, auth0_subject, expires_at,
+    revoked_at, last_used_at, created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (id) DO UPDATE SET
+    grant_id = EXCLUDED.grant_id,
+    session_digest = EXCLUDED.session_digest,
+    auditor_email = EXCLUDED.auditor_email,
+    auth0_subject = EXCLUDED.auth0_subject,
+    expires_at = EXCLUDED.expires_at,
+    revoked_at = EXCLUDED.revoked_at,
+    last_used_at = EXCLUDED.last_used_at,
+    created_at = EXCLUDED.created_at,
+    updated_at = now()
+"#;
+
+struct SessionRecord {
+    id: Uuid,
+    grant_id: Uuid,
+    session_digest: Vec<u8>,
+    auditor_email: String,
+    auth0_subject: String,
+    expires_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+    last_used_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<&AuditorSession> for SessionRecord {
+    fn from(session: &AuditorSession) -> Self {
+        Self {
+            id: session.id.into(),
+            grant_id: session.grant_id.into(),
+            session_digest: session.session_digest().as_bytes().to_vec(),
+            auditor_email: session.auditor_email.clone(),
+            auth0_subject: session.auth0_subject.clone(),
+            expires_at: session.expires_at,
+            revoked_at: session.revoked_at,
+            last_used_at: session.last_used_at,
+            created_at: session.created_at,
+        }
+    }
+}
+
+fn session_from_row(row: Row) -> Result<AuditorSession, Error> {
+    let digest: [u8; 32] = row
+        .try_get::<_, Vec<u8>>("session_digest")?
         .try_into()
         .map_err(|_| Error::InvariantViolation("auditor session digest must contain 32 bytes"))?;
     AuditorSession::rehydrate(
-        row.try_get::<_, Uuid>("id")?.into(),
-        row.try_get::<_, Uuid>("grant_id")?.into(),
-        row.try_get::<_, Uuid>("workspace_id")?.into(),
+        AuditorSessionId::from(row.try_get::<_, Uuid>("id")?),
+        AuditorAccessGrantId::from(row.try_get::<_, Uuid>("grant_id")?),
+        WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         row.try_get("auditor_email")?,
-        Sha256Digest::from_bytes(session_digest),
+        Sha256Digest::from_bytes(digest),
         row.try_get("auth0_subject")?,
         row.try_get("expires_at")?,
         AuditReviewPeriod::new(row.try_get("period_start")?, row.try_get("period_end")?)?,
@@ -144,4 +136,17 @@ fn auditor_session_from_row(row: &Row) -> Result<AuditorSession, Error> {
         row.try_get("created_at")?,
     )
     .map_err(|_| Error::InvariantViolation("persisted auditor session is inconsistent"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GET_FOR_UPDATE_SQL, SAVE_SQL};
+
+    #[test]
+    fn repository_locks_complete_snapshots_and_saves_all_owned_state() {
+        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE OF s"));
+        for field in ["revoked_at", "last_used_at", "created_at", "session_digest"] {
+            assert!(SAVE_SQL.contains(field));
+        }
+    }
 }

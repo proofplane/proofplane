@@ -32,8 +32,8 @@ mod workspaces;
 pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
 pub use agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantRepository;
 pub use auditor_access_grants::{AuditorAccessGrantProjection, AuditorAccessGrantRepository};
-pub use auditor_access_sessions::NewAuditorSession;
-pub use auditor_auth_transactions::{ClaimedAuditorAuthTransaction, NewAuditorAuthTransaction};
+pub use auditor_access_sessions::AuditorSessionRepository;
+pub use auditor_auth_transactions::AuditorAuthTransactionRepository;
 pub use constraints::ConflictKind;
 pub use document_upload_grants::{
     DocumentUploadGrant, EvidenceDocumentUploadGrantRepository, NewDocumentUploadGrant,
