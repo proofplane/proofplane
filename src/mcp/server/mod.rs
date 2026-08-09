@@ -23,7 +23,17 @@ use rmcp::{
 };
 
 use crate::{
-    application::commands::issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+    application::{
+        commands::{
+            create_control::CreateControlHandler,
+            issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            replace_control::ReplaceControlHandler,
+        },
+        queries::{
+            control_catalog::{GetControlHandler, ListControlsHandler},
+            framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
+        },
+    },
     mcp::server::common::authorize_connection,
     services::{
         agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
@@ -76,6 +86,7 @@ pub struct ProofplaneMcp {
     policy_document_upload_grants: PolicyDocumentUploadGrantService,
     auditor_access_grants: AuditorAccessGrantService,
     controls: ControlService,
+    control_handlers: ControlHandlers,
     policies: PolicyService,
     public_api_base_url: Url,
     max_document_bytes: u64,
@@ -90,13 +101,28 @@ pub(super) struct UploadDependencies {
     pub max_document_bytes: u64,
 }
 
+#[derive(Clone)]
+pub(super) struct ControlHandlers {
+    pub create: CreateControlHandler,
+    pub replace: ReplaceControlHandler,
+    pub list: ListControlsHandler,
+    pub get: GetControlHandler,
+    pub list_frameworks: ListFrameworksHandler,
+    pub list_framework_requirements: ListFrameworkRequirementsHandler,
+}
+
+pub(super) struct ControlDependencies {
+    pub service: ControlService,
+    pub handlers: ControlHandlers,
+}
+
 impl ProofplaneMcp {
     pub(super) fn new(
         evidence: EvidenceService,
         evidence_submissions: EvidenceSubmissionService,
         uploads: UploadDependencies,
         auditor_access_grants: AuditorAccessGrantService,
-        controls: ControlService,
+        controls: ControlDependencies,
         policies: PolicyService,
         public_api_base_url: Url,
     ) -> Self {
@@ -108,7 +134,8 @@ impl ProofplaneMcp {
             document_upload_grants: uploads.evidence_grants,
             policy_document_upload_grants: uploads.policy_document_grants,
             auditor_access_grants,
-            controls,
+            control_handlers: controls.handlers,
+            controls: controls.service,
             policies,
             public_api_base_url,
             max_document_bytes: uploads.max_document_bytes,

@@ -801,7 +801,10 @@ FROM requested r
         Ok(Some(payload.evidence_ids.clone()))
     }
 
-    async fn get_control_in_transaction(&self, id: ControlId) -> Result<Option<Control>, Error> {
+    pub(crate) async fn get_control_in_transaction(
+        &self,
+        id: ControlId,
+    ) -> Result<Option<Control>, Error> {
         let rows = self
             .transaction
             .query(

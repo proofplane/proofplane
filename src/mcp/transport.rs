@@ -26,7 +26,17 @@ use crate::authentication::paseto::{
     UploadGrantEncryptor,
 };
 use crate::{
-    application::commands::issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+    application::{
+        commands::{
+            create_control::CreateControlHandler,
+            issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            replace_control::ReplaceControlHandler,
+        },
+        queries::{
+            control_catalog::{GetControlHandler, ListControlsHandler},
+            framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
+        },
+    },
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
     config::HealthConfig,
     domain::WorkspacePermission,
@@ -160,7 +170,19 @@ where
                 max_document_bytes: dependencies.max_document_bytes,
             },
             auditor_access_grants,
-            controls,
+            super::server::ControlDependencies {
+                service: controls,
+                handlers: super::server::ControlHandlers {
+                    create: CreateControlHandler::new(dependencies.postgres.clone()),
+                    replace: ReplaceControlHandler::new(dependencies.postgres.clone()),
+                    list: ListControlsHandler::new(dependencies.postgres.clone()),
+                    get: GetControlHandler::new(dependencies.postgres.clone()),
+                    list_frameworks: ListFrameworksHandler::new(dependencies.postgres.clone()),
+                    list_framework_requirements: ListFrameworkRequirementsHandler::new(
+                        dependencies.postgres.clone(),
+                    ),
+                },
+            },
             policies,
             dependencies.public_api_base_url,
         ),

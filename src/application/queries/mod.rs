@@ -4,5 +4,6 @@
 //! as commands, but read DTOs directly and never rehydrate mutable aggregates.
 
 pub mod control_catalog;
+pub mod framework_catalog;
 pub mod get_user;
 pub mod get_workspace_for_user;

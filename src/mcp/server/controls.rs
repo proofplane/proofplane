@@ -18,6 +18,20 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::{
+            create_control::{CreateControl, CreateControlError},
+            replace_control::{ReplaceControl, ReplaceControlError},
+        },
+        queries::{
+            control_catalog::{
+                GetControl as GetControlQuery, GetControlError, ListControls as ListControlsQuery,
+                ListControlsError,
+            },
+            framework_catalog::{FrameworkCatalogError, ListFrameworkRequirements, ListFrameworks},
+        },
+        ExecutionMetadata,
+    },
     domain::{
         duplicate_ids, required_text, validate_batch, Control, ControlEvidenceMappingItem,
         ControlId, CreateControlEvidenceMappingsPayload, CreateControlPayload,
@@ -48,8 +62,14 @@ impl ProofplaneMcp {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<ListFrameworksResponse>, ErrorData> {
-        authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
-        let frameworks = self.controls.list_frameworks().await?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
+        let frameworks = self
+            .control_handlers
+            .list_frameworks
+            .handle(ListFrameworks {
+                connection: context.agent_connection_context(),
+            })
+            .await?;
 
         Ok(Json(ListFrameworksResponse {
             frameworks: frameworks.into_iter().map(Into::into).collect(),
@@ -65,12 +85,16 @@ impl ProofplaneMcp {
         ctx: RequestContext<RoleServer>,
         Parameters(args): Parameters<FrameworkRequirementsRequest>,
     ) -> Result<Json<ListFrameworkRequirementsResponse>, ErrorData> {
-        authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
+        let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let framework_id =
             parse_uuid_arg("framework_id", args.framework_id).map(FrameworkId::from)?;
         let requirements = self
-            .controls
-            .list_framework_requirements(framework_id)
+            .control_handlers
+            .list_framework_requirements
+            .handle(ListFrameworkRequirements {
+                connection: context.agent_connection_context(),
+                framework_id,
+            })
             .await?;
         if requirements.is_empty() {
             return Err(not_found());
@@ -91,8 +115,11 @@ impl ProofplaneMcp {
     ) -> Result<Json<ListControlsResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let controls = self
-            .controls
-            .list_controls(context.agent_connection_context())
+            .control_handlers
+            .list
+            .handle(ListControlsQuery {
+                connection: context.agent_connection_context(),
+            })
             .await?;
 
         Ok(Json(ListControlsResponse {
@@ -112,8 +139,12 @@ impl ProofplaneMcp {
         let control_id = parse_get_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadControls)?;
         let control = self
-            .controls
-            .get_control(context.agent_connection_context(), control_id)
+            .control_handlers
+            .get
+            .handle(GetControlQuery {
+                connection: context.agent_connection_context(),
+                control_id,
+            })
             .await?
             .ok_or_else(not_found)?;
 
@@ -132,10 +163,21 @@ impl ProofplaneMcp {
         let payload = parse_create_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
-        let control = self
-            .controls
-            .create_control(context.agent_connection_context(), payload)
+        let created = self
+            .control_handlers
+            .create
+            .handle(
+                CreateControl {
+                    connection: context.agent_connection_context(),
+                    code: payload.code,
+                    title: payload.title,
+                    description: payload.description,
+                    framework_requirement_ids: payload.framework_requirement_ids,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await?;
+        let control = created.control;
 
         AuditEvent::new(
             "control.created",
@@ -165,11 +207,22 @@ impl ProofplaneMcp {
         let (control_id, payload) = parse_replace_control_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let workspace_id = context.connection.workspace_id;
-        let control = self
-            .controls
-            .replace_control(context.agent_connection_context(), control_id, payload)
-            .await?
-            .ok_or_else(not_found)?;
+        let replaced = self
+            .control_handlers
+            .replace
+            .handle(
+                ReplaceControl {
+                    connection: context.agent_connection_context(),
+                    control_id,
+                    code: payload.code,
+                    title: payload.title,
+                    description: payload.description,
+                    framework_requirement_ids: payload.framework_requirement_ids,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?;
+        let control = replaced.control;
 
         AuditEvent::new(
             "control.updated",
@@ -1104,6 +1157,103 @@ fn parse_remove_evidence_control_mapping_request(
     }
     .into_result()
     .map_err(argument_errors)
+}
+
+impl From<FrameworkCatalogError> for ErrorData {
+    fn from(error: FrameworkCatalogError) -> Self {
+        match error {
+            FrameworkCatalogError::Unavailable => not_found(),
+            FrameworkCatalogError::Repository(error) => control_dependency_error(error),
+        }
+    }
+}
+
+impl From<ListControlsError> for ErrorData {
+    fn from(error: ListControlsError) -> Self {
+        match error {
+            ListControlsError::Unavailable => not_found(),
+            ListControlsError::Repository(error) => control_dependency_error(error),
+        }
+    }
+}
+
+impl From<GetControlError> for ErrorData {
+    fn from(error: GetControlError) -> Self {
+        match error {
+            GetControlError::Unavailable => not_found(),
+            GetControlError::Repository(error) => control_dependency_error(error),
+        }
+    }
+}
+
+impl From<CreateControlError> for ErrorData {
+    fn from(error: CreateControlError) -> Self {
+        match error {
+            CreateControlError::Unavailable => not_found(),
+            CreateControlError::InvalidDefinition(errors) => domain_errors(errors),
+            CreateControlError::InvalidFrameworkRequirementReferences => {
+                invalid_framework_requirement_references()
+            }
+            CreateControlError::CodeTaken => control_code_taken(),
+            CreateControlError::Repository(error) => control_dependency_error(error),
+        }
+    }
+}
+
+impl From<ReplaceControlError> for ErrorData {
+    fn from(error: ReplaceControlError) -> Self {
+        match error {
+            ReplaceControlError::Unavailable => not_found(),
+            ReplaceControlError::InvalidDefinition(errors) => domain_errors(errors),
+            ReplaceControlError::InvalidFrameworkRequirementReferences => {
+                invalid_framework_requirement_references()
+            }
+            ReplaceControlError::CodeTaken => control_code_taken(),
+            ReplaceControlError::Repository(error) => control_dependency_error(error),
+        }
+    }
+}
+
+fn control_code_taken() -> ErrorData {
+    ErrorData::new(
+        ErrorCode(-32000),
+        "a control with this code already exists in the workspace",
+        Some(json!({
+            "problem": {
+                "code": "control_code_taken",
+                "message": "a control with this code already exists in the workspace",
+            }
+        })),
+    )
+}
+
+fn invalid_framework_requirement_references() -> ErrorData {
+    ErrorData::invalid_params(
+        "tool argument validation failed",
+        Some(json!({
+            "problem": {
+                "code": "validation_failed",
+                "message": "tool argument validation failed",
+                "field_issues": [{
+                    "field": "framework_requirement_ids",
+                    "message": "framework_requirement_ids contains unknown ids",
+                }],
+            }
+        })),
+    )
+}
+
+fn control_dependency_error(error: crate::repository::Error) -> ErrorData {
+    tracing::error!(%error, "MCP control handler repository failure");
+    ErrorData::internal_error(
+        "dependency failure",
+        Some(json!({
+            "problem": {
+                "code": "dependency_failed",
+                "message": "a dependency failed while handling the tool call",
+            }
+        })),
+    )
 }
 
 impl From<ControlMutationError> for ErrorData {

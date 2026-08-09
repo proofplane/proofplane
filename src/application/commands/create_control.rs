@@ -7,8 +7,8 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{
-        ControlAggregate, ControlDefinition, ControlId, DomainError, FrameworkRequirementId,
-        WorkspacePermission,
+        Control, ControlAggregate, ControlDefinition, ControlId, DomainError,
+        FrameworkRequirementId, WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
@@ -22,9 +22,9 @@ pub struct CreateControl {
     pub framework_requirement_ids: Vec<FrameworkRequirementId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedControl {
-    pub control_id: ControlId,
+    pub control: Control,
 }
 
 #[derive(Clone)]
@@ -76,14 +76,20 @@ impl CreateControlHandler {
                         return Ok(CreateOutcome::InvalidFrameworkRequirementReferences);
                     }
                     context.controls().save(&control).await?;
-                    Ok(CreateOutcome::Created)
+                    let projection = context
+                        .get_control_in_transaction(control_id)
+                        .await?
+                        .ok_or(RepositoryError::InvariantViolation(
+                            "created control must be readable in its transaction",
+                        ))?;
+                    Ok(CreateOutcome::Created(projection))
                 },
             )
             .await
             .map_err(CreateControlError::from)?;
 
         match outcome {
-            CreateOutcome::Created => Ok(CreatedControl { control_id }),
+            CreateOutcome::Created(control) => Ok(CreatedControl { control }),
             CreateOutcome::InvalidFrameworkRequirementReferences => {
                 Err(CreateControlError::InvalidFrameworkRequirementReferences)
             }
@@ -92,7 +98,7 @@ impl CreateControlHandler {
 }
 
 enum CreateOutcome {
-    Created,
+    Created(Control),
     InvalidFrameworkRequirementReferences,
 }
 
