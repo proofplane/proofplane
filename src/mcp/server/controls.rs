@@ -59,7 +59,6 @@ use crate::{
 };
 use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::controls::ControlMutationError,
     validate,
     validation::Validation,
 };
@@ -1371,50 +1370,6 @@ fn control_dependency_error(error: crate::repository::Error) -> ErrorData {
             }
         })),
     )
-}
-
-impl From<ControlMutationError> for ErrorData {
-    fn from(error: ControlMutationError) -> Self {
-        match error {
-            ControlMutationError::CodeTaken => ErrorData::new(
-                ErrorCode(-32000),
-                "a control with this code already exists in the workspace",
-                Some(json!({
-                    "problem": {
-                        "code": "control_code_taken",
-                        "message": "a control with this code already exists in the workspace",
-                    }
-                })),
-            ),
-            ControlMutationError::InvalidFrameworkRequirementReferences => {
-                ErrorData::invalid_params(
-                    "tool argument validation failed",
-                    Some(json!({
-                        "problem": {
-                            "code": "validation_failed",
-                            "message": "tool argument validation failed",
-                            "field_issues": [{
-                                "field": "framework_requirement_ids",
-                                "message": "framework_requirement_ids contains unknown ids",
-                            }],
-                        }
-                    })),
-                )
-            }
-            ControlMutationError::Repository(error) => {
-                tracing::error!(%error, "MCP control mutation repository failure");
-                ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                )
-            }
-        }
-    }
 }
 
 #[cfg(test)]

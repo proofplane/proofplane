@@ -35,13 +35,7 @@ use crate::{
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     projections::policy_projection::{PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail},
     repository::Error as RepositoryError,
-    services::{
-        policies::{
-            AttachControlToPoliciesError, AttachPolicyToControlsError,
-            DetachControlFromPoliciesError, DetachPolicyFromControlsError, PolicyMutationError,
-        },
-        Error as ServiceError,
-    },
+    services::Error as ServiceError,
     validate,
     validation::Validation,
 };
@@ -918,12 +912,15 @@ fn policy_mutation_error(error: PolicyCommandError) -> ErrorData {
     match error {
         PolicyCommandError::Unavailable => not_found(),
         PolicyCommandError::InvalidDefinition(errors) => domain_errors(errors),
-        PolicyCommandError::NameTaken => PolicyMutationError::NameTaken.into(),
+        PolicyCommandError::NameTaken => conflict(
+            "policy_name_taken",
+            "an active policy with this name already exists in the workspace",
+        ),
         PolicyCommandError::Rejected { unknown, .. } => {
             if unknown.is_empty() {
                 dependency_failure("policy mapping command was unexpectedly rejected")
             } else {
-                PolicyMutationError::InvalidControlReferences.into()
+                invalid_field("control_ids", "control_ids contains unknown ids")
             }
         }
         PolicyCommandError::Repository(error) => repository_error(error),
@@ -943,9 +940,14 @@ fn attach_policy_single_error(error: PolicyCommandError) -> ErrorData {
         PolicyCommandError::Rejected {
             unknown,
             already_mapped: _,
-        } if !unknown.is_empty() => PolicyMutationError::InvalidControlReferences.into(),
+        } if !unknown.is_empty() => {
+            invalid_field("control_ids", "control_ids contains unknown ids")
+        }
         PolicyCommandError::Rejected { already_mapped, .. } if !already_mapped.is_empty() => {
-            PolicyMutationError::MappingExists.into()
+            conflict(
+                "policy_control_mapping_exists",
+                "this control is already mapped to the policy",
+            )
         }
         other => policy_mutation_error(other),
     }
@@ -960,79 +962,49 @@ fn detach_policy_single_error(error: PolicyCommandError) -> ErrorData {
 
 fn attach_policy_batch_error(error: PolicyCommandError) -> ErrorData {
     match error {
-        PolicyCommandError::Unavailable => AttachPolicyToControlsError::PolicyNotFound.into(),
+        PolicyCommandError::Unavailable => not_found(),
         PolicyCommandError::Rejected {
             unknown,
             already_mapped,
-        } => AttachPolicyToControlsError::Rejected {
-            unknown,
-            already_mapped,
-        }
-        .into(),
-        PolicyCommandError::Repository(error) => {
-            AttachPolicyToControlsError::Repository(error).into()
-        }
+        } => batch_policy_controls_rejected(unknown, already_mapped, false),
+        PolicyCommandError::Repository(error) => repository_error(error),
         other => policy_mutation_error(other),
     }
 }
 
 fn detach_policy_batch_error(error: PolicyCommandError) -> ErrorData {
     match error {
-        PolicyCommandError::Unavailable => DetachPolicyFromControlsError::PolicyNotFound.into(),
+        PolicyCommandError::Unavailable => not_found(),
         PolicyCommandError::Rejected {
             unknown,
             already_mapped,
-        } => DetachPolicyFromControlsError::Rejected {
-            unknown,
-            not_mapped: already_mapped,
-        }
-        .into(),
-        PolicyCommandError::Repository(error) => {
-            DetachPolicyFromControlsError::Repository(error).into()
-        }
+        } => batch_policy_controls_rejected(unknown, already_mapped, true),
+        PolicyCommandError::Repository(error) => repository_error(error),
         other => policy_mutation_error(other),
     }
 }
 
 fn attach_control_batch_error(error: ControlPolicyCommandError) -> ErrorData {
     match error {
-        ControlPolicyCommandError::Unavailable => {
-            AttachControlToPoliciesError::ControlNotFound.into()
-        }
+        ControlPolicyCommandError::Unavailable => not_found(),
         ControlPolicyCommandError::Rejected {
             unknown,
             archived,
             invalid,
-        } => AttachControlToPoliciesError::Rejected {
-            unknown,
-            archived,
-            already_mapped: invalid,
-        }
-        .into(),
-        ControlPolicyCommandError::Repository(error) => {
-            AttachControlToPoliciesError::Repository(error).into()
-        }
+        } => batch_control_policies_rejected(unknown, archived, invalid, false),
+        ControlPolicyCommandError::Repository(error) => repository_error(error),
     }
 }
 
 fn detach_control_batch_error(error: ControlPolicyCommandError) -> ErrorData {
     match error {
-        ControlPolicyCommandError::Unavailable => {
-            DetachControlFromPoliciesError::ControlNotFound.into()
-        }
+        ControlPolicyCommandError::Unavailable => not_found(),
         ControlPolicyCommandError::Rejected {
             unknown,
             archived,
             invalid,
-        } => DetachControlFromPoliciesError::Rejected {
-            unknown,
-            archived,
-            not_mapped: invalid,
-        }
-        .into(),
-        ControlPolicyCommandError::Repository(error) => {
-            DetachControlFromPoliciesError::Repository(error).into()
-        }
+        } => batch_control_policies_rejected(unknown, archived, invalid, true),
+        ControlPolicyCommandError::Repository(error) => repository_error(error),
     }
 }
 
@@ -1053,170 +1025,61 @@ fn dependency_failure(context: &'static str) -> ErrorData {
     )
 }
 
-impl From<PolicyMutationError> for ErrorData {
-    fn from(error: PolicyMutationError) -> Self {
-        match error {
-            PolicyMutationError::Validation(errors) => domain_errors(errors),
-            PolicyMutationError::NameTaken => conflict(
-                "policy_name_taken",
-                "an active policy with this name already exists in the workspace",
-            ),
-            PolicyMutationError::MappingExists => conflict(
-                "policy_control_mapping_exists",
-                "this control is already mapped to the policy",
-            ),
-            PolicyMutationError::InvalidControlReferences => {
-                invalid_field("control_ids", "control_ids contains unknown ids")
-            }
-            PolicyMutationError::Repository(error) => ServiceError::Repository(error).into(),
-        }
-    }
+fn batch_policy_controls_rejected(
+    unknown: Vec<ControlId>,
+    invalid: Vec<ControlId>,
+    detaching: bool,
+) -> ErrorData {
+    let (message, invalid_key) = if detaching {
+        (
+            "control_ids contains unknown or not-mapped ids",
+            "not_mapped_ids",
+        )
+    } else {
+        (
+            "control_ids contains unknown or already-attached ids",
+            "already_mapped_ids",
+        )
+    };
+    batch_rejected(
+        "control_ids",
+        message,
+        vec![
+            ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+            (invalid_key, invalid.into_iter().map(Uuid::from).collect()),
+        ],
+    )
 }
 
-impl From<AttachPolicyToControlsError> for ErrorData {
-    fn from(error: AttachPolicyToControlsError) -> Self {
-        match error {
-            AttachPolicyToControlsError::Rejected {
-                unknown,
-                already_mapped,
-            } => batch_rejected(
-                "control_ids",
-                "control_ids contains unknown or already-attached ids",
-                vec![
-                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
-                    (
-                        "already_mapped_ids",
-                        already_mapped.into_iter().map(Uuid::from).collect(),
-                    ),
-                ],
+fn batch_control_policies_rejected(
+    unknown: Vec<PolicyId>,
+    archived: Vec<PolicyId>,
+    invalid: Vec<PolicyId>,
+    detaching: bool,
+) -> ErrorData {
+    let (message, invalid_key) = if detaching {
+        (
+            "policy_ids contains unknown, archived, or not-mapped ids",
+            "not_mapped_ids",
+        )
+    } else {
+        (
+            "policy_ids contains unknown, archived, or already-attached ids",
+            "already_mapped_ids",
+        )
+    };
+    batch_rejected(
+        "policy_ids",
+        message,
+        vec![
+            ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
+            (
+                "archived_ids",
+                archived.into_iter().map(Uuid::from).collect(),
             ),
-            AttachPolicyToControlsError::PolicyNotFound => not_found(),
-            AttachPolicyToControlsError::Repository(error) => {
-                tracing::error!(%error, "MCP batch policy control attachment repository failure");
-                ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                )
-            }
-        }
-    }
-}
-
-impl From<AttachControlToPoliciesError> for ErrorData {
-    fn from(error: AttachControlToPoliciesError) -> Self {
-        match error {
-            AttachControlToPoliciesError::Rejected {
-                unknown,
-                archived,
-                already_mapped,
-            } => batch_rejected(
-                "policy_ids",
-                "policy_ids contains unknown, archived, or already-attached ids",
-                vec![
-                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
-                    (
-                        "archived_ids",
-                        archived.into_iter().map(Uuid::from).collect(),
-                    ),
-                    (
-                        "already_mapped_ids",
-                        already_mapped.into_iter().map(Uuid::from).collect(),
-                    ),
-                ],
-            ),
-            AttachControlToPoliciesError::ControlNotFound => not_found(),
-            AttachControlToPoliciesError::Repository(error) => {
-                tracing::error!(%error, "MCP batch control policy attachment repository failure");
-                ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                )
-            }
-        }
-    }
-}
-
-impl From<DetachPolicyFromControlsError> for ErrorData {
-    fn from(error: DetachPolicyFromControlsError) -> Self {
-        match error {
-            DetachPolicyFromControlsError::Rejected {
-                unknown,
-                not_mapped,
-            } => batch_rejected(
-                "control_ids",
-                "control_ids contains unknown or not-mapped ids",
-                vec![
-                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
-                    (
-                        "not_mapped_ids",
-                        not_mapped.into_iter().map(Uuid::from).collect(),
-                    ),
-                ],
-            ),
-            DetachPolicyFromControlsError::PolicyNotFound => not_found(),
-            DetachPolicyFromControlsError::Repository(error) => {
-                tracing::error!(%error, "MCP batch policy control detachment repository failure");
-                ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                )
-            }
-        }
-    }
-}
-
-impl From<DetachControlFromPoliciesError> for ErrorData {
-    fn from(error: DetachControlFromPoliciesError) -> Self {
-        match error {
-            DetachControlFromPoliciesError::Rejected {
-                unknown,
-                archived,
-                not_mapped,
-            } => batch_rejected(
-                "policy_ids",
-                "policy_ids contains unknown, archived, or not-mapped ids",
-                vec![
-                    ("unknown_ids", unknown.into_iter().map(Uuid::from).collect()),
-                    (
-                        "archived_ids",
-                        archived.into_iter().map(Uuid::from).collect(),
-                    ),
-                    (
-                        "not_mapped_ids",
-                        not_mapped.into_iter().map(Uuid::from).collect(),
-                    ),
-                ],
-            ),
-            DetachControlFromPoliciesError::ControlNotFound => not_found(),
-            DetachControlFromPoliciesError::Repository(error) => {
-                tracing::error!(%error, "MCP batch control policy detachment repository failure");
-                ErrorData::internal_error(
-                    "dependency failure",
-                    Some(json!({
-                        "problem": {
-                            "code": "dependency_failed",
-                            "message": "a dependency failed while handling the tool call",
-                        }
-                    })),
-                )
-            }
-        }
-    }
+            (invalid_key, invalid.into_iter().map(Uuid::from).collect()),
+        ],
+    )
 }
 
 fn conflict(code: &'static str, message: &'static str) -> ErrorData {

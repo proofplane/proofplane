@@ -42,10 +42,11 @@ and authenticated scope; execution metadata carries request, correlation, and
 causation identifiers where applicable. Query handlers do not open write
 transactions or rehydrate mutable aggregates.
 
-Routes, MCP tools, OAuth endpoints, and workers receive only their required
-typed handlers from the composition root. During incremental migration a
-compatibility façade may delegate to a handler, but no new behavior is added to
-the façade and it is removed in the adapter cutover ticket.
+Routes, MCP tools, OAuth endpoints, and workers receive their required typed
+handlers from the composition root. Boundary coordinators remain only where an
+operation also owns token, object-storage, scanner, or external identity work;
+database lifecycle transitions inside those coordinators delegate to concrete
+handlers. The incremental compatibility façades are removed at cutover.
 
 ## Domain transition events
 
@@ -96,6 +97,10 @@ backfill path is required before the first deployment.
 
 ## Revisions
 
+- 2026-08-09: Completed the adapter cutover. Snapshot handlers now own write
+  transitions, typed scan/finalization commands commit atomically with document
+  snapshots, and unused compatibility services and SQL-shaped worker mutations
+  were removed. Legacy worker-envelope decoding remains intentionally supported.
 - 2026-08-02: Consolidated pre-deployment migrations V002–V006 into V001 and
   removed the rolling database cutover requirement. Runtime legacy-envelope
   decoding remains part of the compatibility contract.

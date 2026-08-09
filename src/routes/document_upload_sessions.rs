@@ -28,6 +28,9 @@ use crate::{
                 RedeemEvidenceDocumentUploadGrant, RedeemEvidenceDocumentUploadGrantHandler,
             },
         },
+        queries::evidence_catalog::{
+            EvidenceCatalogError, ListEvidenceControlMappings, ListEvidenceControlMappingsHandler,
+        },
         queries::resolve_evidence_document_upload_grant_authority::{
             ResolveEvidenceDocumentUploadGrantAuthority,
             ResolveEvidenceDocumentUploadGrantAuthorityHandler,
@@ -46,7 +49,6 @@ use crate::{
     },
     services::{
         agent_connections::AgentConnectionContext,
-        controls::ControlService,
         document_downloads::DownloadGrantIssuer,
         document_downloads::{DocumentDownloadService, DownloadError},
         evidence_submissions::{
@@ -73,7 +75,7 @@ pub struct DocumentUploadSessionState {
     pub downloads: DocumentDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
-    pub controls: ControlService,
+    pub list_control_mappings: ListEvidenceControlMappingsHandler,
     pub secure_cookie: bool,
     pub max_document_bytes: usize,
 }
@@ -146,7 +148,7 @@ async fn open_upload_session(
     let body = render_upload_page(
         &inventory(
             &state.submissions,
-            &state.controls,
+            &state.list_control_mappings,
             session.evidence_id,
             session.coverage,
             session_context(&session),
@@ -171,7 +173,7 @@ async fn upload_file(
     let connection = session_context(&session);
     let before = inventory(
         &state.submissions,
-        &state.controls,
+        &state.list_control_mappings,
         session.evidence_id,
         session.coverage,
         connection,
@@ -323,7 +325,7 @@ async fn archive_file(
         ArchiveDocumentResult::NotTerminal => {
             let page = inventory(
                 &state.submissions,
-                &state.controls,
+                &state.list_control_mappings,
                 session.evidence_id,
                 session.coverage,
                 connection,
@@ -428,7 +430,7 @@ async fn redeem_grant(
 
 async fn inventory(
     submissions: &EvidenceSubmissionService,
-    controls: &ControlService,
+    controls: &ListEvidenceControlMappingsHandler,
     evidence_id: EvidenceId,
     coverage: CoverageWindow,
     connection: AgentConnectionContext,
@@ -437,7 +439,10 @@ async fn inventory(
         .list_for_coverage(connection, evidence_id, coverage)
         .await?;
     let mappings = controls
-        .list_evidence_control_mappings(connection, evidence_id)
+        .handle(ListEvidenceControlMappings {
+            connection,
+            evidence_id,
+        })
         .await?
         .ok_or_else(unavailable)?;
 
@@ -455,6 +460,15 @@ async fn inventory(
             })
             .collect(),
     })
+}
+
+impl From<EvidenceCatalogError> for ApiError {
+    fn from(error: EvidenceCatalogError) -> Self {
+        match error {
+            EvidenceCatalogError::Unavailable => Self::NotFound,
+            EvidenceCatalogError::Repository(error) => error.into(),
+        }
+    }
 }
 
 fn upload_session_document_from_detail(

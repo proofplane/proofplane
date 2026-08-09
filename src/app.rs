@@ -17,7 +17,8 @@ use crate::{
             start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
         },
         queries::{
-            agent_connections::ListUserAgentConnectionsHandler, get_user::GetUserHandler,
+            agent_connections::ListUserAgentConnectionsHandler,
+            evidence_catalog::ListEvidenceControlMappingsHandler, get_user::GetUserHandler,
             get_workspace_for_user::GetWorkspaceForUserHandler, policy_catalog::GetPolicyHandler,
             read_auditor_portal::ReadAuditorPortalHandler,
             resolve_active_auditor_grant::ResolveActiveAuditorGrantHandler,
@@ -69,7 +70,6 @@ use crate::{
         },
         agent_policy_document_uploads::AgentPolicyDocumentUploadService,
         client_resolver::ClientResolver,
-        controls::ControlService,
         document_downloads::DocumentDownloadService,
         evidence_submissions::EvidenceSubmissionService,
         oauth::OAuthService,
@@ -214,7 +214,6 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         dependencies.postgres.clone(),
         dependencies.object_store.clone(),
     );
-    let control_service = ControlService::new(dependencies.postgres.clone());
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
         dependencies.config.server.public_api_base_url.clone(),
         dependencies.config.mcp.resource.to_string(),
@@ -298,7 +297,9 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 downloads: document_download_service.clone(),
                 sessions: upload_session_service,
                 submissions: evidence_submission_service,
-                controls: control_service,
+                list_control_mappings: ListEvidenceControlMappingsHandler::new(
+                    dependencies.postgres.clone(),
+                ),
                 secure_cookie: secure_upload_cookie,
                 max_document_bytes: dependencies.config.uploads.max_document_bytes,
             },

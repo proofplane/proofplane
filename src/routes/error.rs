@@ -14,7 +14,6 @@ use crate::{
     domain::DomainError,
     object_storage::StorageError,
     repository::{ConflictKind, Error as RepositoryError},
-    services::controls::ControlMutationError,
     services::Error as ServiceError,
 };
 
@@ -167,20 +166,6 @@ impl From<CreateOwnedWorkspaceError> for ApiError {
                 conflict(ConflictKind::WorkspaceMembershipExists)
             }
             CreateOwnedWorkspaceError::Repository(error) => repository_error(error),
-        }
-    }
-}
-
-impl From<ControlMutationError> for ApiError {
-    fn from(error: ControlMutationError) -> Self {
-        match error {
-            ControlMutationError::CodeTaken => conflict(ConflictKind::ControlCodeTaken),
-            ControlMutationError::InvalidFrameworkRequirementReferences => {
-                ApiError::BadRequest(vec![
-                    "framework_requirement_ids contains unknown ids".to_owned()
-                ])
-            }
-            ControlMutationError::Repository(error) => repository_error(error),
         }
     }
 }

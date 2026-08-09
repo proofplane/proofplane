@@ -43,7 +43,6 @@ pub use documents::{DocumentRepository, TypedDocumentUploadWork, WorkspaceDocume
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{
     ArchiveDocumentResult, DocumentDownloadCandidate, EvidenceSubmissionRepository,
-    FinalizingDocumentUploadWork, PendingDocumentUploadWork,
 };
 pub use oauth::OAuthAuthorizationFlowRepository;
 pub use outbox::{NewOutboxMessage, OutboxMessage};
