@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use crate::support::{
     harness::{self, TestApp},
-    oauth::{begin_authorization, complete_upstream_login, register_client},
+    oauth::{
+        begin_authorization, complete_upstream_login, consent_agent_connection, register_client,
+    },
     scenario::ScenarioBuilder,
 };
 
@@ -230,6 +232,89 @@ async fn dynamic_registration_is_deterministic_and_drives_authorize() {
         .add_query_param("scope", "read_controls")
         .await;
     authorize.assert_status(StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn authorization_codes_are_one_shot_for_pkce_mismatch_success_and_replay() {
+    const REDIRECT_URI: &str = "http://127.0.0.1:1455/callback";
+    const CODE_VERIFIER: &str = "integration-v2-code-verifier";
+
+    let app = harness::app().await;
+    let sub = "auth0|oauth-code-once";
+    ScenarioBuilder::new(&app)
+        .with_user(sub)
+        .with_workspace(sub, "Test Workspace")
+        .build()
+        .await;
+
+    let mismatched = consent_agent_connection(
+        &app,
+        sub,
+        "PKCE Mismatch Client",
+        &[WorkspacePermission::ReadControls],
+    )
+    .await;
+    let mismatch = app
+        .app_server()
+        .post("/oauth/token")
+        .add_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "grant_type=authorization_code&client_id={}&redirect_uri={REDIRECT_URI}\
+             &code={}&code_verifier=wrong-verifier",
+            mismatched.client_id, mismatched.code,
+        )))
+        .await;
+    mismatch.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(mismatch.json::<Value>(), json!({"error": "invalid_grant"}));
+
+    let consumed_after_mismatch = app
+        .app_server()
+        .post("/oauth/token")
+        .add_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "grant_type=authorization_code&client_id={}&redirect_uri={REDIRECT_URI}\
+             &code={}&code_verifier={CODE_VERIFIER}",
+            mismatched.client_id, mismatched.code,
+        )))
+        .await;
+    consumed_after_mismatch.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        consumed_after_mismatch.json::<Value>(),
+        json!({"error": "invalid_grant"})
+    );
+
+    let valid = consent_agent_connection(
+        &app,
+        sub,
+        "PKCE Replay Client",
+        &[WorkspacePermission::ReadControls],
+    )
+    .await;
+    let first = app
+        .app_server()
+        .post("/oauth/token")
+        .add_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "grant_type=authorization_code&client_id={}&redirect_uri={REDIRECT_URI}\
+             &code={}&code_verifier={CODE_VERIFIER}",
+            valid.client_id, valid.code,
+        )))
+        .await;
+    first.assert_status_ok();
+    assert!(first.json::<Value>()["access_token"].is_string());
+
+    let replay = app
+        .app_server()
+        .post("/oauth/token")
+        .add_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "grant_type=authorization_code&client_id={}&redirect_uri={REDIRECT_URI}\
+             &code={}&code_verifier={CODE_VERIFIER}",
+            valid.client_id, valid.code,
+        )))
+        .await;
+    replay.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(replay.json::<Value>(), json!({"error": "invalid_grant"}));
 }
 
 // This simulates granting the agent access in the web UI.

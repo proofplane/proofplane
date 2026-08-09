@@ -18,8 +18,15 @@ pub struct ReadOAuthConsentContext {
 pub struct OAuthConsentContext {
     pub request_id: OAuthAuthorizationRequestId,
     pub client_name: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub state: String,
+    pub resource: String,
+    pub scopes: Vec<WorkspacePermission>,
+    pub auth0_subject: String,
     pub user_id: UserId,
     pub workspace_id: WorkspaceId,
+    pub expires_at: DateTime<Utc>,
 }
 #[derive(Clone)]
 pub struct ReadOAuthConsentContextHandler {
@@ -85,14 +92,29 @@ impl ReadOAuthAuthorizationGrantHandler {
             .transpose()
     }
 }
-const CONSENT_CONTEXT_SQL: &str = "SELECT r.id, r.client_name, r.user_id, m.workspace_id FROM oauth_authorization_requests r JOIN workspace_memberships m ON m.user_id = r.user_id WHERE r.id = $1 AND r.consumed_at IS NULL AND r.expires_at > $2 AND r.auth0_subject IS NOT NULL";
+const CONSENT_CONTEXT_SQL: &str = "SELECT r.id, r.client_name, r.client_id, r.redirect_uri, r.state, r.resource, r.scopes, r.auth0_subject, r.user_id, m.workspace_id, r.expires_at FROM oauth_authorization_requests r JOIN workspace_memberships m ON m.user_id = r.user_id WHERE r.id = $1 AND r.consumed_at IS NULL AND r.expires_at > $2 AND r.auth0_subject IS NOT NULL";
 const GRANT_VIEW_SQL: &str = "SELECT r.client_id, r.redirect_uri, r.code_challenge, r.resource, r.scopes, r.auth0_subject, r.user_id, c.agent_connection_id, c.workspace_id FROM oauth_authorization_requests r JOIN oauth_authorization_codes c ON c.request_id = r.id WHERE r.id = $1";
 fn consent_context_from_row(row: Row) -> Result<OAuthConsentContext, Error> {
     Ok(OAuthConsentContext {
         request_id: row.try_get::<_, Uuid>("id")?.into(),
         client_name: row.try_get("client_name")?,
+        client_id: row.try_get("client_id")?,
+        redirect_uri: row.try_get("redirect_uri")?,
+        state: row.try_get("state")?,
+        resource: row.try_get("resource")?,
+        scopes: row
+            .try_get::<_, Vec<String>>("scopes")?
+            .into_iter()
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| Error::InvariantViolation("unknown OAuth scope"))
+            })
+            .collect::<Result<_, _>>()?,
+        auth0_subject: row.try_get("auth0_subject")?,
         user_id: row.try_get::<_, Uuid>("user_id")?.into(),
         workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
+        expires_at: row.try_get("expires_at")?,
     })
 }
 fn grant_view_from_row(row: Row) -> Result<OAuthAuthorizationGrantView, Error> {
