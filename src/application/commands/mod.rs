@@ -15,6 +15,7 @@ pub mod issue_evidence_document_upload_grant;
 pub mod issue_policy_document_upload_grant;
 pub mod map_control_to_evidence;
 pub mod map_evidence_to_controls;
+pub mod oauth_authorization_flows;
 pub mod policies;
 pub mod provision_user;
 pub mod record_user_login;

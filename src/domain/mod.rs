@@ -82,6 +82,7 @@ pub use evidence_submission::{
 };
 pub use oauth::{
     NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,
+    OAuthAuthorizationFlow, OAuthAuthorizationFlowCode, OAuthAuthorizationFlowError,
     OAuthAuthorizationRequest, OAuthAuthorizationRequestId,
 };
 pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermissions};

@@ -45,6 +45,7 @@ pub use evidence_submissions::{
     ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
     PendingDocumentUploadWork,
 };
+pub use oauth::OAuthAuthorizationFlowRepository;
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{
     ArchivePolicyResult, CreatePolicyDocumentResult, PolicyDocumentUploadEligibility,
