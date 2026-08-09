@@ -1,17 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    application::ExecutionMetadata,
+    application::{
+        queries::resolve_auditor_session_by_digest::ResolvedAuditorSession, ExecutionMetadata,
+    },
     domain::{
         AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary, AuditorPortalReadModel,
-        AuditorSession,
     },
     repository::{Error, Postgres},
 };
 
 #[derive(Debug, Clone)]
 pub struct ReadAuditorPortal {
-    pub session: AuditorSession,
+    pub session: ResolvedAuditorSession,
 }
 
 #[derive(Clone)]

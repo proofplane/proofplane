@@ -9,6 +9,8 @@ pub mod get_user;
 pub mod get_workspace_for_user;
 pub mod list_auditor_access_grants;
 pub mod read_auditor_portal;
+pub mod resolve_active_auditor_grant;
+pub mod resolve_auditor_grant_by_secret;
 pub mod resolve_auditor_session_by_digest;
 pub mod resolve_evidence_document_upload_grant_authority;
 pub mod resolve_policy_document_upload_grant_authority;
