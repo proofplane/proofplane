@@ -266,6 +266,29 @@ WHERE id = ANY($1)
 }
 
 impl WorkspaceTransactionContext<'_> {
+    pub async fn framework_requirements_exist(
+        &self,
+        ids: &[FrameworkRequirementId],
+    ) -> Result<bool, Error> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let requested = ids.iter().copied().map(Uuid::from).collect::<HashSet<_>>();
+        let found = self
+            .transaction
+            .query_one(
+                r#"
+SELECT count(DISTINCT id) AS found
+FROM framework_requirements
+WHERE id = ANY($1)
+"#,
+                &[&requested.iter().copied().collect::<Vec<_>>()],
+            )
+            .await?
+            .try_get::<_, i64>("found")?;
+        Ok(found == requested.len() as i64)
+    }
+
     pub async fn create_control(&self, payload: &CreateControlPayload) -> Result<Control, Error> {
         let row = self
             .transaction
