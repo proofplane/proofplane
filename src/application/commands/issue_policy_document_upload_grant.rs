@@ -94,33 +94,34 @@ impl IssuePolicyDocumentUploadGrantHandler {
                         return Ok(IssueOutcome::Internal);
                     };
                     let expires_at = issued_at + ttl;
+                    let grant_id = PolicyDocumentUploadGrantId::from(Uuid::new_v4());
+                    let issued = match encryptor.encrypt(
+                        RegisteredClaims {
+                            subject: command.connection.user_id.into(),
+                            token_id: grant_id.into(),
+                            expires_at,
+                        },
+                        &PolicyDocumentUploadGrantClaims::new(
+                            grant_id.into(),
+                            command.connection.workspace_id.into(),
+                            command.policy_id.into(),
+                            command.connection.user_id.into(),
+                            command.connection.connection_id.into(),
+                        ),
+                    ) {
+                        Ok(issued) => issued,
+                        Err(_) => return Ok(IssueOutcome::Internal),
+                    };
                     let grant = match PolicyDocumentUploadGrant::issue(
-                        PolicyDocumentUploadGrantId::from(Uuid::new_v4()),
+                        grant_id,
                         command.connection.workspace_id,
                         command.policy_id,
                         command.connection.user_id,
                         command.connection.connection_id,
                         issued_at,
-                        expires_at,
+                        issued.expires_at,
                     ) {
                         Ok(grant) => grant,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    let issued = match encryptor.encrypt(
-                        RegisteredClaims {
-                            subject: grant.issued_by_user_id().into(),
-                            token_id: grant.id().into(),
-                            expires_at: grant.expires_at(),
-                        },
-                        &PolicyDocumentUploadGrantClaims::new(
-                            grant.id().into(),
-                            grant.workspace_id().into(),
-                            grant.policy_id().into(),
-                            grant.issued_by_user_id().into(),
-                            grant.issued_via_agent_connection_id().into(),
-                        ),
-                    ) {
-                        Ok(issued) => issued,
                         Err(_) => return Ok(IssueOutcome::Internal),
                     };
                     let mut url = match public_api_base_url.join("policy-document-uploads") {
