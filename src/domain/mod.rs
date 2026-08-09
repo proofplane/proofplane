@@ -68,7 +68,9 @@ pub use document::{
 };
 pub use error::DomainError;
 pub use evidence::{
-    CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus, UpdateEvidencePayload,
+    CreateEvidencePayload, Evidence, EvidenceAggregate, EvidenceAggregateError,
+    EvidenceControlMappingState, EvidenceDefinition, EvidenceId, EvidenceStatus,
+    UpdateEvidencePayload,
 };
 pub use evidence_document_upload_grant::{
     EvidenceDocumentUploadGrant, EvidenceDocumentUploadGrantAuthority,
