@@ -7,5 +7,6 @@ pub mod control_catalog;
 pub mod framework_catalog;
 pub mod get_user;
 pub mod get_workspace_for_user;
+pub mod read_auditor_portal;
 pub mod resolve_evidence_document_upload_grant_authority;
 pub mod resolve_policy_document_upload_grant_authority;
