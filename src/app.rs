@@ -3,16 +3,24 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     application::{
         commands::{
+            claim_auditor_auth_transaction::ClaimAuditorAuthTransactionHandler,
+            complete_auditor_authentication::CompleteAuditorAuthenticationHandler,
+            create_authenticated_auditor_session::CreateAuthenticatedAuditorSessionHandler,
             create_owned_workspace::CreateOwnedWorkspaceHandler,
             issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
             record_user_login::RecordUserLoginHandler,
             redeem_evidence_document_upload_grant::RedeemEvidenceDocumentUploadGrantHandler,
             redeem_policy_document_upload_grant::RedeemPolicyDocumentUploadGrantHandler,
             remove_workspace_member::RemoveWorkspaceMemberHandler,
+            revoke_auditor_session::RevokeAuditorSessionHandler,
+            start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
         },
         queries::{
             get_user::GetUserHandler, get_workspace_for_user::GetWorkspaceForUserHandler,
             read_auditor_portal::ReadAuditorPortalHandler,
+            resolve_active_auditor_grant::ResolveActiveAuditorGrantHandler,
+            resolve_auditor_grant_by_secret::ResolveAuditorGrantBySecretHandler,
+            resolve_auditor_session_by_digest::ResolveAuditorSessionByDigestHandler,
             resolve_evidence_document_upload_grant_authority::ResolveEvidenceDocumentUploadGrantAuthorityHandler,
             resolve_policy_document_upload_grant_authority::ResolvePolicyDocumentUploadGrantAuthorityHandler,
         },
@@ -59,10 +67,6 @@ use crate::{
             AgentPolicyDocumentUploadGrantService, AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         },
         agent_policy_document_uploads::AgentPolicyDocumentUploadService,
-        auditor_access_grants::AuditorAccessGrantService,
-        auditor_access_sessions::AuditorAccessSessionService,
-        auditor_auth_transactions::AuditorAuthTransactionService,
-        auditor_authentication::AuditorAuthenticationService,
         client_resolver::ClientResolver,
         controls::ControlService,
         document_downloads::DocumentDownloadService,
@@ -236,21 +240,22 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
     );
     let secure_upload_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
     let secure_auditor_cookie = dependencies.config.server.public_api_base_url.scheme() == "https";
-    let auditor_grants = AuditorAccessGrantService::new(dependencies.postgres.clone());
-    let auditor_auth_transactions = AuditorAuthTransactionService::new(
+    let auditor_start_auth = StartAuditorAuthTransactionHandler::new(
         dependencies.postgres.clone(),
         dependencies.config.auth0.auditor_portal.clone(),
     );
-    let auditor_sessions = AuditorAccessSessionService::new(dependencies.postgres.clone());
+    let auditor_claim_auth = ClaimAuditorAuthTransactionHandler::new(dependencies.postgres.clone());
+    let auditor_create_session =
+        CreateAuthenticatedAuditorSessionHandler::new(dependencies.postgres.clone());
     let auditor_identity_provider = dependencies.auditor_identity_provider.unwrap_or_else(|| {
         Arc::new(Auth0AuditorIdentityProvider::new(
             &dependencies.config.auth0,
         ))
     });
-    let auditor_authentication = AuditorAuthenticationService::new(
-        dependencies.postgres.clone(),
-        auditor_auth_transactions.clone(),
-        auditor_sessions.clone(),
+    let auditor_complete_auth = CompleteAuditorAuthenticationHandler::new(
+        auditor_claim_auth.clone(),
+        ResolveActiveAuditorGrantHandler::new(dependencies.postgres.clone()),
+        auditor_create_session,
         auditor_identity_provider,
         dependencies.config.auth0.auditor_portal.clone(),
     );
@@ -311,10 +316,14 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             },
         ))
         .merge(auditor_access::router(AuditorAccessState {
-            grants: auditor_grants,
-            auth_transactions: auditor_auth_transactions,
-            authentication: auditor_authentication,
-            sessions: auditor_sessions,
+            resolve_grant: ResolveAuditorGrantBySecretHandler::new(dependencies.postgres.clone()),
+            start_auth: auditor_start_auth,
+            claim_auth: auditor_claim_auth,
+            complete_auth: auditor_complete_auth,
+            resolve_session: ResolveAuditorSessionByDigestHandler::new(
+                dependencies.postgres.clone(),
+            ),
+            revoke_session: RevokeAuditorSessionHandler::new(dependencies.postgres.clone()),
             read_portal: ReadAuditorPortalHandler::new(dependencies.postgres.clone()),
             downloads: document_download_service,
             secure_cookie: secure_auditor_cookie,
