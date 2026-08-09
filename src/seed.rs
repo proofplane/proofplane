@@ -9,9 +9,9 @@ use crate::{
     authentication::AgentConnectionContext,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        AgentConnectionId, CreateEvidencePayload, CreateWorkspacePayload, EvidenceStatus,
-        ProvisionUserPayload, UpdateEvidencePayload, UpdateWorkspacePayload, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions, WorkspaceRole,
+        AgentConnectionId, EvidenceAggregate, EvidenceDefinition, EvidenceId, EvidenceStatus,
+        ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions,
+        WorkspaceRole,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
@@ -108,6 +108,7 @@ pub async fn seed_local_data(
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
+    let client = repository.get().await?;
     for (id, slug, name) in [
         (
             local_authorized_workspace_id(),
@@ -120,20 +121,13 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
             "Local Unauthorized Workspace".to_owned(),
         ),
     ] {
-        if repository.get_workspace(id).await?.is_some() {
-            repository
-                .update_workspace(id, &UpdateWorkspacePayload { slug, name })
-                .await?;
-
-            continue;
-        }
-
-        repository
-            .create_workspace(&CreateWorkspacePayload {
-                id: Some(id),
-                slug,
-                name,
-            })
+        client
+            .execute(
+                r#"INSERT INTO workspaces (id, slug, name)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name"#,
+                &[&Uuid::from(id), &slug, &name],
+            )
             .await?;
     }
 
@@ -259,17 +253,45 @@ async fn seed_evidence(
             connection.connection_id,
             async move |context| {
                 for seed in seeds {
-                    if let Some(existing_evidence) = existing
+                    let existing_id = existing
                         .iter()
                         .find(|evidence| evidence.title == seed.title)
-                    {
-                        let update = seed.into_update();
-                        context
-                            .replace_evidence(existing_evidence.id, &update)
-                            .await?;
+                        .map(|evidence| evidence.id);
+                    let definition = EvidenceDefinition::new(
+                        seed.title,
+                        seed.description,
+                        seed.collection_instructions,
+                    )
+                    .into_result()
+                    .map_err(|_| {
+                        crate::repository::Error::InvariantViolation(
+                            "seed evidence definition must be valid",
+                        )
+                    })?;
+                    let evidence = context.evidence();
+                    if let Some(existing_id) = existing_id {
+                        let mut aggregate = evidence.get(existing_id).await?.ok_or(
+                            crate::repository::Error::InvariantViolation(
+                                "listed seed evidence must be readable as an aggregate",
+                            ),
+                        )?;
+                        aggregate
+                            .replace(definition, seed.status, Utc::now())
+                            .map_err(|_| {
+                                crate::repository::Error::InvariantViolation(
+                                    "seed evidence replacement must be valid",
+                                )
+                            })?;
+                        evidence.save(&aggregate).await?;
                     } else {
-                        let payload = seed.into_new();
-                        context.create_evidence(&payload).await?;
+                        let aggregate = EvidenceAggregate::define(
+                            EvidenceId::from(Uuid::new_v4()),
+                            workspace_id,
+                            definition,
+                            seed.status,
+                            Utc::now(),
+                        );
+                        evidence.save(&aggregate).await?;
                     }
                 }
 
@@ -619,26 +641,6 @@ struct SeedPolicy {
     name: &'static str,
     description: Option<&'static str>,
     control_codes: Vec<&'static str>,
-}
-
-impl SeedEvidence {
-    fn into_new(self) -> CreateEvidencePayload {
-        CreateEvidencePayload {
-            title: self.title,
-            description: self.description,
-            collection_instructions: self.collection_instructions,
-            status: self.status,
-        }
-    }
-
-    fn into_update(self) -> UpdateEvidencePayload {
-        UpdateEvidencePayload {
-            title: self.title,
-            description: self.description,
-            collection_instructions: self.collection_instructions,
-            status: self.status,
-        }
-    }
 }
 
 fn demo_evidence() -> Result<Vec<SeedEvidence>, Error> {

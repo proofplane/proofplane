@@ -36,9 +36,7 @@ pub use auditor_access_grants::{AuditorAccessGrantProjection, AuditorAccessGrant
 pub use auditor_access_sessions::AuditorSessionRepository;
 pub use auditor_auth_transactions::AuditorAuthTransactionRepository;
 pub use constraints::ConflictKind;
-pub use document_upload_grants::{
-    DocumentUploadGrant, EvidenceDocumentUploadGrantRepository, NewDocumentUploadGrant,
-};
+pub use document_upload_grants::EvidenceDocumentUploadGrantRepository;
 pub use documents::{DocumentRepository, TypedDocumentUploadWork, WorkspaceDocumentRepository};
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{

@@ -89,20 +89,6 @@ impl<'a> WorkspaceTransactionContext<'a> {
             connection: RepositoryConnection::WorkspaceTransaction(self),
         }
     }
-
-    pub async fn create_auditor_access_grant(
-        &self,
-        grant: AuditorAccessGrant,
-    ) -> Result<AuditorAccessGrant, Error> {
-        let repository = self.auditor_access_grants();
-        repository.save(&grant).await?;
-        repository
-            .get(grant.id, self.workspace_id)
-            .await?
-            .ok_or(Error::InvariantViolation(
-                "saved auditor access grant must be readable",
-            ))
-    }
 }
 
 impl AuditorAccessGrantRepository<'_> {
@@ -285,28 +271,6 @@ impl Postgres {
         rows.into_iter()
             .map(|row| GrantRecord::try_from(row).and_then(AuditorAccessGrant::try_from))
             .collect()
-    }
-
-    pub async fn revoke_auditor_access_grant(
-        &self,
-        workspace_id: WorkspaceId,
-        grant_id: AuditorAccessGrantId,
-    ) -> Result<Option<AuditorAccessGrant>, Error> {
-        self.in_transaction(async move |context| {
-            let repository = context.auditor_access_grants();
-            let Some(mut grant) = repository.get(grant_id, workspace_id).await? else {
-                return Ok(None);
-            };
-            if grant.workspace_id != workspace_id {
-                return Ok(None);
-            }
-            grant
-                .revoke(Utc::now())
-                .map_err(|_| Error::InvariantViolation("auditor grant revocation is invalid"))?;
-            repository.save(&grant).await?;
-            Ok(Some(grant))
-        })
-        .await
     }
 
     pub async fn get_active_auditor_access_grant_by_digest(

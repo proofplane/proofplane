@@ -4,9 +4,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, CreateEvidencePayload, Evidence, EvidenceAggregate,
-        EvidenceControlMapping, EvidenceControlMappingState, EvidenceDefinition, EvidenceId,
-        EvidenceStatus, UpdateEvidencePayload, WorkspaceId,
+        ControlId, ControlSummary, Evidence, EvidenceAggregate, EvidenceControlMapping,
+        EvidenceControlMappingState, EvidenceDefinition, EvidenceId, EvidenceStatus, WorkspaceId,
     },
     repository::{WorkspaceReadContext, WorkspaceTransactionContext},
 };
@@ -228,87 +227,6 @@ WHERE id = $1
 FOR KEY SHARE
 "#,
                 &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
-            )
-            .await?;
-
-        rows.into_iter().next().map(evidence_from_row).transpose()
-    }
-
-    pub async fn create_evidence(
-        &self,
-        payload: &CreateEvidencePayload,
-    ) -> Result<Evidence, Error> {
-        let row = self
-            .transaction
-            .query_one(
-                r#"
-INSERT INTO evidence (
-    workspace_id,
-    title,
-    description,
-    collection_instructions,
-    status
-)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING
-    id,
-    workspace_id,
-    title,
-    description,
-    collection_instructions,
-    status,
-    created_at,
-    updated_at
-"#,
-                &[
-                    &Uuid::from(self.workspace_id),
-                    &payload.title,
-                    &payload.description,
-                    &payload.collection_instructions,
-                    &payload.status.as_str(),
-                ],
-            )
-            .await?;
-
-        evidence_from_row(row)
-    }
-
-    pub async fn replace_evidence(
-        &self,
-        id: EvidenceId,
-        update: &UpdateEvidencePayload,
-    ) -> Result<Option<Evidence>, Error> {
-        let rows = self
-            .transaction
-            .query(
-                r#"
-UPDATE evidence
-SET
-    title = $2,
-    description = $3,
-    collection_instructions = $4,
-    status = $5,
-    updated_at = now()
-WHERE id = $1
-  AND workspace_id = $6
-RETURNING
-    id,
-    workspace_id,
-    title,
-    description,
-    collection_instructions,
-    status,
-    created_at,
-    updated_at
-"#,
-                &[
-                    &Uuid::from(id),
-                    &update.title,
-                    &update.description,
-                    &update.collection_instructions,
-                    &update.status.as_str(),
-                    &Uuid::from(self.workspace_id),
-                ],
             )
             .await?;
 
