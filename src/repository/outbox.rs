@@ -12,7 +12,7 @@ use crate::{
     pubsub::TopicName,
 };
 
-use super::{Error, Postgres, TransactionContext, WorkspaceTransactionContext};
+use super::{Error, Postgres, UnitOfWork, WorkspaceRepositories};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewOutboxMessage {
@@ -47,16 +47,16 @@ pub struct OutboxMessage {
     pub created_at: DateTime<Utc>,
 }
 
-impl WorkspaceTransactionContext<'_> {
+impl WorkspaceRepositories<'_> {
     pub async fn append_outbox_message(
         &self,
         message: &NewOutboxMessage,
     ) -> Result<OutboxMessage, Error> {
-        append_outbox_message(&self.transaction, message).await
+        append_outbox_message(self.transaction, message).await
     }
 }
 
-impl TransactionContext<'_> {
+impl UnitOfWork<'_> {
     pub async fn append_outbox_message(
         &self,
         message: &NewOutboxMessage,
@@ -314,7 +314,7 @@ mod tests {
 
     async fn append(postgres: &Postgres, message: NewOutboxMessage) -> OutboxMessage {
         postgres
-            .in_transaction(async move |context| context.append_outbox_message(&message).await)
+            .in_unit_of_work(async move |context| context.append_outbox_message(&message).await)
             .await
             .expect("outbox append commits")
     }
@@ -352,7 +352,7 @@ mod tests {
         let message = scan_message(None, None);
 
         let result = postgres
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 context.append_outbox_message(&message).await?;
 
                 Err::<(), Error>(Error::InvariantViolation("injected domain write failure"))

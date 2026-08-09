@@ -12,13 +12,13 @@ use crate::{
 
 use super::{
     snapshot::{save_workspace_snapshot, workspace_snapshot_record},
-    Error, Postgres, TransactionContext, WorkspaceTransactionContext,
+    Error, Postgres, UnitOfWork, WorkspaceRepositories,
 };
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
-    Transaction(&'a TransactionContext<'a>),
-    WorkspaceTransaction(&'a WorkspaceTransactionContext<'a>),
+    Transaction(&'a UnitOfWork<'a>),
+    WorkspaceTransaction(&'a WorkspaceRepositories<'a>),
 }
 
 pub struct AuditorAccessGrantRepository<'a> {
@@ -65,7 +65,7 @@ impl TryFrom<Row> for AuditorAccessGrantSummary {
     }
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn auditor_access_grants(&'a self) -> AuditorAccessGrantRepository<'a> {
         AuditorAccessGrantRepository {
             connection: RepositoryConnection::Transaction(self),
@@ -73,7 +73,7 @@ impl<'a> TransactionContext<'a> {
     }
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn auditor_access_grants(&'a self) -> AuditorAccessGrantRepository<'a> {
         AuditorAccessGrantRepository {
             connection: RepositoryConnection::WorkspaceTransaction(self),
@@ -131,10 +131,10 @@ impl AuditorAccessGrantRepository<'_> {
             RepositoryConnection::WorkspaceTransaction(context) => {
                 if grant.workspace_id != context.workspace_id {
                     return Err(Error::InvariantViolation(
-                        "auditor access grant workspace must match its transaction",
+                        "auditor access grant workspace must match its repository scope",
                     ));
                 }
-                save_workspace_snapshot(&context.transaction, record.as_workspace_snapshot()).await
+                save_workspace_snapshot(context.transaction, record.as_workspace_snapshot()).await
             }
         }
     }

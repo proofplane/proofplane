@@ -35,9 +35,8 @@ impl ListControlsHandler {
         }
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async |context| {
-                context.control_projections().list().await
-            })
+            .control_projections(query.connection.workspace_id)
+            .list()
             .await?)
     }
 }
@@ -79,9 +78,8 @@ impl GetControlHandler {
         }
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context.control_projections().get(query.control_id).await
-            })
+            .control_projections(query.connection.workspace_id)
+            .get(query.control_id)
             .await?)
     }
 }

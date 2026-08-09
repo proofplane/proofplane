@@ -65,7 +65,7 @@ impl StartAuditorAuthTransactionHandler {
         let transaction_id = AuditorAuthTransactionId::from(Uuid::new_v4());
         let email = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let grants = context.auditor_access_grants();
                 let Some(grant) = grants.get(command.grant_id, command.workspace_id).await? else {
                     return Ok(None);

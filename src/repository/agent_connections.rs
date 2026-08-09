@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::{
     snapshot::{save_workspace_snapshot, workspace_snapshot_record},
-    Error, Postgres, TransactionContext,
+    Error, Postgres, UnitOfWork,
 };
 use crate::{
     domain::{AgentConnection, AgentConnectionId, Sha256Digest, UserId, WorkspacePermission},
@@ -14,7 +14,7 @@ use crate::{
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
-    Transaction(&'a TransactionContext<'a>),
+    Transaction(&'a UnitOfWork<'a>),
 }
 pub struct AgentConnectionRepository<'a> {
     connection: RepositoryConnection<'a>,
@@ -27,7 +27,7 @@ impl Postgres {
         }
     }
 }
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn agent_connections(&'a self) -> AgentConnectionRepository<'a> {
         AgentConnectionRepository {
             connection: RepositoryConnection::Transaction(self),

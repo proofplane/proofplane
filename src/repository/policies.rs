@@ -10,16 +10,13 @@ use crate::{
         PolicyControlMappingState, PolicyDefinition, PolicyId, WorkspaceId,
     },
     projections::{
-        ControlSummary, PolicyCatalogEntry, PolicyControlMapping, PolicyDetail,
-        PolicyDocumentDetail, PolicyDocumentStatus,
+        ControlSummary, DocumentDownloadCandidate, PolicyCatalogEntry, PolicyControlMapping,
+        PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
     },
-    repository::{
-        DocumentDownloadCandidate, TransactionContext, WorkspaceReadContext,
-        WorkspaceTransactionContext,
-    },
+    repository::{UnitOfWork, WorkspaceClient, WorkspaceRepositories},
 };
 
-impl TransactionContext<'_> {
+impl UnitOfWork<'_> {
     pub async fn policy_is_active(
         &self,
         workspace_id: WorkspaceId,
@@ -47,12 +44,12 @@ use super::{documents::document_from_row, Error};
 
 use super::snapshot::{save_workspace_snapshot, workspace_snapshot_record};
 
-/// Transaction-scoped complete-snapshot repository for the policy aggregate.
+/// Workspace-scoped complete-snapshot repository for the policy aggregate.
 pub struct PolicyRepository<'a> {
-    context: &'a WorkspaceTransactionContext<'a>,
+    context: &'a WorkspaceRepositories<'a>,
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn policies(&'a self) -> PolicyRepository<'a> {
         PolicyRepository { context: self }
     }
@@ -70,11 +67,11 @@ impl PolicyRepository<'_> {
     pub async fn save(&self, policy: &Policy) -> Result<(), Error> {
         if policy.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
-                "policy workspace must match its transaction",
+                "policy workspace must match its repository scope",
             ));
         }
         let record = PolicyRecord::from(policy);
-        save_workspace_snapshot(&self.context.transaction, record.as_workspace_snapshot()).await?;
+        save_workspace_snapshot(self.context.transaction, record.as_workspace_snapshot()).await?;
         self.context
             .transaction
             .execute(
@@ -169,7 +166,7 @@ pub enum PolicyDocumentUploadEligibility {
     CurrentDocument,
 }
 
-impl WorkspaceTransactionContext<'_> {
+impl WorkspaceRepositories<'_> {
     pub async fn policy_document_in_progress(&self, policy_id: PolicyId) -> Result<bool, Error> {
         Ok(self.transaction.query_one("SELECT EXISTS (SELECT 1 FROM documents WHERE owner_type = 'policy' AND owner_id = $1 AND workspace_id = $2 AND archived = false AND upload_status IN ('pending', 'finalizing'))", &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)]).await?.try_get(0)?)
     }
@@ -266,7 +263,7 @@ WHERE m.policy_id = $1
     }
 }
 
-impl WorkspaceReadContext {
+impl WorkspaceClient {
     pub(crate) async fn get_policy_document_for_agent_upload(
         &self,
         policy_id: PolicyId,

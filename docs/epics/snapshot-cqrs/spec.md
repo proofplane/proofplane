@@ -38,6 +38,13 @@ before commit. Authorization, parent eligibility, relationships, and
 orchestration remain in handlers. Lists, details, reverse mappings, portal
 views, catalogs, downloads, and authority resolution are query models.
 
+`UnitOfWork` owns only the database transaction. Commands derive a
+`WorkspaceRepositories` scope from it when they need workspace-bound aggregate
+or transactional projection repositories. Authentication and actor identity
+do not enter the persistence boundary. Ordinary queries call projection
+repositories directly with the authorized workspace ID; the projection
+repository owns pooled-client acquisition and workspace filtering.
+
 ## Commands, queries, and execution metadata
 
 Commands and queries are immutable task-oriented values. Each operation has a

@@ -3,11 +3,11 @@ use uuid::Uuid;
 
 use crate::domain::{ProvisionUserPayload, User, UserId};
 
-use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
+use super::{constraints::classify_db_error, Error, Postgres, UnitOfWork};
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
-    Transaction(&'a TransactionContext<'a>),
+    Transaction(&'a UnitOfWork<'a>),
 }
 
 /// Complete-snapshot persistence for the user aggregate.
@@ -57,7 +57,7 @@ RETURNING id, auth0_sub, email, name, last_login_at, created_at
     }
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn users(&'a self) -> UserRepository<'a> {
         UserRepository {
             connection: RepositoryConnection::Transaction(self),

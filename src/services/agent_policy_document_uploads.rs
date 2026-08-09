@@ -224,16 +224,13 @@ impl AgentPolicyDocumentUploadService {
         let policy_id = grant.policy_id();
         let eligibility = self
             .repository
-            .in_agent_connection_workspace_context(
-                grant.workspace_id(),
-                grant.issued_by_user_id(),
-                grant.issued_via_agent_connection_id(),
-                async move |context| {
-                    context
-                        .lock_policy_document_upload_eligibility(policy_id)
-                        .await
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(grant.workspace_id());
+                let context = &workspace;
+                context
+                    .lock_policy_document_upload_eligibility(policy_id)
+                    .await
+            })
             .await?;
         match eligibility {
             Some(PolicyDocumentUploadEligibility::Eligible) => Ok(()),

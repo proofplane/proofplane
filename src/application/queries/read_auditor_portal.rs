@@ -41,17 +41,13 @@ impl ReadAuditorPortalHandler {
         }
 
         let session = query.session;
-        let (mut controls, policies) = self
+        let projections = self
             .repository
-            .in_workspace_context_read(session.workspace_id, async |context| {
-                let controls = context
-                    .auditor_portal_projections()
-                    .controls(session.period.start, session.period.end)
-                    .await?;
-                let policies = context.auditor_portal_projections().policies().await?;
-                Ok((controls, policies))
-            })
+            .auditor_portal_projections(session.workspace_id);
+        let mut controls = projections
+            .controls(session.period.start, session.period.end)
             .await?;
+        let policies = projections.policies().await?;
         let control_indices = controls
             .iter()
             .enumerate()

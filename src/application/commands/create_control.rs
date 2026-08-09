@@ -65,26 +65,24 @@ impl CreateControlHandler {
 
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    if !context
-                        .framework_requirements_exist(control.framework_requirement_ids())
-                        .await?
-                    {
-                        return Ok(CreateOutcome::InvalidFrameworkRequirementReferences);
-                    }
-                    context.controls().save(&control).await?;
-                    let projection = context.control_projections().get(control_id).await?.ok_or(
-                        RepositoryError::InvariantViolation(
-                            "created control must be readable in its transaction",
-                        ),
-                    )?;
-                    Ok(CreateOutcome::Created(projection))
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                if !workspace
+                    .framework_requirements_exist(control.framework_requirement_ids())
+                    .await?
+                {
+                    return Ok(CreateOutcome::InvalidFrameworkRequirementReferences);
+                }
+                workspace.controls().save(&control).await?;
+                let projection = workspace
+                    .control_projections()
+                    .get(control_id)
+                    .await?
+                    .ok_or(RepositoryError::InvariantViolation(
+                        "created control must be readable in its transaction",
+                    ))?;
+                Ok(CreateOutcome::Created(projection))
+            })
             .await
             .map_err(CreateControlError::from)?;
 

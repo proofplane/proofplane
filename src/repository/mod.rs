@@ -1,8 +1,6 @@
 use deadpool_postgres::{Object, Pool};
 
-use uuid::Uuid;
-
-use crate::domain::{AgentConnectionId, UserId, WorkspaceId};
+use crate::domain::WorkspaceId;
 
 mod agent_connections;
 mod agent_evidence_upload_grants;
@@ -40,9 +38,7 @@ pub use constraints::ConflictKind;
 pub use document_upload_grants::EvidenceDocumentUploadGrantRepository;
 pub use documents::{DocumentRepository, TypedDocumentUploadWork, WorkspaceDocumentRepository};
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
-pub use evidence_submissions::{
-    ArchiveDocumentResult, DocumentDownloadCandidate, EvidenceSubmissionRepository,
-};
+pub use evidence_submissions::{ArchiveDocumentResult, EvidenceSubmissionRepository};
 pub use oauth::OAuthAuthorizationFlowRepository;
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{
@@ -57,43 +53,28 @@ pub struct Postgres {
     pool: Pool,
 }
 
-pub struct TransactionContext<'transaction> {
+pub struct UnitOfWork<'transaction> {
     transaction: deadpool_postgres::Transaction<'transaction>,
 }
 
-pub struct WorkspaceTransactionContext<'transaction> {
-    pub workspace_id: WorkspaceId,
-    pub user_id: UserId,
-    pub credential: WorkspaceCredential,
-    transaction: deadpool_postgres::Transaction<'transaction>,
+pub struct WorkspaceRepositories<'unit_of_work> {
+    pub(super) workspace_id: WorkspaceId,
+    pub(super) transaction: &'unit_of_work deadpool_postgres::Transaction<'unit_of_work>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceCredential {
-    AgentConnection(AgentConnectionId),
-}
-
-impl WorkspaceCredential {
-    pub fn agent_connection_uuid(self) -> Option<Uuid> {
-        match self {
-            Self::AgentConnection(id) => Some(id.into()),
+impl<'unit_of_work> UnitOfWork<'unit_of_work> {
+    pub fn for_workspace(
+        &'unit_of_work self,
+        workspace_id: WorkspaceId,
+    ) -> WorkspaceRepositories<'unit_of_work> {
+        WorkspaceRepositories {
+            workspace_id,
+            transaction: &self.transaction,
         }
     }
-}
 
-impl<'transaction> WorkspaceTransactionContext<'transaction> {
-    fn new(
-        workspace_id: WorkspaceId,
-        user_id: UserId,
-        credential: WorkspaceCredential,
-        transaction: deadpool_postgres::Transaction<'transaction>,
-    ) -> Self {
-        Self {
-            workspace_id,
-            user_id,
-            credential,
-            transaction,
-        }
+    fn new(transaction: deadpool_postgres::Transaction<'unit_of_work>) -> Self {
+        Self { transaction }
     }
 
     async fn commit(self) -> Result<(), tokio_postgres::Error> {
@@ -101,12 +82,18 @@ impl<'transaction> WorkspaceTransactionContext<'transaction> {
     }
 }
 
-pub struct WorkspaceReadContext {
-    pub workspace_id: WorkspaceId,
-    client: deadpool_postgres::Object,
+impl WorkspaceRepositories<'_> {
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
 }
 
-impl WorkspaceReadContext {
+pub(super) struct WorkspaceClient {
+    pub(super) workspace_id: WorkspaceId,
+    pub(super) client: deadpool_postgres::Object,
+}
+
+impl WorkspaceClient {
     fn new(workspace_id: WorkspaceId, client: deadpool_postgres::Object) -> Self {
         Self {
             workspace_id,
@@ -124,65 +111,35 @@ impl Postgres {
         self.pool.get().await
     }
 
-    pub async fn in_transaction<T, F>(&self, operation: F) -> Result<T, Error>
+    pub async fn in_unit_of_work<T, F>(&self, operation: F) -> Result<T, Error>
     where
         T: Send,
         F: for<'context, 'transaction> AsyncFnOnce(
-                &'context mut TransactionContext<'transaction>,
+                &'context UnitOfWork<'transaction>,
             ) -> Result<T, Error>
             + Send,
     {
         let mut client = self.get().await?;
         let transaction = client.transaction().await?;
-        let mut context = TransactionContext { transaction };
-        let result = operation(&mut context).await?;
+        let unit_of_work = UnitOfWork::new(transaction);
+        let result = operation(&unit_of_work).await?;
 
-        context.transaction.commit().await?;
-
-        Ok(result)
-    }
-
-    pub async fn in_agent_connection_workspace_context<T, F>(
-        &self,
-        workspace_id: WorkspaceId,
-        user_id: UserId,
-        agent_connection_id: AgentConnectionId,
-        operation: F,
-    ) -> Result<T, Error>
-    where
-        T: Send,
-        F: for<'context, 'transaction> AsyncFnOnce(
-                &'context mut WorkspaceTransactionContext<'transaction>,
-            ) -> Result<T, Error>
-            + Send,
-    {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let mut context = WorkspaceTransactionContext::new(
-            workspace_id,
-            user_id,
-            WorkspaceCredential::AgentConnection(agent_connection_id),
-            transaction,
-        );
-        let result = operation(&mut context).await?;
-
-        context.commit().await?;
+        unit_of_work.commit().await?;
 
         Ok(result)
     }
 
-    pub async fn in_workspace_context_read<T, F>(
+    pub(super) async fn with_workspace_client<T, F>(
         &self,
         workspace_id: WorkspaceId,
         operation: F,
     ) -> Result<T, Error>
     where
         T: Send,
-        F: for<'context> AsyncFnOnce(&'context WorkspaceReadContext) -> Result<T, Error> + Send,
+        F: for<'context> AsyncFnOnce(&'context WorkspaceClient) -> Result<T, Error> + Send,
     {
         let client = self.get().await?;
-        let context = WorkspaceReadContext::new(workspace_id, client);
-
+        let context = WorkspaceClient::new(workspace_id, client);
         operation(&context).await
     }
 }

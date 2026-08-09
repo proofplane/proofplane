@@ -48,7 +48,7 @@ impl CreateAuthenticatedAuditorSessionHandler {
         let digest = Sha256Digest::digest(raw_session.as_bytes());
         let now = Utc::now();
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let grants = context.auditor_access_grants();
                 let Some(grant) = grants.get(command.grant_id, command.workspace_id).await? else {
                     return Ok(None);

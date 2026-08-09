@@ -61,41 +61,37 @@ impl CreatePolicyHandler {
         let requested = command.control_ids;
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    let present = context.existing_control_ids(&requested).await?;
-                    let unknown = requested
-                        .iter()
-                        .copied()
-                        .filter(|id| !present.contains(id))
-                        .collect::<Vec<_>>();
-                    if !unknown.is_empty() {
-                        return Ok(CreateOutcome::Rejected { unknown });
-                    }
-                    let mut policy =
-                        Policy::define(id, context.workspace_id, definition, Utc::now());
-                    policy
-                        .replace_mappings(
-                            requested
-                                .iter()
-                                .copied()
-                                .map(|id| PolicyControlMappingState::new(id, Utc::now()))
-                                .collect(),
-                        )
-                        .map_err(invariant)?;
-                    context.policies().save(&policy).await?;
-                    Ok(CreateOutcome::Created(Box::new(
-                        context.policy_projections().get(id).await?.ok_or(
-                            RepositoryError::InvariantViolation(
-                                "created policy must be readable in its transaction",
-                            ),
-                        )?,
-                    )))
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                let present = context.existing_control_ids(&requested).await?;
+                let unknown = requested
+                    .iter()
+                    .copied()
+                    .filter(|id| !present.contains(id))
+                    .collect::<Vec<_>>();
+                if !unknown.is_empty() {
+                    return Ok(CreateOutcome::Rejected { unknown });
+                }
+                let mut policy = Policy::define(id, context.workspace_id, definition, Utc::now());
+                policy
+                    .replace_mappings(
+                        requested
+                            .iter()
+                            .copied()
+                            .map(|id| PolicyControlMappingState::new(id, Utc::now()))
+                            .collect(),
+                    )
+                    .map_err(invariant)?;
+                context.policies().save(&policy).await?;
+                Ok(CreateOutcome::Created(Box::new(
+                    context.policy_projections().get(id).await?.ok_or(
+                        RepositoryError::InvariantViolation(
+                            "created policy must be readable in its transaction",
+                        ),
+                    )?,
+                )))
+            })
             .await
             .map_err(PolicyCommandError::from)?;
         match outcome {
@@ -143,23 +139,20 @@ impl ReplacePolicyHandler {
         let id = command.policy_id;
         let detail = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    let repository = context.policies();
-                    let Some(mut policy) = repository.get(id).await? else {
-                        return Ok(None);
-                    };
-                    if policy.archived_at().is_some() {
-                        return Ok(None);
-                    }
-                    policy.replace(definition, Utc::now()).map_err(invariant)?;
-                    repository.save(&policy).await?;
-                    context.policy_projections().get(id).await
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                let repository = context.policies();
+                let Some(mut policy) = repository.get(id).await? else {
+                    return Ok(None);
+                };
+                if policy.archived_at().is_some() {
+                    return Ok(None);
+                }
+                policy.replace(definition, Utc::now()).map_err(invariant)?;
+                repository.save(&policy).await?;
+                context.policy_projections().get(id).await
+            })
             .await?;
         detail
             .map(|policy| ReplacedPolicy { policy })
@@ -194,32 +187,29 @@ impl ArchivePolicyHandler {
         let id = command.policy_id;
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    let repository = context.policies();
-                    let Some(mut policy) = repository.get(id).await? else {
-                        return Ok(None);
-                    };
-                    if policy.archived_at().is_some() {
-                        return Ok(None);
-                    }
-                    if context.policy_document_in_progress(id).await? {
-                        return Ok(Some(Err(())));
-                    }
-                    policy.archive(Utc::now()).map_err(invariant)?;
-                    let archived_at =
-                        policy
-                            .archived_at()
-                            .ok_or(RepositoryError::InvariantViolation(
-                                "archived policy needs timestamp",
-                            ))?;
-                    repository.save(&policy).await?;
-                    Ok(Some(Ok(archived_at)))
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                let repository = context.policies();
+                let Some(mut policy) = repository.get(id).await? else {
+                    return Ok(None);
+                };
+                if policy.archived_at().is_some() {
+                    return Ok(None);
+                }
+                if context.policy_document_in_progress(id).await? {
+                    return Ok(Some(Err(())));
+                }
+                policy.archive(Utc::now()).map_err(invariant)?;
+                let archived_at =
+                    policy
+                        .archived_at()
+                        .ok_or(RepositoryError::InvariantViolation(
+                            "archived policy needs timestamp",
+                        ))?;
+                repository.save(&policy).await?;
+                Ok(Some(Ok(archived_at)))
+            })
             .await?;
         match outcome {
             Some(Ok(archived_at)) => Ok(ArchivedPolicy {
@@ -381,74 +371,71 @@ async fn change_mappings(
     authorize(connection)?;
     let response_control_ids = requested.clone();
     let outcome = repository
-        .in_agent_connection_workspace_context(
-            connection.workspace_id,
-            connection.user_id,
-            connection.connection_id,
-            async move |context| {
-                let repository = context.policies();
-                let Some(mut policy) = repository.get(policy_id).await? else {
-                    return Ok(None);
-                };
-                if policy.archived_at().is_some() {
-                    return Ok(None);
-                }
-                let existing = context.existing_control_ids(&requested).await?;
-                let unknown = requested
+        .in_unit_of_work(async move |unit_of_work| {
+            let workspace = unit_of_work.for_workspace(connection.workspace_id);
+            let context = &workspace;
+            let repository = context.policies();
+            let Some(mut policy) = repository.get(policy_id).await? else {
+                return Ok(None);
+            };
+            if policy.archived_at().is_some() {
+                return Ok(None);
+            }
+            let existing = context.existing_control_ids(&requested).await?;
+            let unknown = requested
+                .iter()
+                .copied()
+                .filter(|id| !existing.contains(id))
+                .collect::<Vec<_>>();
+            let mapped = |id| policy.mappings().iter().any(|item| item.control_id() == id);
+            let invalid = requested
+                .iter()
+                .copied()
+                .filter(|id| {
+                    existing.contains(id) && (if attach { mapped(*id) } else { !mapped(*id) })
+                })
+                .collect::<Vec<_>>();
+            if !unknown.is_empty() || !invalid.is_empty() || has_duplicates(&requested) {
+                return Ok(Some(Err((unknown, invalid))));
+            };
+            let next = if attach {
+                policy
+                    .mappings()
                     .iter()
-                    .copied()
-                    .filter(|id| !existing.contains(id))
-                    .collect::<Vec<_>>();
-                let mapped = |id| policy.mappings().iter().any(|item| item.control_id() == id);
-                let invalid = requested
+                    .cloned()
+                    .chain(
+                        requested
+                            .iter()
+                            .copied()
+                            .map(|id| PolicyControlMappingState::new(id, Utc::now())),
+                    )
+                    .collect()
+            } else {
+                policy
+                    .mappings()
                     .iter()
-                    .copied()
-                    .filter(|id| {
-                        existing.contains(id) && (if attach { mapped(*id) } else { !mapped(*id) })
-                    })
-                    .collect::<Vec<_>>();
-                if !unknown.is_empty() || !invalid.is_empty() || has_duplicates(&requested) {
-                    return Ok(Some(Err((unknown, invalid))));
-                };
-                let next = if attach {
-                    policy
-                        .mappings()
-                        .iter()
-                        .cloned()
-                        .chain(
-                            requested
-                                .iter()
-                                .copied()
-                                .map(|id| PolicyControlMappingState::new(id, Utc::now())),
-                        )
-                        .collect()
-                } else {
-                    policy
-                        .mappings()
-                        .iter()
-                        .filter(|item| !requested.contains(&item.control_id()))
-                        .cloned()
-                        .collect()
-                };
-                policy.replace_mappings(next).map_err(invariant)?;
-                repository.save(&policy).await?;
-                let mut mappings = Vec::new();
-                if attach {
-                    for id in &requested {
-                        mappings.push(
-                            context
-                                .policy_projections()
-                                .get_control_mapping(policy_id, *id)
-                                .await?
-                                .ok_or(RepositoryError::InvariantViolation(
-                                    "saved policy mapping must be readable",
-                                ))?,
-                        );
-                    }
+                    .filter(|item| !requested.contains(&item.control_id()))
+                    .cloned()
+                    .collect()
+            };
+            policy.replace_mappings(next).map_err(invariant)?;
+            repository.save(&policy).await?;
+            let mut mappings = Vec::new();
+            if attach {
+                for id in &requested {
+                    mappings.push(
+                        context
+                            .policy_projections()
+                            .get_control_mapping(policy_id, *id)
+                            .await?
+                            .ok_or(RepositoryError::InvariantViolation(
+                                "saved policy mapping must be readable",
+                            ))?,
+                    );
                 }
-                Ok(Some(Ok(mappings)))
-            },
-        )
+            }
+            Ok(Some(Ok(mappings)))
+        })
         .await?;
     match outcome {
         None => Err(PolicyCommandError::Unavailable),
@@ -474,84 +461,81 @@ async fn change_control_policies(
     authorize(connection).map_err(|_| ControlPolicyCommandError::Unavailable)?;
     let response_policy_ids = requested.clone();
     let outcome = repository
-        .in_agent_connection_workspace_context(
-            connection.workspace_id,
-            connection.user_id,
-            connection.connection_id,
-            async move |context| {
-                if !context
-                    .existing_control_ids(&[control_id])
-                    .await?
-                    .contains(&control_id)
-                {
-                    return Ok(ControlPolicyOutcome::ControlUnavailable);
+        .in_unit_of_work(async move |unit_of_work| {
+            let workspace = unit_of_work.for_workspace(connection.workspace_id);
+            let context = &workspace;
+            if !context
+                .existing_control_ids(&[control_id])
+                .await?
+                .contains(&control_id)
+            {
+                return Ok(ControlPolicyOutcome::ControlUnavailable);
+            }
+
+            let policy_repository = context.policies();
+            let mut lock_order = requested.clone();
+            lock_order.sort_unstable_by_key(|id| Uuid::from(*id));
+            let mut policies = Vec::with_capacity(lock_order.len());
+            let mut unknown = Vec::new();
+            let mut archived = Vec::new();
+            let mut invalid = Vec::new();
+
+            for policy_id in lock_order {
+                let Some(policy) = policy_repository.get(policy_id).await? else {
+                    unknown.push(policy_id);
+                    continue;
+                };
+                if policy.archived_at().is_some() {
+                    archived.push(policy_id);
+                    continue;
                 }
+                let mapped = policy
+                    .mappings()
+                    .iter()
+                    .any(|mapping| mapping.control_id() == control_id);
+                if (attach && mapped) || (!attach && !mapped) {
+                    invalid.push(policy_id);
+                }
+                policies.push(policy);
+            }
 
-                let policy_repository = context.policies();
-                let mut lock_order = requested.clone();
-                lock_order.sort_unstable_by_key(|id| Uuid::from(*id));
-                let mut policies = Vec::with_capacity(lock_order.len());
-                let mut unknown = Vec::new();
-                let mut archived = Vec::new();
-                let mut invalid = Vec::new();
+            if !unknown.is_empty()
+                || !archived.is_empty()
+                || !invalid.is_empty()
+                || has_policy_duplicates(&requested)
+            {
+                return Ok(ControlPolicyOutcome::Rejected {
+                    unknown,
+                    archived,
+                    invalid,
+                });
+            }
 
-                for policy_id in lock_order {
-                    let Some(policy) = policy_repository.get(policy_id).await? else {
-                        unknown.push(policy_id);
-                        continue;
-                    };
-                    if policy.archived_at().is_some() {
-                        archived.push(policy_id);
-                        continue;
-                    }
-                    let mapped = policy
+            for mut policy in policies {
+                let next = if attach {
+                    policy
                         .mappings()
                         .iter()
-                        .any(|mapping| mapping.control_id() == control_id);
-                    if (attach && mapped) || (!attach && !mapped) {
-                        invalid.push(policy_id);
-                    }
-                    policies.push(policy);
-                }
+                        .cloned()
+                        .chain(std::iter::once(PolicyControlMappingState::new(
+                            control_id,
+                            Utc::now(),
+                        )))
+                        .collect()
+                } else {
+                    policy
+                        .mappings()
+                        .iter()
+                        .filter(|mapping| mapping.control_id() != control_id)
+                        .cloned()
+                        .collect()
+                };
+                policy.replace_mappings(next).map_err(invariant)?;
+                policy_repository.save(&policy).await?;
+            }
 
-                if !unknown.is_empty()
-                    || !archived.is_empty()
-                    || !invalid.is_empty()
-                    || has_policy_duplicates(&requested)
-                {
-                    return Ok(ControlPolicyOutcome::Rejected {
-                        unknown,
-                        archived,
-                        invalid,
-                    });
-                }
-
-                for mut policy in policies {
-                    let next = if attach {
-                        policy
-                            .mappings()
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(PolicyControlMappingState::new(
-                                control_id,
-                                Utc::now(),
-                            )))
-                            .collect()
-                    } else {
-                        policy
-                            .mappings()
-                            .iter()
-                            .filter(|mapping| mapping.control_id() != control_id)
-                            .cloned()
-                            .collect()
-                    };
-                    policy.replace_mappings(next).map_err(invariant)?;
-                    policy_repository.save(&policy).await?;
-                }
-
-                Ok(ControlPolicyOutcome::Changed)
-            },
-        )
+            Ok(ControlPolicyOutcome::Changed)
+        })
         .await?;
 
     match outcome {

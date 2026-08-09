@@ -47,7 +47,7 @@ impl RedeemPolicyDocumentUploadGrantHandler {
     ) -> Result<RedeemedPolicyDocumentUploadGrant, PolicyDocumentUploadGrantHandlerError> {
         let outcome = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 if !context
                     .policy_is_active(
                         command.authority.workspace_id(),

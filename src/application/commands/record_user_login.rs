@@ -31,7 +31,7 @@ impl RecordUserLoginHandler {
     ) -> Result<User, RecordUserLoginError> {
         let outcome = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.users();
                 let Some(mut user) = repository.get(command.user_id).await? else {
                     return Ok(LoginOutcome::Unavailable);

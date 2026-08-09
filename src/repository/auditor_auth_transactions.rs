@@ -3,15 +3,15 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use super::{Error, TransactionContext};
+use super::{Error, UnitOfWork};
 use crate::domain::{AuditorAuthTransaction, Sha256Digest};
 
 /// Complete-snapshot persistence for the one-use auditor authentication transaction.
 pub struct AuditorAuthTransactionRepository<'a> {
-    context: &'a TransactionContext<'a>,
+    context: &'a UnitOfWork<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn auditor_auth_transactions(&'a self) -> AuditorAuthTransactionRepository<'a> {
         AuditorAuthTransactionRepository { context: self }
     }

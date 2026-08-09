@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::{Document, DocumentIdentity, DocumentUploadStatus, UserId, WorkspaceId};
 
-use super::{Error, Postgres, TransactionContext, WorkspaceTransactionContext};
+use super::{Error, Postgres, UnitOfWork, WorkspaceRepositories};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedDocumentUploadWork {
@@ -99,11 +99,11 @@ WHERE d.id = $1
 /// Complete-snapshot persistence for the document aggregate. Transactional
 /// reads retain a row lock so scan and finalization deliveries race safely.
 pub struct DocumentRepository<'a> {
-    context: &'a TransactionContext<'a>,
+    context: &'a UnitOfWork<'a>,
 }
 
 pub struct WorkspaceDocumentRepository<'a> {
-    context: &'a WorkspaceTransactionContext<'a>,
+    context: &'a WorkspaceRepositories<'a>,
 }
 
 /// Private persistence shape for a complete document snapshot.
@@ -153,13 +153,13 @@ impl DocumentRecord {
     }
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn documents(&'a self) -> WorkspaceDocumentRepository<'a> {
         WorkspaceDocumentRepository { context: self }
     }
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn documents(&'a self) -> DocumentRepository<'a> {
         DocumentRepository { context: self }
     }
@@ -227,7 +227,7 @@ FROM documents WHERE id = $1 AND workspace_id = $2 AND owner_type = $3 AND owner
 
     pub async fn save(&self, document: &Document) -> Result<(), Error> {
         save_workspace_document_snapshot(
-            &self.context.transaction,
+            self.context.transaction,
             self.context.workspace_id,
             document,
         )
@@ -351,21 +351,18 @@ mod tests {
         .expect("test document is valid");
         let object_key = document.object_key.clone();
         let result = postgres
-            .in_agent_connection_workspace_context(
-                workspace.workspace_id,
-                workspace.user_id,
-                workspace.agent_connection_id,
-                async move |context| {
-                    context.documents().save(&document).await?;
-                    context
-                        .append_outbox_message(&NewOutboxMessage::new(
-                            TopicName::new(MESSAGE_BUS_TOPIC),
-                            IntegrationMessage::scan_document(identity, object_key, None, None),
-                        ))
-                        .await?;
-                    Err::<(), _>(Error::InvariantViolation("force transaction rollback"))
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace_repositories = unit_of_work.for_workspace(workspace.workspace_id);
+                let context = &workspace_repositories;
+                context.documents().save(&document).await?;
+                context
+                    .append_outbox_message(&NewOutboxMessage::new(
+                        TopicName::new(MESSAGE_BUS_TOPIC),
+                        IntegrationMessage::scan_document(identity, object_key, None, None),
+                    ))
+                    .await?;
+                Err::<(), _>(Error::InvariantViolation("force transaction rollback"))
+            })
             .await;
         assert!(result.is_err());
 

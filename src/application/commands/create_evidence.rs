@@ -64,19 +64,15 @@ impl CreateEvidenceHandler {
         );
         let evidence = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    context.evidence().save(&evidence).await?;
-                    context.evidence_projections().get(id).await?.ok_or(
-                        RepositoryError::InvariantViolation(
-                            "created evidence must be readable in its transaction",
-                        ),
-                    )
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                workspace.evidence().save(&evidence).await?;
+                workspace.evidence_projections().get(id).await?.ok_or(
+                    RepositoryError::InvariantViolation(
+                        "created evidence must be readable in its transaction",
+                    ),
+                )
+            })
             .await?;
         Ok(CreatedEvidence { evidence })
     }

@@ -65,71 +65,64 @@ impl MapControlToEvidenceHandler {
 
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    if !context.controls_exist(&[control_id]).await? {
-                        return Ok(MapOutcome::ControlNotFound);
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                if !context.controls_exist(&[control_id]).await? {
+                    return Ok(MapOutcome::ControlNotFound);
+                }
+                let repository = context.evidence();
+                let mut evidence = Vec::<Evidence>::new();
+                for evidence_id in lock_order {
+                    if let Some(aggregate) = repository.get(evidence_id).await? {
+                        evidence.push(aggregate);
                     }
-                    let repository = context.evidence();
-                    let mut evidence = Vec::<Evidence>::new();
-                    for evidence_id in lock_order {
-                        if let Some(aggregate) = repository.get(evidence_id).await? {
-                            evidence.push(aggregate);
-                        }
-                    }
-                    let unknown = requested_ids
-                        .iter()
-                        .copied()
-                        .filter(|id| !evidence.iter().any(|item| item.id() == *id))
-                        .collect::<Vec<_>>();
-                    let already_mapped = requested_ids
-                        .iter()
-                        .copied()
-                        .filter(|id| {
-                            evidence.iter().any(|item| {
-                                item.id() == *id
-                                    && item
-                                        .mappings()
-                                        .iter()
-                                        .any(|mapping| mapping.control_id() == control_id)
-                            })
+                }
+                let unknown = requested_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !evidence.iter().any(|item| item.id() == *id))
+                    .collect::<Vec<_>>();
+                let already_mapped = requested_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        evidence.iter().any(|item| {
+                            item.id() == *id
+                                && item
+                                    .mappings()
+                                    .iter()
+                                    .any(|mapping| mapping.control_id() == control_id)
                         })
-                        .collect::<Vec<_>>();
-                    if !unknown.is_empty() || !already_mapped.is_empty() {
-                        return Ok(MapOutcome::Rejected {
-                            unknown,
-                            already_mapped,
-                        });
-                    }
-                    for mut item in evidence {
-                        let rationale = rationale_by_evidence.get(&item.id()).ok_or(
-                            RepositoryError::InvariantViolation(
-                                "evidence mapping rationale must be present",
-                            ),
-                        )?;
-                        let mut mappings = item.mappings().to_vec();
-                        mappings.push(
-                            EvidenceControlMappingState::new(
-                                control_id,
-                                rationale.clone(),
-                                Utc::now(),
-                            )
+                    })
+                    .collect::<Vec<_>>();
+                if !unknown.is_empty() || !already_mapped.is_empty() {
+                    return Ok(MapOutcome::Rejected {
+                        unknown,
+                        already_mapped,
+                    });
+                }
+                for mut item in evidence {
+                    let rationale = rationale_by_evidence.get(&item.id()).ok_or(
+                        RepositoryError::InvariantViolation(
+                            "evidence mapping rationale must be present",
+                        ),
+                    )?;
+                    let mut mappings = item.mappings().to_vec();
+                    mappings.push(
+                        EvidenceControlMappingState::new(control_id, rationale.clone(), Utc::now())
                             .into_result()
                             .map_err(|_| {
                                 RepositoryError::InvariantViolation("evidence mapping is invalid")
                             })?,
-                        );
-                        item.replace_mappings(mappings).map_err(|_| {
-                            RepositoryError::InvariantViolation("evidence mappings are invalid")
-                        })?;
-                        repository.save(&item).await?;
-                    }
-                    Ok(MapOutcome::Mapped(requested_ids))
-                },
-            )
+                    );
+                    item.replace_mappings(mappings).map_err(|_| {
+                        RepositoryError::InvariantViolation("evidence mappings are invalid")
+                    })?;
+                    repository.save(&item).await?;
+                }
+                Ok(MapOutcome::Mapped(requested_ids))
+            })
             .await?;
 
         match outcome {

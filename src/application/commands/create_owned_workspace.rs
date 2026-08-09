@@ -34,7 +34,7 @@ impl CreateOwnedWorkspaceHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<WorkspaceWithRole, CreateOwnedWorkspaceError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.workspaces();
                 if let Some(existing) = repository.get_for_member(command.actor_user_id).await? {
                     if existing.id() != command.workspace_id {

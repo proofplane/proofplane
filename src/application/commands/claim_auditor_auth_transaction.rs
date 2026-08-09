@@ -37,7 +37,7 @@ impl ClaimAuditorAuthTransactionHandler {
         }
         let digest = Sha256Digest::digest(command.state.expose_secret().as_bytes());
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let Some(mut transaction) = context.auditor_auth_transactions().get(digest).await?
                 else {
                     return Ok(None);

@@ -17,5 +17,11 @@ invariants, read models, and asynchronous contracts independent.
   no runtime handler registry or service locator.
 - Domain events are explicit transition results and are not replayed to
   reconstruct aggregates.
+- A unit of work owns transaction lifetime only. Workspace scoping is applied
+  separately when obtaining aggregate repositories, while ordinary read-side
+  handlers call workspace-scoped projection repositories directly.
+- Authentication and authorization remain application concerns; repository
+  APIs receive workspace identity only where it is required for tenant-safe
+  SQL filtering.
 - Existing asynchronous document processing remains at-least-once and workers
   retain compatibility with queued legacy messages during the cutover.

@@ -66,77 +66,74 @@ impl IssueAgentEvidenceUploadGrantHandler {
         let encryptor = self.encryptor.clone();
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    if context
-                        .evidence_projections()
-                        .get(command.evidence_id)
-                        .await?
-                        .is_none()
-                    {
-                        return Ok(IssueOutcome::Unavailable);
-                    }
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                if context
+                    .evidence_projections()
+                    .get(command.evidence_id)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(IssueOutcome::Unavailable);
+                }
 
-                    let upload_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
-                    let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
-                    let issued_at = Utc::now();
-                    let Ok(ttl) = chrono::Duration::from_std(GRANT_TTL) else {
-                        return Ok(IssueOutcome::Internal);
-                    };
-                    let expires_at = issued_at + ttl;
-                    let issued = match encryptor.encrypt(
-                        RegisteredClaims {
-                            subject: Uuid::from(command.connection.user_id),
-                            token_id: Uuid::from(upload_id),
-                            expires_at,
-                        },
-                        &AgentEvidenceUploadGrantClaims::new(
-                            upload_id.into(),
-                            command.connection.workspace_id.into(),
-                            command.evidence_id.into(),
-                            submission_id.into(),
-                            command.connection.user_id.into(),
-                            command.connection.connection_id.into(),
-                        ),
-                    ) {
-                        Ok(issued) => issued,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    let grant = match AgentEvidenceUploadGrant::issue(
-                        upload_id,
-                        submission_id,
-                        command.connection.workspace_id,
-                        command.evidence_id,
-                        command.coverage,
-                        command.declaration,
-                        command.connection.user_id,
-                        command.connection.connection_id,
-                        issued_at,
-                        issued.expires_at,
-                    ) {
-                        Ok(grant) => grant,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    let repository = context.agent_evidence_upload_grants();
-                    repository.save(&grant).await?;
-                    let grant = repository
-                        .get(grant.id(), grant.workspace_id())
-                        .await?
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "saved machine upload grant must be readable",
-                        ))?;
+                let upload_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
+                let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
+                let issued_at = Utc::now();
+                let Ok(ttl) = chrono::Duration::from_std(GRANT_TTL) else {
+                    return Ok(IssueOutcome::Internal);
+                };
+                let expires_at = issued_at + ttl;
+                let issued = match encryptor.encrypt(
+                    RegisteredClaims {
+                        subject: Uuid::from(command.connection.user_id),
+                        token_id: Uuid::from(upload_id),
+                        expires_at,
+                    },
+                    &AgentEvidenceUploadGrantClaims::new(
+                        upload_id.into(),
+                        command.connection.workspace_id.into(),
+                        command.evidence_id.into(),
+                        submission_id.into(),
+                        command.connection.user_id.into(),
+                        command.connection.connection_id.into(),
+                    ),
+                ) {
+                    Ok(issued) => issued,
+                    Err(_) => return Ok(IssueOutcome::Internal),
+                };
+                let grant = match AgentEvidenceUploadGrant::issue(
+                    upload_id,
+                    submission_id,
+                    command.connection.workspace_id,
+                    command.evidence_id,
+                    command.coverage,
+                    command.declaration,
+                    command.connection.user_id,
+                    command.connection.connection_id,
+                    issued_at,
+                    issued.expires_at,
+                ) {
+                    Ok(grant) => grant,
+                    Err(_) => return Ok(IssueOutcome::Internal),
+                };
+                let repository = context.agent_evidence_upload_grants();
+                repository.save(&grant).await?;
+                let grant = repository
+                    .get(grant.id(), grant.workspace_id())
+                    .await?
+                    .ok_or(crate::repository::Error::InvariantViolation(
+                        "saved machine upload grant must be readable",
+                    ))?;
 
-                    Ok(IssueOutcome::Issued(Box::new(
-                        IssuedAgentEvidenceUploadGrant {
-                            grant,
-                            credential: SecretString::from(issued.token),
-                        },
-                    )))
-                },
-            )
+                Ok(IssueOutcome::Issued(Box::new(
+                    IssuedAgentEvidenceUploadGrant {
+                        grant,
+                        credential: SecretString::from(issued.token),
+                    },
+                )))
+            })
             .await?;
 
         match outcome {

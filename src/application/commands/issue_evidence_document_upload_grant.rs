@@ -93,89 +93,86 @@ impl IssueEvidenceDocumentUploadGrantHandler {
         let public_api_base_url = self.public_api_base_url.clone();
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    if context
-                        .evidence_projections()
-                        .get(command.evidence_id)
-                        .await?
-                        .is_none()
-                    {
-                        return Ok(IssueOutcome::Unavailable);
-                    }
-                    let issued_at = Utc::now();
-                    let Ok(ttl) = chrono::Duration::from_std(GRANT_TTL) else {
-                        return Ok(IssueOutcome::Internal);
-                    };
-                    let expires_at = issued_at + ttl;
-                    let grant_id = DocumentUploadGrantId::from(Uuid::new_v4());
-                    let issued = match encryptor.encrypt(
-                        RegisteredClaims {
-                            subject: command.connection.user_id.into(),
-                            token_id: grant_id.into(),
-                            expires_at,
-                        },
-                        &EvidenceDocumentUploadGrantClaims::new(
-                            grant_id.into(),
-                            command.connection.workspace_id.into(),
-                            command.evidence_id.into(),
-                            command.coverage.valid_from,
-                            command.coverage.valid_until,
-                            command.connection.user_id.into(),
-                            command.connection.connection_id.into(),
-                        ),
-                    ) {
-                        Ok(issued) => issued,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    let grant = match EvidenceDocumentUploadGrant::issue(
-                        grant_id,
-                        command.connection.workspace_id,
-                        command.evidence_id,
-                        command.coverage,
-                        command.connection.user_id,
-                        command.connection.connection_id,
-                        issued_at,
-                        issued.expires_at,
-                    ) {
-                        Ok(grant) => grant,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    let mut url = match public_api_base_url.join("evidence-document-uploads") {
-                        Ok(url) => url,
-                        Err(_) => return Ok(IssueOutcome::Internal),
-                    };
-                    url.query_pairs_mut().append_pair("token", &issued.token);
-                    let repository = context.evidence_document_upload_grants();
-                    repository.save(&grant).await?;
-                    let grant = repository
-                        .get(grant.id(), grant.workspace_id())
-                        .await?
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "saved evidence human upload grant must be readable",
-                        ))?;
-                    Ok(IssueOutcome::Issued(Box::new(
-                        IssuedEvidenceDocumentUploadGrant {
-                            url,
-                            expires_at: issued.expires_at,
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                if context
+                    .evidence_projections()
+                    .get(command.evidence_id)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(IssueOutcome::Unavailable);
+                }
+                let issued_at = Utc::now();
+                let Ok(ttl) = chrono::Duration::from_std(GRANT_TTL) else {
+                    return Ok(IssueOutcome::Internal);
+                };
+                let expires_at = issued_at + ttl;
+                let grant_id = DocumentUploadGrantId::from(Uuid::new_v4());
+                let issued = match encryptor.encrypt(
+                    RegisteredClaims {
+                        subject: command.connection.user_id.into(),
+                        token_id: grant_id.into(),
+                        expires_at,
+                    },
+                    &EvidenceDocumentUploadGrantClaims::new(
+                        grant_id.into(),
+                        command.connection.workspace_id.into(),
+                        command.evidence_id.into(),
+                        command.coverage.valid_from,
+                        command.coverage.valid_until,
+                        command.connection.user_id.into(),
+                        command.connection.connection_id.into(),
+                    ),
+                ) {
+                    Ok(issued) => issued,
+                    Err(_) => return Ok(IssueOutcome::Internal),
+                };
+                let grant = match EvidenceDocumentUploadGrant::issue(
+                    grant_id,
+                    command.connection.workspace_id,
+                    command.evidence_id,
+                    command.coverage,
+                    command.connection.user_id,
+                    command.connection.connection_id,
+                    issued_at,
+                    issued.expires_at,
+                ) {
+                    Ok(grant) => grant,
+                    Err(_) => return Ok(IssueOutcome::Internal),
+                };
+                let mut url = match public_api_base_url.join("evidence-document-uploads") {
+                    Ok(url) => url,
+                    Err(_) => return Ok(IssueOutcome::Internal),
+                };
+                url.query_pairs_mut().append_pair("token", &issued.token);
+                let repository = context.evidence_document_upload_grants();
+                repository.save(&grant).await?;
+                let grant = repository
+                    .get(grant.id(), grant.workspace_id())
+                    .await?
+                    .ok_or(crate::repository::Error::InvariantViolation(
+                        "saved evidence human upload grant must be readable",
+                    ))?;
+                Ok(IssueOutcome::Issued(Box::new(
+                    IssuedEvidenceDocumentUploadGrant {
+                        url,
+                        expires_at: issued.expires_at,
+                        evidence_id: grant.evidence_id(),
+                        coverage: grant.coverage(),
+                        audit: EvidenceDocumentUploadGrantAuditContext {
+                            workspace_id: grant.workspace_id(),
                             evidence_id: grant.evidence_id(),
                             coverage: grant.coverage(),
-                            audit: EvidenceDocumentUploadGrantAuditContext {
-                                workspace_id: grant.workspace_id(),
-                                evidence_id: grant.evidence_id(),
-                                coverage: grant.coverage(),
-                                issued_by_user_id: grant.issued_by_user_id(),
-                                issued_via: EvidenceDocumentUploadGrantIssuer::AgentConnection(
-                                    grant.issued_via_agent_connection_id(),
-                                ),
-                            },
+                            issued_by_user_id: grant.issued_by_user_id(),
+                            issued_via: EvidenceDocumentUploadGrantIssuer::AgentConnection(
+                                grant.issued_via_agent_connection_id(),
+                            ),
                         },
-                    )))
-                },
-            )
+                    },
+                )))
+            })
             .await?;
 
         match outcome {

@@ -134,11 +134,8 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_policy_document_for_agent_upload(policy_id, document_id)
-                    .await
-            })
+            .policy_projections(workspace_id)
+            .get_agent_upload_document(policy_id, document_id)
             .await?)
     }
 
@@ -212,9 +209,8 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.get_current_policy_document(policy_id).await
-            })
+            .policy_projections(connection.workspace_id)
+            .get_current_document(policy_id)
             .await?)
     }
 

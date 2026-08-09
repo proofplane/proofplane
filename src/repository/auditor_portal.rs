@@ -13,12 +13,12 @@ use crate::{
         AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
         AuditorPortalPolicyDocument, AuditorPortalSubmission, ControlSummary, EvidenceDetail,
     },
-    repository::WorkspaceReadContext,
+    repository::WorkspaceClient,
 };
 
 use super::Error;
 
-impl WorkspaceReadContext {
+impl WorkspaceClient {
     pub(super) async fn load_auditor_portal_policies(
         &self,
     ) -> Result<Vec<AuditorPortalPolicy>, Error> {
@@ -70,8 +70,7 @@ ORDER BY lower(p.name), p.id, lower(c.code), c.id
         period_end: DateTime<Utc>,
     ) -> Result<Vec<AuditorPortalControl>, Error> {
         let mut controls = self
-            .control_projections()
-            .list()
+            .load_control_details()
             .await?
             .into_iter()
             .map(AuditorPortalControl::from)

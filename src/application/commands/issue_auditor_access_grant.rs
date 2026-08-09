@@ -77,37 +77,34 @@ impl IssueAuditorAccessGrantHandler {
         let period = command.period;
         let grant = self
             .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let grant = AuditorAccessGrant::issue(
-                        grant_id,
-                        connection.workspace_id,
-                        auditor_email,
-                        Sha256Digest::from_bytes(*issued.digest.as_bytes()),
-                        connection.user_id,
-                        connection.connection_id,
-                        issued_at,
-                        expires_at,
-                        period,
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(connection.workspace_id);
+                let context = &workspace;
+                let grant = AuditorAccessGrant::issue(
+                    grant_id,
+                    connection.workspace_id,
+                    auditor_email,
+                    Sha256Digest::from_bytes(*issued.digest.as_bytes()),
+                    connection.user_id,
+                    connection.connection_id,
+                    issued_at,
+                    expires_at,
+                    period,
+                )
+                .map_err(|_| {
+                    crate::repository::Error::InvariantViolation(
+                        "auditor access grant issuance must be valid",
                     )
-                    .map_err(|_| {
-                        crate::repository::Error::InvariantViolation(
-                            "auditor access grant issuance must be valid",
-                        )
-                    })?;
-                    let repository = context.auditor_access_grants();
-                    repository.save(&grant).await?;
-                    repository
-                        .get(grant.id, connection.workspace_id)
-                        .await?
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "saved auditor access grant must be readable",
-                        ))
-                },
-            )
+                })?;
+                let repository = context.auditor_access_grants();
+                repository.save(&grant).await?;
+                repository
+                    .get(grant.id, connection.workspace_id)
+                    .await?
+                    .ok_or(crate::repository::Error::InvariantViolation(
+                        "saved auditor access grant must be readable",
+                    ))
+            })
             .await?;
 
         Ok(IssuedAuditorAccessGrant {

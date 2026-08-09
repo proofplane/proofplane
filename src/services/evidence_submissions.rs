@@ -79,9 +79,8 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.evidence_submission_projections().get(id).await
-            })
+            .evidence_submission_projections(connection.workspace_id)
+            .get(id)
             .await?)
     }
 
@@ -92,12 +91,8 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .evidence_submission_projections()
-                    .list_for_evidence(evidence_id)
-                    .await
-            })
+            .evidence_submission_projections(connection.workspace_id)
+            .list_for_evidence(evidence_id)
             .await?)
     }
 
@@ -109,12 +104,8 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .evidence_submission_projections()
-                    .list_for_coverage(evidence_id, coverage)
-                    .await
-            })
+            .evidence_submission_projections(connection.workspace_id)
+            .list_for_coverage(evidence_id, coverage)
             .await?)
     }
 
@@ -125,12 +116,8 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .evidence_submission_projections()
-                    .latest_for_evidence(evidence_id)
-                    .await
-            })
+            .evidence_submission_projections(connection.workspace_id)
+            .latest_for_evidence(evidence_id)
             .await?)
     }
 
@@ -201,11 +188,8 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_agent_upload_document(submission_id, document_id)
-                    .await
-            })
+            .evidence_submission_projections(workspace_id)
+            .get_agent_upload_document(submission_id, document_id)
             .await?)
     }
 

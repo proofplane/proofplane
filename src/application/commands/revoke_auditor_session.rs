@@ -31,7 +31,7 @@ impl RevokeAuditorSessionHandler {
     ) -> Result<RevokeAuditorSessionResult, RevokeAuditorSessionError> {
         let digest = Sha256Digest::digest(command.raw_session.expose_secret().as_bytes());
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let Some(mut session) = context.auditor_sessions().get(digest).await? else {
                     return Ok(None);
                 };

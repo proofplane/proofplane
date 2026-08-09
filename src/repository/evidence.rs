@@ -8,7 +8,7 @@ use crate::{
         EvidenceStatus, WorkspaceId,
     },
     projections::{ControlSummary, EvidenceControlMapping, EvidenceDetail},
-    repository::{WorkspaceReadContext, WorkspaceTransactionContext},
+    repository::{WorkspaceClient, WorkspaceRepositories},
 };
 
 use super::{
@@ -16,12 +16,12 @@ use super::{
     Error,
 };
 
-/// Transaction-scoped complete-snapshot repository for the evidence aggregate.
+/// Workspace-scoped complete-snapshot repository for the evidence aggregate.
 pub struct EvidenceRepository<'a> {
-    context: &'a WorkspaceTransactionContext<'a>,
+    context: &'a WorkspaceRepositories<'a>,
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn evidence(&'a self) -> EvidenceRepository<'a> {
         EvidenceRepository { context: self }
     }
@@ -45,11 +45,11 @@ impl EvidenceRepository<'_> {
     pub async fn save(&self, evidence: &Evidence) -> Result<(), Error> {
         if evidence.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
-                "evidence workspace must match its transaction",
+                "evidence workspace must match its repository scope",
             ));
         }
         let record = EvidenceRecord::from(evidence);
-        save_workspace_snapshot(&self.context.transaction, record.as_workspace_snapshot()).await?;
+        save_workspace_snapshot(self.context.transaction, record.as_workspace_snapshot()).await?;
         self.context
             .transaction
             .execute(
@@ -67,7 +67,7 @@ impl EvidenceRepository<'_> {
     }
 }
 
-impl WorkspaceTransactionContext<'_> {
+impl WorkspaceRepositories<'_> {
     pub(super) async fn load_evidence_control_mapping(
         &self,
         evidence_id: EvidenceId,
@@ -204,7 +204,7 @@ fn mapping_from_row(row: Row) -> Result<EvidenceControlMappingState, Error> {
     .map_err(|_| Error::InvariantViolation("persisted evidence mapping is invalid"))
 }
 
-impl WorkspaceTransactionContext<'_> {
+impl WorkspaceRepositories<'_> {
     pub(super) async fn load_evidence_detail(
         &self,
         id: EvidenceId,
@@ -235,7 +235,7 @@ FOR KEY SHARE
     }
 }
 
-impl WorkspaceReadContext {
+impl WorkspaceClient {
     pub(super) async fn load_evidence_detail(
         &self,
         id: EvidenceId,
@@ -356,17 +356,14 @@ mod tests {
             .unwrap();
 
         postgres
-            .in_agent_connection_workspace_context(
-                workspace.workspace_id,
-                workspace.user_id,
-                workspace.agent_connection_id,
-                async |context| {
-                    context.evidence().save(&aggregate).await?;
-                    let rehydrated = context.evidence().get(evidence_id).await?.unwrap();
-                    assert_eq!(rehydrated, aggregate);
-                    Ok(())
-                },
-            )
+            .in_unit_of_work(async |unit_of_work| {
+                let workspace_repositories = unit_of_work.for_workspace(workspace.workspace_id);
+                let context = &workspace_repositories;
+                context.evidence().save(&aggregate).await?;
+                let rehydrated = context.evidence().get(evidence_id).await?.unwrap();
+                assert_eq!(rehydrated, aggregate);
+                Ok(())
+            })
             .await
             .unwrap();
     }

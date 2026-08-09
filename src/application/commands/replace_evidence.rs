@@ -53,30 +53,27 @@ impl ReplaceEvidenceHandler {
         let evidence_id = command.evidence_id;
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    let repository = context.evidence();
-                    let Some(mut evidence) = repository.get(evidence_id).await? else {
-                        return Ok(None);
-                    };
-                    evidence
-                        .replace(definition, command.status, Utc::now())
-                        .map_err(|error| match error {
-                            EvidenceError::InvalidRehydration
-                            | EvidenceError::InvalidReplacementTime => {
-                                RepositoryError::InvariantViolation("evidence snapshot is invalid")
-                            }
-                            EvidenceError::DuplicateControlMapping(_) => {
-                                RepositoryError::InvariantViolation("evidence mappings are invalid")
-                            }
-                        })?;
-                    repository.save(&evidence).await?;
-                    context.evidence_projections().get(evidence_id).await
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                let repository = context.evidence();
+                let Some(mut evidence) = repository.get(evidence_id).await? else {
+                    return Ok(None);
+                };
+                evidence
+                    .replace(definition, command.status, Utc::now())
+                    .map_err(|error| match error {
+                        EvidenceError::InvalidRehydration
+                        | EvidenceError::InvalidReplacementTime => {
+                            RepositoryError::InvariantViolation("evidence snapshot is invalid")
+                        }
+                        EvidenceError::DuplicateControlMapping(_) => {
+                            RepositoryError::InvariantViolation("evidence mappings are invalid")
+                        }
+                    })?;
+                repository.save(&evidence).await?;
+                context.evidence_projections().get(evidence_id).await
+            })
             .await?;
         outcome
             .map(|evidence| ReplacedEvidence { evidence })

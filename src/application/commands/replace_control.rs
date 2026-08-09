@@ -58,43 +58,40 @@ impl ReplaceControlHandler {
 
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    if !context
-                        .framework_requirements_exist(&requirement_ids)
-                        .await?
-                    {
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                if !context
+                    .framework_requirements_exist(&requirement_ids)
+                    .await?
+                {
+                    return Ok(ReplaceOutcome::InvalidFrameworkRequirementReferences);
+                }
+                let repository = context.controls();
+                let Some(mut control) = repository.get(control_id).await? else {
+                    return Ok(ReplaceOutcome::Unavailable);
+                };
+                match control.replace(definition, requirement_ids, Utc::now()) {
+                    Ok(()) => {}
+                    Err(ControlError::DuplicateFrameworkRequirementReference(_)) => {
                         return Ok(ReplaceOutcome::InvalidFrameworkRequirementReferences);
                     }
-                    let repository = context.controls();
-                    let Some(mut control) = repository.get(control_id).await? else {
-                        return Ok(ReplaceOutcome::Unavailable);
-                    };
-                    match control.replace(definition, requirement_ids, Utc::now()) {
-                        Ok(()) => {}
-                        Err(ControlError::DuplicateFrameworkRequirementReference(_)) => {
-                            return Ok(ReplaceOutcome::InvalidFrameworkRequirementReferences);
-                        }
-                        Err(
-                            ControlError::InvalidRehydration | ControlError::InvalidReplacementTime,
-                        ) => {
-                            return Err(RepositoryError::InvariantViolation(
-                                "replacement control snapshot is invalid",
-                            ));
-                        }
+                    Err(
+                        ControlError::InvalidRehydration | ControlError::InvalidReplacementTime,
+                    ) => {
+                        return Err(RepositoryError::InvariantViolation(
+                            "replacement control snapshot is invalid",
+                        ));
                     }
-                    repository.save(&control).await?;
-                    let projection = context.control_projections().get(control_id).await?.ok_or(
-                        RepositoryError::InvariantViolation(
-                            "replaced control must be readable in its transaction",
-                        ),
-                    )?;
-                    Ok(ReplaceOutcome::Replaced(projection))
-                },
-            )
+                }
+                repository.save(&control).await?;
+                let projection = context.control_projections().get(control_id).await?.ok_or(
+                    RepositoryError::InvariantViolation(
+                        "replaced control must be readable in its transaction",
+                    ),
+                )?;
+                Ok(ReplaceOutcome::Replaced(projection))
+            })
             .await
             .map_err(ReplaceControlError::from)?;
 

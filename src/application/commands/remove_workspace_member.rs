@@ -29,7 +29,7 @@ impl RemoveWorkspaceMemberHandler {
     ) -> Result<WorkspaceId, RemoveWorkspaceMemberError> {
         let outcome = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.workspaces();
                 let Some(mut aggregate) = repository.get_for_member(command.actor_user_id).await?
                 else {

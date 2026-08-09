@@ -7,14 +7,14 @@ use crate::domain::{
     UserId, WorkspacePermission,
 };
 
-use super::{Error, TransactionContext};
+use super::{Error, UnitOfWork};
 
 /// Complete-snapshot persistence for OAuth authorization flows.
 pub struct OAuthAuthorizationFlowRepository<'a> {
-    context: &'a TransactionContext<'a>,
+    context: &'a UnitOfWork<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn oauth_authorization_flows(&'a self) -> OAuthAuthorizationFlowRepository<'a> {
         OAuthAuthorizationFlowRepository { context: self }
     }

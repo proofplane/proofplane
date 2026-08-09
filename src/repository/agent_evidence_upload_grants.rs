@@ -9,12 +9,12 @@ use crate::domain::{
 
 use super::{
     snapshot::{save_workspace_snapshot, workspace_snapshot_record},
-    Error, Postgres, WorkspaceTransactionContext,
+    Error, Postgres, WorkspaceRepositories,
 };
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
-    Transaction(&'a WorkspaceTransactionContext<'a>),
+    Transaction(&'a WorkspaceRepositories<'a>),
 }
 
 /// Persistence boundary for the machine-upload grant aggregate.
@@ -34,7 +34,7 @@ impl Postgres {
     }
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn agent_evidence_upload_grants(&'a self) -> AgentEvidenceUploadGrantRepository<'a> {
         AgentEvidenceUploadGrantRepository {
             connection: RepositoryConnection::Transaction(self),
@@ -76,11 +76,11 @@ impl AgentEvidenceUploadGrantRepository<'_> {
         };
         if grant.workspace_id() != context.workspace_id {
             return Err(Error::InvariantViolation(
-                "machine upload grant workspace must match its transaction",
+                "machine upload grant workspace must match its repository scope",
             ));
         }
         let record = GrantRecord::try_from(grant)?;
-        save_workspace_snapshot(&context.transaction, record.as_workspace_snapshot()).await
+        save_workspace_snapshot(context.transaction, record.as_workspace_snapshot()).await
     }
 }
 
@@ -282,15 +282,12 @@ mod tests {
         grant: AgentEvidenceUploadGrant,
     ) -> Result<(), Error> {
         postgres
-            .in_agent_connection_workspace_context(
-                workspace.workspace_id,
-                workspace.user_id,
-                workspace.agent_connection_id,
-                async move |context| {
-                    let repository = context.agent_evidence_upload_grants();
-                    repository.save(&grant).await
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace_repositories = unit_of_work.for_workspace(workspace.workspace_id);
+                let context = &workspace_repositories;
+                let repository = context.agent_evidence_upload_grants();
+                repository.save(&grant).await
+            })
             .await
     }
 
@@ -317,18 +314,15 @@ mod tests {
         let owner_workspace_id = owner.workspace_id;
 
         let round_tripped = postgres
-            .in_agent_connection_workspace_context(
-                owner.workspace_id,
-                owner.user_id,
-                owner.agent_connection_id,
-                async move |context| {
-                    let repository = context.agent_evidence_upload_grants();
-                    repository.save(&grant).await?;
-                    let reloaded = repository.get(grant_id, owner_workspace_id).await?;
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(owner.workspace_id);
+                let context = &workspace;
+                let repository = context.agent_evidence_upload_grants();
+                repository.save(&grant).await?;
+                let reloaded = repository.get(grant_id, owner_workspace_id).await?;
 
-                    Ok(reloaded == Some(grant))
-                },
-            )
+                Ok(reloaded == Some(grant))
+            })
             .await
             .expect("full-snapshot save completes");
         assert!(round_tripped);

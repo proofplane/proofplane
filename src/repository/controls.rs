@@ -13,7 +13,7 @@ use crate::{
         ControlDetail, ControlSummary, EvidenceControlMapping, FrameworkDetail,
         FrameworkRequirementDetail,
     },
-    repository::{Postgres, WorkspaceReadContext, WorkspaceTransactionContext},
+    repository::{Postgres, WorkspaceClient, WorkspaceRepositories},
 };
 
 use super::{
@@ -22,12 +22,12 @@ use super::{
     Error,
 };
 
-/// Transaction-scoped complete-snapshot repository for the control aggregate.
+/// Workspace-scoped complete-snapshot repository for the control aggregate.
 pub struct ControlRepository<'a> {
-    context: &'a WorkspaceTransactionContext<'a>,
+    context: &'a WorkspaceRepositories<'a>,
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn controls(&'a self) -> ControlRepository<'a> {
         ControlRepository { context: self }
     }
@@ -81,11 +81,11 @@ ORDER BY framework_requirement_id
     pub async fn save(&self, control: &Control) -> Result<(), Error> {
         if control.workspace_id() != self.context.workspace_id {
             return Err(Error::InvariantViolation(
-                "control workspace must match its transaction",
+                "control workspace must match its repository scope",
             ));
         }
         let record = ControlRecord::from(control);
-        save_workspace_snapshot(&self.context.transaction, record.as_workspace_snapshot())
+        save_workspace_snapshot(self.context.transaction, record.as_workspace_snapshot())
             .await
             .map_err(|error| match error {
                 Error::Database(error) => classify_db_error(error),
@@ -265,7 +265,7 @@ WHERE id = ANY($1)
     }
 }
 
-impl WorkspaceTransactionContext<'_> {
+impl WorkspaceRepositories<'_> {
     pub async fn framework_requirements_exist(
         &self,
         ids: &[FrameworkRequirementId],
@@ -328,7 +328,7 @@ ORDER BY fr.code
     }
 }
 
-impl WorkspaceReadContext {
+impl WorkspaceClient {
     pub(super) async fn load_control_details(&self) -> Result<Vec<ControlDetail>, Error> {
         let rows = self
             .client

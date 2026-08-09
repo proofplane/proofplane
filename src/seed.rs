@@ -150,7 +150,7 @@ async fn seed_local_owner(repository: &Postgres) -> Result<UserId, Error> {
         .is_none()
     {
         repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 context
                     .insert_workspace_membership(&NewWorkspaceMembership {
                         user_id: user.id,
@@ -238,68 +238,61 @@ SET user_id = EXCLUDED.user_id,
 
 async fn seed_evidence(
     repository: &Postgres,
-    connection: AgentConnectionContext,
+    _connection: AgentConnectionContext,
 ) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
     let seeds = demo_evidence()?;
-    let existing = repository
-        .in_workspace_context_read(workspace_id, async |context| {
-            context.evidence_projections().list().await
-        })
-        .await?;
+    let existing = repository.evidence_projections(workspace_id).list().await?;
 
     repository
-        .in_agent_connection_workspace_context(
-            workspace_id,
-            connection.user_id,
-            connection.connection_id,
-            async move |context| {
-                for seed in seeds {
-                    let existing_id = existing
-                        .iter()
-                        .find(|evidence| evidence.title == seed.title)
-                        .map(|evidence| evidence.id);
-                    let definition = EvidenceDefinition::new(
-                        seed.title,
-                        seed.description,
-                        seed.collection_instructions,
+        .in_unit_of_work(async move |unit_of_work| {
+            let workspace = unit_of_work.for_workspace(workspace_id);
+            let context = &workspace;
+            for seed in seeds {
+                let existing_id = existing
+                    .iter()
+                    .find(|evidence| evidence.title == seed.title)
+                    .map(|evidence| evidence.id);
+                let definition = EvidenceDefinition::new(
+                    seed.title,
+                    seed.description,
+                    seed.collection_instructions,
+                )
+                .into_result()
+                .map_err(|_| {
+                    crate::repository::Error::InvariantViolation(
+                        "seed evidence definition must be valid",
                     )
-                    .into_result()
-                    .map_err(|_| {
+                })?;
+                let evidence = context.evidence();
+                if let Some(existing_id) = existing_id {
+                    let mut aggregate = evidence.get(existing_id).await?.ok_or(
                         crate::repository::Error::InvariantViolation(
-                            "seed evidence definition must be valid",
-                        )
-                    })?;
-                    let evidence = context.evidence();
-                    if let Some(existing_id) = existing_id {
-                        let mut aggregate = evidence.get(existing_id).await?.ok_or(
+                            "listed seed evidence must be readable as an aggregate",
+                        ),
+                    )?;
+                    aggregate
+                        .replace(definition, seed.status, Utc::now())
+                        .map_err(|_| {
                             crate::repository::Error::InvariantViolation(
-                                "listed seed evidence must be readable as an aggregate",
-                            ),
-                        )?;
-                        aggregate
-                            .replace(definition, seed.status, Utc::now())
-                            .map_err(|_| {
-                                crate::repository::Error::InvariantViolation(
-                                    "seed evidence replacement must be valid",
-                                )
-                            })?;
-                        evidence.save(&aggregate).await?;
-                    } else {
-                        let aggregate = Evidence::define(
-                            EvidenceId::from(Uuid::new_v4()),
-                            workspace_id,
-                            definition,
-                            seed.status,
-                            Utc::now(),
-                        );
-                        evidence.save(&aggregate).await?;
-                    }
+                                "seed evidence replacement must be valid",
+                            )
+                        })?;
+                    evidence.save(&aggregate).await?;
+                } else {
+                    let aggregate = Evidence::define(
+                        EvidenceId::from(Uuid::new_v4()),
+                        workspace_id,
+                        definition,
+                        seed.status,
+                        Utc::now(),
+                    );
+                    evidence.save(&aggregate).await?;
                 }
+            }
 
-                Ok(())
-            },
-        )
+            Ok(())
+        })
         .await?;
 
     Ok(())

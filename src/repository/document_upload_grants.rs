@@ -7,7 +7,7 @@ use crate::{
         CoverageWindow, DocumentUploadGrantId,
         EvidenceDocumentUploadGrant as DomainEvidenceDocumentUploadGrant, WorkspaceId,
     },
-    repository::{TransactionContext, WorkspaceTransactionContext},
+    repository::{UnitOfWork, WorkspaceRepositories},
 };
 
 use super::{
@@ -16,15 +16,15 @@ use super::{
 };
 
 enum SnapshotConnection<'a> {
-    Transaction(&'a TransactionContext<'a>),
-    Workspace(&'a WorkspaceTransactionContext<'a>),
+    Transaction(&'a UnitOfWork<'a>),
+    Workspace(&'a WorkspaceRepositories<'a>),
 }
 
 pub struct EvidenceDocumentUploadGrantRepository<'a> {
     connection: SnapshotConnection<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn evidence_document_upload_grants(&'a self) -> EvidenceDocumentUploadGrantRepository<'a> {
         EvidenceDocumentUploadGrantRepository {
             connection: SnapshotConnection::Transaction(self),
@@ -32,7 +32,7 @@ impl<'a> TransactionContext<'a> {
     }
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn evidence_document_upload_grants(&'a self) -> EvidenceDocumentUploadGrantRepository<'a> {
         EvidenceDocumentUploadGrantRepository {
             connection: SnapshotConnection::Workspace(self),
@@ -74,10 +74,10 @@ impl EvidenceDocumentUploadGrantRepository<'_> {
             SnapshotConnection::Workspace(context) => {
                 if grant.workspace_id() != context.workspace_id {
                     return Err(Error::InvariantViolation(
-                        "evidence human upload grant workspace must match its transaction",
+                        "evidence human upload grant workspace must match its repository scope",
                     ));
                 }
-                &context.transaction
+                context.transaction
             }
         };
         let record = EvidenceGrantRecord::from(grant);

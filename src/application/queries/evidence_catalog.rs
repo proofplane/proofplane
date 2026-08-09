@@ -29,9 +29,8 @@ impl ListEvidenceHandler {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async |context| {
-                context.evidence_projections().list().await
-            })
+            .evidence_projections(query.connection.workspace_id)
+            .list()
             .await?)
     }
 }
@@ -59,9 +58,8 @@ impl GetEvidenceHandler {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context.evidence_projections().get(query.evidence_id).await
-            })
+            .evidence_projections(query.connection.workspace_id)
+            .get(query.evidence_id)
             .await?)
     }
 }
@@ -95,12 +93,8 @@ impl ListEvidenceControlMappingsHandler {
         }
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context
-                    .control_projections()
-                    .list_evidence_mappings(query.evidence_id)
-                    .await
-            })
+            .control_projections(query.connection.workspace_id)
+            .list_evidence_mappings(query.evidence_id)
             .await?)
     }
 }
@@ -134,12 +128,8 @@ impl ListControlEvidenceMappingsHandler {
         }
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context
-                    .control_projections()
-                    .list_evidence_for_control(query.control_id)
-                    .await
-            })
+            .control_projections(query.connection.workspace_id)
+            .list_evidence_for_control(query.control_id)
             .await?)
     }
 }

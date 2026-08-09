@@ -26,9 +26,8 @@ impl ListPoliciesHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async |context| {
-                context.policy_projections().list_catalog().await
-            })
+            .policy_projections(query.connection.workspace_id)
+            .list_catalog()
             .await?)
     }
 }
@@ -53,9 +52,8 @@ impl GetPolicyHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context.policy_projections().get(query.policy_id).await
-            })
+            .policy_projections(query.connection.workspace_id)
+            .get(query.policy_id)
             .await?)
     }
 }
@@ -80,12 +78,8 @@ impl ListControlPolicyMappingsHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .in_workspace_context_read(query.connection.workspace_id, async move |context| {
-                context
-                    .control_projections()
-                    .list_policies_for_control(query.control_id)
-                    .await
-            })
+            .control_projections(query.connection.workspace_id)
+            .list_policies_for_control(query.control_id)
             .await?)
     }
 }

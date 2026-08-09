@@ -6,14 +6,14 @@ use crate::{
     projections::WorkspaceDetails,
 };
 
-use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
+use super::{constraints::classify_db_error, Error, Postgres, UnitOfWork};
 
 /// Complete-snapshot persistence for a workspace and all of its memberships.
 pub struct WorkspaceRepository<'a> {
-    context: &'a TransactionContext<'a>,
+    context: &'a UnitOfWork<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn workspaces(&'a self) -> WorkspaceRepository<'a> {
         WorkspaceRepository { context: self }
     }

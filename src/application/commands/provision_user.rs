@@ -32,7 +32,7 @@ impl ProvisionUserHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<User, ProvisionUserError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.users();
                 let (user, changed) = match repository.get_by_auth0_sub(&command.auth0_sub).await? {
                     Some(mut user) => {

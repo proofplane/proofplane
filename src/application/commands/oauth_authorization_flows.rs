@@ -132,7 +132,7 @@ impl RequestOAuthAuthorizationHandler {
         )
         .map_err(|_| OAuthAuthorizationCommandError::Invalid)?;
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.oauth_authorization_flows();
                 if let Some(existing) = repository.get(flow.id()).await? {
                     if existing == flow {
@@ -157,7 +157,7 @@ impl AttachOAuthAuthorizationSubjectHandler {
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         let digest = Sha256Digest::digest(command.csrf_token.as_bytes());
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.oauth_authorization_flows();
                 let Some(mut flow) = repository.get_by_csrf_digest(digest).await? else {
                     return Ok(None);
@@ -182,7 +182,7 @@ impl CancelOAuthAuthorizationHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.oauth_authorization_flows();
                 let Some(mut flow) = repository.get(command.request_id).await? else {
                     return Ok(None);
@@ -205,7 +205,7 @@ impl ApproveOAuthAuthorizationHandler {
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         let code_digest = Sha256Digest::digest(command.code.as_bytes());
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.oauth_authorization_flows();
                 let Some(mut flow) = repository.get(command.request_id).await? else {
                     return Ok(None);
@@ -237,7 +237,7 @@ impl ConsumeOAuthAuthorizationCodeHandler {
     ) -> Result<OAuthAuthorizationCodeGrant, OAuthAuthorizationCommandError> {
         let digest = Sha256Digest::digest(command.code.as_bytes());
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.oauth_authorization_flows();
                 let Some(mut flow) = repository.get_by_code_digest(digest).await? else {
                     return Ok(None);

@@ -7,7 +7,7 @@ use crate::{
     projections::{WorkspaceDetails, WorkspaceWithRole},
 };
 
-use super::{constraints::classify_db_error, Error, Postgres, TransactionContext};
+use super::{constraints::classify_db_error, Error, Postgres, UnitOfWork};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewWorkspaceMembership {
@@ -16,7 +16,7 @@ pub struct NewWorkspaceMembership {
     pub role: WorkspaceRole,
 }
 
-impl TransactionContext<'_> {
+impl UnitOfWork<'_> {
     pub async fn get_membership_role(
         &self,
         workspace_id: WorkspaceId,

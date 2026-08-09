@@ -50,7 +50,7 @@ impl RedeemEvidenceDocumentUploadGrantHandler {
     ) -> Result<RedeemedEvidenceDocumentUploadGrant, EvidenceDocumentUploadGrantHandlerError> {
         let outcome = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.evidence_document_upload_grants();
                 let Some(mut grant) = repository
                     .get(command.authority.id(), command.authority.workspace_id())

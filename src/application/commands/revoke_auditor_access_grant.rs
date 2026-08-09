@@ -46,29 +46,26 @@ impl RevokeAuditorAccessGrantHandler {
         authorize(&command.connection)?;
         let connection = command.connection;
         self.repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let repository = context.auditor_access_grants();
-                    let Some(mut grant) = repository
-                        .get(command.grant_id, connection.workspace_id)
-                        .await?
-                    else {
-                        return Ok(None);
-                    };
-                    match grant.revoke(Utc::now()).map_err(|_| {
-                        crate::repository::Error::InvariantViolation(
-                            "auditor access grant revocation must be valid",
-                        )
-                    })? {
-                        AuditorAccessGrantRevocation::Revoked => repository.save(&grant).await?,
-                        AuditorAccessGrantRevocation::AlreadyRevoked => {}
-                    }
-                    Ok(Some(grant))
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(connection.workspace_id);
+                let context = &workspace;
+                let repository = context.auditor_access_grants();
+                let Some(mut grant) = repository
+                    .get(command.grant_id, connection.workspace_id)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                match grant.revoke(Utc::now()).map_err(|_| {
+                    crate::repository::Error::InvariantViolation(
+                        "auditor access grant revocation must be valid",
+                    )
+                })? {
+                    AuditorAccessGrantRevocation::Revoked => repository.save(&grant).await?,
+                    AuditorAccessGrantRevocation::AlreadyRevoked => {}
+                }
+                Ok(Some(grant))
+            })
             .await?
             .ok_or(RevokeAuditorAccessGrantError::Unavailable)
     }

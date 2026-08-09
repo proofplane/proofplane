@@ -102,32 +102,29 @@ impl IssueAgentPolicyDocumentUploadGrantHandler {
 
         let outcome = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    match context
-                        .lock_policy_document_upload_eligibility(grant.policy_id())
-                        .await?
-                    {
-                        None => return Ok(IssueOutcome::Unavailable),
-                        Some(PolicyDocumentUploadEligibility::CurrentDocument) => {
-                            return Ok(IssueOutcome::CurrentDocument);
-                        }
-                        Some(PolicyDocumentUploadEligibility::Eligible) => {}
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                match context
+                    .lock_policy_document_upload_eligibility(grant.policy_id())
+                    .await?
+                {
+                    None => return Ok(IssueOutcome::Unavailable),
+                    Some(PolicyDocumentUploadEligibility::CurrentDocument) => {
+                        return Ok(IssueOutcome::CurrentDocument);
                     }
-                    let repository = context.agent_policy_document_upload_grants();
-                    repository.save(&grant).await?;
-                    let grant = repository
-                        .get(grant.id(), grant.workspace_id())
-                        .await?
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "saved policy machine upload grant must be readable",
-                        ))?;
-                    Ok(IssueOutcome::Issued(Box::new(grant)))
-                },
-            )
+                    Some(PolicyDocumentUploadEligibility::Eligible) => {}
+                }
+                let repository = context.agent_policy_document_upload_grants();
+                repository.save(&grant).await?;
+                let grant = repository
+                    .get(grant.id(), grant.workspace_id())
+                    .await?
+                    .ok_or(crate::repository::Error::InvariantViolation(
+                        "saved policy machine upload grant must be readable",
+                    ))?;
+                Ok(IssueOutcome::Issued(Box::new(grant)))
+            })
             .await?;
 
         let grant = match outcome {

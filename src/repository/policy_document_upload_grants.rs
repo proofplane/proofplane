@@ -7,7 +7,7 @@ use crate::{
         PolicyDocumentUploadGrant as DomainPolicyDocumentUploadGrant, PolicyDocumentUploadGrantId,
         WorkspaceId,
     },
-    repository::{TransactionContext, WorkspaceTransactionContext},
+    repository::{UnitOfWork, WorkspaceRepositories},
 };
 
 use super::{
@@ -16,15 +16,15 @@ use super::{
 };
 
 enum SnapshotConnection<'a> {
-    Transaction(&'a TransactionContext<'a>),
-    Workspace(&'a WorkspaceTransactionContext<'a>),
+    Transaction(&'a UnitOfWork<'a>),
+    Workspace(&'a WorkspaceRepositories<'a>),
 }
 
 pub struct PolicyDocumentUploadGrantRepository<'a> {
     connection: SnapshotConnection<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn policy_document_upload_grants(&'a self) -> PolicyDocumentUploadGrantRepository<'a> {
         PolicyDocumentUploadGrantRepository {
             connection: SnapshotConnection::Transaction(self),
@@ -32,7 +32,7 @@ impl<'a> TransactionContext<'a> {
     }
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn policy_document_upload_grants(&'a self) -> PolicyDocumentUploadGrantRepository<'a> {
         PolicyDocumentUploadGrantRepository {
             connection: SnapshotConnection::Workspace(self),
@@ -74,10 +74,10 @@ impl PolicyDocumentUploadGrantRepository<'_> {
             SnapshotConnection::Workspace(context) => {
                 if grant.workspace_id() != context.workspace_id {
                     return Err(Error::InvariantViolation(
-                        "policy human upload grant workspace must match its transaction",
+                        "policy human upload grant workspace must match its repository scope",
                     ));
                 }
-                &context.transaction
+                context.transaction
             }
         };
         let record = PolicyGrantRecord::from(grant);

@@ -178,7 +178,7 @@ impl RequestAgentConnectionHandler {
         )
         .map_err(|_| AgentConnectionCommandError::Invalid)?;
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let user = context.users().get(connection.user_id).await?.ok_or(
                     RepositoryError::InvariantViolation("agent connection requester must exist"),
                 )?;
@@ -250,7 +250,7 @@ impl DenyAgentConnectionHandler {
             return Ok(false);
         };
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(id).await? else {
                     return Ok(false);
@@ -282,7 +282,7 @@ impl ConsumeAgentConnectionContinuationHandler {
             return Ok(ConsumeAgentConnectionOutcome::Invalid);
         };
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(id).await? else {
                     return Ok(ConsumeAgentConnectionOutcome::Invalid);
@@ -318,7 +318,7 @@ impl ActivateAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<ActivateAgentConnectionOutcome, AgentConnectionCommandError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(ActivateAgentConnectionOutcome::Rejected);
@@ -352,7 +352,7 @@ impl AuthorizeAgentConnectionHandler {
             .map_err(|_| AgentConnectionCommandError::Invalid)?;
         let result = self
             .repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(None);
@@ -408,7 +408,7 @@ impl UseAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<bool, AgentConnectionCommandError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(false);
@@ -430,7 +430,7 @@ impl RevokeAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<bool, AgentConnectionCommandError> {
         self.repository
-            .in_transaction(async move |context| {
+            .in_unit_of_work(async move |context| {
                 let repository = context.agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(false);

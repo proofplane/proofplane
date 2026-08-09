@@ -8,18 +8,18 @@ use crate::{
         CoverageWindow, Document, DocumentId, DocumentIdentity, EvidenceId, EvidenceSubmission,
         EvidenceSubmissionId, EvidenceSubmitter, WorkspaceId,
     },
-    projections::EvidenceSubmissionDetail,
-    repository::{WorkspaceReadContext, WorkspaceTransactionContext},
+    projections::{DocumentDownloadCandidate, EvidenceSubmissionDetail},
+    repository::{WorkspaceClient, WorkspaceRepositories},
 };
 
 use super::{documents::document_from_row, Error};
 
 /// Complete-snapshot repository for the submission provenance aggregate.
 pub struct EvidenceSubmissionRepository<'a> {
-    context: &'a WorkspaceTransactionContext<'a>,
+    context: &'a WorkspaceRepositories<'a>,
 }
 
-impl<'a> WorkspaceTransactionContext<'a> {
+impl<'a> WorkspaceRepositories<'a> {
     pub fn evidence_submissions(&'a self) -> EvidenceSubmissionRepository<'a> {
         EvidenceSubmissionRepository { context: self }
     }
@@ -75,12 +75,6 @@ WHERE EXISTS (
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentDownloadCandidate {
-    pub workspace_id: WorkspaceId,
-    pub document: Document,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveDocumentResult {
     Archived,
@@ -109,7 +103,7 @@ const SUBMISSION_DETAIL_COLUMNS: &str = r#"
     a.created_at
 "#;
 
-impl WorkspaceReadContext {
+impl WorkspaceClient {
     pub(crate) async fn get_agent_upload_document(
         &self,
         submission_id: EvidenceSubmissionId,
@@ -244,28 +238,6 @@ WHERE a.workspace_id = $1
             .next()
             .map(document_download_candidate_from_row)
             .transpose()
-    }
-
-    pub async fn evidence_submission_exists(
-        &self,
-        id: EvidenceSubmissionId,
-    ) -> Result<bool, Error> {
-        let rows = self
-            .client
-            .query(
-                r#"
-SELECT 1
-FROM evidence_submissions s
-JOIN evidence e ON e.id = s.evidence_id
-WHERE s.id = $1
-  AND e.workspace_id = $2
-LIMIT 1
-"#,
-                &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
-            )
-            .await?;
-
-        Ok(!rows.is_empty())
     }
 
     pub(super) async fn load_evidence_submission_detail(

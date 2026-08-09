@@ -52,85 +52,80 @@ impl MapEvidenceToControlsHandler {
         let requested = command.mappings;
         let result = self
             .repository
-            .in_agent_connection_workspace_context(
-                command.connection.workspace_id,
-                command.connection.user_id,
-                command.connection.connection_id,
-                async move |context| {
-                    let repository = context.evidence();
-                    let Some(mut evidence) = repository.get(evidence_id).await? else {
-                        return Ok(MapOutcome::Unavailable);
-                    };
-                    let mut combined = evidence.mappings().to_vec();
-                    let mut requested_ids = Vec::with_capacity(requested.len());
-                    for mapping in &requested {
-                        requested_ids.push(mapping.control_id);
-                    }
-                    let existing_controls = context.existing_control_ids(&requested_ids).await?;
-                    let unknown = requested_ids
-                        .iter()
-                        .copied()
-                        .filter(|id| !existing_controls.contains(id))
-                        .collect::<Vec<_>>();
-                    let already_mapped = requested_ids
-                        .iter()
-                        .copied()
-                        .filter(|id| {
-                            evidence
-                                .mappings()
-                                .iter()
-                                .any(|mapping| mapping.control_id() == *id)
-                        })
-                        .collect::<Vec<_>>();
-                    if !unknown.is_empty() || !already_mapped.is_empty() {
-                        return Ok(MapOutcome::Rejected {
-                            unknown,
-                            already_mapped,
-                        });
-                    }
-                    for mapping in requested {
-                        let mapping = EvidenceControlMappingState::new(
-                            mapping.control_id,
-                            mapping.rationale,
-                            Utc::now(),
-                        )
-                        .into_result()
-                        .map_err(|_| {
-                            RepositoryError::InvariantViolation("evidence mapping is invalid")
-                        })?;
-                        combined.push(mapping);
-                    }
-                    evidence
-                        .replace_mappings(combined)
-                        .map_err(|error| match error {
-                            EvidenceError::DuplicateControlMapping(_) => {
-                                RepositoryError::InvariantViolation(
-                                    "duplicate evidence control mapping",
-                                )
-                            }
-                            _ => {
-                                RepositoryError::InvariantViolation("evidence snapshot is invalid")
-                            }
-                        })?;
-                    repository.save(&evidence).await?;
-                    let projections = context.control_projections();
-                    let mut saved = Vec::with_capacity(requested_ids.len());
-                    for control_id in requested_ids.iter().copied() {
-                        saved.push(
-                            projections
-                                .get_evidence_mapping(evidence_id, control_id)
-                                .await?
-                                .ok_or(RepositoryError::InvariantViolation(
-                                    "saved evidence mapping must be readable",
-                                ))?,
-                        );
-                    }
-                    Ok(MapOutcome::Mapped {
-                        requested_ids,
-                        mappings: saved,
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let context = &workspace;
+                let repository = context.evidence();
+                let Some(mut evidence) = repository.get(evidence_id).await? else {
+                    return Ok(MapOutcome::Unavailable);
+                };
+                let mut combined = evidence.mappings().to_vec();
+                let mut requested_ids = Vec::with_capacity(requested.len());
+                for mapping in &requested {
+                    requested_ids.push(mapping.control_id);
+                }
+                let existing_controls = context.existing_control_ids(&requested_ids).await?;
+                let unknown = requested_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !existing_controls.contains(id))
+                    .collect::<Vec<_>>();
+                let already_mapped = requested_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        evidence
+                            .mappings()
+                            .iter()
+                            .any(|mapping| mapping.control_id() == *id)
                     })
-                },
-            )
+                    .collect::<Vec<_>>();
+                if !unknown.is_empty() || !already_mapped.is_empty() {
+                    return Ok(MapOutcome::Rejected {
+                        unknown,
+                        already_mapped,
+                    });
+                }
+                for mapping in requested {
+                    let mapping = EvidenceControlMappingState::new(
+                        mapping.control_id,
+                        mapping.rationale,
+                        Utc::now(),
+                    )
+                    .into_result()
+                    .map_err(|_| {
+                        RepositoryError::InvariantViolation("evidence mapping is invalid")
+                    })?;
+                    combined.push(mapping);
+                }
+                evidence
+                    .replace_mappings(combined)
+                    .map_err(|error| match error {
+                        EvidenceError::DuplicateControlMapping(_) => {
+                            RepositoryError::InvariantViolation(
+                                "duplicate evidence control mapping",
+                            )
+                        }
+                        _ => RepositoryError::InvariantViolation("evidence snapshot is invalid"),
+                    })?;
+                repository.save(&evidence).await?;
+                let projections = context.control_projections();
+                let mut saved = Vec::with_capacity(requested_ids.len());
+                for control_id in requested_ids.iter().copied() {
+                    saved.push(
+                        projections
+                            .get_evidence_mapping(evidence_id, control_id)
+                            .await?
+                            .ok_or(RepositoryError::InvariantViolation(
+                                "saved evidence mapping must be readable",
+                            ))?,
+                    );
+                }
+                Ok(MapOutcome::Mapped {
+                    requested_ids,
+                    mappings: saved,
+                })
+            })
             .await?;
         match result {
             MapOutcome::Mapped {
@@ -233,12 +228,8 @@ mod tests {
                 if unknown == vec![ControlId::from(foreign_control_id)] && already_mapped.is_empty()
         ));
         let mappings = postgres
-            .in_workspace_context_read(workspace.workspace_id, async |context| {
-                context
-                    .control_projections()
-                    .list_evidence_mappings(evidence_id)
-                    .await
-            })
+            .control_projections(workspace.workspace_id)
+            .list_evidence_mappings(evidence_id)
             .await
             .unwrap()
             .unwrap();

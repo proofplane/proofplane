@@ -7,14 +7,14 @@ use crate::domain::{
     WorkspaceId,
 };
 
-use super::{Error, TransactionContext};
+use super::{Error, UnitOfWork};
 
 /// Complete-snapshot persistence for the auditor session aggregate.
 pub struct AuditorSessionRepository<'a> {
-    context: &'a TransactionContext<'a>,
+    context: &'a UnitOfWork<'a>,
 }
 
-impl<'a> TransactionContext<'a> {
+impl<'a> UnitOfWork<'a> {
     pub fn auditor_sessions(&'a self) -> AuditorSessionRepository<'a> {
         AuditorSessionRepository { context: self }
     }
