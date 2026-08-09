@@ -2,10 +2,10 @@ use super::auth::McpPrincipal;
 #[cfg(test)]
 use crate::domain::{UserId, WorkspacePermissions};
 use crate::{
+    authentication::AgentConnectionContext,
     domain::{WorkspaceId, WorkspacePermission},
     observability::audit::AuditActor,
     routes::request_context::RequestId,
-    services::agent_connections::AgentConnectionContext,
 };
 use rmcp::ErrorData;
 use serde_json::json;

@@ -4,10 +4,10 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::paseto::{
-        AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantDecryptor,
-        AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor, DownloadGrantEncryptor,
-        McpOAuthDecryptor, McpOAuthEncryptor, PolicyUploadGrantDecryptor,
-        PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
+        AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantEncryptor,
+        DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+        PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
+        UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},
@@ -100,20 +100,14 @@ async fn run() -> Result<(), Error> {
             proofplane::services::agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &config.paseto.upload_grant,
         )?;
-    let agent_policy_upload_grant_decryptor =
-        AgentPolicyDocumentUploadGrantDecryptor::from_config(
-            config.server.public_api_base_url.clone(),
-            proofplane::services::agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
-            &config.paseto.upload_grant,
-        )?;
     let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        proofplane::authentication::paseto::POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        proofplane::authentication::paseto::POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
@@ -151,7 +145,6 @@ async fn run() -> Result<(), Error> {
         upload_grant_decryptor,
         agent_upload_grant_encryptor,
         agent_policy_upload_grant_encryptor,
-        agent_policy_upload_grant_decryptor,
         policy_upload_grant_encryptor,
         policy_upload_grant_decryptor,
         max_document_bytes: config.uploads.max_document_bytes as u64,

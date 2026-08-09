@@ -37,6 +37,7 @@ use crate::{
         },
         ExecutionMetadata,
     },
+    authentication::AgentConnectionContext,
     domain::{
         validate_document_filename, CoverageWindow, Document, DocumentId, DocumentUploadStatus,
         EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
@@ -48,7 +49,6 @@ use crate::{
         request_context::RequestId,
     },
     services::{
-        agent_connections::AgentConnectionContext,
         document_downloads::DownloadGrantIssuer,
         document_downloads::{DocumentDownloadService, DownloadError},
         evidence_submissions::{

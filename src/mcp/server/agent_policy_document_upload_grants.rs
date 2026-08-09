@@ -16,17 +16,19 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::issue_agent_policy_document_upload_grant::{
+            AgentPolicyDocumentUploadGrantError, IssueAgentPolicyDocumentUploadGrant,
+            IssuedAgentPolicyDocumentUploadGrant,
+        },
+        ExecutionMetadata,
+    },
     domain::{AgentPolicyDocumentUploadDeclaration, PolicyId, WorkspacePermission},
     observability::{
         agent_policy_document_uploads::{record_grant, AgentPolicyDocumentUploadGrantResult},
         audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     },
-    services::{
-        agent_policy_document_upload_grants::{
-            AgentPolicyDocumentUploadGrantError, IssuedAgentPolicyDocumentUploadGrant,
-        },
-        Error as ServiceError,
-    },
+    services::Error as ServiceError,
     validate,
 };
 
@@ -57,8 +59,15 @@ impl ProofplaneMcp {
             }
         };
         let issued = match self
-            .agent_policy_document_upload_grants
-            .issue(&context.agent_connection_context(), policy_id, declaration)
+            .issue_agent_policy_document_upload_grant
+            .handle(
+                IssueAgentPolicyDocumentUploadGrant {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                    declaration,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await
         {
             Ok(issued) => issued,

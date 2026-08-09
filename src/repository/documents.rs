@@ -106,6 +106,53 @@ pub struct WorkspaceDocumentRepository<'a> {
     context: &'a WorkspaceTransactionContext<'a>,
 }
 
+/// Private persistence shape for a complete document snapshot.
+struct DocumentRecord {
+    created_by_user_id: Uuid,
+    filename: String,
+    content_type: String,
+    content_length: i64,
+    object_key: String,
+    checksum_sha256: String,
+    checksum_crc32c: String,
+    archived: bool,
+    upload_status: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl DocumentRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            created_by_user_id: row.try_get("created_by_user_id")?,
+            filename: row.try_get("filename")?,
+            content_type: row.try_get("content_type")?,
+            content_length: row.try_get("content_length")?,
+            object_key: row.try_get("object_key")?,
+            checksum_sha256: row.try_get("checksum_sha256")?,
+            checksum_crc32c: row.try_get("checksum_crc32c")?,
+            archived: row.try_get("archived")?,
+            upload_status: row.try_get("upload_status")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    fn into_domain(self, identity: DocumentIdentity) -> Result<Document, Error> {
+        Ok(Document {
+            identity,
+            created_by_user_id: UserId::from(self.created_by_user_id),
+            filename: self.filename,
+            content_type: self.content_type,
+            content_length: self.content_length,
+            object_key: self.object_key,
+            checksum_sha256: self.checksum_sha256,
+            checksum_crc32c: self.checksum_crc32c,
+            upload_status: self.upload_status.parse::<DocumentUploadStatus>()?,
+            archived: self.archived,
+            created_at: self.created_at,
+        })
+    }
+}
+
 impl<'a> WorkspaceTransactionContext<'a> {
     pub fn documents(&'a self) -> WorkspaceDocumentRepository<'a> {
         WorkspaceDocumentRepository { context: self }
@@ -129,7 +176,7 @@ FROM documents WHERE id = $1 AND owner_type = $2 AND owner_id = $3 FOR UPDATE"#,
                 &[&identity.document_uuid(), &owner.owner_type(), &owner.owner_uuid()],
             )
             .await?
-            .map(|row| document_from_row(&row, identity))
+            .map(|row| DocumentRecord::try_from_row(&row)?.into_domain(identity))
             .transpose()
     }
 
@@ -175,7 +222,7 @@ impl WorkspaceDocumentRepository<'_> {
             r#"SELECT id, workspace_id, owner_type, owner_id, created_by_user_id, filename, content_type, content_length, object_key, checksum_sha256, checksum_crc32c, archived, upload_status, created_at
 FROM documents WHERE id = $1 AND workspace_id = $2 AND owner_type = $3 AND owner_id = $4 FOR UPDATE"#,
             &[&identity.document_uuid(), &Uuid::from(self.context.workspace_id), &owner.owner_type(), &owner.owner_uuid()],
-        ).await?.map(|row| document_from_row(&row, identity)).transpose()
+        ).await?.map(|row| DocumentRecord::try_from_row(&row)?.into_domain(identity)).transpose()
     }
 
     pub async fn save(&self, document: &Document) -> Result<(), Error> {

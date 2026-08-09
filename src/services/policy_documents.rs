@@ -12,6 +12,7 @@ use crate::{
         },
         ExecutionMetadata,
     },
+    authentication::AgentConnectionContext,
     domain::{
         AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, PolicyId, WorkspaceId,
@@ -22,7 +23,6 @@ use crate::{
 };
 
 use super::{
-    agent_connections::AgentConnectionContext,
     documents::{
         delete_staged_document, stage_bounded_document, stage_document, BoundedStagingRequest,
     },
@@ -239,12 +239,14 @@ impl PolicyDocumentService {
             )
             .await
             .map_err(command_error)?;
+        let archived = result == ArchiveDocumentOutcome::Archived;
         let result = match result {
             ArchiveDocumentOutcome::Archived => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Replayed => ArchiveDocumentResult::Archived,
             ArchiveDocumentOutcome::Unavailable => ArchiveDocumentResult::NotFound,
             ArchiveDocumentOutcome::NotTerminal => ArchiveDocumentResult::NotTerminal,
         };
-        if result == ArchiveDocumentResult::Archived {
+        if archived {
             AuditEvent::new(
                 "policy_document.archived",
                 AuditOutcome::Success,

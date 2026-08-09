@@ -49,9 +49,7 @@ pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub use policies::{
     ArchivePolicyResult, CreatePolicyDocumentResult, PolicyDocumentUploadEligibility,
 };
-pub use policy_document_upload_grants::{
-    NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant, PolicyDocumentUploadGrantRepository,
-};
+pub use policy_document_upload_grants::PolicyDocumentUploadGrantRepository;
 pub use users::UserRepository;
 pub use workspace_memberships::NewWorkspaceMembership;
 pub use workspaces::WorkspaceRepository;

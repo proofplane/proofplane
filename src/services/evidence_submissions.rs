@@ -9,6 +9,7 @@ use crate::{
         },
         ExecutionMetadata,
     },
+    authentication::AgentConnectionContext,
     domain::{
         AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionDetail,
@@ -19,10 +20,7 @@ use crate::{
     services::Error,
 };
 
-use super::{
-    agent_connections::AgentConnectionContext,
-    documents::{delete_staged_document, stage_evidence_document},
-};
+use super::documents::{delete_staged_document, stage_evidence_document};
 use bytes::Bytes;
 use futures_core::Stream;
 use uuid::Uuid;
@@ -284,6 +282,7 @@ impl EvidenceSubmissionService {
             .map_err(command_error)?;
         Ok(match outcome {
             ArchiveDocumentOutcome::Archived => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Replayed => ArchiveDocumentResult::Archived,
             ArchiveDocumentOutcome::Unavailable => ArchiveDocumentResult::NotFound,
             ArchiveDocumentOutcome::NotTerminal => ArchiveDocumentResult::NotTerminal,
         })

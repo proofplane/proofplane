@@ -28,6 +28,7 @@ use crate::{
             create_control::CreateControlHandler,
             create_evidence::CreateEvidenceHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_agent_policy_document_upload_grant::IssueAgentPolicyDocumentUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
@@ -55,10 +56,7 @@ use crate::{
         },
     },
     mcp::server::common::authorize_connection,
-    services::{
-        agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        evidence_submissions::EvidenceSubmissionService,
-    },
+    services::evidence_submissions::EvidenceSubmissionService,
     VERSION,
 };
 use url::Url;
@@ -98,7 +96,7 @@ pub struct ProofplaneMcp {
     evidence_handlers: EvidenceHandlers,
     evidence_submissions: EvidenceSubmissionService,
     issue_agent_evidence_upload_grant: IssueAgentEvidenceUploadGrantHandler,
-    agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
+    issue_agent_policy_document_upload_grant: IssueAgentPolicyDocumentUploadGrantHandler,
     issue_evidence_document_upload_grant: IssueEvidenceDocumentUploadGrantHandler,
     issue_policy_document_upload_grant: IssuePolicyDocumentUploadGrantHandler,
     auditor_access_grants: AuditorGrantHandlers,
@@ -113,7 +111,7 @@ pub(super) struct UploadDependencies {
     pub issue_evidence_grant: IssueEvidenceDocumentUploadGrantHandler,
     pub issue_policy_grant: IssuePolicyDocumentUploadGrantHandler,
     pub issue_agent_evidence_grant: IssueAgentEvidenceUploadGrantHandler,
-    pub agent_policy_document_grants: AgentPolicyDocumentUploadGrantService,
+    pub issue_agent_policy_grant: IssueAgentPolicyDocumentUploadGrantHandler,
     pub max_document_bytes: u64,
 }
 
@@ -177,7 +175,7 @@ impl ProofplaneMcp {
             evidence_handlers,
             evidence_submissions,
             issue_agent_evidence_upload_grant: uploads.issue_agent_evidence_grant,
-            agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
+            issue_agent_policy_document_upload_grant: uploads.issue_agent_policy_grant,
             issue_evidence_document_upload_grant: uploads.issue_evidence_grant,
             issue_policy_document_upload_grant: uploads.issue_policy_grant,
             auditor_access_grants,

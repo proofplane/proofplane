@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-pub mod agent_connections;
 pub mod agent_evidence_upload_grants;
 pub mod agent_evidence_uploads;
 pub mod agent_policy_document_upload_grants;
@@ -11,7 +10,6 @@ pub mod document_downloads;
 mod documents;
 pub mod evidence_submissions;
 pub mod oauth;
-pub mod policy_document_upload_grants;
 pub mod policy_documents;
 pub mod policy_upload_sessions;
 pub mod upload_sessions;

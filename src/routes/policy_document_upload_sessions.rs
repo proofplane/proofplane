@@ -45,6 +45,7 @@ use crate::{
         },
         ExecutionMetadata,
     },
+    authentication::AgentConnectionContext,
     domain::{
         validate_document_filename, DocumentId, DocumentUploadStatus, PolicyId,
         WorkspacePermissions,
@@ -58,7 +59,6 @@ use crate::{
         request_context::RequestId,
     },
     services::{
-        agent_connections::AgentConnectionContext,
         document_downloads::{DocumentDownloadService, DownloadError},
         policy_documents::{PolicyDocumentService, UploadPolicyDocumentPayload},
         policy_upload_sessions::{

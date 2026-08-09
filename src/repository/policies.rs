@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ControlId, ControlSummary, CreateControlPolicyMappingsPayload, CreateDocumentPayload,
+        ControlId, ControlSummary, CreateControlPolicyMappingsPayload,
         CreatePolicyControlMappingsPayload, CreatePolicyPayload,
         DeleteControlPolicyMappingsPayload, DeletePolicyControlMappingsPayload, Document,
-        DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy, PolicyAggregate,
+        DocumentId, DocumentIdentity, DocumentUploadStatus, Policy, PolicyAggregate,
         PolicyControlMapping, PolicyControlMappingState, PolicyDefinition, PolicyId,
         UpdatePolicyPayload, WorkspaceId,
     },
@@ -17,7 +17,7 @@ use crate::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
     },
     repository::{
-        ArchiveDocumentResult, DocumentDownloadCandidate, TransactionContext, WorkspaceReadContext,
+        DocumentDownloadCandidate, TransactionContext, WorkspaceReadContext,
         WorkspaceTransactionContext,
     },
 };
@@ -223,132 +223,6 @@ FOR UPDATE OF p
         } else {
             PolicyDocumentUploadEligibility::Eligible
         }))
-    }
-
-    pub async fn create_policy_document(
-        &self,
-        payload: &CreateDocumentPayload,
-    ) -> Result<CreatePolicyDocumentResult, Error> {
-        let DocumentOwner::Policy(policy_id) = payload.owner else {
-            return Err(Error::InvariantViolation(
-                "policy document creation requires a policy owner",
-            ));
-        };
-        let policy = self
-            .transaction
-            .query_opt(
-                r#"
-SELECT id
-FROM policies
-WHERE id = $1
-  AND workspace_id = $2
-  AND archived_at IS NULL
-FOR UPDATE
-"#,
-                &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
-            )
-            .await?;
-        if policy.is_none() {
-            return Ok(CreatePolicyDocumentResult::PolicyNotFound);
-        }
-
-        let row = self
-            .transaction
-            .query_opt(
-                r#"
-INSERT INTO documents (
-    workspace_id,
-    owner_type,
-    owner_id,
-    filename,
-    content_type,
-    content_length,
-    object_key,
-    checksum_sha256,
-    checksum_crc32c,
-    created_by_user_id,
-    upload_status
-)
-SELECT $8, 'policy', $1, $2, $3, $4, $5, $6, $7, $9, 'pending'
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM documents
-    WHERE owner_type = 'policy'
-      AND owner_id = $1
-      AND archived = false
-)
-RETURNING *, owner_id AS policy_id
-"#,
-                &[
-                    &Uuid::from(policy_id),
-                    &payload.filename,
-                    &payload.content_type,
-                    &payload.content_length,
-                    &payload.object_key,
-                    &payload.checksum_sha256,
-                    &payload.checksum_crc32c,
-                    &Uuid::from(self.workspace_id),
-                    &Uuid::from(self.user_id),
-                ],
-            )
-            .await?;
-
-        match row {
-            Some(row) => Ok(CreatePolicyDocumentResult::Created(
-                policy_document_from_row(&row)?,
-            )),
-            None => Ok(CreatePolicyDocumentResult::DocumentExists),
-        }
-    }
-
-    pub async fn archive_policy_document(
-        &self,
-        policy_id: PolicyId,
-        document_id: DocumentId,
-    ) -> Result<ArchiveDocumentResult, Error> {
-        let row = self
-            .transaction
-            .query_one(
-                r#"
-WITH scoped AS (
-    SELECT a.id, a.upload_status
-    FROM documents a
-    JOIN policies p ON p.id = a.owner_id
-    WHERE a.workspace_id = $1
-      AND p.archived_at IS NULL
-      AND a.owner_type = 'policy'
-      AND a.owner_id = $2
-      AND a.id = $3
-      AND a.archived = false
-),
-updated AS (
-    UPDATE documents a
-    SET archived = true
-    FROM scoped
-    WHERE a.id = scoped.id
-      AND scoped.upload_status IN ('uploaded', 'contains_virus', 'failed')
-    RETURNING a.id
-)
-SELECT
-    EXISTS (SELECT 1 FROM scoped) AS found,
-    EXISTS (SELECT 1 FROM updated) AS archived
-"#,
-                &[
-                    &Uuid::from(self.workspace_id),
-                    &Uuid::from(policy_id),
-                    &Uuid::from(document_id),
-                ],
-            )
-            .await?;
-
-        match (
-            row.try_get::<_, bool>("found")?,
-            row.try_get::<_, bool>("archived")?,
-        ) {
-            (false, _) => Ok(ArchiveDocumentResult::NotFound),
-            (true, true) => Ok(ArchiveDocumentResult::Archived),
-            (true, false) => Ok(ArchiveDocumentResult::NotTerminal),
-        }
     }
 
     pub async fn create_policy(&self, payload: &CreatePolicyPayload) -> Result<Policy, Error> {

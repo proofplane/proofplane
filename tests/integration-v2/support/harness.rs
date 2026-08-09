@@ -22,11 +22,10 @@ use proofplane::{
     app::AppDependencies,
     authentication::{
         paseto::{
-            AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantDecryptor,
-            AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor,
-            DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
+            AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantEncryptor,
+            DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor,
+            UploadGrantEncryptor, POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         },
         UserAuthenticator,
     },
@@ -41,7 +40,6 @@ use proofplane::{
         agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         client_resolver::ClientResolver, oauth::OAuthService,
-        policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
     },
 };
 use serde_json::Value;
@@ -363,21 +361,15 @@ fn build_mcp_server(
             &app_config.paseto.upload_grant,
         )
         .expect("agent policy upload grant encryptor initializes"),
-        agent_policy_upload_grant_decryptor: AgentPolicyDocumentUploadGrantDecryptor::from_config(
-            issuer.clone(),
-            AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
-            &app_config.paseto.upload_grant,
-        )
-        .expect("agent policy upload grant decryptor initializes"),
         policy_upload_grant_encryptor: PolicyUploadGrantEncryptor::from_config(
             issuer.clone(),
-            POLICY_UPLOAD_GRANT_AUDIENCE,
+            POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &app_config.paseto.upload_grant,
         )
         .expect("policy upload grant encryptor initializes"),
         policy_upload_grant_decryptor: PolicyUploadGrantDecryptor::from_config(
             issuer,
-            POLICY_UPLOAD_GRANT_AUDIENCE,
+            POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &app_config.paseto.upload_grant,
         )
         .expect("policy upload grant decryptor initializes"),

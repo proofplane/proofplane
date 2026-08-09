@@ -20,10 +20,9 @@ use super::{
     server::{ProofplaneMcp, UploadDependencies},
 };
 use crate::authentication::paseto::{
-    AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantDecryptor,
-    AgentPolicyDocumentUploadGrantEncryptor, DownloadGrantDecryptor, DownloadGrantEncryptor,
-    PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
-    UploadGrantEncryptor,
+    AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantEncryptor,
+    DownloadGrantDecryptor, DownloadGrantEncryptor, PolicyUploadGrantDecryptor,
+    PolicyUploadGrantEncryptor, UploadGrantDecryptor, UploadGrantEncryptor,
 };
 use crate::{
     application::{
@@ -32,6 +31,7 @@ use crate::{
             create_control::CreateControlHandler,
             create_evidence::CreateEvidenceHandler,
             issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_agent_policy_document_upload_grant::IssueAgentPolicyDocumentUploadGrantHandler,
             issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
             issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
             issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
@@ -71,10 +71,7 @@ use crate::{
         },
         request_context::attach_request_id,
     },
-    services::{
-        agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        evidence_submissions::EvidenceSubmissionService,
-    },
+    services::evidence_submissions::EvidenceSubmissionService,
 };
 use url::Url;
 
@@ -102,7 +99,6 @@ pub struct McpAppDependencies<V> {
     pub upload_grant_decryptor: UploadGrantDecryptor,
     pub agent_upload_grant_encryptor: AgentEvidenceUploadGrantEncryptor,
     pub agent_policy_upload_grant_encryptor: AgentPolicyDocumentUploadGrantEncryptor,
-    pub agent_policy_upload_grant_decryptor: AgentPolicyDocumentUploadGrantDecryptor,
     pub policy_upload_grant_encryptor: PolicyUploadGrantEncryptor,
     pub policy_upload_grant_decryptor: PolicyUploadGrantDecryptor,
     pub max_document_bytes: u64,
@@ -127,7 +123,6 @@ impl<V> Clone for McpAppDependencies<V> {
             upload_grant_decryptor: self.upload_grant_decryptor.clone(),
             agent_upload_grant_encryptor: self.agent_upload_grant_encryptor.clone(),
             agent_policy_upload_grant_encryptor: self.agent_policy_upload_grant_encryptor.clone(),
-            agent_policy_upload_grant_decryptor: self.agent_policy_upload_grant_decryptor.clone(),
             policy_upload_grant_encryptor: self.policy_upload_grant_encryptor.clone(),
             policy_upload_grant_decryptor: self.policy_upload_grant_decryptor.clone(),
             max_document_bytes: self.max_document_bytes,
@@ -155,10 +150,9 @@ where
         dependencies.postgres.clone(),
         dependencies.agent_upload_grant_encryptor,
     );
-    let agent_policy_document_upload_grants = AgentPolicyDocumentUploadGrantService::new(
+    let issue_agent_policy_document_upload_grant = IssueAgentPolicyDocumentUploadGrantHandler::new(
         dependencies.postgres.clone(),
         dependencies.agent_policy_upload_grant_encryptor,
-        dependencies.agent_policy_upload_grant_decryptor,
     );
     let issue_policy_document_upload_grant = IssuePolicyDocumentUploadGrantHandler::new(
         dependencies.postgres.clone(),
@@ -195,7 +189,7 @@ where
                 issue_evidence_grant: issue_evidence_document_upload_grant,
                 issue_policy_grant: issue_policy_document_upload_grant,
                 issue_agent_evidence_grant: issue_agent_evidence_upload_grant,
-                agent_policy_document_grants: agent_policy_document_upload_grants,
+                issue_agent_policy_grant: issue_agent_policy_document_upload_grant,
                 max_document_bytes: dependencies.max_document_bytes,
             },
             super::server::AuditorGrantHandlers {

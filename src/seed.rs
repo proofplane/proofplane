@@ -6,6 +6,7 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
+    authentication::AgentConnectionContext,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
         AgentConnectionId, CreateEvidencePayload, CreateWorkspacePayload, EvidenceStatus,
@@ -17,7 +18,6 @@ use crate::{
     },
     observability,
     repository::{NewWorkspaceMembership, Postgres},
-    services::agent_connections::AgentConnectionContext,
     store,
 };
 use thiserror::Error;

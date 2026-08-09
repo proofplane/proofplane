@@ -31,10 +31,13 @@ const POLICY_UPLOAD_SESSION_IMPLICIT_ASSERTION: &[u8] =
 const MCP_OAUTH_IMPLICIT_ASSERTION: &[u8] = b"proofplane:mcp-oauth-access:v1";
 const REGISTERED_CLAIMS: [&str; 7] = ["iss", "aud", "sub", "jti", "iat", "nbf", "exp"];
 const AGENT_EVIDENCE_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
+const AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
 const EVIDENCE_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
 const POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION: u8 = 1;
 
 pub const AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-agent-evidence-upload-grant";
+pub const AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE: &str =
+    "proofplane-agent-policy-document-upload-grant";
 pub const EVIDENCE_DOCUMENT_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
 pub const POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE: &str = "proofplane-policy-document-upload-grant";
 
@@ -92,6 +95,86 @@ impl AgentEvidenceUploadGrantClaims {
             issued_via_agent_connection_id: issued_via_agent_connection_id.to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AgentPolicyDocumentUploadGrantClaims {
+    pub(crate) version: u8,
+    pub(crate) upload_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) policy_id: String,
+    pub(crate) issued_by_user_id: String,
+    pub(crate) issued_via_agent_connection_id: String,
+}
+
+impl AgentPolicyDocumentUploadGrantClaims {
+    pub(crate) fn new(
+        upload_id: Uuid,
+        workspace_id: Uuid,
+        policy_id: Uuid,
+        issued_by_user_id: Uuid,
+        issued_via_agent_connection_id: Uuid,
+    ) -> Self {
+        Self {
+            version: AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION,
+            upload_id: upload_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            policy_id: policy_id.to_string(),
+            issued_by_user_id: issued_by_user_id.to_string(),
+            issued_via_agent_connection_id: issued_via_agent_connection_id.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerifiedAgentPolicyDocumentUploadGrantClaims {
+    pub(crate) upload_id: Uuid,
+    pub(crate) workspace_id: Uuid,
+    pub(crate) policy_id: Uuid,
+    pub(crate) issued_by_user_id: Uuid,
+    pub(crate) issued_via_agent_connection_id: Uuid,
+    pub(crate) expires_at: DateTime<Utc>,
+}
+
+impl TryFrom<VerifiedPasetoToken<AgentPolicyDocumentUploadGrantClaims>>
+    for VerifiedAgentPolicyDocumentUploadGrantClaims
+{
+    type Error = InvalidAgentPolicyDocumentUploadGrantClaims;
+
+    fn try_from(
+        token: VerifiedPasetoToken<AgentPolicyDocumentUploadGrantClaims>,
+    ) -> Result<Self, Self::Error> {
+        if token.claims.version != AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_TOKEN_VERSION {
+            return Err(InvalidAgentPolicyDocumentUploadGrantClaims);
+        }
+        let upload_id = parse_agent_policy_document_upload_grant_uuid(&token.claims.upload_id)?;
+        let issued_by_user_id =
+            parse_agent_policy_document_upload_grant_uuid(&token.claims.issued_by_user_id)?;
+        if upload_id != token.token_id || issued_by_user_id != token.subject {
+            return Err(InvalidAgentPolicyDocumentUploadGrantClaims);
+        }
+        Ok(Self {
+            upload_id,
+            workspace_id: parse_agent_policy_document_upload_grant_uuid(
+                &token.claims.workspace_id,
+            )?,
+            policy_id: parse_agent_policy_document_upload_grant_uuid(&token.claims.policy_id)?,
+            issued_by_user_id,
+            issued_via_agent_connection_id: parse_agent_policy_document_upload_grant_uuid(
+                &token.claims.issued_via_agent_connection_id,
+            )?,
+            expires_at: token.expires_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InvalidAgentPolicyDocumentUploadGrantClaims;
+
+fn parse_agent_policy_document_upload_grant_uuid(
+    value: &str,
+) -> Result<Uuid, InvalidAgentPolicyDocumentUploadGrantClaims> {
+    Uuid::parse_str(value).map_err(|_| InvalidAgentPolicyDocumentUploadGrantClaims)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

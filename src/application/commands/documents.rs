@@ -100,6 +100,7 @@ pub enum CreatePolicyDocumentOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveDocumentOutcome {
     Archived,
+    Replayed,
     Unavailable,
     NotTerminal,
 }
@@ -538,8 +539,8 @@ impl ArchiveDocumentHandler {
                         documents.save(&document).await?;
                     }
                     Ok(match transition.outcome {
-                        DocumentTransitionOutcome::Archived
-                        | DocumentTransitionOutcome::Ignored => ArchiveDocumentOutcome::Archived,
+                        DocumentTransitionOutcome::Archived => ArchiveDocumentOutcome::Archived,
+                        DocumentTransitionOutcome::Ignored => ArchiveDocumentOutcome::Replayed,
                         DocumentTransitionOutcome::Rejected => ArchiveDocumentOutcome::NotTerminal,
                         _ => {
                             return Err(RepositoryError::InvariantViolation(
