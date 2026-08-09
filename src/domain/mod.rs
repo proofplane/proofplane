@@ -88,7 +88,8 @@ pub use permission::{canonical_permissions, WorkspacePermission, WorkspacePermis
 pub use policy::{
     validate_policy_name, validate_unique_policy_control_ids, CreateControlPolicyMappingsPayload,
     CreatePolicyControlMappingsPayload, CreatePolicyPayload, DeleteControlPolicyMappingsPayload,
-    DeletePolicyControlMappingsPayload, Policy, PolicyControlMapping, PolicyDocumentUploadGrantId,
+    DeletePolicyControlMappingsPayload, Policy, PolicyAggregate, PolicyAggregateError,
+    PolicyControlMapping, PolicyControlMappingState, PolicyDefinition, PolicyDocumentUploadGrantId,
     PolicyId, UpdatePolicyPayload,
 };
 pub use policy_document_upload_grant::{

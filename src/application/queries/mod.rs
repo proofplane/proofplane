@@ -10,6 +10,7 @@ pub mod framework_catalog;
 pub mod get_user;
 pub mod get_workspace_for_user;
 pub mod list_auditor_access_grants;
+pub mod policy_catalog;
 pub mod read_auditor_portal;
 pub mod resolve_active_auditor_grant;
 pub mod resolve_auditor_grant_by_secret;

@@ -9,8 +9,9 @@ use crate::{
         ControlId, ControlSummary, CreateControlPolicyMappingsPayload, CreateDocumentPayload,
         CreatePolicyControlMappingsPayload, CreatePolicyPayload,
         DeleteControlPolicyMappingsPayload, DeletePolicyControlMappingsPayload, Document,
-        DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy,
-        PolicyControlMapping, PolicyId, UpdatePolicyPayload, WorkspaceId,
+        DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, Policy, PolicyAggregate,
+        PolicyControlMapping, PolicyControlMappingState, PolicyDefinition, PolicyId,
+        UpdatePolicyPayload, WorkspaceId,
     },
     projections::policy_projection::{
         PolicyCatalogEntry, PolicyDetail, PolicyDocumentDetail, PolicyDocumentStatus,
@@ -50,6 +51,110 @@ use super::{
     BatchMapRejection, BatchUnmapRejection, Error,
 };
 
+use super::snapshot::{save_workspace_snapshot, workspace_snapshot_record};
+
+/// Transaction-scoped complete-snapshot repository for the policy aggregate.
+pub struct PolicyRepository<'a> {
+    context: &'a WorkspaceTransactionContext<'a>,
+}
+
+impl<'a> WorkspaceTransactionContext<'a> {
+    pub fn policies(&'a self) -> PolicyRepository<'a> {
+        PolicyRepository { context: self }
+    }
+}
+
+impl PolicyRepository<'_> {
+    pub async fn get(&self, id: PolicyId) -> Result<Option<PolicyAggregate>, Error> {
+        let Some(row) = self.context.transaction.query_opt("SELECT id, workspace_id, name, description, created_at, updated_at, archived_at FROM policies WHERE id = $1 AND workspace_id = $2 FOR UPDATE", &[&Uuid::from(id), &Uuid::from(self.context.workspace_id)]).await? else { return Ok(None) };
+        let record = PolicyRecord::try_from(row)?;
+        let mappings = self.context.transaction.query("SELECT control_id, created_at FROM policy_control_mappings WHERE policy_id = $1 ORDER BY control_id", &[&Uuid::from(id)]).await?.into_iter().map(policy_mapping_from_row).collect::<Result<Vec<_>, _>>()?;
+        record.into_aggregate(mappings).map(Some)
+    }
+
+    /// Persists the aggregate's complete definition, archive lifecycle, and mapping snapshot.
+    pub async fn save(&self, policy: &PolicyAggregate) -> Result<(), Error> {
+        if policy.workspace_id() != self.context.workspace_id {
+            return Err(Error::InvariantViolation(
+                "policy workspace must match its transaction",
+            ));
+        }
+        let record = PolicyRecord::from(policy);
+        save_workspace_snapshot(&self.context.transaction, record.as_workspace_snapshot()).await?;
+        self.context
+            .transaction
+            .execute(
+                "DELETE FROM policy_control_mappings WHERE policy_id = $1",
+                &[&Uuid::from(policy.id())],
+            )
+            .await?;
+        for mapping in policy.mappings() {
+            self.context.transaction.execute("INSERT INTO policy_control_mappings (policy_id, control_id, created_at) VALUES ($1, $2, $3)", &[&Uuid::from(policy.id()), &Uuid::from(mapping.control_id()), &mapping.created_at()]).await?;
+        }
+        Ok(())
+    }
+}
+
+workspace_snapshot_record! {
+    struct PolicyRecord { id: Uuid, workspace_id: Uuid, name: String, description: Option<String>, created_at: DateTime<Utc>, updated_at: DateTime<Utc>, archived_at: Option<DateTime<Utc>>, }
+    table: policies,
+    conflict: id,
+    scope: workspace_id,
+}
+impl TryFrom<Row> for PolicyRecord {
+    type Error = Error;
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            name: row.try_get("name")?,
+            description: row.try_get("description")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            archived_at: row.try_get("archived_at")?,
+        })
+    }
+}
+impl PolicyRecord {
+    fn into_aggregate(
+        self,
+        mappings: Vec<PolicyControlMappingState>,
+    ) -> Result<PolicyAggregate, Error> {
+        let definition = PolicyDefinition::new(self.name, self.description)
+            .into_result()
+            .map_err(|_| Error::InvariantViolation("persisted policy definition is invalid"))?;
+        PolicyAggregate::rehydrate(
+            self.id.into(),
+            self.workspace_id.into(),
+            definition,
+            mappings,
+            self.created_at,
+            self.updated_at,
+            self.archived_at,
+        )
+        .map_err(|_| Error::InvariantViolation("persisted policy snapshot is inconsistent"))
+    }
+}
+impl From<&PolicyAggregate> for PolicyRecord {
+    fn from(policy: &PolicyAggregate) -> Self {
+        Self {
+            id: policy.id().into(),
+            workspace_id: policy.workspace_id().into(),
+            name: policy.name().to_owned(),
+            description: policy.description().map(str::to_owned),
+            created_at: policy.created_at(),
+            updated_at: policy.updated_at(),
+            archived_at: policy.archived_at(),
+        }
+    }
+}
+fn policy_mapping_from_row(row: Row) -> Result<PolicyControlMappingState, Error> {
+    Ok(PolicyControlMappingState::new(
+        row.try_get::<_, Uuid>("control_id")?.into(),
+        row.try_get("created_at")?,
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchivePolicyResult {
     Archived {
@@ -74,6 +179,10 @@ pub enum PolicyDocumentUploadEligibility {
 }
 
 impl WorkspaceTransactionContext<'_> {
+    pub async fn policy_document_in_progress(&self, policy_id: PolicyId) -> Result<bool, Error> {
+        Ok(self.transaction.query_one("SELECT EXISTS (SELECT 1 FROM documents WHERE owner_type = 'policy' AND owner_id = $1 AND workspace_id = $2 AND archived = false AND upload_status IN ('pending', 'finalizing'))", &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)]).await?.try_get(0)?)
+    }
+
     pub async fn lock_policy_document_upload_eligibility(
         &self,
         policy_id: PolicyId,
@@ -861,7 +970,7 @@ RETURNING control_id
         policy_detail_from_joined_rows(rows)
     }
 
-    async fn get_policy_control_mapping(
+    pub async fn get_policy_control_mapping(
         &self,
         policy_id: PolicyId,
         control_id: ControlId,
