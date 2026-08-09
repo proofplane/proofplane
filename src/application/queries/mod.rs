@@ -4,3 +4,4 @@
 //! as commands, but read DTOs directly and never rehydrate mutable aggregates.
 
 pub mod get_user;
+pub mod get_workspace_for_user;

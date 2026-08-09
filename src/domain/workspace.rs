@@ -66,6 +66,135 @@ pub struct Workspace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAggregate {
+    workspace: Workspace,
+    memberships: Vec<WorkspaceMembership>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspaceAggregateError {
+    #[error("workspace membership snapshot is inconsistent")]
+    InvalidMemberships,
+    #[error("the user already belongs to the workspace")]
+    AlreadyMember,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspaceMemberError {
+    #[error("workspace membership is unavailable")]
+    Unavailable,
+    #[error("workspace member not found")]
+    NotFound,
+    #[error("the workspace must retain at least one owner")]
+    LastOwner,
+}
+
+impl WorkspaceAggregate {
+    pub fn create_owned(workspace: Workspace, owner_user_id: UserId) -> Self {
+        let owner = WorkspaceMembership {
+            user_id: owner_user_id,
+            workspace_id: workspace.id,
+            role: WorkspaceRole::Owner,
+            created_at: workspace.created_at,
+        };
+        Self {
+            workspace,
+            memberships: vec![owner],
+        }
+    }
+
+    pub fn rehydrate(
+        workspace: Workspace,
+        memberships: Vec<WorkspaceMembership>,
+    ) -> Result<Self, WorkspaceAggregateError> {
+        let scoped = memberships
+            .iter()
+            .all(|membership| membership.workspace_id == workspace.id);
+        let unique_users = memberships
+            .iter()
+            .map(|membership| membership.user_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == memberships.len();
+        let has_owner = memberships
+            .iter()
+            .any(|membership| membership.role == WorkspaceRole::Owner);
+        if !scoped || !unique_users || !has_owner {
+            return Err(WorkspaceAggregateError::InvalidMemberships);
+        }
+        Ok(Self {
+            workspace,
+            memberships,
+        })
+    }
+
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
+    }
+
+    pub fn memberships(&self) -> &[WorkspaceMembership] {
+        &self.memberships
+    }
+
+    pub fn role_for(&self, user_id: UserId) -> Option<WorkspaceRole> {
+        self.memberships
+            .iter()
+            .find(|membership| membership.user_id == user_id)
+            .map(|membership| membership.role)
+    }
+
+    pub fn add_member(
+        &mut self,
+        user_id: UserId,
+        role: WorkspaceRole,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), WorkspaceAggregateError> {
+        if self.role_for(user_id).is_some() {
+            return Err(WorkspaceAggregateError::AlreadyMember);
+        }
+        self.memberships.push(WorkspaceMembership {
+            user_id,
+            workspace_id: self.workspace.id,
+            role,
+            created_at,
+        });
+        Ok(())
+    }
+
+    pub fn remove_member(
+        &mut self,
+        actor_user_id: UserId,
+        target_user_id: UserId,
+    ) -> Result<(), WorkspaceMemberError> {
+        if !matches!(
+            self.role_for(actor_user_id),
+            Some(WorkspaceRole::Owner | WorkspaceRole::Admin)
+        ) {
+            return Err(WorkspaceMemberError::Unavailable);
+        }
+        let Some(index) = self
+            .memberships
+            .iter()
+            .position(|membership| membership.user_id == target_user_id)
+        else {
+            return Err(WorkspaceMemberError::NotFound);
+        };
+        if self.memberships[index].role == WorkspaceRole::Owner
+            && self
+                .memberships
+                .iter()
+                .filter(|membership| membership.role == WorkspaceRole::Owner)
+                .count()
+                == 1
+        {
+            return Err(WorkspaceMemberError::LastOwner);
+        }
+        self.memberships.remove(index);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateWorkspacePayload {
     pub id: Option<WorkspaceId>,
     pub slug: Option<String>,
@@ -80,9 +209,11 @@ pub struct UpdateWorkspacePayload {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::WorkspaceId;
+    use super::{Workspace, WorkspaceAggregate, WorkspaceId, WorkspaceMemberError, WorkspaceRole};
+    use crate::domain::UserId;
 
     #[test]
     fn workspace_id_is_uuid_value_type() {
@@ -91,5 +222,70 @@ mod tests {
 
         assert_eq!(Uuid::from(id), uuid);
         assert_eq!(id, WorkspaceId::from(uuid));
+    }
+
+    #[test]
+    fn aggregate_rejects_last_owner_removal_without_mutating_memberships() {
+        let owner_id = UserId::from(Uuid::new_v4());
+        let mut workspace = owned_workspace(owner_id);
+        let before = workspace.clone();
+
+        assert_eq!(
+            workspace.remove_member(owner_id, owner_id),
+            Err(WorkspaceMemberError::LastOwner)
+        );
+        assert_eq!(workspace, before);
+    }
+
+    #[test]
+    fn aggregate_conceals_unauthorized_and_cross_workspace_removals_without_mutation() {
+        let owner_id = UserId::from(Uuid::new_v4());
+        let outsider_id = UserId::from(Uuid::new_v4());
+        let mut workspace = owned_workspace(owner_id);
+        let before = workspace.clone();
+
+        assert_eq!(
+            workspace.remove_member(outsider_id, owner_id),
+            Err(WorkspaceMemberError::Unavailable)
+        );
+        assert_eq!(
+            workspace.remove_member(owner_id, outsider_id),
+            Err(WorkspaceMemberError::NotFound)
+        );
+        assert_eq!(workspace, before);
+    }
+
+    #[test]
+    fn aggregate_removes_a_member_once_and_replay_is_state_idempotent() {
+        let owner_id = UserId::from(Uuid::new_v4());
+        let admin_id = UserId::from(Uuid::new_v4());
+        let mut workspace = owned_workspace(owner_id);
+        workspace
+            .add_member(admin_id, WorkspaceRole::Admin, timestamp())
+            .unwrap();
+
+        workspace.remove_member(owner_id, admin_id).unwrap();
+        let after = workspace.clone();
+        assert_eq!(
+            workspace.remove_member(owner_id, admin_id),
+            Err(WorkspaceMemberError::NotFound)
+        );
+        assert_eq!(workspace, after);
+    }
+
+    fn owned_workspace(owner_id: UserId) -> WorkspaceAggregate {
+        WorkspaceAggregate::create_owned(
+            Workspace {
+                id: WorkspaceId::from(Uuid::new_v4()),
+                slug: Some("workspace".to_owned()),
+                name: "Workspace".to_owned(),
+                created_at: timestamp(),
+            },
+            owner_id,
+        )
+    }
+
+    fn timestamp() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).single().unwrap()
     }
 }

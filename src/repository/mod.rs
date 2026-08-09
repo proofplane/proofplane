@@ -48,6 +48,7 @@ pub use policies::{
 pub use policy_document_upload_grants::{NewPolicyDocumentUploadGrant, PolicyDocumentUploadGrant};
 pub use users::UserRepository;
 pub use workspace_memberships::NewWorkspaceMembership;
+pub use workspaces::WorkspaceRepository;
 
 pub struct Postgres {
     pool: Pool,
