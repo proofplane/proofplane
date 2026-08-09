@@ -29,6 +29,7 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
+pub use agent_connections::AgentConnectionRepository;
 pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
 pub use agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantRepository;
 pub use auditor_access_grants::{AuditorAccessGrantProjection, AuditorAccessGrantRepository};

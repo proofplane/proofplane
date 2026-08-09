@@ -24,8 +24,9 @@ mod validation;
 mod workspace;
 
 pub use agent_connection::{
-    AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId, AgentConnectionStatus,
-    NewPendingAgentConnection, UserAgentConnection,
+    AgentAuthorizationTransactionId, AgentConnection, AgentConnectionActivation,
+    AgentConnectionConsumption, AgentConnectionId, AgentConnectionRevocation,
+    AgentConnectionStatus, AgentConnectionUse, NewPendingAgentConnection, UserAgentConnection,
 };
 pub use agent_evidence_upload_grant::{
     AgentEvidenceUploadAuthority, AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant,

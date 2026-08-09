@@ -3,6 +3,7 @@
 //! Query modules follow the same one-operation/one-concrete-handler convention
 //! as commands, but read DTOs directly and never rehydrate mutable aggregates.
 
+pub mod agent_connections;
 pub mod control_catalog;
 pub mod framework_catalog;
 pub mod get_user;

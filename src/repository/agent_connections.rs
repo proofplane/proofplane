@@ -1,498 +1,200 @@
+use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use crate::domain::{
-    AgentConnection, AgentConnectionId, AgentConnectionStatus, NewPendingAgentConnection,
-    Sha256Digest, UserAgentConnection, UserId, WorkspaceId, WorkspacePermission,
+use super::{
+    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    Error, Postgres, TransactionContext,
 };
+use crate::domain::{AgentConnection, AgentConnectionId, Sha256Digest, WorkspacePermission};
 
-use super::{constraints::classify_db_error, Error, Postgres};
-
-const CONNECTION_COLUMNS: &str = "c.id, c.user_id, c.workspace_id, c.auth0_subject, \
-    c.auth0_client_id, c.client_display_name, c.resource, c.status, \
-    c.pending_expires_at, c.activated_at, c.last_used_at, c.revoked_at, c.created_at";
-const PERMISSIONS_MATCH: &str = r#"
-(
-    SELECT count(*)
-    FROM agent_connection_permissions p
-    WHERE p.agent_connection_id = c.id
-) = cardinality($6::text[])
-AND NOT EXISTS (
-    SELECT 1
-    FROM agent_connection_permissions p
-    WHERE p.agent_connection_id = c.id
-      AND NOT p.permission = ANY($6::text[])
-)
-"#;
+enum RepositoryConnection<'a> {
+    Postgres(&'a Postgres),
+    Transaction(&'a TransactionContext<'a>),
+}
+pub struct AgentConnectionRepository<'a> {
+    connection: RepositoryConnection<'a>,
+}
 
 impl Postgres {
-    pub async fn create_pending_agent_connection(
-        &self,
-        pending: &NewPendingAgentConnection,
-    ) -> Result<AgentConnection, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-
-        transaction
-            .execute(
-                r#"
-DELETE FROM agent_connections
-WHERE user_id = $1
-  AND auth0_client_id = $2
-  AND resource = $3
-  AND status IN ('pending', 'authorized')
-  AND pending_expires_at <= now()
-"#,
-                &[
-                    &Uuid::from(pending.user_id),
-                    &pending.auth0_client_id,
-                    &pending.resource,
-                ],
-            )
-            .await?;
-
-        let row = transaction
-            .query_one(
-                r#"
-INSERT INTO agent_connections (
-    id, user_id, workspace_id, auth0_subject, auth0_client_id,
-    client_display_name, resource, status, pending_expires_at
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
-RETURNING id, user_id, workspace_id, auth0_subject, auth0_client_id,
-    client_display_name, resource, status, pending_expires_at, activated_at,
-    last_used_at, revoked_at, created_at
-"#,
-                &[
-                    &Uuid::from(pending.id),
-                    &Uuid::from(pending.user_id),
-                    &Uuid::from(pending.workspace_id),
-                    &pending.auth0_subject,
-                    &pending.auth0_client_id,
-                    &pending.client_display_name,
-                    &pending.resource,
-                    &pending.pending_expires_at,
-                ],
-            )
-            .await
-            .map_err(classify_db_error)?;
-
-        for permission in &pending.permissions {
-            transaction
-                .execute(
-                    r#"
-INSERT INTO agent_connection_permissions (agent_connection_id, permission)
-VALUES ($1, $2)
-"#,
-                    &[&Uuid::from(pending.id), &permission.as_str()],
-                )
-                .await
-                .map_err(classify_db_error)?;
+    pub fn agent_connections(&self) -> AgentConnectionRepository<'_> {
+        AgentConnectionRepository {
+            connection: RepositoryConnection::Postgres(self),
         }
-
-        let continuation_digest: &[u8] = pending.continuation_digest.as_bytes();
-        let nonce_digest: &[u8] = pending.nonce_digest.as_bytes();
-        transaction
-            .execute(
-                r#"
-INSERT INTO agent_authorization_transactions (
-    id, agent_connection_id, continuation_digest, nonce_digest
-)
-VALUES ($1, $2, $3, $4)
-"#,
-                &[
-                    &Uuid::from(pending.transaction_id),
-                    &Uuid::from(pending.id),
-                    &continuation_digest,
-                    &nonce_digest,
-                ],
-            )
-            .await
-            .map_err(classify_db_error)?;
-
-        transaction.commit().await?;
-        let mut connection = connection_from_row(&row)?;
-        connection.permissions = pending.permissions.clone();
-        Ok(connection)
     }
-
-    pub async fn deny_pending_agent_connection(
-        &self,
-        continuation_digest: Sha256Digest,
-    ) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let digest: &[u8] = continuation_digest.as_bytes();
-        let deleted = client
-            .execute(
-                r#"
-DELETE FROM agent_connections c
-USING agent_authorization_transactions t
-WHERE t.agent_connection_id = c.id
-  AND t.continuation_digest = $1
-  AND t.consumed_at IS NULL
-  AND c.status = 'pending'
-"#,
-                &[&digest],
-            )
-            .await?;
-        Ok(deleted == 1)
-    }
-
-    pub async fn consume_agent_connection_continuation(
-        &self,
-        continuation_digest: Sha256Digest,
-        nonce_digest: Sha256Digest,
-    ) -> Result<Option<AgentConnection>, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let continuation: &[u8] = continuation_digest.as_bytes();
-        let nonce: &[u8] = nonce_digest.as_bytes();
-        let row = transaction
-            .query_opt(
-                &format!(
-                    r#"
-WITH consumed AS (
-    UPDATE agent_authorization_transactions t
-    SET consumed_at = now()
-    FROM agent_connections candidate
-    WHERE t.agent_connection_id = candidate.id
-      AND t.continuation_digest = $1
-      AND t.nonce_digest = $2
-      AND t.consumed_at IS NULL
-      AND candidate.status = 'pending'
-      AND candidate.pending_expires_at > now()
-      AND EXISTS (
-          SELECT 1 FROM users u
-          WHERE u.id = candidate.user_id
-            AND u.auth0_sub = candidate.auth0_subject
-      )
-      AND EXISTS (
-          SELECT 1 FROM workspace_memberships m
-          WHERE m.user_id = candidate.user_id
-            AND m.workspace_id = candidate.workspace_id
-      )
-    RETURNING t.agent_connection_id
-)
-UPDATE agent_connections c
-SET status = 'authorized'
-FROM consumed
-WHERE consumed.agent_connection_id = c.id
-RETURNING {CONNECTION_COLUMNS}
-"#
-                ),
-                &[&continuation, &nonce],
-            )
-            .await?;
-
-        let Some(row) = row else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let mut connection = connection_from_row(&row)?;
-        connection.permissions = permissions_for_connection(&transaction, connection.id).await?;
-        transaction.commit().await?;
-        Ok(Some(connection))
-    }
-
-    pub async fn find_reusable_agent_connection(
-        &self,
-        auth0_subject: &str,
-        auth0_client_id: &str,
-        resource: &str,
-    ) -> Result<Option<AgentConnection>, Error> {
-        let client = self.get().await?;
-        let row = client
-            .query_opt(
-                &format!(
-                    r#"
-SELECT {CONNECTION_COLUMNS}
-FROM agent_connections c
-JOIN users u ON u.id = c.user_id
-JOIN workspace_memberships m
-  ON m.user_id = c.user_id AND m.workspace_id = c.workspace_id
-WHERE c.auth0_subject = $1
-  AND u.auth0_sub = $1
-  AND c.auth0_client_id = $2
-  AND c.resource = $3
-  AND c.status IN ('authorized', 'active')
-"#
-                ),
-                &[&auth0_subject, &auth0_client_id, &resource],
-            )
-            .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let mut connection = connection_from_row(&row)?;
-        connection.permissions = permissions_for_connection(&client, connection.id).await?;
-        Ok(Some(connection))
-    }
-
-    pub async fn activate_agent_connection(
-        &self,
-        id: AgentConnectionId,
-    ) -> Result<Option<AgentConnection>, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(
-                r#"
-UPDATE agent_connections c
-SET status = 'active', activated_at = now()
-WHERE c.id = $1
-  AND c.status = 'authorized'
-  AND c.pending_expires_at > now()
-  AND EXISTS (
-      SELECT 1 FROM agent_authorization_transactions t
-      WHERE t.agent_connection_id = c.id AND t.consumed_at IS NOT NULL
-  )
-  AND EXISTS (
-      SELECT 1 FROM workspace_memberships m
-      WHERE m.user_id = c.user_id AND m.workspace_id = c.workspace_id
-  )
-RETURNING c.id, c.user_id, c.workspace_id, c.auth0_subject, c.auth0_client_id,
-    c.client_display_name, c.resource, c.status, c.pending_expires_at,
-    c.activated_at, c.last_used_at, c.revoked_at, c.created_at
-"#,
-                &[&Uuid::from(id)],
-            )
-            .await?;
-        let Some(row) = row else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let mut connection = connection_from_row(&row)?;
-        connection.permissions = permissions_for_connection(&transaction, id).await?;
-        transaction.commit().await?;
-        Ok(Some(connection))
-    }
-
-    pub async fn authorize_agent_connection(
-        &self,
-        id: AgentConnectionId,
-        workspace_id: WorkspaceId,
-        auth0_subject: &str,
-        auth0_client_id: &str,
-        resource: &str,
-        permissions: &[String],
-    ) -> Result<Option<AgentConnection>, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(
-                &format!(
-                    r#"
-WITH activated AS (
-    UPDATE agent_connections c
-    SET status = 'active',
-        activated_at = now(),
-        last_used_at = now()
-    WHERE c.id = $1
-      AND c.workspace_id = $2
-      AND c.auth0_subject = $3
-      AND c.auth0_client_id = $4
-      AND c.resource = $5
-      AND c.status = 'authorized'
-      AND c.pending_expires_at > now()
-      AND {PERMISSIONS_MATCH}
-      AND EXISTS (
-          SELECT 1 FROM users u
-          WHERE u.id = c.user_id AND u.auth0_sub = c.auth0_subject
-      )
-      AND EXISTS (
-          SELECT 1 FROM workspace_memberships m
-          WHERE m.user_id = c.user_id AND m.workspace_id = c.workspace_id
-      )
-    RETURNING {CONNECTION_COLUMNS}
-),
-touched AS (
-    UPDATE agent_connections c
-    SET last_used_at = now()
-    WHERE c.id = $1
-      AND c.workspace_id = $2
-      AND c.auth0_subject = $3
-      AND c.auth0_client_id = $4
-      AND c.resource = $5
-      AND c.status = 'active'
-      AND {PERMISSIONS_MATCH}
-      AND NOT EXISTS (SELECT 1 FROM activated)
-      AND EXISTS (
-          SELECT 1 FROM users u
-          WHERE u.id = c.user_id AND u.auth0_sub = c.auth0_subject
-      )
-      AND EXISTS (
-          SELECT 1 FROM workspace_memberships m
-          WHERE m.user_id = c.user_id AND m.workspace_id = c.workspace_id
-      )
-    RETURNING {CONNECTION_COLUMNS}
-)
-SELECT * FROM activated
-UNION ALL
-SELECT * FROM touched
-LIMIT 1
-"#
-                ),
-                &[
-                    &Uuid::from(id),
-                    &Uuid::from(workspace_id),
-                    &auth0_subject,
-                    &auth0_client_id,
-                    &resource,
-                    &permissions,
-                ],
-            )
-            .await?;
-        let Some(row) = row else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let mut connection = connection_from_row(&row)?;
-        connection.permissions = permissions_for_connection(&transaction, id).await?;
-        transaction.commit().await?;
-        Ok(Some(connection))
-    }
-
-    pub async fn touch_agent_connection_last_used_at(
-        &self,
-        id: AgentConnectionId,
-    ) -> Result<bool, Error> {
-        let client = self.get().await?;
-        Ok(client
-            .execute(
-                r#"
-UPDATE agent_connections
-SET last_used_at = now()
-WHERE id = $1 AND status = 'active'
-"#,
-                &[&Uuid::from(id)],
-            )
-            .await?
-            == 1)
-    }
-
-    pub async fn revoke_agent_connection(&self, id: AgentConnectionId) -> Result<bool, Error> {
-        let client = self.get().await?;
-        Ok(client
-            .execute(
-                r#"
-UPDATE agent_connections
-SET status = 'revoked', revoked_at = now()
-WHERE id = $1 AND status IN ('pending', 'authorized', 'active')
-"#,
-                &[&Uuid::from(id)],
-            )
-            .await?
-            == 1)
-    }
-
-    pub async fn list_user_agent_connections(
-        &self,
-        user_id: UserId,
-    ) -> Result<Vec<UserAgentConnection>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
-                r#"
-SELECT c.id, c.client_display_name, c.status, t.consumed_at AS authorized_at,
-    c.last_used_at
-FROM agent_connections c
-JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id
-WHERE c.user_id = $1
-  AND c.status IN ('authorized', 'active')
-  AND t.consumed_at IS NOT NULL
-ORDER BY t.consumed_at DESC, c.id DESC
-"#,
-                &[&Uuid::from(user_id)],
-            )
-            .await?;
-        rows.iter().map(user_connection_from_row).collect()
-    }
-
-    pub async fn revoke_user_agent_connection(
-        &self,
-        user_id: UserId,
-        id: AgentConnectionId,
-    ) -> Result<bool, Error> {
-        let client = self.get().await?;
-        Ok(client
-            .execute(
-                r#"
-UPDATE agent_connections
-SET status = 'revoked', revoked_at = now()
-WHERE id = $1
-  AND user_id = $2
-  AND status IN ('authorized', 'active')
-"#,
-                &[&Uuid::from(id), &Uuid::from(user_id)],
-            )
-            .await?
-            == 1)
+}
+impl<'a> TransactionContext<'a> {
+    pub fn agent_connections(&'a self) -> AgentConnectionRepository<'a> {
+        AgentConnectionRepository {
+            connection: RepositoryConnection::Transaction(self),
+        }
     }
 }
 
-fn user_connection_from_row(row: &Row) -> Result<UserAgentConnection, Error> {
-    Ok(UserAgentConnection {
-        id: row.try_get::<_, Uuid>("id")?.into(),
-        client_name: row.try_get("client_display_name")?,
-        status: row
-            .try_get::<_, String>("status")?
-            .parse::<AgentConnectionStatus>()
-            .map_err(|_| Error::InvariantViolation("unknown agent connection status"))?,
-        authorized_at: row.try_get("authorized_at")?,
-        last_used_at: row.try_get("last_used_at")?,
-    })
+impl AgentConnectionRepository<'_> {
+    /// Rehydrates the whole connection, including permissions and the opaque continuation digests.
+    /// Transactional reads lock the snapshot through the surrounding commit.
+    pub async fn get(&self, id: AgentConnectionId) -> Result<Option<AgentConnection>, Error> {
+        let rows = match self.connection {
+            RepositoryConnection::Postgres(postgres) => {
+                postgres
+                    .get()
+                    .await?
+                    .query(GET_SQL, &[&Uuid::from(id)])
+                    .await?
+            }
+            RepositoryConnection::Transaction(context) => {
+                context
+                    .transaction
+                    .query(
+                        &format!("{GET_SQL} {GET_FOR_UPDATE_SQL}"),
+                        &[&Uuid::from(id)],
+                    )
+                    .await?
+            }
+        };
+        rows.into_iter()
+            .next()
+            .map(AgentConnection::try_from)
+            .transpose()
+    }
+
+    /// Saves the aggregate's complete state. Eligibility and relationship policy belong in handlers.
+    pub async fn save(&self, connection: &AgentConnection) -> Result<(), Error> {
+        let RepositoryConnection::Transaction(context) = self.connection else {
+            return Err(Error::InvariantViolation(
+                "agent connections must be saved in a transaction",
+            ));
+        };
+        let record = ConnectionRecord::from(connection);
+        save_workspace_snapshot(&context.transaction, record.as_workspace_snapshot()).await?;
+        context
+            .transaction
+            .execute(
+                "DELETE FROM agent_connection_permissions WHERE agent_connection_id = $1",
+                &[&record.id],
+            )
+            .await?;
+        for permission in &connection.permissions {
+            context.transaction.execute("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[&record.id, &permission.as_str()]).await?;
+        }
+        context.transaction.execute(
+            "INSERT INTO agent_authorization_transactions (id, agent_connection_id, continuation_digest, nonce_digest, consumed_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (agent_connection_id) DO UPDATE SET id = EXCLUDED.id, continuation_digest = EXCLUDED.continuation_digest, nonce_digest = EXCLUDED.nonce_digest, consumed_at = EXCLUDED.consumed_at",
+            &[&Uuid::from(connection.authorization_transaction_id()), &record.id, &connection.continuation_digest().as_bytes().as_slice(), &connection.nonce_digest().as_bytes().as_slice(), &connection.continuation_consumed_at()]
+        ).await?;
+        Ok(())
+    }
 }
 
-async fn permissions_for_connection(
-    client: &impl GenericClient,
-    id: AgentConnectionId,
-) -> Result<Vec<WorkspacePermission>, Error> {
-    let rows = client
-        .query(
-            r#"
-SELECT permission
-FROM agent_connection_permissions
-WHERE agent_connection_id = $1
-"#,
-            &[&Uuid::from(id)],
-        )
-        .await?;
-    let mut permissions = rows
-        .into_iter()
-        .map(|row| {
-            row.try_get::<_, String>("permission")?
-                .parse()
-                .map_err(|_| Error::InvariantViolation("unknown agent connection permission"))
+const GET_SQL: &str = r#"SELECT c.id, c.user_id, c.workspace_id, c.auth0_subject, c.auth0_client_id, c.client_display_name, c.resource, c.status, c.pending_expires_at, c.activated_at, c.last_used_at, c.revoked_at, c.created_at, t.id AS transaction_id, t.continuation_digest, t.nonce_digest, t.consumed_at, COALESCE((SELECT array_agg(p.permission ORDER BY array_position(ARRAY['read_evidence','write_evidence','read_evidence_submissions','write_evidence_submissions','read_controls','write_controls','manage_auditor_access'], p.permission)) FROM agent_connection_permissions p WHERE p.agent_connection_id = c.id), ARRAY[]::text[]) AS permissions FROM agent_connections c JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id WHERE c.id = $1"#;
+const GET_FOR_UPDATE_SQL: &str = "FOR UPDATE OF c, t";
+
+workspace_snapshot_record! {
+    struct ConnectionRecord { id: Uuid, user_id: Uuid, workspace_id: Uuid, auth0_subject: String, auth0_client_id: String, client_display_name: String, resource: String, status: String, pending_expires_at: DateTime<Utc>, activated_at: Option<DateTime<Utc>>, last_used_at: Option<DateTime<Utc>>, revoked_at: Option<DateTime<Utc>>, created_at: DateTime<Utc>, }
+    table: agent_connections, conflict: id, scope: workspace_id,
+}
+
+impl TryFrom<Row> for ConnectionRecord {
+    type Error = Error;
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_id: row.try_get("user_id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            auth0_subject: row.try_get("auth0_subject")?,
+            auth0_client_id: row.try_get("auth0_client_id")?,
+            client_display_name: row.try_get("client_display_name")?,
+            resource: row.try_get("resource")?,
+            status: row.try_get::<_, String>("status")?,
+            pending_expires_at: row.try_get("pending_expires_at")?,
+            activated_at: row.try_get("activated_at")?,
+            last_used_at: row.try_get("last_used_at")?,
+            revoked_at: row.try_get("revoked_at")?,
+            created_at: row.try_get("created_at")?,
         })
-        .collect::<Result<Vec<_>, Error>>()?;
-    permissions.sort_by_key(|permission| {
-        WorkspacePermission::ALL
-            .iter()
-            .position(|candidate| candidate == permission)
-            .unwrap_or(WorkspacePermission::ALL.len())
-    });
-    Ok(permissions)
+    }
+}
+impl TryFrom<Row> for AgentConnection {
+    type Error = Error;
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        let record = ConnectionRecord::try_from(row.clone())?;
+        let continuation: [u8; 32] = row
+            .try_get::<_, Vec<u8>>("continuation_digest")?
+            .try_into()
+            .map_err(|_| {
+                Error::InvariantViolation("agent continuation digest must contain 32 bytes")
+            })?;
+        let nonce: [u8; 32] = row
+            .try_get::<_, Vec<u8>>("nonce_digest")?
+            .try_into()
+            .map_err(|_| Error::InvariantViolation("agent nonce digest must contain 32 bytes"))?;
+        let permissions = row
+            .try_get::<_, Vec<String>>("permissions")?
+            .into_iter()
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| Error::InvariantViolation("unknown agent connection permission"))
+            })
+            .collect::<Result<Vec<WorkspacePermission>, Error>>()?;
+        AgentConnection::rehydrate(
+            record.id.into(),
+            record.user_id.into(),
+            record.workspace_id.into(),
+            record.auth0_subject,
+            record.auth0_client_id,
+            record.client_display_name,
+            record.resource,
+            record
+                .status
+                .parse()
+                .map_err(|_| Error::InvariantViolation("unknown agent connection status"))?,
+            permissions,
+            record.pending_expires_at,
+            record.activated_at,
+            record.last_used_at,
+            record.revoked_at,
+            record.created_at,
+            row.try_get::<_, Uuid>("transaction_id")?.into(),
+            Sha256Digest::from_bytes(continuation),
+            Sha256Digest::from_bytes(nonce),
+            row.try_get("consumed_at")?,
+        )
+        .map_err(|_| Error::InvariantViolation("persisted agent connection is inconsistent"))
+    }
+}
+impl From<&AgentConnection> for ConnectionRecord {
+    fn from(value: &AgentConnection) -> Self {
+        Self {
+            id: value.id.into(),
+            user_id: value.user_id.into(),
+            workspace_id: value.workspace_id.into(),
+            auth0_subject: value.auth0_subject.clone(),
+            auth0_client_id: value.auth0_client_id.clone(),
+            client_display_name: value.client_display_name.clone(),
+            resource: value.resource.clone(),
+            status: value.status.as_str().to_owned(),
+            pending_expires_at: value.pending_expires_at,
+            activated_at: value.activated_at,
+            last_used_at: value.last_used_at,
+            revoked_at: value.revoked_at,
+            created_at: value.created_at,
+        }
+    }
 }
 
-fn connection_from_row(row: &Row) -> Result<AgentConnection, Error> {
-    Ok(AgentConnection {
-        id: AgentConnectionId::from(row.try_get::<_, Uuid>("id")?),
-        user_id: row.try_get::<_, Uuid>("user_id")?.into(),
-        workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
-        auth0_subject: row.try_get("auth0_subject")?,
-        auth0_client_id: row.try_get("auth0_client_id")?,
-        client_display_name: row.try_get("client_display_name")?,
-        resource: row.try_get("resource")?,
-        status: row
-            .try_get::<_, String>("status")?
-            .parse()
-            .map_err(|_| Error::InvariantViolation("unknown agent connection status"))?,
-        permissions: Vec::new(),
-        pending_expires_at: row.try_get("pending_expires_at")?,
-        activated_at: row.try_get("activated_at")?,
-        last_used_at: row.try_get("last_used_at")?,
-        revoked_at: row.try_get("revoked_at")?,
-        created_at: row.try_get("created_at")?,
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn snapshot_read_locks_only_in_a_transaction() {
+        assert!(!GET_SQL.contains("FOR UPDATE"));
+        assert!(GET_FOR_UPDATE_SQL.contains("FOR UPDATE OF c, t"));
+    }
+    #[test]
+    fn snapshot_query_loads_digests_and_canonical_permissions() {
+        assert!(GET_SQL.contains("continuation_digest"));
+        assert!(GET_SQL.contains("array_position"));
+    }
 }

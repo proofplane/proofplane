@@ -1,25 +1,35 @@
-use std::sync::Arc;
-
-use chrono::{DateTime, Utc};
-use thiserror::Error;
-use uuid::Uuid;
-
+//! Compatibility façade for adapters not yet cut over to typed operations.
+pub use crate::authentication::AgentConnectionContext;
 use crate::{
+    application::{
+        commands::agent_connections::{
+            ActivateAgentConnection, ActivateAgentConnectionHandler,
+            ActivateAgentConnectionOutcome, AgentConnectionCommandError, AuthorizeAgentConnection,
+            AuthorizeAgentConnectionHandler, ConsumeAgentConnectionContinuation,
+            ConsumeAgentConnectionContinuationHandler, ConsumeAgentConnectionOutcome,
+            DenyAgentConnection, DenyAgentConnectionHandler, RequestAgentConnection,
+            RequestAgentConnectionHandler, RevokeAgentConnection, RevokeAgentConnectionHandler,
+            UseAgentConnection, UseAgentConnectionHandler,
+        },
+        queries::agent_connections::{
+            FindReusableAgentConnection, FindReusableAgentConnectionHandler,
+            ListUserAgentConnections, ListUserAgentConnectionsHandler,
+        },
+        ExecutionMetadata,
+    },
     domain::{
-        AgentAuthorizationTransactionId, AgentConnection, AgentConnectionId,
-        NewPendingAgentConnection, Sha256Digest, UserAgentConnection, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions,
+        AgentConnection, AgentConnectionId, Sha256Digest, UserAgentConnection, UserId, WorkspaceId,
+        WorkspacePermission,
     },
     repository::{ConflictKind, Error as RepositoryError, Postgres},
 };
-
-pub use crate::authentication::AgentConnectionContext;
-
+use chrono::{DateTime, Utc};
+use std::sync::Arc;
+use thiserror::Error;
 #[derive(Clone)]
 pub struct AgentConnectionService {
     repository: Arc<Postgres>,
 }
-
 #[derive(Debug, Error)]
 pub enum AgentConnectionError {
     #[error("agent connection request was rejected by policy")]
@@ -29,19 +39,29 @@ pub enum AgentConnectionError {
     #[error("repository error")]
     Repository(RepositoryError),
 }
-
 impl From<RepositoryError> for AgentConnectionError {
     fn from(error: RepositoryError) -> Self {
         if matches!(
             error,
             RepositoryError::Conflict(ConflictKind::AgentConnectionExists)
         ) {
-            return Self::AlreadyExists;
+            Self::AlreadyExists
+        } else {
+            Self::Repository(error)
         }
-        Self::Repository(error)
     }
 }
-
+impl From<AgentConnectionCommandError> for AgentConnectionError {
+    fn from(error: AgentConnectionCommandError) -> Self {
+        match error {
+            AgentConnectionCommandError::AlreadyExists => Self::AlreadyExists,
+            AgentConnectionCommandError::Denied
+            | AgentConnectionCommandError::Invalid
+            | AgentConnectionCommandError::Unavailable => Self::PolicyRejected,
+            AgentConnectionCommandError::Repository(error) => error.into(),
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct CreatePendingConnectionPayload {
     pub user_id: UserId,
@@ -55,7 +75,6 @@ pub struct CreatePendingConnectionPayload {
     pub continuation_token: String,
     pub nonce: String,
 }
-
 #[derive(Debug, Clone)]
 pub struct FindReusableConnectionPayload {
     pub auth0_subject: String,
@@ -63,7 +82,6 @@ pub struct FindReusableConnectionPayload {
     pub resource: String,
     pub permissions: Vec<WorkspacePermission>,
 }
-
 #[derive(Debug, Clone)]
 pub struct AuthorizeMcpConnectionPayload {
     pub connection_id: AgentConnectionId,
@@ -73,212 +91,207 @@ pub struct AuthorizeMcpConnectionPayload {
     pub resource: String,
     pub permissions: Vec<WorkspacePermission>,
 }
-
 #[derive(Debug, Clone)]
 pub struct ConsumeContinuationPayload {
     pub continuation_token: String,
     pub nonce: String,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(
     clippy::large_enum_variant,
-    reason = "the approved policy outcome intentionally owns the repository result"
+    reason = "the compatibility outcome preserves the legacy shape"
 )]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsumeContinuationOutcome {
     Approved(AgentConnection),
     Invalid,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(
     clippy::large_enum_variant,
-    reason = "the activated policy outcome intentionally owns the repository result"
+    reason = "the compatibility outcome preserves the legacy shape"
 )]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivationOutcome {
     Activated(AgentConnection),
     Rejected,
 }
-
 impl AgentConnectionService {
     pub fn new(repository: Arc<Postgres>) -> Self {
         Self { repository }
     }
-
     pub async fn create_pending(
         &self,
         payload: CreatePendingConnectionPayload,
     ) -> Result<AgentConnection, AgentConnectionError> {
-        let user = self
-            .repository
-            .get_user(payload.user_id)
-            .await?
-            .ok_or(AgentConnectionError::PolicyRejected)?;
-        if user.auth0_sub != payload.auth0_subject {
-            return Err(AgentConnectionError::PolicyRejected);
-        }
-        if self
-            .repository
-            .get_membership_role(payload.workspace_id, payload.user_id)
-            .await?
-            .is_none()
-        {
-            return Err(AgentConnectionError::PolicyRejected);
-        }
-
-        Ok(self
-            .repository
-            .create_pending_agent_connection(&NewPendingAgentConnection {
-                id: AgentConnectionId::from(Uuid::new_v4()),
-                transaction_id: AgentAuthorizationTransactionId::from(Uuid::new_v4()),
-                user_id: payload.user_id,
-                workspace_id: payload.workspace_id,
-                auth0_subject: payload.auth0_subject,
-                auth0_client_id: payload.auth0_client_id,
-                client_display_name: payload.client_display_name,
-                resource: payload.resource,
-                permissions: payload.permissions,
-                pending_expires_at: payload.expires_at,
-                continuation_digest: digest_secret(&payload.continuation_token),
-                nonce_digest: digest_secret(&payload.nonce),
-            })
+        Ok(RequestAgentConnectionHandler::new(self.repository.clone())
+            .handle(
+                RequestAgentConnection {
+                    user_id: payload.user_id,
+                    workspace_id: payload.workspace_id,
+                    auth0_subject: payload.auth0_subject,
+                    auth0_client_id: payload.auth0_client_id,
+                    client_display_name: payload.client_display_name,
+                    resource: payload.resource,
+                    permissions: payload.permissions,
+                    expires_at: payload.expires_at,
+                    continuation_token: payload.continuation_token,
+                    nonce: payload.nonce,
+                },
+                ExecutionMetadata::background(),
+            )
             .await?)
     }
-
     pub async fn deny_pending(
         &self,
         continuation_token: &str,
     ) -> Result<bool, AgentConnectionError> {
-        Ok(self
-            .repository
-            .deny_pending_agent_connection(digest_secret(continuation_token))
+        Ok(DenyAgentConnectionHandler::new(self.repository.clone())
+            .handle(
+                DenyAgentConnection {
+                    continuation_token: continuation_token.to_owned(),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?)
     }
-
     pub async fn consume_continuation(
         &self,
         payload: ConsumeContinuationPayload,
     ) -> Result<ConsumeContinuationOutcome, AgentConnectionError> {
-        let connection = self
-            .repository
-            .consume_agent_connection_continuation(
-                digest_secret(&payload.continuation_token),
-                digest_secret(&payload.nonce),
-            )
-            .await?;
-        Ok(match connection {
-            Some(connection) => ConsumeContinuationOutcome::Approved(connection),
-            None => ConsumeContinuationOutcome::Invalid,
-        })
+        Ok(
+            match ConsumeAgentConnectionContinuationHandler::new(self.repository.clone())
+                .handle(
+                    ConsumeAgentConnectionContinuation {
+                        continuation_token: payload.continuation_token,
+                        nonce: payload.nonce,
+                    },
+                    ExecutionMetadata::background(),
+                )
+                .await?
+            {
+                ConsumeAgentConnectionOutcome::Approved(connection) => {
+                    ConsumeContinuationOutcome::Approved(connection)
+                }
+                ConsumeAgentConnectionOutcome::Invalid => ConsumeContinuationOutcome::Invalid,
+            },
+        )
     }
-
     pub async fn find_reusable(
         &self,
         payload: FindReusableConnectionPayload,
     ) -> Result<Option<AgentConnection>, AgentConnectionError> {
-        let connection = self
-            .repository
-            .find_reusable_agent_connection(
-                &payload.auth0_subject,
-                &payload.auth0_client_id,
-                &payload.resource,
-            )
+        let result = FindReusableAgentConnectionHandler::new(self.repository.clone())
+            .handle(FindReusableAgentConnection {
+                auth0_subject: payload.auth0_subject,
+                auth0_client_id: payload.auth0_client_id,
+                resource: payload.resource,
+                permissions: payload.permissions,
+            })
             .await?;
-        Ok(connection.filter(|connection| connection.permissions == payload.permissions))
+        match result {
+            Some(connection) => Ok(self
+                .repository
+                .agent_connections()
+                .get(connection.id)
+                .await?),
+            None => Ok(None),
+        }
     }
-
     pub async fn authorize_mcp_connection(
         &self,
         payload: AuthorizeMcpConnectionPayload,
     ) -> Result<Option<AgentConnectionContext>, AgentConnectionError> {
-        let permission_strings = payload
-            .permissions
-            .iter()
-            .map(|permission| permission.as_str().to_owned())
-            .collect::<Vec<_>>();
-        let Some(connection) = self
-            .repository
-            .authorize_agent_connection(
-                payload.connection_id,
-                payload.workspace_id,
-                &payload.auth0_subject,
-                &payload.auth0_client_id,
-                &payload.resource,
-                &permission_strings,
-            )
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(AgentConnectionContext {
-            user_id: connection.user_id,
-            connection_id: connection.id,
-            workspace_id: connection.workspace_id,
-            permissions: WorkspacePermissions::from_iter(connection.permissions),
-        }))
+        Ok(
+            AuthorizeAgentConnectionHandler::new(self.repository.clone())
+                .handle(
+                    AuthorizeAgentConnection {
+                        connection_id: payload.connection_id,
+                        workspace_id: payload.workspace_id,
+                        auth0_subject: payload.auth0_subject,
+                        auth0_client_id: payload.auth0_client_id,
+                        resource: payload.resource,
+                        permissions: payload.permissions,
+                    },
+                    ExecutionMetadata::background(),
+                )
+                .await?,
+        )
     }
-
     pub async fn activate(
         &self,
         id: AgentConnectionId,
     ) -> Result<ActivationOutcome, AgentConnectionError> {
-        let connection = self.repository.activate_agent_connection(id).await?;
-        Ok(match connection {
-            Some(connection) => ActivationOutcome::Activated(connection),
-            None => ActivationOutcome::Rejected,
-        })
+        Ok(
+            match ActivateAgentConnectionHandler::new(self.repository.clone())
+                .handle(
+                    ActivateAgentConnection { connection_id: id },
+                    ExecutionMetadata::background(),
+                )
+                .await?
+            {
+                ActivateAgentConnectionOutcome::Activated(connection) => {
+                    ActivationOutcome::Activated(connection)
+                }
+                ActivateAgentConnectionOutcome::Rejected => ActivationOutcome::Rejected,
+            },
+        )
     }
-
     pub async fn touch_last_used(
         &self,
         id: AgentConnectionId,
     ) -> Result<bool, AgentConnectionError> {
-        Ok(self
-            .repository
-            .touch_agent_connection_last_used_at(id)
+        Ok(UseAgentConnectionHandler::new(self.repository.clone())
+            .handle(
+                UseAgentConnection { connection_id: id },
+                ExecutionMetadata::background(),
+            )
             .await?)
     }
-
     pub async fn revoke(&self, id: AgentConnectionId) -> Result<bool, AgentConnectionError> {
-        Ok(self.repository.revoke_agent_connection(id).await?)
+        Ok(RevokeAgentConnectionHandler::new(self.repository.clone())
+            .handle(
+                RevokeAgentConnection {
+                    connection_id: id,
+                    user_id: None,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await?)
     }
-
     pub async fn list_for_user(
         &self,
         user_id: UserId,
     ) -> Result<Vec<UserAgentConnection>, AgentConnectionError> {
-        Ok(self.repository.list_user_agent_connections(user_id).await?)
+        Ok(
+            ListUserAgentConnectionsHandler::new(self.repository.clone())
+                .handle(ListUserAgentConnections { user_id })
+                .await?
+                .into_iter()
+                .map(|value| UserAgentConnection {
+                    id: value.id,
+                    client_name: value.client_name,
+                    status: value.status,
+                    authorized_at: value.authorized_at,
+                    last_used_at: value.last_used_at,
+                })
+                .collect(),
+        )
     }
-
     pub async fn revoke_for_user(
         &self,
         user_id: UserId,
         id: AgentConnectionId,
     ) -> Result<bool, AgentConnectionError> {
-        Ok(self
-            .repository
-            .revoke_user_agent_connection(user_id, id)
+        Ok(RevokeAgentConnectionHandler::new(self.repository.clone())
+            .handle(
+                RevokeAgentConnection {
+                    connection_id: id,
+                    user_id: Some(user_id),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?)
     }
 }
-
 pub fn digest_secret(value: &str) -> Sha256Digest {
     Sha256Digest::digest(value.as_bytes())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::digest_secret;
-
-    #[test]
-    fn secret_digest_is_deterministic_and_does_not_retain_plaintext() {
-        let digest = digest_secret("continuation-secret");
-
-        assert_eq!(digest, digest_secret("continuation-secret"));
-        assert_ne!(
-            digest.as_bytes().as_slice(),
-            b"continuation-secret".as_slice()
-        );
-    }
 }
