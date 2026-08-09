@@ -62,8 +62,11 @@ impl IssueAuditorAccessGrantHandler {
     ) -> Result<IssuedAuditorAccessGrant, IssueAuditorAccessGrantError> {
         authorize(&command.connection)?;
         let auditor_email = normalize_email(&command.auditor_email)?;
-        let expires_at = command.expires_at.unwrap_or_else(default_expires_at);
-        if expires_at <= Utc::now() {
+        let issued_at = Utc::now();
+        let expires_at = command
+            .expires_at
+            .unwrap_or(issued_at + chrono::Duration::days(DEFAULT_GRANT_TTL_DAYS));
+        if expires_at <= issued_at {
             return Err(IssueAuditorAccessGrantError::ExpiresAtInPast);
         }
 
@@ -86,7 +89,7 @@ impl IssueAuditorAccessGrantHandler {
                         Sha256Digest::from_bytes(*issued.digest.as_bytes()),
                         connection.user_id,
                         connection.connection_id,
-                        Utc::now(),
+                        issued_at,
                         expires_at,
                         period,
                     )
@@ -131,10 +134,6 @@ fn authorize(connection: &AgentConnectionContext) -> Result<(), IssueAuditorAcce
         .has(WorkspacePermission::ManageAuditorAccess)
         .then_some(())
         .ok_or(IssueAuditorAccessGrantError::Denied)
-}
-
-fn default_expires_at() -> DateTime<Utc> {
-    Utc::now() + chrono::Duration::days(DEFAULT_GRANT_TTL_DAYS)
 }
 
 #[cfg(test)]
