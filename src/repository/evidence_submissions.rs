@@ -15,6 +15,61 @@ use crate::{
 
 use super::{documents::document_from_row, Error, Postgres, TransactionContext};
 
+/// Complete-snapshot repository for the submission provenance aggregate.
+pub struct EvidenceSubmissionRepository<'a> {
+    context: &'a WorkspaceTransactionContext<'a>,
+}
+
+impl<'a> WorkspaceTransactionContext<'a> {
+    pub fn evidence_submissions(&'a self) -> EvidenceSubmissionRepository<'a> {
+        EvidenceSubmissionRepository { context: self }
+    }
+}
+
+impl EvidenceSubmissionRepository<'_> {
+    pub async fn get(&self, id: EvidenceSubmissionId) -> Result<Option<EvidenceSubmission>, Error> {
+        self.context
+            .transaction
+            .query_opt(
+                r#"SELECT s.id, s.evidence_id, s.submitted_by_agent_connection_id,
+ c.user_id AS submitted_by_user_id, s.received_at, s.valid_from, s.valid_until
+FROM evidence_submissions s
+JOIN evidence e ON e.id = s.evidence_id
+JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
+WHERE s.id = $1 AND e.workspace_id = $2
+FOR UPDATE OF s"#,
+                &[&Uuid::from(id), &Uuid::from(self.context.workspace_id)],
+            )
+            .await?
+            .map(|row| evidence_submission_from_row(&row))
+            .transpose()
+    }
+
+    /// Persists the entire submission snapshot; evidence eligibility is checked
+    /// by the command handler before this boundary is called.
+    pub async fn save(&self, submission: &EvidenceSubmission) -> Result<(), Error> {
+        let EvidenceSubmitter::AgentConnection {
+            agent_connection_id,
+            ..
+        } = submission.submitted_by;
+        let changed = self.context.transaction.execute(
+            r#"INSERT INTO evidence_submissions (id, evidence_id, submitted_by_agent_connection_id, received_at, valid_from, valid_until)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE SET evidence_id = EXCLUDED.evidence_id,
+ submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
+ received_at = EXCLUDED.received_at, valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until"#,
+            &[&Uuid::from(submission.id), &Uuid::from(submission.evidence_id), &Uuid::from(agent_connection_id),
+              &submission.received_at, &submission.valid_from, &submission.valid_until],
+        ).await?;
+        if changed != 1 {
+            return Err(Error::InvariantViolation(
+                "submission snapshot save must affect one row",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingDocumentUploadWork {
     pub workspace_id: WorkspaceId,

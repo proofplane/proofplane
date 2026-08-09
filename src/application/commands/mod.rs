@@ -9,6 +9,7 @@ pub mod create_authenticated_auditor_session;
 pub mod create_control;
 pub mod create_evidence;
 pub mod create_owned_workspace;
+pub mod documents;
 pub mod issue_agent_evidence_upload_grant;
 pub mod issue_auditor_access_grant;
 pub mod issue_evidence_document_upload_grant;

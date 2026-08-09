@@ -63,7 +63,8 @@ pub use controls::{
 };
 pub use declared_upload_file::{DeclaredUploadFile, DeclaredUploadFileError};
 pub use document::{
-    CreateDocumentPayload, Document, DocumentId, DocumentIdentity, DocumentOwner,
+    CreateDocumentPayload, Document, DocumentEvent, DocumentId, DocumentIdentity,
+    DocumentLifecycleError, DocumentOwner, DocumentTransition, DocumentTransitionOutcome,
     DocumentUploadStatus,
 };
 pub use error::DomainError;
@@ -78,7 +79,8 @@ pub use evidence_document_upload_grant::{
 };
 pub use evidence_submission::{
     CoverageWindow, CreateEvidenceSubmissionPayload, DocumentUploadGrantId, EvidenceSubmission,
-    EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmitter,
+    EvidenceSubmissionDetail, EvidenceSubmissionId, EvidenceSubmissionTransition,
+    EvidenceSubmissionTransitionOutcome, EvidenceSubmitter,
 };
 pub use oauth::{
     NewOAuthAuthorizationCode, NewOAuthAuthorizationRequest, OAuthAuthorizationCode,

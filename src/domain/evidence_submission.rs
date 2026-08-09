@@ -34,6 +34,48 @@ pub struct EvidenceSubmission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceSubmissionTransitionOutcome {
+    Created,
+    Replayed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceSubmissionTransition {
+    pub outcome: EvidenceSubmissionTransitionOutcome,
+}
+
+impl EvidenceSubmission {
+    pub fn create(
+        id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
+        submitted_by: EvidenceSubmitter,
+        coverage: CoverageWindow,
+        received_at: DateTime<Utc>,
+    ) -> (Self, EvidenceSubmissionTransition) {
+        (
+            Self {
+                id,
+                evidence_id,
+                submitted_by,
+                received_at,
+                valid_from: coverage.valid_from,
+                valid_until: coverage.valid_until,
+            },
+            EvidenceSubmissionTransition {
+                outcome: EvidenceSubmissionTransitionOutcome::Created,
+            },
+        )
+    }
+
+    pub fn coverage(&self) -> CoverageWindow {
+        CoverageWindow {
+            valid_from: self.valid_from,
+            valid_until: self.valid_until,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceSubmitter {
     AgentConnection {
         agent_connection_id: AgentConnectionId,

@@ -39,11 +39,11 @@ pub use constraints::ConflictKind;
 pub use document_upload_grants::{
     DocumentUploadGrant, EvidenceDocumentUploadGrantRepository, NewDocumentUploadGrant,
 };
-pub use documents::TypedDocumentUploadWork;
+pub use documents::{DocumentRepository, TypedDocumentUploadWork, WorkspaceDocumentRepository};
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use evidence_submissions::{
-    ArchiveDocumentResult, DocumentDownloadCandidate, FinalizingDocumentUploadWork,
-    PendingDocumentUploadWork,
+    ArchiveDocumentResult, DocumentDownloadCandidate, EvidenceSubmissionRepository,
+    FinalizingDocumentUploadWork, PendingDocumentUploadWork,
 };
 pub use oauth::OAuthAuthorizationFlowRepository;
 pub use outbox::{NewOutboxMessage, OutboxMessage};
