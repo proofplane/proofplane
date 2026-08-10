@@ -10,23 +10,40 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::agent_connections::{
+            AgentConnectionCommandError, AuthorizeAgentConnection, AuthorizeAgentConnectionHandler,
+            ConsumeAgentConnectionContinuation, ConsumeAgentConnectionContinuationHandler,
+            ConsumeAgentConnectionOutcome, RequestAgentConnection, RequestAgentConnectionHandler,
+        },
+        commands::oauth_authorization_flows::{
+            ApproveOAuthAuthorization, ApproveOAuthAuthorizationHandler,
+            AttachOAuthAuthorizationSubject, AttachOAuthAuthorizationSubjectHandler,
+            CancelOAuthAuthorization, CancelOAuthAuthorizationHandler,
+            ConsumeOAuthAuthorizationCode, ConsumeOAuthAuthorizationCodeHandler,
+            OAuthAuthorizationCodeGrant, OAuthAuthorizationCommandError, RequestOAuthAuthorization,
+            RequestOAuthAuthorizationHandler,
+        },
+        queries::agent_connections::{
+            FindReusableAgentConnection, FindReusableAgentConnectionHandler,
+        },
+        queries::oauth_authorization_flows::{
+            OAuthConsentContext as OAuthConsentContextReadModel, ReadOAuthConsentContext,
+            ReadOAuthConsentContextHandler,
+        },
+        ExecutionMetadata,
+    },
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims, VerifyError},
     authentication::paseto::{
         IssuedPasetoToken, McpOAuthDecryptor, McpOAuthEncryptor, RegisteredClaims,
     },
     domain::{
-        canonical_permissions, AgentConnection, NewOAuthAuthorizationCode,
-        NewOAuthAuthorizationRequest, OAuthAuthorizationCode, OAuthAuthorizationRequest,
+        canonical_permissions, OAuthAuthorizationFlow, OAuthAuthorizationRequest,
         OAuthAuthorizationRequestId, WorkspacePermission,
     },
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 
-use super::agent_connections::{
-    AgentConnectionError, AgentConnectionService, AuthorizeMcpConnectionPayload,
-    ConsumeContinuationOutcome, ConsumeContinuationPayload, CreatePendingConnectionPayload,
-    FindReusableConnectionPayload,
-};
 use super::client_resolver::{ClientResolutionError, ClientResolver};
 use crate::authentication::client_registration::{RegisterClientPayload, RegisteredClient};
 
@@ -36,8 +53,16 @@ const ACCESS_TOKEN_TTL: ChronoDuration = ChronoDuration::hours(24);
 
 #[derive(Clone)]
 pub struct OAuthService {
-    repository: Arc<Postgres>,
-    agent_connections: AgentConnectionService,
+    request_authorization: RequestOAuthAuthorizationHandler,
+    attach_authorization_subject: AttachOAuthAuthorizationSubjectHandler,
+    cancel_authorization: CancelOAuthAuthorizationHandler,
+    approve_authorization: ApproveOAuthAuthorizationHandler,
+    consume_authorization_code: ConsumeOAuthAuthorizationCodeHandler,
+    read_consent_context: ReadOAuthConsentContextHandler,
+    find_reusable_agent_connection: FindReusableAgentConnectionHandler,
+    request_agent_connection: RequestAgentConnectionHandler,
+    consume_agent_connection: ConsumeAgentConnectionContinuationHandler,
+    authorize_agent_connection: AuthorizeAgentConnectionHandler,
     clients: ClientResolver,
     resource: Url,
     token_encryptor: McpOAuthEncryptor,
@@ -55,7 +80,7 @@ pub enum OAuthError {
     #[error("OAuth dependency failed")]
     Repository(#[from] RepositoryError),
     #[error("agent connection authorization failed")]
-    AgentConnection(#[from] AgentConnectionError),
+    AgentConnection(#[from] AgentConnectionCommandError),
     #[error("MCP OAuth token operation failed")]
     Token(#[from] crate::authentication::paseto::Error),
     #[error("client id could not be resolved")]
@@ -123,10 +148,25 @@ impl OAuthService {
         token_encryptor: McpOAuthEncryptor,
         token_decryptor: McpOAuthDecryptor,
     ) -> Self {
-        let agent_connections = AgentConnectionService::new(repository.clone());
         Self {
-            repository,
-            agent_connections,
+            request_authorization: RequestOAuthAuthorizationHandler::new(repository.clone()),
+            attach_authorization_subject: AttachOAuthAuthorizationSubjectHandler::new(
+                repository.clone(),
+            ),
+            cancel_authorization: CancelOAuthAuthorizationHandler::new(repository.clone()),
+            approve_authorization: ApproveOAuthAuthorizationHandler::new(repository.clone()),
+            consume_authorization_code: ConsumeOAuthAuthorizationCodeHandler::new(
+                repository.clone(),
+            ),
+            read_consent_context: ReadOAuthConsentContextHandler::new(repository.clone()),
+            find_reusable_agent_connection: FindReusableAgentConnectionHandler::new(
+                repository.clone(),
+            ),
+            request_agent_connection: RequestAgentConnectionHandler::new(repository.clone()),
+            consume_agent_connection: ConsumeAgentConnectionContinuationHandler::new(
+                repository.clone(),
+            ),
+            authorize_agent_connection: AuthorizeAgentConnectionHandler::new(repository.clone()),
             clients,
             resource,
             token_encryptor,
@@ -151,11 +191,12 @@ impl OAuthService {
             return Err(OAuthError::InvalidRequest);
         }
         let csrf_token = random_secret(32)?;
-        Ok(PreparedAuthorization {
-            request: self
-                .repository
-                .create_oauth_authorization_request(&NewOAuthAuthorizationRequest {
-                    id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
+        let now = Utc::now();
+        let flow = self
+            .request_authorization
+            .handle(
+                RequestOAuthAuthorization {
+                    request_id: OAuthAuthorizationRequestId::from(Uuid::new_v4()),
                     client_id: payload.client_id,
                     client_name: client.client_name,
                     redirect_uri: payload.redirect_uri,
@@ -164,9 +205,15 @@ impl OAuthService {
                     resource: self.resource.to_string(),
                     scopes: payload.scopes,
                     csrf_token: csrf_token.clone(),
-                    expires_at: Utc::now() + AUTHORIZATION_REQUEST_TTL,
-                })
-                .await?,
+                    created_at: now,
+                    expires_at: now + AUTHORIZATION_REQUEST_TTL,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(request_authorization_error)?;
+        Ok(PreparedAuthorization {
+            request: request_from_flow(&flow)?,
             csrf_token,
         })
     }
@@ -177,32 +224,37 @@ impl OAuthService {
         auth0_subject: String,
         user_id: crate::domain::UserId,
     ) -> Result<CallbackOutcome, OAuthError> {
-        let request = self
-            .repository
-            .get_oauth_authorization_request_by_csrf(csrf_token)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
-        let request = self
-            .repository
-            .attach_oauth_authorization_subject(request.id, &auth0_subject, user_id)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
+        let flow = self
+            .attach_authorization_subject
+            .handle(
+                AttachOAuthAuthorizationSubject {
+                    csrf_token: csrf_token.to_owned(),
+                    auth0_subject: auth0_subject.clone(),
+                    user_id,
+                    attached_at: Utc::now(),
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(authorization_grant_error)?;
         if let Some(connection) = self
-            .agent_connections
-            .find_reusable(FindReusableConnectionPayload {
+            .find_reusable_agent_connection
+            .handle(FindReusableAgentConnection {
                 auth0_subject,
-                auth0_client_id: request.client_id.clone(),
-                resource: request.resource.clone(),
-                permissions: request.scopes.clone(),
+                auth0_client_id: flow.client_id().to_owned(),
+                resource: flow.resource().to_owned(),
+                permissions: flow.scopes().to_vec(),
             })
             .await?
         {
             return Ok(CallbackOutcome::Reusable {
-                redirect_uri: self.issue_code_redirect(&request, connection).await?,
+                redirect_uri: self
+                    .issue_code_redirect(&flow, connection.id, connection.workspace_id)
+                    .await?,
             });
         }
         Ok(CallbackOutcome::ConsentRequired {
-            context: Box::new(self.consent_context(request).await?),
+            context: Box::new(self.consent_context(flow.id()).await?),
         })
     }
 
@@ -210,71 +262,64 @@ impl OAuthService {
         &self,
         request_id: OAuthAuthorizationRequestId,
     ) -> Result<OAuthConsentContext, OAuthError> {
-        let request = self
-            .repository
-            .get_oauth_authorization_request(request_id)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
-        self.consent_context(request).await
+        self.consent_context(request_id).await
     }
 
     pub async fn approve_consent(&self, payload: ApproveConsentPayload) -> Result<Url, OAuthError> {
-        let request = self
-            .repository
-            .get_oauth_authorization_request(payload.request_id)
-            .await
-            .map_err(OAuthError::Repository)?
-            .ok_or(OAuthError::InvalidGrant)?;
-        let auth0_subject = request
-            .auth0_subject
-            .clone()
-            .ok_or(OAuthError::InvalidGrant)?;
-        let user_id = request.user_id.ok_or(OAuthError::InvalidGrant)?;
-        let workspace = self
-            .repository
-            .get_workspace_with_role_for_user(user_id)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
+        let context = self.read_consent_context(payload.request_id).await?;
         let continuation_token = random_secret(32)?;
         let nonce = random_secret(32)?;
-        self.agent_connections
-            .create_pending(CreatePendingConnectionPayload {
-                user_id,
-                workspace_id: workspace.workspace.id,
-                auth0_subject: auth0_subject.clone(),
-                auth0_client_id: request.client_id.clone(),
-                client_display_name: request.client_name.clone(),
-                resource: request.resource.clone(),
-                permissions: request.scopes.clone(),
-                expires_at: request.expires_at,
-                continuation_token: continuation_token.clone(),
-                nonce: nonce.clone(),
-            })
+        self.request_agent_connection
+            .handle(
+                RequestAgentConnection {
+                    user_id: context.user_id,
+                    workspace_id: context.workspace_id,
+                    auth0_subject: context.auth0_subject.clone(),
+                    auth0_client_id: context.client_id.clone(),
+                    client_display_name: context.client_name.clone(),
+                    resource: context.resource.clone(),
+                    permissions: context.scopes.clone(),
+                    expires_at: context.expires_at,
+                    continuation_token: continuation_token.clone(),
+                    nonce: nonce.clone(),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?;
         let connection = match self
-            .agent_connections
-            .consume_continuation(ConsumeContinuationPayload {
-                continuation_token,
-                nonce,
-            })
+            .consume_agent_connection
+            .handle(
+                ConsumeAgentConnectionContinuation {
+                    continuation_token,
+                    nonce,
+                },
+                ExecutionMetadata::background(),
+            )
             .await?
         {
-            ConsumeContinuationOutcome::Approved(connection) => connection,
-            ConsumeContinuationOutcome::Invalid => return Err(OAuthError::InvalidGrant),
+            ConsumeAgentConnectionOutcome::Approved(connection) => connection,
+            ConsumeAgentConnectionOutcome::Invalid => return Err(OAuthError::InvalidGrant),
         };
-        self.issue_code_redirect(&request, connection).await
+        self.issue_code_redirect_from_context(&context, connection.id, connection.workspace_id)
+            .await
     }
 
     pub async fn cancel_consent(
         &self,
         request_id: OAuthAuthorizationRequestId,
     ) -> Result<Url, OAuthError> {
-        let request = self
-            .repository
-            .consume_oauth_authorization_request(request_id)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
-        redirect_with_error(&request.redirect_uri, "access_denied", &request.state)
+        let flow = self
+            .cancel_authorization
+            .handle(
+                CancelOAuthAuthorization {
+                    request_id,
+                    cancelled_at: Utc::now(),
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(authorization_grant_error)?;
+        redirect_with_error(flow.redirect_uri(), "access_denied", flow.state())
     }
 
     pub async fn issue_access_token(
@@ -282,14 +327,18 @@ impl OAuthService {
         payload: TokenPayload,
     ) -> Result<IssuedPasetoToken, OAuthError> {
         let code = self
-            .repository
-            .consume_oauth_authorization_code(
-                &payload.code,
-                &payload.client_id,
-                &payload.redirect_uri,
+            .consume_authorization_code
+            .handle(
+                ConsumeOAuthAuthorizationCode {
+                    code: payload.code,
+                    client_id: payload.client_id,
+                    redirect_uri: payload.redirect_uri,
+                    consumed_at: Utc::now(),
+                },
+                ExecutionMetadata::background(),
             )
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
+            .await
+            .map_err(authorization_grant_error)?;
         if pkce_challenge(&payload.code_verifier) != code.code_challenge {
             return Err(OAuthError::InvalidGrant);
         }
@@ -314,56 +363,95 @@ impl OAuthService {
 
     async fn issue_code_redirect(
         &self,
-        request: &OAuthAuthorizationRequest,
-        connection: AgentConnection,
+        flow: &OAuthAuthorizationFlow,
+        connection_id: crate::domain::AgentConnectionId,
+        workspace_id: crate::domain::WorkspaceId,
     ) -> Result<Url, OAuthError> {
         let code = random_secret(32)?;
-        self.repository
-            .create_oauth_authorization_code(&NewOAuthAuthorizationCode {
-                code: code.clone(),
-                request_id: request.id,
-                agent_connection_id: connection.id,
-                workspace_id: connection.workspace_id,
-                client_id: request.client_id.clone(),
-                redirect_uri: request.redirect_uri.clone(),
-                code_challenge: request.code_challenge.clone(),
-                resource: request.resource.clone(),
-                scopes: request.scopes.clone(),
-                expires_at: Utc::now() + AUTHORIZATION_CODE_TTL,
+        let now = Utc::now();
+        self.approve_authorization
+            .handle(
+                ApproveOAuthAuthorization {
+                    request_id: flow.id(),
+                    code: code.clone(),
+                    agent_connection_id: connection_id,
+                    workspace_id,
+                    approved_at: now,
+                    code_expires_at: now + AUTHORIZATION_CODE_TTL,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(authorization_grant_error)?;
+        redirect_with_code(flow.redirect_uri(), &code, flow.state())
+    }
+
+    async fn issue_code_redirect_from_context(
+        &self,
+        context: &OAuthConsentContextReadModel,
+        connection_id: crate::domain::AgentConnectionId,
+        workspace_id: crate::domain::WorkspaceId,
+    ) -> Result<Url, OAuthError> {
+        let code = random_secret(32)?;
+        let now = Utc::now();
+        self.approve_authorization
+            .handle(
+                ApproveOAuthAuthorization {
+                    request_id: context.request_id,
+                    code: code.clone(),
+                    agent_connection_id: connection_id,
+                    workspace_id,
+                    approved_at: now,
+                    code_expires_at: now + AUTHORIZATION_CODE_TTL,
+                },
+                ExecutionMetadata::background(),
+            )
+            .await
+            .map_err(authorization_grant_error)?;
+        redirect_with_code(&context.redirect_uri, &code, &context.state)
+    }
+
+    async fn read_consent_context(
+        &self,
+        request_id: OAuthAuthorizationRequestId,
+    ) -> Result<OAuthConsentContextReadModel, OAuthError> {
+        self.read_consent_context
+            .handle(ReadOAuthConsentContext {
+                request_id,
+                now: Utc::now(),
             })
-            .await?;
-        redirect_with_code(&request.redirect_uri, &code, &request.state)
+            .await?
+            .ok_or(OAuthError::InvalidGrant)
     }
 
     async fn consent_context(
         &self,
-        request: OAuthAuthorizationRequest,
+        request_id: OAuthAuthorizationRequestId,
     ) -> Result<OAuthConsentContext, OAuthError> {
-        let user_id = request.user_id.ok_or(OAuthError::InvalidGrant)?;
-        self.repository
-            .get_workspace_with_role_for_user(user_id)
-            .await?
-            .ok_or(OAuthError::InvalidGrant)?;
+        let context = self.read_consent_context(request_id).await?;
         Ok(OAuthConsentContext {
-            request_id: request.id,
-            client_name: request.client_name,
+            request_id: context.request_id,
+            client_name: context.client_name,
         })
     }
 
     async fn issue_token_for_code(
         &self,
-        code: OAuthAuthorizationCode,
+        code: OAuthAuthorizationCodeGrant,
     ) -> Result<IssuedPasetoToken, OAuthError> {
         let Some(context) = self
-            .agent_connections
-            .authorize_mcp_connection(AuthorizeMcpConnectionPayload {
-                connection_id: code.agent_connection_id,
-                workspace_id: code.workspace_id,
-                auth0_subject: code.auth0_subject.clone(),
-                auth0_client_id: code.client_id.clone(),
-                resource: code.resource.clone(),
-                permissions: code.scopes.clone(),
-            })
+            .authorize_agent_connection
+            .handle(
+                AuthorizeAgentConnection {
+                    connection_id: code.agent_connection_id,
+                    workspace_id: code.workspace_id,
+                    auth0_subject: code.auth0_subject.clone(),
+                    auth0_client_id: code.client_id.clone(),
+                    resource: code.resource.clone(),
+                    permissions: code.scopes.clone(),
+                },
+                ExecutionMetadata::background(),
+            )
             .await?
         else {
             return Err(OAuthError::InvalidGrant);
@@ -388,6 +476,42 @@ impl OAuthService {
                 scopes,
             },
         )?)
+    }
+}
+
+fn request_from_flow(
+    flow: &OAuthAuthorizationFlow,
+) -> Result<OAuthAuthorizationRequest, OAuthError> {
+    Ok(OAuthAuthorizationRequest {
+        id: flow.id(),
+        client_id: flow.client_id().to_owned(),
+        client_name: flow.client_name().to_owned(),
+        redirect_uri: flow.redirect_uri().to_owned(),
+        code_challenge: flow.code_challenge().to_owned(),
+        state: flow.state().to_owned(),
+        resource: flow.resource().to_owned(),
+        scopes: flow.scopes().to_vec(),
+        auth0_subject: flow.auth0_subject().map(str::to_owned),
+        user_id: flow.user_id(),
+        expires_at: flow.expires_at(),
+    })
+}
+
+fn request_authorization_error(error: OAuthAuthorizationCommandError) -> OAuthError {
+    match error {
+        OAuthAuthorizationCommandError::Unavailable | OAuthAuthorizationCommandError::Invalid => {
+            OAuthError::InvalidRequest
+        }
+        OAuthAuthorizationCommandError::Repository(error) => OAuthError::Repository(error),
+    }
+}
+
+fn authorization_grant_error(error: OAuthAuthorizationCommandError) -> OAuthError {
+    match error {
+        OAuthAuthorizationCommandError::Unavailable | OAuthAuthorizationCommandError::Invalid => {
+            OAuthError::InvalidGrant
+        }
+        OAuthAuthorizationCommandError::Repository(error) => OAuthError::Repository(error),
     }
 }
 

@@ -4,7 +4,7 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 use tokio::time::timeout;
 
-use crate::{repository::Postgres, routes::error::ApiError};
+use crate::{persistence::Postgres, routes::error::ApiError};
 
 #[derive(Clone)]
 pub struct ReadyState {

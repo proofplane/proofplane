@@ -60,7 +60,7 @@ async fn empty_catalog_and_every_unavailable_browser_resource_share_one_recovery
         .await;
     empty_catalog.assert_status_ok();
     assert_eq!(
-        body_projection(&empty_catalog.text()),
+        body_read_model(&empty_catalog.text()),
         empty_policies_body(workspace_name, auditor_email)
     );
 
@@ -100,7 +100,7 @@ async fn empty_catalog_and_every_unavailable_browser_resource_share_one_recovery
     ];
     for response in responses {
         response.assert_status_not_found();
-        assert_eq!(body_projection(&response.text()), unavailable);
+        assert_eq!(body_read_model(&response.text()), unavailable);
     }
 
     client
@@ -115,5 +115,5 @@ async fn empty_catalog_and_every_unavailable_browser_resource_share_one_recovery
         .add_header("cookie", auditor_cookie)
         .await;
     revoked.assert_status_not_found();
-    assert_eq!(body_projection(&revoked.text()), unavailable);
+    assert_eq!(body_read_model(&revoked.text()), unavailable);
 }

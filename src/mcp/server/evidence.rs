@@ -14,11 +14,19 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::create_evidence::{CreateEvidence as CreateEvidenceCommand, CreateEvidenceError},
+        queries::evidence_catalog::{
+            EvidenceCatalogError, GetEvidence as GetEvidenceQuery,
+            ListEvidence as ListEvidenceQuery,
+        },
+        ExecutionMetadata,
+    },
     domain::{
-        required_text, CreateEvidencePayload, Evidence, EvidenceId, EvidenceStatus,
-        WorkspacePermission,
+        required_text, CreateEvidencePayload, EvidenceId, EvidenceStatus, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    read_models::EvidenceDetail,
     validate,
 };
 use uuid::Uuid;
@@ -38,9 +46,20 @@ impl ProofplaneMcp {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidence)?;
         let workspace_id = context.connection.workspace_id;
         let evidence = self
-            .evidence
-            .create(context.agent_connection_context(), payload)
-            .await?;
+            .evidence_handlers
+            .create
+            .handle(
+                CreateEvidenceCommand {
+                    connection: context.agent_connection_context(),
+                    title: payload.title,
+                    description: payload.description,
+                    collection_instructions: payload.collection_instructions,
+                    status: payload.status,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
+            .await?
+            .evidence;
 
         AuditEvent::new(
             "evidence.created",
@@ -70,8 +89,11 @@ impl ProofplaneMcp {
     ) -> Result<Json<ListEvidenceResponse>, ErrorData> {
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidence)?;
         let evidence = self
-            .evidence
-            .list_by_workspace(context.agent_connection_context())
+            .evidence_handlers
+            .list
+            .handle(ListEvidenceQuery {
+                connection: context.agent_connection_context(),
+            })
             .await?;
 
         Ok(Json(ListEvidenceResponse {
@@ -91,8 +113,12 @@ impl ProofplaneMcp {
         let evidence_id = parse_evidence_arg(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::ReadEvidence)?;
         let evidence = self
-            .evidence
-            .get(context.agent_connection_context(), evidence_id)
+            .evidence_handlers
+            .get
+            .handle(GetEvidenceQuery {
+                connection: context.agent_connection_context(),
+                evidence_id,
+            })
             .await?
             .ok_or_else(not_found)?;
 
@@ -100,6 +126,43 @@ impl ProofplaneMcp {
             evidence: evidence.into(),
         }))
     }
+}
+
+impl From<CreateEvidenceError> for ErrorData {
+    fn from(error: CreateEvidenceError) -> Self {
+        match error {
+            CreateEvidenceError::Unavailable => not_found(),
+            CreateEvidenceError::InvalidDefinition(errors) => domain_errors(errors),
+            CreateEvidenceError::Repository(error) => {
+                tracing::error!(%error, "MCP create evidence repository failure");
+                dependency_failed()
+            }
+        }
+    }
+}
+
+impl From<EvidenceCatalogError> for ErrorData {
+    fn from(error: EvidenceCatalogError) -> Self {
+        match error {
+            EvidenceCatalogError::Unavailable => not_found(),
+            EvidenceCatalogError::Repository(error) => {
+                tracing::error!(%error, "MCP evidence catalog repository failure");
+                dependency_failed()
+            }
+        }
+    }
+}
+
+fn dependency_failed() -> ErrorData {
+    ErrorData::internal_error(
+        "dependency failure",
+        Some(serde_json::json!({
+            "problem": {
+                "code": "dependency_failed",
+                "message": "a dependency failed while handling the tool call",
+            }
+        })),
+    )
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -136,8 +199,8 @@ struct EvidenceResponseDTO {
     updated_at: String,
 }
 
-impl From<Evidence> for EvidenceResponseDTO {
-    fn from(evidence: Evidence) -> Self {
+impl From<EvidenceDetail> for EvidenceResponseDTO {
+    fn from(evidence: EvidenceDetail) -> Self {
         Self {
             id: evidence.id.to_string(),
             workspace_id: evidence.workspace_id.to_string(),

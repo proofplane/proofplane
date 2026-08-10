@@ -16,13 +16,13 @@ pub struct ExpectedPolicyDocument<'a> {
 }
 
 #[track_caller]
-pub fn assert_policy_projection(
-    projection: &Value,
+pub fn assert_policy_read_model(
+    read_model: &Value,
     policy: &TestPolicy,
     expected_document: Option<ExpectedPolicyDocument<'_>>,
 ) -> Option<Uuid> {
     assert_eq!(
-        object_keys(projection),
+        object_keys(read_model),
         [
             "controls",
             "created_at",
@@ -35,18 +35,18 @@ pub fn assert_policy_projection(
         .into_iter()
         .collect()
     );
-    assert_eq!(projection["id"], policy.id.to_string());
-    assert_eq!(projection["name"], policy.name);
-    assert_eq!(projection["description"], json!(policy.description));
-    assert_eq!(projection["controls"], json!([]));
-    assert_rfc3339(&projection["created_at"]);
-    assert_rfc3339(&projection["updated_at"]);
+    assert_eq!(read_model["id"], policy.id.to_string());
+    assert_eq!(read_model["name"], policy.name);
+    assert_eq!(read_model["description"], json!(policy.description));
+    assert_eq!(read_model["controls"], json!([]));
+    assert_rfc3339(&read_model["created_at"]);
+    assert_rfc3339(&read_model["updated_at"]);
 
     let Some(expected) = expected_document else {
-        assert_eq!(projection["document"], Value::Null);
+        assert_eq!(read_model["document"], Value::Null);
         return None;
     };
-    let document = &projection["document"];
+    let document = &read_model["document"];
     assert_eq!(
         object_keys(document),
         [

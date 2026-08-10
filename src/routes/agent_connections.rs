@@ -12,21 +12,29 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::agent_connections::{
+            AgentConnectionCommandError, RevokeAgentConnection, RevokeAgentConnectionHandler,
+        },
+        queries::agent_connections::{ListUserAgentConnections, ListUserAgentConnectionsHandler},
+        ExecutionMetadata,
+    },
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
         UserContext,
     },
-    domain::{AgentConnectionId, UserAgentConnection},
+    domain::AgentConnectionId,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
+    read_models::UserAgentConnectionSummary,
     routes::{
         authentication::authenticate_user, error::ApiError, me::UserRouteAuthState,
         request_context::RequestId,
     },
-    services::agent_connections::{AgentConnectionError, AgentConnectionService},
 };
 
 pub struct AgentConnectionsState<V: TokenVerifier<Claims = VerifiedClaims>> {
-    pub service: AgentConnectionService,
+    pub list: ListUserAgentConnectionsHandler,
+    pub revoke: RevokeAgentConnectionHandler,
     pub route_auth: UserRouteAuthState<V>,
     pub mcp_url: Url,
 }
@@ -34,7 +42,8 @@ pub struct AgentConnectionsState<V: TokenVerifier<Claims = VerifiedClaims>> {
 impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for AgentConnectionsState<V> {
     fn clone(&self) -> Self {
         Self {
-            service: self.service.clone(),
+            list: self.list.clone(),
+            revoke: self.revoke.clone(),
             route_auth: self.route_auth.clone(),
             mcp_url: self.mcp_url.clone(),
         }
@@ -69,10 +78,12 @@ async fn list_connections<V: TokenVerifier<Claims = VerifiedClaims>>(
     Extension(user): Extension<UserContext>,
 ) -> Result<Json<AgentConnectionsResponse>, ApiError> {
     let connections = state
-        .service
-        .list_for_user(user.user_id)
+        .list
+        .handle(ListUserAgentConnections {
+            user_id: user.user_id,
+        })
         .await
-        .map_err(map_service_error)?;
+        .map_err(map_query_error)?;
     Ok(Json(AgentConnectionsResponse {
         mcp_url: state.mcp_url.to_string(),
         connections: connections.into_iter().map(Into::into).collect(),
@@ -87,10 +98,16 @@ async fn revoke_connection<V: TokenVerifier<Claims = VerifiedClaims>>(
 ) -> Result<StatusCode, ApiError> {
     let id = AgentConnectionId::from(id);
     if !state
-        .service
-        .revoke_for_user(user.user_id, id)
+        .revoke
+        .handle(
+            RevokeAgentConnection {
+                connection_id: id,
+                user_id: Some(user.user_id),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
         .await
-        .map_err(map_service_error)?
+        .map_err(map_command_error)?
     {
         return Err(ApiError::NotFound);
     }
@@ -111,8 +128,13 @@ async fn revoke_connection<V: TokenVerifier<Claims = VerifiedClaims>>(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn map_service_error(error: AgentConnectionError) -> ApiError {
+fn map_command_error(error: AgentConnectionCommandError) -> ApiError {
     tracing::error!(%error, "agent connection operation failed");
+    ApiError::Internal
+}
+
+fn map_query_error(error: crate::persistence::Error) -> ApiError {
+    tracing::error!(%error, "agent connection query failed");
     ApiError::Internal
 }
 
@@ -131,8 +153,8 @@ struct AgentConnectionResponse {
     last_used_at: Option<DateTime<Utc>>,
 }
 
-impl From<UserAgentConnection> for AgentConnectionResponse {
-    fn from(connection: UserAgentConnection) -> Self {
+impl From<UserAgentConnectionSummary> for AgentConnectionResponse {
+    fn from(connection: UserAgentConnectionSummary) -> Self {
         Self {
             id: connection.id.into(),
             client_name: connection.client_name,

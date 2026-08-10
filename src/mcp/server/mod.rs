@@ -23,15 +23,40 @@ use rmcp::{
 };
 
 use crate::{
-    mcp::server::common::authorize_connection,
-    services::{
-        agent_evidence_upload_grants::AgentEvidenceUploadGrantService,
-        agent_policy_document_upload_grants::AgentPolicyDocumentUploadGrantService,
-        auditor_access_grants::AuditorAccessGrantService, controls::ControlService,
-        document_upload_grants::DocumentUploadGrantService, evidence::EvidenceService,
-        evidence_submissions::EvidenceSubmissionService, policies::PolicyService,
-        policy_document_upload_grants::PolicyDocumentUploadGrantService,
+    application::{
+        commands::{
+            create_control::CreateControlHandler,
+            create_evidence::CreateEvidenceHandler,
+            issue_agent_evidence_upload_grant::IssueAgentEvidenceUploadGrantHandler,
+            issue_agent_policy_document_upload_grant::IssueAgentPolicyDocumentUploadGrantHandler,
+            issue_auditor_access_grant::IssueAuditorAccessGrantHandler,
+            issue_evidence_document_upload_grant::IssueEvidenceDocumentUploadGrantHandler,
+            issue_policy_document_upload_grant::IssuePolicyDocumentUploadGrantHandler,
+            map_control_to_evidence::MapControlToEvidenceHandler,
+            map_evidence_to_controls::MapEvidenceToControlsHandler,
+            policies::{
+                ArchivePolicyHandler, AttachControlToPoliciesHandler,
+                AttachPolicyToControlsHandler, CreatePolicyHandler,
+                DetachControlFromPoliciesHandler, DetachPolicyFromControlsHandler,
+                ReplacePolicyHandler,
+            },
+            replace_control::ReplaceControlHandler,
+            revoke_auditor_access_grant::RevokeAuditorAccessGrantHandler,
+            unmap_control_from_evidence::UnmapControlFromEvidenceHandler,
+            unmap_evidence_from_controls::UnmapEvidenceFromControlsHandler,
+        },
+        queries::{
+            control_catalog::{GetControlHandler, ListControlsHandler},
+            evidence_catalog::{
+                GetEvidenceHandler, ListEvidenceControlMappingsHandler, ListEvidenceHandler,
+            },
+            framework_catalog::{ListFrameworkRequirementsHandler, ListFrameworksHandler},
+            list_auditor_access_grants::ListAuditorAccessGrantsHandler,
+            policy_catalog::{GetPolicyHandler, ListPoliciesHandler},
+        },
     },
+    mcp::server::common::authorize_connection,
+    services::evidence_submissions::EvidenceSubmissionService,
     VERSION,
 };
 use url::Url;
@@ -68,48 +93,94 @@ fn server_instructions() -> String {
 
 #[derive(Clone)]
 pub struct ProofplaneMcp {
-    evidence: EvidenceService,
+    evidence_handlers: EvidenceHandlers,
     evidence_submissions: EvidenceSubmissionService,
-    agent_evidence_upload_grants: AgentEvidenceUploadGrantService,
-    agent_policy_document_upload_grants: AgentPolicyDocumentUploadGrantService,
-    document_upload_grants: DocumentUploadGrantService,
-    policy_document_upload_grants: PolicyDocumentUploadGrantService,
-    auditor_access_grants: AuditorAccessGrantService,
-    controls: ControlService,
-    policies: PolicyService,
+    issue_agent_evidence_upload_grant: IssueAgentEvidenceUploadGrantHandler,
+    issue_agent_policy_document_upload_grant: IssueAgentPolicyDocumentUploadGrantHandler,
+    issue_evidence_document_upload_grant: IssueEvidenceDocumentUploadGrantHandler,
+    issue_policy_document_upload_grant: IssuePolicyDocumentUploadGrantHandler,
+    auditor_access_grants: AuditorGrantHandlers,
+    control_handlers: ControlHandlers,
+    policy_handlers: PolicyHandlers,
     public_api_base_url: Url,
     max_document_bytes: u64,
     tool_router: ToolRouter<Self>,
 }
 
 pub(super) struct UploadDependencies {
-    pub evidence_grants: DocumentUploadGrantService,
-    pub policy_document_grants: PolicyDocumentUploadGrantService,
-    pub agent_evidence_grants: AgentEvidenceUploadGrantService,
-    pub agent_policy_document_grants: AgentPolicyDocumentUploadGrantService,
+    pub issue_evidence_grant: IssueEvidenceDocumentUploadGrantHandler,
+    pub issue_policy_grant: IssuePolicyDocumentUploadGrantHandler,
+    pub issue_agent_evidence_grant: IssueAgentEvidenceUploadGrantHandler,
+    pub issue_agent_policy_grant: IssueAgentPolicyDocumentUploadGrantHandler,
     pub max_document_bytes: u64,
+}
+
+#[derive(Clone)]
+pub(super) struct ControlHandlers {
+    pub create: CreateControlHandler,
+    pub replace: ReplaceControlHandler,
+    pub list: ListControlsHandler,
+    pub get: GetControlHandler,
+    pub list_frameworks: ListFrameworksHandler,
+    pub list_framework_requirements: ListFrameworkRequirementsHandler,
+}
+
+pub(super) struct ControlDependencies {
+    pub handlers: ControlHandlers,
+}
+
+#[derive(Clone)]
+pub(super) struct EvidenceHandlers {
+    pub create: CreateEvidenceHandler,
+    pub list: ListEvidenceHandler,
+    pub get: GetEvidenceHandler,
+    pub list_control_mappings: ListEvidenceControlMappingsHandler,
+    pub map_to_controls: MapEvidenceToControlsHandler,
+    pub map_control_to_evidence: MapControlToEvidenceHandler,
+    pub unmap_from_controls: UnmapEvidenceFromControlsHandler,
+    pub unmap_control_from_evidence: UnmapControlFromEvidenceHandler,
+}
+
+#[derive(Clone)]
+pub(super) struct AuditorGrantHandlers {
+    pub issue: IssueAuditorAccessGrantHandler,
+    pub list: ListAuditorAccessGrantsHandler,
+    pub revoke: RevokeAuditorAccessGrantHandler,
+}
+
+#[derive(Clone)]
+pub(super) struct PolicyHandlers {
+    pub create: CreatePolicyHandler,
+    pub replace: ReplacePolicyHandler,
+    pub archive: ArchivePolicyHandler,
+    pub attach_to_controls: AttachPolicyToControlsHandler,
+    pub attach_control_to_policies: AttachControlToPoliciesHandler,
+    pub detach_from_controls: DetachPolicyFromControlsHandler,
+    pub detach_control_from_policies: DetachControlFromPoliciesHandler,
+    pub list: ListPoliciesHandler,
+    pub get: GetPolicyHandler,
 }
 
 impl ProofplaneMcp {
     pub(super) fn new(
-        evidence: EvidenceService,
+        evidence_handlers: EvidenceHandlers,
         evidence_submissions: EvidenceSubmissionService,
         uploads: UploadDependencies,
-        auditor_access_grants: AuditorAccessGrantService,
-        controls: ControlService,
-        policies: PolicyService,
+        auditor_access_grants: AuditorGrantHandlers,
+        controls: ControlDependencies,
+        policy_handlers: PolicyHandlers,
         public_api_base_url: Url,
     ) -> Self {
         Self {
-            evidence,
+            evidence_handlers,
             evidence_submissions,
-            agent_evidence_upload_grants: uploads.agent_evidence_grants,
-            agent_policy_document_upload_grants: uploads.agent_policy_document_grants,
-            document_upload_grants: uploads.evidence_grants,
-            policy_document_upload_grants: uploads.policy_document_grants,
+            issue_agent_evidence_upload_grant: uploads.issue_agent_evidence_grant,
+            issue_agent_policy_document_upload_grant: uploads.issue_agent_policy_grant,
+            issue_evidence_document_upload_grant: uploads.issue_evidence_grant,
+            issue_policy_document_upload_grant: uploads.issue_policy_grant,
             auditor_access_grants,
-            controls,
-            policies,
+            control_handlers: controls.handlers,
+            policy_handlers,
             public_api_base_url,
             max_document_bytes: uploads.max_document_bytes,
             tool_router: Self::tool_router(),

@@ -5,8 +5,8 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::{
+    persistence::{OutboxMessage, Postgres},
     pubsub::{OutboundMessage, Publisher},
-    repository::{OutboxMessage, Postgres},
 };
 use tracing::warn;
 
@@ -38,7 +38,7 @@ impl Default for OutboxDequeuerConfig {
 #[derive(Debug, Error)]
 pub enum OutboxDequeuerError {
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 pub struct OutboxDequeuer<'a, P> {
@@ -168,14 +168,27 @@ where
 }
 
 fn outbound_message(row: &OutboxMessage) -> OutboundMessage {
-    let data = json!({
-        "outbox_message_id": row.id.to_string(),
-        "event_type": row.event_type,
-        "aggregate_type": row.aggregate_type,
-        "aggregate_id": row.aggregate_id,
-        "request_id": row.request_id.map(|request_id| request_id.to_string()),
-        "payload": row.payload,
-    });
+    let data = if row.message_version == 0 {
+        json!({
+            "outbox_message_id": row.id.to_string(),
+            "event_type": row.event_type,
+            "aggregate_type": row.aggregate_type,
+            "aggregate_id": row.aggregate_id,
+            "request_id": row.request_id,
+            "payload": row.payload,
+        })
+    } else {
+        json!({
+            "message_id": row.message_id,
+            "kind": row.message_kind,
+            "type": row.message_type,
+            "version": row.message_version,
+            "subject": row.subject,
+            "correlation_id": row.correlation_id,
+            "causation_id": row.causation_id,
+            "payload": row.payload,
+        })
+    };
 
     OutboundMessage::new(data.to_string().into_bytes())
 }
@@ -190,10 +203,12 @@ fn retry_delay(attempt_count: i32, initial: Duration, max: Duration) -> Duration
 mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use serde_json::json;
+    use uuid::Uuid;
 
     use crate::{
+        messaging::IntegrationMessageKind,
+        persistence::OutboxMessage,
         pubsub::{fake::FakePublisher, Publisher, TopicName, MESSAGE_BUS_TOPIC},
-        repository::OutboxMessage,
     };
 
     use super::{
@@ -207,8 +222,32 @@ mod tests {
     }
 
     #[test]
-    fn outbox_publish_message_is_self_describing() {
+    fn typed_outbox_publish_message_preserves_the_versioned_envelope() {
         let row = outbox_row(42, 0);
+
+        let message = outbound_message(&row);
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&message.data)
+                .expect("message data is JSON"),
+            json!({
+                "message_id": Uuid::from_u128(41),
+                "kind": "command",
+                "type": "ScanDocument",
+                "version": 1,
+                "subject": "document-1",
+                "correlation_id": Uuid::from_u128(42),
+                "causation_id": Uuid::from_u128(40),
+                "payload": { "scan_id": "scan-1" },
+            })
+        );
+    }
+
+    #[test]
+    fn version_zero_outbox_publish_message_retains_the_legacy_envelope() {
+        let mut row = outbox_row(42, 0);
+        row.message_version = 0;
+        row.message_type = "document.scan_requested".to_owned();
 
         let message = outbound_message(&row);
 
@@ -353,6 +392,13 @@ mod tests {
                     .parse()
                     .expect("request id parses"),
             ),
+            message_kind: IntegrationMessageKind::Command,
+            message_type: "ScanDocument".to_owned(),
+            message_version: 1,
+            message_id: Uuid::from_u128(41),
+            subject: "document-1".to_owned(),
+            correlation_id: Some(Uuid::from_u128(42)),
+            causation_id: Some(Uuid::from_u128(40)),
             attempt_count,
             next_available_at: Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap(),
             created_at: Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap(),

@@ -143,7 +143,7 @@ async fn competing_machine_grants_allow_the_loser_after_the_winner_is_archived()
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &current,
             policy,
             Some(ExpectedPolicyDocument {
@@ -188,7 +188,7 @@ async fn competing_machine_grants_allow_the_loser_after_the_winner_is_archived()
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &uploaded,
             policy,
             Some(ExpectedPolicyDocument {
@@ -262,7 +262,7 @@ async fn competing_machine_grants_allow_the_loser_after_the_winner_is_archived()
     let empty = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_eq!(assert_policy_projection(&empty, policy, None), None);
+    assert_eq!(assert_policy_read_model(&empty, policy, None), None);
 
     let mut replacement_events = app.pipeline_events().subscribe();
     let ((replacement, replacement_request_id), replacement_logs) = app
@@ -309,7 +309,7 @@ async fn competing_machine_grants_allow_the_loser_after_the_winner_is_archived()
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &replacement_uploaded,
             policy,
             Some(ExpectedPolicyDocument {
@@ -465,7 +465,7 @@ async fn machine_and_browser_transfers_choose_one_current_document() {
         (browser_filename, browser_bytes.as_slice())
     };
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &current,
             policy,
             Some(ExpectedPolicyDocument {

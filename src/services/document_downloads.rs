@@ -14,7 +14,8 @@ use crate::{
         EvidenceSubmissionId, PolicyId, UserId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
-    repository::{DocumentDownloadCandidate, Postgres},
+    persistence::Postgres,
+    read_models::DocumentDownloadCandidate,
 };
 
 const DOWNLOAD_TOKEN_VERSION: u8 = 1;
@@ -133,11 +134,10 @@ impl DocumentDownloadService {
     ) -> Result<IssuedDownloadGrant, DownloadError> {
         let candidate = self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_document_for_download_grant(submission_id, document_id)
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .evidence_submissions()
+            .get_document_for_download(submission_id, document_id)
             .await?
             .ok_or(DownloadError::NotFound)?;
 
@@ -233,11 +233,10 @@ impl DocumentDownloadService {
     ) -> Result<WorkspaceDownloadedDocument, DownloadError> {
         let candidate = self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_document_for_download_grant(submission_id, document_id)
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .evidence_submissions()
+            .get_document_for_download(submission_id, document_id)
             .await?
             .ok_or(DownloadError::NotFound)?;
 
@@ -275,16 +274,15 @@ impl DocumentDownloadService {
     ) -> Result<WorkspaceDownloadedDocument, DownloadError> {
         let candidate = self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_document_for_download_grant_within_period(
-                        submission_id,
-                        document_id,
-                        period_start,
-                        period_end,
-                    )
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .evidence_submissions()
+            .get_document_for_download_within_period(
+                submission_id,
+                document_id,
+                period_start,
+                period_end,
+            )
             .await?
             .ok_or(DownloadError::NotFound)?;
 
@@ -320,11 +318,10 @@ impl DocumentDownloadService {
     ) -> Result<DownloadedPolicyDocument, DownloadError> {
         let candidate = self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_policy_document_for_download(policy_id, document_id)
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .policies()
+            .get_document_for_download(policy_id, document_id)
             .await?
             .ok_or(DownloadError::NotFound)?;
 
@@ -418,7 +415,7 @@ pub enum DownloadError {
     #[error("internal document download error")]
     Internal,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 fn finalized_object_key(candidate: &DocumentDownloadCandidate) -> Result<ObjectKey, DownloadError> {

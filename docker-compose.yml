@@ -2,7 +2,7 @@ name: proofplane
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: proofplane
       POSTGRES_USER: proofplane

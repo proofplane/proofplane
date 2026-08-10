@@ -64,7 +64,7 @@ async fn evidence_creation_list_and_get_are_complete_ordered_scoped_and_audited(
             .expect("evidence id is a string"),
     )
     .expect("evidence id is a UUID");
-    assert_evidence_projection(
+    assert_evidence_read_model(
         &captured["evidence"],
         captured_id,
         owner_workspace_id,
@@ -95,7 +95,7 @@ async fn evidence_creation_list_and_get_are_complete_ordered_scoped_and_audited(
     let listed_evidence = listed["evidence"].as_array().expect("evidence is an array");
     assert_eq!(listed_evidence.len(), 2);
     assert_eq!(listed_evidence[0], captured["evidence"]);
-    assert_evidence_projection(
+    assert_evidence_read_model(
         &listed_evidence[1],
         same_workspace_id,
         owner_workspace_id,
@@ -372,7 +372,7 @@ async fn upload_grant_and_two_browser_uploads_produce_complete_newest_first_subm
     assert_eq!(submissions.len(), 2);
     assert_eq!(submissions[0]["document"]["filename"], "newer.txt");
     assert_eq!(submissions[1]["document"]["filename"], "older.txt");
-    assert_submission_projection(
+    assert_submission_read_model(
         &submissions[0],
         evidence_id,
         user_id,
@@ -380,7 +380,7 @@ async fn upload_grant_and_two_browser_uploads_produce_complete_newest_first_subm
         "newer.txt",
         newer_bytes,
     );
-    assert_submission_projection(
+    assert_submission_read_model(
         &submissions[1],
         evidence_id,
         user_id,
@@ -531,7 +531,7 @@ async fn upload_grant_rejections_are_exact_unaudited_and_create_no_observable_su
 }
 
 #[track_caller]
-fn assert_evidence_projection(
+fn assert_evidence_read_model(
     evidence: &Value,
     evidence_id: Uuid,
     workspace_id: Uuid,
@@ -566,7 +566,7 @@ fn assert_evidence_projection(
 }
 
 #[track_caller]
-fn assert_submission_projection(
+fn assert_submission_read_model(
     detail: &Value,
     evidence_id: Uuid,
     user_id: Uuid,

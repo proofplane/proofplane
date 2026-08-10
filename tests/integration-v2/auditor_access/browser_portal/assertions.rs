@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn body_projection(html: &str) -> String {
+pub(super) fn body_read_model(html: &str) -> String {
     let start = html.find("<body>\n").expect("page body opens") + "<body>\n".len();
     let end = html[start..]
         .find("\n</body>")

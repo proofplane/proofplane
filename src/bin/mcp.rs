@@ -4,17 +4,15 @@ use axum::Router;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     authentication::paseto::{
-        AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
-        AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
+        AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantEncryptor,
         DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
         PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
         UploadGrantEncryptor,
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage, observability, repository,
+    object_storage, observability, persistence,
     services::{client_resolver::ClientResolver, oauth::OAuthService},
-    store,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -33,7 +31,7 @@ async fn main() {
 #[derive(Debug, Error)]
 enum Error {
     #[error("postgres connection error")]
-    StoreConnection(#[from] store::conn::Error),
+    DatabaseConnection(#[from] persistence::connection::Error),
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
     #[error("prometheus initialization error")]
@@ -62,13 +60,13 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = store::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
     debug!("running migrations");
-    store::migrate(&mut client).await?;
+    persistence::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
-    let postgres = Arc::new(repository::Postgres::new(pool));
+    let pool = persistence::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let postgres = Arc::new(persistence::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
@@ -92,12 +90,7 @@ async fn run() -> Result<(), Error> {
     )?;
     let agent_upload_grant_encryptor = AgentEvidenceUploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-        &config.paseto.upload_grant,
-    )?;
-    let agent_upload_grant_decryptor = AgentEvidenceUploadGrantDecryptor::from_config(
-        config.server.public_api_base_url.clone(),
-        proofplane::services::agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
+        proofplane::application::commands::issue_agent_evidence_upload_grant::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let agent_policy_upload_grant_encryptor =
@@ -106,20 +99,14 @@ async fn run() -> Result<(), Error> {
             proofplane::services::agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &config.paseto.upload_grant,
         )?;
-    let agent_policy_upload_grant_decryptor =
-        AgentPolicyDocumentUploadGrantDecryptor::from_config(
-            config.server.public_api_base_url.clone(),
-            proofplane::services::agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
-            &config.paseto.upload_grant,
-        )?;
     let policy_upload_grant_encryptor = PolicyUploadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        proofplane::authentication::paseto::POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let policy_upload_grant_decryptor = PolicyUploadGrantDecryptor::from_config(
         config.server.public_api_base_url.clone(),
-        proofplane::services::policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
+        proofplane::authentication::paseto::POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         &config.paseto.upload_grant,
     )?;
     let mcp_oauth_encryptor = McpOAuthEncryptor::from_config(
@@ -156,9 +143,7 @@ async fn run() -> Result<(), Error> {
         upload_grant_encryptor,
         upload_grant_decryptor,
         agent_upload_grant_encryptor,
-        agent_upload_grant_decryptor,
         agent_policy_upload_grant_encryptor,
-        agent_policy_upload_grant_decryptor,
         policy_upload_grant_encryptor,
         policy_upload_grant_decryptor,
         max_document_bytes: config.uploads.max_document_bytes as u64,

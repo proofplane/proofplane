@@ -1,4 +1,5 @@
 pub mod app;
+pub mod application;
 pub mod authentication;
 pub mod config;
 pub mod dequeuer;
@@ -6,17 +7,16 @@ pub mod domain;
 pub mod errors;
 pub mod handlers;
 pub mod mcp;
-pub mod migrations;
+pub mod messaging;
 pub mod object_storage;
 pub mod observability;
-pub mod projections;
+pub mod persistence;
 pub mod pubsub;
-pub mod repository;
+pub mod read_models;
 pub mod routes;
 pub mod scanner;
 pub mod seed;
 pub mod services;
-pub mod store;
 pub mod validation;
 pub mod worker;
 

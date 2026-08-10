@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use super::{ids::uuid_id, AgentConnectionId, Document, DomainError, EvidenceId, UserId};
+use super::{ids::uuid_id, AgentConnectionId, DomainError, EvidenceId, UserId};
 
 uuid_id!(EvidenceSubmissionId);
 uuid_id!(DocumentUploadGrantId);
@@ -34,6 +34,48 @@ pub struct EvidenceSubmission {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceSubmissionTransitionOutcome {
+    Created,
+    Replayed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceSubmissionTransition {
+    pub outcome: EvidenceSubmissionTransitionOutcome,
+}
+
+impl EvidenceSubmission {
+    pub fn create(
+        id: EvidenceSubmissionId,
+        evidence_id: EvidenceId,
+        submitted_by: EvidenceSubmitter,
+        coverage: CoverageWindow,
+        received_at: DateTime<Utc>,
+    ) -> (Self, EvidenceSubmissionTransition) {
+        (
+            Self {
+                id,
+                evidence_id,
+                submitted_by,
+                received_at,
+                valid_from: coverage.valid_from,
+                valid_until: coverage.valid_until,
+            },
+            EvidenceSubmissionTransition {
+                outcome: EvidenceSubmissionTransitionOutcome::Created,
+            },
+        )
+    }
+
+    pub fn coverage(&self) -> CoverageWindow {
+        CoverageWindow {
+            valid_from: self.valid_from,
+            valid_until: self.valid_until,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceSubmitter {
     AgentConnection {
         agent_connection_id: AgentConnectionId,
@@ -63,12 +105,6 @@ pub struct CreateEvidenceSubmissionPayload {
     pub id: EvidenceSubmissionId,
     pub evidence_id: EvidenceId,
     pub coverage: CoverageWindow,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvidenceSubmissionDetail {
-    pub submission: EvidenceSubmission,
-    pub document: Document,
 }
 
 #[cfg(test)]

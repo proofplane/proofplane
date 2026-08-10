@@ -137,7 +137,7 @@ async fn matching_replay_tracks_the_upload_lifecycle_and_rejects_completed_misma
             .len(),
         1
     );
-    assert_submission_projection(
+    assert_submission_read_model(
         &listed["submissions"][0],
         descriptor.submission_id,
         document_id,
@@ -259,7 +259,7 @@ async fn concurrent_matching_transfers_converge_on_one_submission_and_document()
             .len(),
         1
     );
-    assert_submission_projection(
+    assert_submission_read_model(
         &listed["submissions"][0],
         descriptor.submission_id,
         document_id,

@@ -6,6 +6,13 @@ use futures_core::Stream;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::documents::{
+            CompleteAgentPolicyDocumentUpload, CompleteAgentPolicyDocumentUploadHandler,
+            CompleteAgentPolicyDocumentUploadOutcome, DocumentCommandError,
+        },
+        ExecutionMetadata,
+    },
     domain::{
         AgentPolicyDocumentUploadAuthority, AgentPolicyDocumentUploadGrant,
         AgentPolicyDocumentUploadGrantError as DomainGrantError, AgentPolicyDocumentUploadGrantId,
@@ -18,19 +25,14 @@ use crate::{
         },
         audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     },
-    repository::{
-        CreatePolicyDocumentResult, Error as RepositoryError, PolicyDocumentUploadEligibility,
-        Postgres,
-    },
+    persistence::{Error as RepositoryError, PolicyDocumentUploadEligibility, Postgres},
 };
 
 use super::{
     agent_policy_document_upload_grants::{
         AgentPolicyDocumentUploadCredentialVerifier, AgentPolicyDocumentUploadGrantError,
     },
-    policy_documents::{
-        policy_document_scan_requested_message, PolicyDocumentService, UploadPolicyDocumentPayload,
-    },
+    policy_documents::{PolicyDocumentService, UploadPolicyDocumentPayload},
     Error as ServiceError,
 };
 
@@ -40,6 +42,7 @@ pub struct AgentPolicyDocumentUploadService {
     documents: PolicyDocumentService,
     credential_verifier: AgentPolicyDocumentUploadCredentialVerifier,
     max_document_bytes: usize,
+    complete_upload: CompleteAgentPolicyDocumentUploadHandler,
 }
 
 pub struct AgentPolicyDocumentUploadResult {
@@ -79,6 +82,7 @@ impl AgentPolicyDocumentUploadService {
     ) -> Self {
         Self {
             documents: PolicyDocumentService::new(repository.clone(), object_store),
+            complete_upload: CompleteAgentPolicyDocumentUploadHandler::new(repository.clone()),
             repository,
             credential_verifier,
             max_document_bytes,
@@ -220,16 +224,14 @@ impl AgentPolicyDocumentUploadService {
         let policy_id = grant.policy_id();
         let eligibility = self
             .repository
-            .in_agent_connection_workspace_context(
-                grant.workspace_id(),
-                grant.issued_by_user_id(),
-                grant.issued_via_agent_connection_id(),
-                async move |context| {
-                    context
-                        .lock_policy_document_upload_eligibility(policy_id)
-                        .await
-                },
-            )
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.workspace(grant.workspace_id());
+                workspace
+                    .reads()
+                    .policies()
+                    .lock_document_upload_eligibility(policy_id)
+                    .await
+            })
             .await?;
         match eligibility {
             Some(PolicyDocumentUploadEligibility::Eligible) => Ok(()),
@@ -262,36 +264,14 @@ impl AgentPolicyDocumentUploadService {
             request_id,
         };
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                workspace_id,
-                grant.issued_by_user_id(),
-                grant.issued_via_agent_connection_id(),
-                async move |context| {
-                    let repository = context.agent_policy_document_upload_grants();
-                    let Some(mut locked_grant) = repository.get(upload_id, workspace_id).await?
-                    else {
-                        return Ok(CompletionTransactionResult::Unavailable);
-                    };
-                    if locked_grant.matches_authority(&authority).is_err()
-                        || locked_grant
-                            .validate_staged_file(staged.content_length, &staged.checksum_sha256)
-                            .is_err()
-                    {
-                        return Ok(CompletionTransactionResult::Unavailable);
-                    }
-                    let completed = match locked_grant.completed_document_at(Utc::now()) {
-                        Ok(completed) => completed,
-                        Err(_) => return Ok(CompletionTransactionResult::Unavailable),
-                    };
-                    if let Some(document_id) = completed {
-                        return Ok(CompletionTransactionResult::Replayed(document_id));
-                    }
-                    if staged.policy_id != locked_grant.policy_id() {
-                        return Ok(CompletionTransactionResult::Unavailable);
-                    }
-
-                    let create_payload = CreateDocumentPayload {
+            .complete_upload
+            .handle(
+                CompleteAgentPolicyDocumentUpload {
+                    grant,
+                    authority,
+                    policy_id,
+                    document_id: DocumentId::from(Uuid::new_v4()),
+                    document: CreateDocumentPayload {
                         owner: DocumentOwner::Policy(policy_id),
                         filename: staged.filename,
                         content_type: staged.content_type,
@@ -299,36 +279,15 @@ impl AgentPolicyDocumentUploadService {
                         object_key: staged.object_key,
                         checksum_sha256: staged.checksum_sha256,
                         checksum_crc32c: staged.checksum_crc32c,
-                    };
-                    let document = match context.create_policy_document(&create_payload).await? {
-                        CreatePolicyDocumentResult::Created(document) => document,
-                        CreatePolicyDocumentResult::PolicyNotFound => {
-                            return Ok(CompletionTransactionResult::Unavailable)
-                        }
-                        CreatePolicyDocumentResult::DocumentExists => {
-                            return Ok(CompletionTransactionResult::CurrentDocument)
-                        }
-                    };
-                    context
-                        .append_outbox_message(&policy_document_scan_requested_message(
-                            &document, request_id,
-                        ))
-                        .await?;
-                    locked_grant
-                        .complete(document.id(), Utc::now())
-                        .map_err(|_| {
-                            RepositoryError::InvariantViolation(
-                                "policy machine upload grant changed during completion",
-                            )
-                        })?;
-                    repository.save(&locked_grant).await?;
-                    Ok(CompletionTransactionResult::Created(document))
+                    },
+                    completed_at: Utc::now(),
                 },
+                ExecutionMetadata::for_request(request_id),
             )
             .await;
 
         match result {
-            Ok(CompletionTransactionResult::Created(document)) => {
+            Ok(CompleteAgentPolicyDocumentUploadOutcome::Created(document)) => {
                 let result = AgentPolicyDocumentUploadResult {
                     policy_id,
                     document,
@@ -336,7 +295,7 @@ impl AgentPolicyDocumentUploadService {
                 self.record_created(audit_context, &result);
                 Ok(AgentPolicyDocumentUploadOutcome::Created(result))
             }
-            Ok(CompletionTransactionResult::Replayed(document_id)) => {
+            Ok(CompleteAgentPolicyDocumentUploadOutcome::Replayed(document_id)) => {
                 let result = self
                     .load_completed_result_by_id(workspace_id, policy_id, document_id)
                     .await;
@@ -352,17 +311,26 @@ impl AgentPolicyDocumentUploadService {
                     }
                 }
             }
-            Ok(CompletionTransactionResult::CurrentDocument) => {
+            Ok(CompleteAgentPolicyDocumentUploadOutcome::CurrentDocument) => {
                 self.delete_staged(&object_key, request_id).await;
                 record_attempt(AgentPolicyDocumentUploadAttemptResult::CurrentDocument);
                 Err(AgentPolicyDocumentUploadError::CurrentDocument)
             }
-            Ok(CompletionTransactionResult::Unavailable) => {
+            Ok(CompleteAgentPolicyDocumentUploadOutcome::Unavailable)
+            | Err(DocumentCommandError::Unavailable | DocumentCommandError::Invalid) => {
                 self.delete_staged(&object_key, request_id).await;
                 record_attempt(AgentPolicyDocumentUploadAttemptResult::Unavailable);
                 Err(AgentPolicyDocumentUploadError::Unavailable)
             }
             Err(error) => {
+                let error = match error {
+                    DocumentCommandError::Repository(error) => error,
+                    DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+                        RepositoryError::InvariantViolation(
+                            "validated machine policy upload command was rejected",
+                        )
+                    }
+                };
                 match self
                     .reconcile_failed_completion(
                         upload_id,
@@ -499,13 +467,6 @@ impl AgentPolicyDocumentUploadService {
             document,
         })
     }
-}
-
-enum CompletionTransactionResult {
-    Created(Document),
-    Replayed(DocumentId),
-    CurrentDocument,
-    Unavailable,
 }
 
 #[derive(Debug, thiserror::Error)]

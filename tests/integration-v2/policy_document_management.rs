@@ -24,7 +24,7 @@ use crate::support::{
     json::{assert_rfc3339, object_keys},
     mcp::{assert_not_found, assert_validation_error, McpClient, McpError},
     oauth::authorize_agent_connection,
-    policy_documents::{assert_policy_projection, ExpectedPolicyDocument as ExpectedDocument},
+    policy_documents::{assert_policy_read_model, ExpectedPolicyDocument as ExpectedDocument},
     scenario::ScenarioBuilder,
 };
 
@@ -294,7 +294,7 @@ async fn grant_requests_conceal_invalid_unavailable_cross_workspace_and_denied_p
 }
 
 #[tokio::test]
-async fn pending_upload_has_one_complete_projection_and_blocks_replacement_and_browser_archive() {
+async fn pending_upload_has_one_complete_read_model_and_blocks_replacement_and_browser_archive() {
     let app = harness::app().await;
     let subject = "auth0|policy-doc-pending";
     let workspace_name = "Policy Document Pending";
@@ -372,7 +372,7 @@ async fn pending_upload_has_one_complete_projection_and_blocks_replacement_and_b
     let pending = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    let document_id = assert_policy_projection(
+    let document_id = assert_policy_read_model(
         &pending,
         policy,
         Some(ExpectedDocument {
@@ -694,7 +694,7 @@ async fn clean_document_downloads_archives_is_concealed_and_allows_one_replaceme
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &settled,
             policy,
             Some(ExpectedDocument {
@@ -797,7 +797,7 @@ async fn clean_document_downloads_archives_is_concealed_and_allows_one_replaceme
     let empty = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_eq!(assert_policy_projection(&empty, policy, None), None);
+    assert_eq!(assert_policy_read_model(&empty, policy, None), None);
 
     let replacement_bytes = b"replacement policy bytes";
     let mut replacement_events = app.pipeline_events().subscribe();
@@ -833,7 +833,7 @@ async fn clean_document_downloads_archives_is_concealed_and_allows_one_replaceme
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &replacement,
             policy,
             Some(ExpectedDocument {
@@ -915,7 +915,7 @@ async fn eicar_document_settles_as_contains_virus_renders_upload_failed_and_is_c
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &settled,
             policy,
             Some(ExpectedDocument {
@@ -1063,7 +1063,7 @@ async fn concurrent_policy_uploads_choose_one_redirected_winner_and_one_conflict
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &settled,
             policy,
             Some(ExpectedDocument {
@@ -1136,7 +1136,7 @@ async fn browser_routes_reject_invalid_sessions_forms_tokens_and_cross_policy_do
     let baseline = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_eq!(assert_policy_projection(&baseline, policy, None), None);
+    assert_eq!(assert_policy_read_model(&baseline, policy, None), None);
     let missing_page = app.app_server().get(MANAGEMENT_PATH).await;
     assert_policy_unavailable(&missing_page);
     let malformed_page = app
@@ -1259,7 +1259,7 @@ async fn browser_routes_reject_invalid_sessions_forms_tokens_and_cross_policy_do
         .call_tool("get_policy", json!({ "policy_id": other_policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &other_settled,
             other_policy,
             Some(ExpectedDocument {

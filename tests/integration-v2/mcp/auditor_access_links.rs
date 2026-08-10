@@ -20,7 +20,7 @@ const PERIOD_START: &str = "2026-01-01T00:00:00.000Z";
 const PERIOD_END: &str = "2026-03-31T23:59:59.000Z";
 
 #[tokio::test]
-async fn auditor_links_create_list_and_revoke_complete_scoped_projections_with_safe_audits() {
+async fn auditor_links_create_list_and_revoke_complete_scoped_read_models_with_safe_audits() {
     let app = harness::app().await;
     let owner = "auth0|mcp-auditor-links-owner";
     let foreign = "auth0|mcp-auditor-links-foreign";
@@ -364,7 +364,7 @@ fn assert_create_response(response: &Value, workspace_id: Uuid, email: &str) -> 
             .expect("grant id is a string"),
     )
     .expect("grant id is a UUID");
-    assert_grant_projection(&response["grant"], grant_id, email, None);
+    assert_grant_read_model(&response["grant"], grant_id, email, None);
     assert_eq!(response["url_secret_type"], "bearer_secret");
     assert_eq!(response["intended_use"], "auditor_browser_access");
 
@@ -391,7 +391,7 @@ fn assert_create_response(response: &Value, workspace_id: Uuid, email: &str) -> 
 }
 
 #[track_caller]
-fn assert_grant_projection(grant: &Value, grant_id: Uuid, email: &str, revoked_at: Option<&Value>) {
+fn assert_grant_read_model(grant: &Value, grant_id: Uuid, email: &str, revoked_at: Option<&Value>) {
     assert_eq!(
         object_keys(grant),
         [

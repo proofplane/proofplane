@@ -4,13 +4,11 @@
 
 Proofplane is a single Rust crate. Application code lives in `src/`, organized
 by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
-persistence in `repository/` and `store/`, types in `domain/`, and external
+persistence in `persistence/`, types in `domain/` and `read_models/`, and external
 adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
 and `seed`).
 
-Unit tests are colocated with source modules. The Docker-backed integration
-suite lives under `tests/integration-v2/`, with shared setup in `support/`.
 Database migrations belong in `migrations/`. API fixtures and project design
 notes live in `docs/`.
 
@@ -18,7 +16,7 @@ notes live in `docs/`.
 
 - `make build`: compile the package and generated bindings.
 - `make check`: run formatting checks, Clippy with warnings denied, and all
-  tests. Run this before submitting changes.
+  tests.
 - `make up && make health`: start and verify local Postgres, Pub/Sub, and
   ClamAV dependencies.
 - `make seed`: run database migrations and seed local data.
@@ -28,17 +26,49 @@ notes live in `docs/`.
 - `cargo test --test integration-v2 evidence_document_uploads`: run a focused
   integration-v2 test module.
 
-Docker must be available for integration-v2 tests because they use
-Testcontainers.
+## Architecture: Snapshot CQRS
+
+Proofplane uses CQRS with complete aggregate snapshots in one Postgres database;
+it does not use event sourcing or a separate read database. Commands mutate
+aggregates inside a `UnitOfWork`. Queries load purpose-built read models directly
+and must not rehydrate mutable aggregates or open write transactions. A command
+may use transaction-scoped read gateways for authorization, eligibility,
+relationships, or a response that must observe its save before commit.
+
+Commands and queries are immutable, task-oriented values with concrete,
+operation-specific handlers and inherent `handle` methods. Do not introduce
+handler marker traits, a mediator, runtime registry, dynamic dispatcher, service
+locator, or a generic repository abstraction. Routes, MCP tools, workers, and
+services receive typed handlers from the composition root; coordinators remain
+only when an operation also owns an external boundary such as tokens, object
+storage, scanning, Pub/Sub, or identity.
+
+Keep lifecycle transitions and invariants in domain aggregates. Application
+handlers own authorization, tenant boundaries, parent eligibility, relationship
+checks, and orchestration.
+
+Aggregate transitions may return immutable, past-tense domain events, but only
+emit an event when a real consumer translates it into audit work, an outbox
+message, or a follow-up command. Rejected transitions and idempotent replays emit
+no event. Persist an aggregate snapshot and its resulting outbox messages in the
+same transaction. Integration messages distinguish imperative commands from
+completed-fact events and remain safe for at-least-once delivery through
+idempotent aggregate transitions.
 
 ## Coding Style & Naming Conventions
 
 Use standard Rust formatting (`cargo fmt`) and four-space indentation. Name
 modules, functions, and tests in `snake_case`; types and traits in `PascalCase`;
-constants in `SCREAMING_SNAKE_CASE`. Keep domain and application interfaces
-independent of generated adapter types. Prefer existing concrete Postgres
-gateways for internal persistence and traits for genuine external adapter
-boundaries.
+constants in `SCREAMING_SNAKE_CASE`. Keep generated and transport types out of
+domain and application interfaces. Prefer existing concrete Postgres gateways
+for internal persistence and traits for genuine external adapter boundaries.
+
+Name persistence values for their concrete role: use `unit_of_work` for
+`UnitOfWork`, `workspace` for `WorkspaceUnitOfWork`, `reads` for read gateway
+collections, and `repository` or an aggregate-specific name such as
+`policy_repository` for individual aggregate repositories. Do not use generic
+`context` names for persistence values; reserve `context` for genuine
+authentication, request, audit, and workflow context objects.
 
 Never call `.expect(...)` in long-running server or runtime paths where a panic
 could cause application downtime. This includes the API, MCP server, worker,
@@ -49,25 +79,75 @@ development commands may use `expect` when aborting is the intended behavior
 and the message is actionable. Before completing a change, search modified
 runtime code for `.expect(` and remove every occurrence.
 
-For snapshot-persisted aggregates, keep lifecycle transitions and invariants in
-the domain aggregate. Services own authorization, parent eligibility, and
-orchestration. Repositories map through private persistence records and expose
+Repositories map aggregates through private persistence records and expose
 narrow `get` and `save` operations: `get` rehydrates the complete aggregate,
 and `save` persists its complete current snapshot. Snapshot `save` methods must
-not add aggregate-specific eligibility or relationship queries.
+not add aggregate-specific authorization, eligibility, or relationship queries.
+
+Name each aggregate's private primary persistence record after the aggregate,
+and give it explicit `try_from_row(&Row)`, `from_domain(&Domain)`, and
+`into_domain(...)` methods. Repository methods load rows into records and bind
+records to SQL; they must not construct aggregates directly from rows or bind
+domain fields directly in save SQL. Persist primary and companion records with
+the shared full-snapshot upsert, which updates every non-conflict column.
+
+Keep multi-table orchestration inside the owning repository. Synchronize
+optional companion records to the aggregate snapshot. Replace owned child
+collections by deleting the aggregate's current rows and inserting the complete
+current collection in the same transaction. Workspace filtering belongs in
+`get` and read operations; `save` trusts the handler's completed orchestration.
+
+Name aggregate roots with the bare ubiquitous-language noun, such as `Control`
+or `Evidence`; do not use an `Aggregate` suffix. Read-only shapes live under
+`src/read_models/` and use names that describe their role, such as `ControlDetail`
+or `PolicyCatalogEntry`. Aggregate repositories return aggregates only. Lists,
+details, summaries, reverse mappings, and other read shapes must be loaded by a
+dedicated read gateway. Reserve “projection” for a process that constructs or
+maintains derived read-side state.
 
 ## Testing Guidelines
 
-Use `#[test]` or `#[tokio::test]` unit tests for pure behavior. Put database,
-transaction, HTTP, worker coordination, and dependency-boundary behavior in
-`tests/integration-v2/`. Name tests after observable outcomes, such as
-`malicious_scan_marks_document_contains_virus`. There is no numeric coverage
-threshold; changes should cover success, failure, and rollback paths appropriate
-to their risk.
+Write or update a test when a change creates or alters observable behavior, fixes
+a bug, changes a domain invariant, authorization or concealment rule, public
+contract, persistence mapping, transaction boundary, concurrency behavior,
+idempotency rule, retry policy, or application-owned dependency failure. Cover
+success, rejection, and rollback paths in proportion to risk. Prefer extending
+the nearest existing test over repeating the same assertion at several layers;
+there is no numeric coverage target.
+
+Do not add tests for documentation-only changes, formatting, renames,
+compiler-enforced facts, trivial getters or delegation, unchanged mechanical
+refactors, or behavior owned by a third-party dependency. Do not pin private
+implementation details when a stable behavioral boundary proves the same rule.
+If behavior is unchanged, add a test only when the refactor crosses a risky
+boundary or closes a demonstrated coverage gap.
+
+Run `make check` before submitting implementation changes. For documentation-only
+changes, run `git diff --check` and review links and referenced paths instead of
+the Rust test suite.
+
+Choose the narrowest boundary that proves the behavior without mocking the code
+that owns it:
+
+- Use colocated `#[test]` or `#[tokio::test]` tests for pure domain,
+  serialization, validation, authorization, and other deterministic behavior.
+- Use colocated tests backed by `persistence::test_support` and real Postgres for
+  repository round trips, workspace scoping, locks, complete snapshots,
+  constraints, transaction rollback, and application behavior that no client
+  can observe directly.
+- Use `tests/integration-v2/` for client-visible HTTP, MCP, browser, worker,
+  Pub/Sub, scanner, object-storage, and end-to-end transaction behavior. Name
+  tests after observable outcomes, such as
+  `malicious_scan_marks_document_contains_virus`.
+
+Docker is required for the latter two test boundaries.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test
-body. **Read `tests/integration-v2/README.md` before adding to it.**
+body. Assert complete positive outcomes rather than guessed absence. **Read
+`tests/integration-v2/README.md` before adding to it.** If a behavior cannot be
+reached by a real client, test it at the appropriate lower boundary and record
+that reason in the pull request.
 
 ## Commit & Pull Request Guidelines
 
@@ -82,6 +162,13 @@ steps change.
 Do not commit credentials or production configuration. Override the default
 with `PROOFPLANE_CONFIG=path/to/config.yaml`. Treat `make reset-local` as
 destructive: it removes Docker volumes and `.local/storage`.
+
+Treat `make docker-clean` as destructive too. It removes leftover Testcontainers
+containers, then prunes dangling volumes machine-wide, which is not limited to
+Proofplane. The local dev database survives while the compose stack is running or
+merely stopped, but `make down` removes those containers and leaves
+`proofplane_proofplane-postgres-data` dangling, so running `make docker-clean`
+after `make down` deletes it.
 
 ## Agent skills
 

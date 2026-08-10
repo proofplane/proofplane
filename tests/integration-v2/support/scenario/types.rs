@@ -144,9 +144,9 @@ impl TestEvidence {
 }
 
 impl TestEvidenceSubmission {
-    pub(crate) fn from_mcp(projection: &Value) -> Self {
-        let submission = &projection["submission"];
-        let document = &projection["document"];
+    pub(crate) fn from_mcp(read_model: &Value) -> Self {
+        let submission = &read_model["submission"];
+        let document = &read_model["document"];
 
         Self {
             id: parse_uuid(&submission["id"], "evidence submission id"),
@@ -184,16 +184,16 @@ impl TestPolicy {
 }
 
 impl TestPolicyDocument {
-    pub(crate) fn from_mcp(policy_id: Uuid, projection: &Value) -> Self {
+    pub(crate) fn from_mcp(policy_id: Uuid, read_model: &Value) -> Self {
         Self {
             policy_id,
-            document_id: parse_uuid(&projection["id"], "policy document id"),
-            filename: projection["filename"]
+            document_id: parse_uuid(&read_model["id"], "policy document id"),
+            filename: read_model["filename"]
                 .as_str()
                 .expect("policy document filename is text")
                 .to_owned(),
-            created_at: parse_timestamp(&projection["created_at"], "policy document created_at"),
-            upload_status: projection["upload_status"]
+            created_at: parse_timestamp(&read_model["created_at"], "policy document created_at"),
+            upload_status: read_model["upload_status"]
                 .as_str()
                 .expect("policy document upload status is text")
                 .to_owned(),

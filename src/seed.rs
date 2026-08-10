@@ -6,19 +6,18 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::{
+    authentication::AgentConnectionContext,
     config::{load_from_env, ConfigError, ObjectStorageConfig},
     domain::{
-        AgentConnectionId, CreateEvidencePayload, CreateWorkspacePayload, EvidenceStatus,
-        ProvisionUserPayload, UpdateEvidencePayload, UpdateWorkspacePayload, UserId, WorkspaceId,
-        WorkspacePermission, WorkspacePermissions, WorkspaceRole,
+        AgentConnectionId, Evidence, EvidenceDefinition, EvidenceId, EvidenceStatus,
+        ProvisionUserPayload, UserId, WorkspaceId, WorkspacePermission, WorkspacePermissions,
+        WorkspaceRole,
     },
     object_storage::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     observability,
-    repository::{NewWorkspaceMembership, Postgres},
-    services::agent_connections::AgentConnectionContext,
-    store,
+    persistence::{self, NewWorkspaceMembership, Postgres},
 };
 use thiserror::Error;
 use tracing::debug;
@@ -26,7 +25,7 @@ use tracing::debug;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("postgres connection error")]
-    StoreConnection(#[from] store::conn::Error),
+    DatabaseConnection(#[from] persistence::connection::Error),
 
     #[error("configuration error: {0}")]
     Config(#[source] Box<ConfigError>),
@@ -38,7 +37,7 @@ pub enum Error {
     Migrations(#[from] refinery::Error),
 
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 
     #[error("connection pool error")]
     Pool(#[from] deadpool_postgres::PoolError),
@@ -74,13 +73,13 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let config = load_from_env().map_err(|error| Error::Config(Box::new(error)))?;
     observability::init_cli_tracing(&config.observability)?;
 
-    let mut client = store::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
 
     debug!("running migrations");
-    store::migrate(&mut client).await?;
+    persistence::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = store::conn_pool(config.postgres.expose_secret(), 4).await?;
+    let pool = persistence::conn_pool(config.postgres.expose_secret(), 4).await?;
     let postgres = Postgres::new(pool);
 
     seed_local_data(&postgres, &config.object_storage).await
@@ -108,6 +107,7 @@ pub async fn seed_local_data(
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
+    let client = repository.get().await?;
     for (id, slug, name) in [
         (
             local_authorized_workspace_id(),
@@ -120,20 +120,13 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
             "Local Unauthorized Workspace".to_owned(),
         ),
     ] {
-        if repository.get_workspace(id).await?.is_some() {
-            repository
-                .update_workspace(id, &UpdateWorkspacePayload { slug, name })
-                .await?;
-
-            continue;
-        }
-
-        repository
-            .create_workspace(&CreateWorkspacePayload {
-                id: Some(id),
-                slug,
-                name,
-            })
+        client
+            .execute(
+                r#"INSERT INTO workspaces (id, slug, name)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name"#,
+                &[&Uuid::from(id), &slug, &name],
+            )
             .await?;
     }
 
@@ -156,8 +149,8 @@ async fn seed_local_owner(repository: &Postgres) -> Result<UserId, Error> {
         .is_none()
     {
         repository
-            .in_transaction(async move |context| {
-                context
+            .in_unit_of_work(async move |unit_of_work| {
+                unit_of_work
                     .insert_workspace_membership(&NewWorkspaceMembership {
                         user_id: user.id,
                         workspace_id,
@@ -244,38 +237,65 @@ SET user_id = EXCLUDED.user_id,
 
 async fn seed_evidence(
     repository: &Postgres,
-    connection: AgentConnectionContext,
+    _connection: AgentConnectionContext,
 ) -> Result<(), Error> {
     let workspace_id = local_workspace_id();
     let seeds = demo_evidence()?;
     let existing = repository
-        .in_workspace_context_read(workspace_id, async |context| context.list_evidence().await)
+        .workspace_reads(workspace_id)
+        .await?
+        .evidence()
+        .list()
         .await?;
 
     repository
-        .in_agent_connection_workspace_context(
-            workspace_id,
-            connection.user_id,
-            connection.connection_id,
-            async move |context| {
-                for seed in seeds {
-                    if let Some(existing_evidence) = existing
-                        .iter()
-                        .find(|evidence| evidence.title == seed.title)
-                    {
-                        let update = seed.into_update();
-                        context
-                            .replace_evidence(existing_evidence.id, &update)
-                            .await?;
-                    } else {
-                        let payload = seed.into_new();
-                        context.create_evidence(&payload).await?;
-                    }
+        .in_unit_of_work(async move |unit_of_work| {
+            let workspace = unit_of_work.workspace(workspace_id);
+            for seed in seeds {
+                let existing_id = existing
+                    .iter()
+                    .find(|evidence| evidence.title == seed.title)
+                    .map(|evidence| evidence.id);
+                let definition = EvidenceDefinition::new(
+                    seed.title,
+                    seed.description,
+                    seed.collection_instructions,
+                )
+                .into_result()
+                .map_err(|_| {
+                    crate::persistence::Error::InvariantViolation(
+                        "seed evidence definition must be valid",
+                    )
+                })?;
+                let evidence_repository = workspace.aggregates().evidence();
+                if let Some(existing_id) = existing_id {
+                    let mut aggregate = evidence_repository.get(existing_id).await?.ok_or(
+                        crate::persistence::Error::InvariantViolation(
+                            "listed seed evidence must be readable as an aggregate",
+                        ),
+                    )?;
+                    aggregate
+                        .replace(definition, seed.status, Utc::now())
+                        .map_err(|_| {
+                            crate::persistence::Error::InvariantViolation(
+                                "seed evidence replacement must be valid",
+                            )
+                        })?;
+                    evidence_repository.save(&aggregate).await?;
+                } else {
+                    let aggregate = Evidence::define(
+                        EvidenceId::from(Uuid::new_v4()),
+                        workspace_id,
+                        definition,
+                        seed.status,
+                        Utc::now(),
+                    );
+                    evidence_repository.save(&aggregate).await?;
                 }
+            }
 
-                Ok(())
-            },
-        )
+            Ok(())
+        })
         .await?;
 
     Ok(())
@@ -619,26 +639,6 @@ struct SeedPolicy {
     name: &'static str,
     description: Option<&'static str>,
     control_codes: Vec<&'static str>,
-}
-
-impl SeedEvidence {
-    fn into_new(self) -> CreateEvidencePayload {
-        CreateEvidencePayload {
-            title: self.title,
-            description: self.description,
-            collection_instructions: self.collection_instructions,
-            status: self.status,
-        }
-    }
-
-    fn into_update(self) -> UpdateEvidencePayload {
-        UpdateEvidencePayload {
-            title: self.title,
-            description: self.description,
-            collection_instructions: self.collection_instructions,
-            status: self.status,
-        }
-    }
 }
 
 fn demo_evidence() -> Result<Vec<SeedEvidence>, Error> {

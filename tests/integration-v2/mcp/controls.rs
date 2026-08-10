@@ -46,7 +46,7 @@ async fn framework_tools_return_the_complete_seeded_catalog_and_conceal_unavaila
     let frameworks = reader.call_tool("list_frameworks", json!({})).await;
     assert_eq!(
         frameworks,
-        json!({ "frameworks": [framework_projection(soc2)] })
+        json!({ "frameworks": [framework_read_model(soc2)] })
     );
 
     let requirements = reader
@@ -59,8 +59,8 @@ async fn framework_tools_return_the_complete_seeded_catalog_and_conceal_unavaila
         requirements,
         json!({
             "requirements": [
-                requirement_projection(soc2.requirement("CC6.1")),
-                requirement_projection(soc2.requirement("CC7.1")),
+                requirement_read_model(soc2.requirement("CC6.1")),
+                requirement_read_model(soc2.requirement("CC7.1")),
             ]
         })
     );
@@ -132,7 +132,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
         .await;
     let control_id = Uuid::parse_str(created["id"].as_str().expect("control id is a string"))
         .expect("control id is a UUID");
-    assert_control_projection(
+    assert_control_read_model(
         &created,
         control_id,
         workspace_id,
@@ -179,7 +179,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
                 .await
         })
         .await;
-    assert_control_projection(
+    assert_control_read_model(
         &replaced,
         control_id,
         workspace_id,
@@ -252,7 +252,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
         .await;
     let control_id = Uuid::parse_str(baseline["id"].as_str().expect("control id is a string"))
         .expect("control id is a UUID");
-    assert_control_projection(
+    assert_control_read_model(
         &baseline,
         control_id,
         workspace_id,
@@ -397,7 +397,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
     assert_eq!(final_listing, json!({ "controls": [baseline] }));
 }
 
-fn framework_projection(framework: &TestFramework) -> Value {
+fn framework_read_model(framework: &TestFramework) -> Value {
     json!({
         "id": framework.id,
         "code": framework.code,
@@ -406,7 +406,7 @@ fn framework_projection(framework: &TestFramework) -> Value {
     })
 }
 
-fn requirement_projection(requirement: &TestFrameworkRequirement) -> Value {
+fn requirement_read_model(requirement: &TestFrameworkRequirement) -> Value {
     json!({
         "id": requirement.id,
         "framework_id": requirement.framework_id,
@@ -418,7 +418,7 @@ fn requirement_projection(requirement: &TestFrameworkRequirement) -> Value {
 
 #[allow(clippy::too_many_arguments)]
 #[track_caller]
-fn assert_control_projection(
+fn assert_control_read_model(
     control: &Value,
     control_id: Uuid,
     workspace_id: Uuid,
@@ -455,7 +455,7 @@ fn assert_control_projection(
         .expect("framework_requirements is an array");
     assert_eq!(actual_requirements.len(), requirements.len());
     for (actual, expected) in actual_requirements.iter().zip(requirements) {
-        assert_eq!(actual, &requirement_projection(expected));
+        assert_eq!(actual, &requirement_read_model(expected));
     }
 }
 

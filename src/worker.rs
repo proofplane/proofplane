@@ -21,8 +21,12 @@ use crate::{
     handlers::{
         document_finalization::DocumentFinalizationHandler, document_scan::DocumentScanHandler,
     },
+    messaging::{
+        IntegrationMessage, IntegrationMessageDecodeError, LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
+        LEGACY_DOCUMENT_SCAN_REQUESTED,
+    },
     object_storage::FilesystemObjectStore,
-    repository::Postgres,
+    persistence::Postgres,
     routes::{
         error::not_found,
         health::{self, ReadyState},
@@ -33,10 +37,8 @@ use crate::{
     validation::Validation,
 };
 
-// TODO: create a more robust pubsub library that has the message types in
-// one place
-pub const DOCUMENT_SCAN_REQUESTED: &str = "document.scan_requested";
-pub const DOCUMENT_FINALIZATION_REQUESTED: &str = "document.finalization_requested";
+pub const DOCUMENT_SCAN_REQUESTED: &str = LEGACY_DOCUMENT_SCAN_REQUESTED;
+pub const DOCUMENT_FINALIZATION_REQUESTED: &str = LEGACY_DOCUMENT_FINALIZATION_REQUESTED;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMessage {
@@ -59,6 +61,8 @@ pub enum WorkerMessageDecodeError {
     InvalidBase64,
     #[error("message data must be a JSON payload")]
     PayloadJson,
+    #[error("typed integration message is invalid: {0}")]
+    TypedMessage(#[from] IntegrationMessageDecodeError),
     #[error("message data envelope is invalid")]
     DataValidation(Vec<WorkerMessageDataValidationError>),
 }
@@ -254,20 +258,75 @@ pub fn decode_worker_message(body: &[u8]) -> Result<WorkerMessage, WorkerMessage
     let data = STANDARD
         .decode(message.data.as_bytes())
         .map_err(|_| WorkerMessageDecodeError::InvalidBase64)?;
-    let data = serde_json::from_slice::<WorkerMessageDataDTO>(&data)
+    let data: Value =
+        serde_json::from_slice(&data).map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
+
+    if is_typed_envelope(&data) {
+        decode_typed_worker_message(data, envelope.delivery_attempt)
+    } else {
+        decode_legacy_worker_message(data, message.message_id, envelope.delivery_attempt)
+    }
+}
+
+fn is_typed_envelope(data: &Value) -> bool {
+    data.as_object().is_some_and(|object| {
+        [
+            "message_id",
+            "kind",
+            "type",
+            "version",
+            "subject",
+            "correlation_id",
+            "causation_id",
+        ]
+        .iter()
+        .any(|field| object.contains_key(*field))
+    })
+}
+
+fn decode_typed_worker_message(
+    data: Value,
+    delivery_attempt: Option<u32>,
+) -> Result<WorkerMessage, WorkerMessageDecodeError> {
+    let integration_message = IntegrationMessage::from_envelope(data)?;
+    let metadata = integration_message.metadata();
+    let event_type = match &integration_message {
+        IntegrationMessage::ScanDocument { .. } => DOCUMENT_SCAN_REQUESTED,
+        IntegrationMessage::FinalizeDocument { .. } => DOCUMENT_FINALIZATION_REQUESTED,
+    };
+    let payload = serde_json::to_value(integration_message.payload())
+        .map_err(|_| WorkerMessageDecodeError::PayloadJson)?;
+
+    Ok(WorkerMessage {
+        message_id: metadata.message_id.to_string(),
+        event_type: event_type.to_owned(),
+        aggregate_type: integration_message.payload().aggregate_type().to_owned(),
+        aggregate_id: metadata.subject.clone(),
+        request_id: metadata.correlation_id,
+        payload,
+        delivery_attempt,
+    })
+}
+
+fn decode_legacy_worker_message(
+    data: Value,
+    message_id: String,
+    delivery_attempt: Option<u32>,
+) -> Result<WorkerMessage, WorkerMessageDecodeError> {
+    let data = serde_json::from_value::<WorkerMessageDataDTO>(data)
         .map_err(|_| WorkerMessageDecodeError::PayloadJson)?
         .into_message_data()
         .into_result()
         .map_err(WorkerMessageDecodeError::DataValidation)?;
 
     Ok(WorkerMessage {
-        message_id: message.message_id,
+        message_id,
         event_type: data.event_type,
         aggregate_type: data.aggregate_type,
         aggregate_id: data.aggregate_id,
         request_id: data.request_id,
         payload: data.payload,
-        delivery_attempt: envelope.delivery_attempt,
+        delivery_attempt,
     })
 }
 
@@ -360,6 +419,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::messaging::{FINALIZE_DOCUMENT_TYPE, SCAN_DOCUMENT_TYPE};
 
     #[test]
     fn decodes_valid_push_envelope_into_worker_message() {
@@ -373,6 +433,109 @@ mod tests {
         assert_eq!(message.payload, json!({ "scan_id": "scan-1" }));
         assert_eq!(message.request_id, Some(request_id()));
         assert_eq!(message.delivery_attempt, Some(2));
+    }
+
+    #[test]
+    fn decodes_typed_envelope_and_propagates_integration_metadata() {
+        let message = decode_worker_message(&envelope_with_data(json!({
+            "message_id": Uuid::from_u128(2),
+            "kind": "command",
+            "type": SCAN_DOCUMENT_TYPE,
+            "version": 1,
+            "subject": Uuid::from_u128(3),
+            "correlation_id": Uuid::from_u128(4),
+            "causation_id": Uuid::from_u128(5),
+            "payload": {
+                "evidence_submission_id": Uuid::from_u128(6),
+                "object_key": "quarantine/document-1"
+            }
+        })))
+        .expect("typed worker message decodes");
+
+        assert_eq!(message.message_id, Uuid::from_u128(2).to_string());
+        assert_eq!(message.event_type, DOCUMENT_SCAN_REQUESTED);
+        assert_eq!(message.aggregate_type, "evidence_document");
+        assert_eq!(message.aggregate_id, Uuid::from_u128(3).to_string());
+        assert_eq!(message.request_id, Some(Uuid::from_u128(4)));
+        assert_eq!(
+            message.payload,
+            json!({
+                "evidence_submission_id": Uuid::from_u128(6),
+                "object_key": "quarantine/document-1"
+            })
+        );
+        assert_eq!(message.delivery_attempt, Some(2));
+    }
+
+    #[test]
+    fn typed_looking_messages_never_fall_back_to_legacy_decoding() {
+        let mixed = json!({
+            "message_id": Uuid::from_u128(2),
+            "kind": "command",
+            "type": FINALIZE_DOCUMENT_TYPE,
+            "version": 2,
+            "subject": Uuid::from_u128(3),
+            "correlation_id": null,
+            "causation_id": null,
+            "payload": {
+                "evidence_submission_id": Uuid::from_u128(6),
+                "object_key": "quarantine/document-1"
+            },
+            "event_type": DOCUMENT_FINALIZATION_REQUESTED,
+            "aggregate_type": "evidence_document",
+            "aggregate_id": Uuid::from_u128(3)
+        });
+
+        assert_eq!(
+            decode_worker_message(&envelope_with_data(mixed))
+                .expect_err("mixed envelope is rejected as typed"),
+            WorkerMessageDecodeError::TypedMessage(
+                IntegrationMessageDecodeError::MalformedEnvelope
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_typed_types_versions_and_malformed_payloads() {
+        let base = json!({
+            "message_id": Uuid::from_u128(2),
+            "kind": "command",
+            "type": SCAN_DOCUMENT_TYPE,
+            "version": 1,
+            "subject": Uuid::from_u128(3),
+            "correlation_id": null,
+            "causation_id": null,
+            "payload": {
+                "evidence_submission_id": Uuid::from_u128(6),
+                "object_key": "quarantine/document-1"
+            }
+        });
+
+        let mut unknown_type = base.clone();
+        unknown_type["type"] = json!("UnknownCommand");
+        assert!(matches!(
+            decode_worker_message(&envelope_with_data(unknown_type)),
+            Err(WorkerMessageDecodeError::TypedMessage(
+                IntegrationMessageDecodeError::UnknownType(_)
+            ))
+        ));
+
+        let mut unknown_version = base.clone();
+        unknown_version["version"] = json!(2);
+        assert!(matches!(
+            decode_worker_message(&envelope_with_data(unknown_version)),
+            Err(WorkerMessageDecodeError::TypedMessage(
+                IntegrationMessageDecodeError::UnsupportedVersion { .. }
+            ))
+        ));
+
+        let mut malformed_payload = base;
+        malformed_payload["payload"] = json!({ "object_key": 7 });
+        assert_eq!(
+            decode_worker_message(&envelope_with_data(malformed_payload))
+                .expect_err("malformed typed payload is rejected"),
+            WorkerMessageDecodeError::TypedMessage(IntegrationMessageDecodeError::MalformedPayload)
+        );
     }
 
     #[test]

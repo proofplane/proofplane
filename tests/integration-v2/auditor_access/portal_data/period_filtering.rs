@@ -128,14 +128,14 @@ async fn period_overlap_filters_and_orders_sequential_submissions_newest_first()
 
     let controls = body["controls"].as_array().expect("controls is an array");
     assert_eq!(controls.len(), 1);
-    assert_control_projection(&controls[0], control);
+    assert_control_read_model(&controls[0], control);
     assert_eq!(controls[0]["framework_requirements"], json!([]));
     assert_eq!(controls[0]["policies"], json!([]));
     let mappings = controls[0]["evidence"]
         .as_array()
         .expect("evidence mappings is an array");
     assert_eq!(mappings.len(), 1);
-    assert_evidence_projection(
+    assert_evidence_read_model(
         &mappings[0],
         evidence.id,
         "Period-filtered evidence",
@@ -176,6 +176,6 @@ async fn period_overlap_filters_and_orders_sequential_submissions_newest_first()
         evidence.submission("start-overlapping.txt"),
     ];
     for (actual, expected) in submissions.iter().zip(expected_submissions) {
-        assert_submission_projection(actual, expected, true);
+        assert_submission_read_model(actual, expected, true);
     }
 }

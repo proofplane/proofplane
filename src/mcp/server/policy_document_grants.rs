@@ -14,12 +14,15 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::issue_policy_document_upload_grant::{
+            IssuePolicyDocumentUploadGrant, IssuedPolicyDocumentUploadGrant,
+            PolicyDocumentUploadGrantHandlerError,
+        },
+        ExecutionMetadata,
+    },
     domain::{PolicyId, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::{
-        policy_document_upload_grants::{IssuedPolicyUploadGrant, PolicyUploadGrantError},
-        Error as ServiceError,
-    },
     validate,
 };
 
@@ -37,8 +40,14 @@ impl ProofplaneMcp {
         let policy_id = parse_policy_document_grant_request(args)?;
         let context = authorize_token_workspace(&ctx, WorkspacePermission::WriteControls)?;
         let grant = self
-            .policy_document_upload_grants
-            .issue(&context.agent_connection_context(), policy_id)
+            .issue_policy_document_upload_grant
+            .handle(
+                IssuePolicyDocumentUploadGrant {
+                    connection: context.agent_connection_context(),
+                    policy_id,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await?;
 
         AuditEvent::new(
@@ -72,8 +81,8 @@ struct ManagePolicyDocumentResponse {
     intended_use: &'static str,
 }
 
-impl From<IssuedPolicyUploadGrant> for ManagePolicyDocumentResponse {
-    fn from(grant: IssuedPolicyUploadGrant) -> Self {
+impl From<IssuedPolicyDocumentUploadGrant> for ManagePolicyDocumentResponse {
+    fn from(grant: IssuedPolicyDocumentUploadGrant) -> Self {
         Self {
             url: grant.url.to_string(),
             expires_at: format_datetime(grant.expires_at),
@@ -95,16 +104,17 @@ fn parse_policy_document_grant_request(
     .map_err(argument_errors)
 }
 
-impl From<PolicyUploadGrantError> for ErrorData {
-    fn from(error: PolicyUploadGrantError) -> Self {
+impl From<PolicyDocumentUploadGrantHandlerError> for ErrorData {
+    fn from(error: PolicyDocumentUploadGrantHandlerError) -> Self {
         match error {
-            PolicyUploadGrantError::Unavailable => not_found(),
-            PolicyUploadGrantError::Internal => {
+            PolicyDocumentUploadGrantHandlerError::Unavailable => not_found(),
+            PolicyDocumentUploadGrantHandlerError::Internal => {
                 tracing::error!(%error, "MCP policy document upload grant failure");
                 ErrorData::internal_error("internal error", None)
             }
-            PolicyUploadGrantError::Repository(repository_error) => {
-                ServiceError::from(repository_error).into()
+            PolicyDocumentUploadGrantHandlerError::Repository(repository_error) => {
+                tracing::error!(%repository_error, "MCP policy document upload grant repository failure");
+                ErrorData::internal_error("dependency failure", None)
             }
         }
     }

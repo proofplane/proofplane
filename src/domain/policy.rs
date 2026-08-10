@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::validation::Validation;
+use crate::{validate, validation::Validation};
 
 use uuid::Uuid;
 
-use super::{ids::uuid_id, BatchKey, ControlId, ControlSummary, DomainError, WorkspaceId};
+use super::{ids::uuid_id, optional_text, BatchKey, ControlId, DomainError, WorkspaceId};
 
 uuid_id!(PolicyId);
 uuid_id!(PolicyDocumentUploadGrantId);
@@ -17,23 +17,175 @@ impl BatchKey for PolicyId {
     }
 }
 
+/// Complete mutable snapshot for a policy and its control mappings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
-    pub id: PolicyId,
-    pub workspace_id: WorkspaceId,
-    pub name: String,
-    pub description: Option<String>,
-    pub control_mappings: Vec<PolicyControlMapping>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub archived_at: Option<DateTime<Utc>>,
+    id: PolicyId,
+    workspace_id: WorkspaceId,
+    definition: PolicyDefinition,
+    mappings: Vec<PolicyControlMappingState>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyControlMapping {
-    pub policy_id: PolicyId,
-    pub control: ControlSummary,
-    pub created_at: DateTime<Utc>,
+pub struct PolicyDefinition {
+    name: String,
+    description: Option<String>,
+}
+
+impl PolicyDefinition {
+    pub fn new(raw_name: String, raw_description: Option<String>) -> Validation<Self, DomainError> {
+        validate! {
+            name <- validate_policy_name(raw_name),
+            description <- optional_text("description", raw_description, 4_000),
+            => Self { name, description },
+        }
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyControlMappingState {
+    control_id: ControlId,
+    created_at: DateTime<Utc>,
+}
+impl PolicyControlMappingState {
+    pub fn new(control_id: ControlId, created_at: DateTime<Utc>) -> Self {
+        Self {
+            control_id,
+            created_at,
+        }
+    }
+    pub fn control_id(&self) -> ControlId {
+        self.control_id
+    }
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+}
+
+impl Policy {
+    pub fn define(
+        id: PolicyId,
+        workspace_id: WorkspaceId,
+        definition: PolicyDefinition,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            workspace_id,
+            definition,
+            mappings: Vec::new(),
+            created_at,
+            updated_at: created_at,
+            archived_at: None,
+        }
+    }
+    pub(crate) fn rehydrate(
+        id: PolicyId,
+        workspace_id: WorkspaceId,
+        definition: PolicyDefinition,
+        mappings: Vec<PolicyControlMappingState>,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        archived_at: Option<DateTime<Utc>>,
+    ) -> Result<Self, PolicyError> {
+        if updated_at < created_at || archived_at.is_some_and(|at| at < created_at) {
+            return Err(PolicyError::InvalidRehydration);
+        }
+        let mut policy = Self::define(id, workspace_id, definition, created_at);
+        policy.replace_mappings(mappings)?;
+        policy.updated_at = updated_at;
+        policy.archived_at = archived_at;
+        Ok(policy)
+    }
+    pub fn replace(
+        &mut self,
+        definition: PolicyDefinition,
+        at: DateTime<Utc>,
+    ) -> Result<(), PolicyError> {
+        self.ensure_active()?;
+        if at < self.created_at {
+            return Err(PolicyError::InvalidReplacementTime);
+        }
+        self.definition = definition;
+        self.updated_at = at;
+        Ok(())
+    }
+    pub fn archive(&mut self, at: DateTime<Utc>) -> Result<(), PolicyError> {
+        self.ensure_active()?;
+        if at < self.created_at {
+            return Err(PolicyError::InvalidReplacementTime);
+        }
+        self.archived_at = Some(at);
+        self.updated_at = at;
+        Ok(())
+    }
+    pub fn replace_mappings(
+        &mut self,
+        mut mappings: Vec<PolicyControlMappingState>,
+    ) -> Result<(), PolicyError> {
+        self.ensure_active()?;
+        mappings.sort_unstable_by_key(|m| Uuid::from(m.control_id()));
+        if mappings
+            .windows(2)
+            .any(|pair| pair[0].control_id() == pair[1].control_id())
+        {
+            return Err(PolicyError::DuplicateControlMapping);
+        }
+        self.mappings = mappings;
+        Ok(())
+    }
+    fn ensure_active(&self) -> Result<(), PolicyError> {
+        if self.archived_at.is_some() {
+            Err(PolicyError::Archived)
+        } else {
+            Ok(())
+        }
+    }
+    pub fn id(&self) -> PolicyId {
+        self.id
+    }
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+    pub fn name(&self) -> &str {
+        self.definition.name()
+    }
+    pub fn description(&self) -> Option<&str> {
+        self.definition.description()
+    }
+    pub fn mappings(&self) -> &[PolicyControlMappingState] {
+        &self.mappings
+    }
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+    pub fn archived_at(&self) -> Option<DateTime<Utc>> {
+        self.archived_at
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PolicyError {
+    #[error("policy is archived")]
+    Archived,
+    #[error("control mapping is duplicated")]
+    DuplicateControlMapping,
+    #[error("policy snapshot is inconsistent")]
+    InvalidRehydration,
+    #[error("policy replacement predates its creation")]
+    InvalidReplacementTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,10 +253,14 @@ pub fn validate_unique_policy_control_ids(
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    use super::{validate_policy_name, validate_unique_policy_control_ids, PolicyId};
-    use crate::domain::{ControlId, DomainError};
+    use super::{
+        validate_policy_name, validate_unique_policy_control_ids, Policy, PolicyDefinition,
+        PolicyError, PolicyId,
+    };
+    use crate::domain::{ControlId, DomainError, WorkspaceId};
 
     #[test]
     fn policy_id_wraps_uuid() {
@@ -146,5 +302,34 @@ mod tests {
             validate_unique_policy_control_ids(vec![id, id]).into_result(),
             Err(vec![DomainError::DuplicatePolicyControlId])
         );
+    }
+
+    #[test]
+    fn archive_rejects_later_definition_and_mapping_mutations() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 9, 12, 0, 0).unwrap();
+        let mut policy = Policy::define(
+            PolicyId::from(Uuid::new_v4()),
+            WorkspaceId::from(Uuid::new_v4()),
+            PolicyDefinition::new("  Security  ".into(), Some("  Description  ".into()))
+                .into_result()
+                .unwrap(),
+            created_at,
+        );
+        policy.archive(created_at).unwrap();
+        assert_eq!(
+            policy.replace_mappings(Vec::new()),
+            Err(PolicyError::Archived)
+        );
+        assert_eq!(
+            policy.replace(
+                PolicyDefinition::new("Replacement".into(), None)
+                    .into_result()
+                    .unwrap(),
+                created_at,
+            ),
+            Err(PolicyError::Archived)
+        );
+        assert_eq!(policy.name(), "Security");
+        assert_eq!(policy.description(), Some("Description"));
     }
 }

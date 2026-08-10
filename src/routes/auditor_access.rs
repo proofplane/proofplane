@@ -12,27 +12,51 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    domain::{
-        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
-        AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
-        AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, Document, Evidence,
-        EvidenceSubmission, EvidenceSubmissionId, FrameworkRequirement,
+    application::{
+        commands::{
+            claim_auditor_auth_transaction::{
+                ClaimAuditorAuthTransaction, ClaimAuditorAuthTransactionHandler,
+            },
+            complete_auditor_authentication::{
+                CompleteAuditorAuthentication, CompleteAuditorAuthenticationError,
+                CompleteAuditorAuthenticationHandler,
+            },
+            revoke_auditor_session::{
+                RevokeAuditorSession, RevokeAuditorSessionError, RevokeAuditorSessionHandler,
+            },
+            start_auditor_auth_transaction::{
+                StartAuditorAuthTransaction, StartAuditorAuthTransactionError,
+                StartAuditorAuthTransactionHandler,
+            },
+        },
+        queries::{
+            read_auditor_portal::{ReadAuditorPortal, ReadAuditorPortalHandler},
+            resolve_auditor_grant_by_secret::{
+                ResolveAuditorGrantBySecret, ResolveAuditorGrantBySecretHandler,
+            },
+            resolve_auditor_session_by_digest::{
+                ResolveAuditorSessionByDigest, ResolveAuditorSessionByDigestError,
+                ResolveAuditorSessionByDigestHandler, ResolvedAuditorSession,
+            },
+        },
+        ExecutionMetadata,
     },
+    domain::{AuditorSessionTransition, Document, EvidenceSubmission, EvidenceSubmissionId},
     object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    routes::{error::ApiError, request_context::RequestId},
-    services::{
-        auditor_access_grants::{AuditorAccessGrantError, AuditorAccessGrantService},
-        auditor_access_sessions::{AuditorAccessSessionError, AuditorAccessSessionService},
-        auditor_auth_transactions::{AuditorAuthTransactionError, AuditorAuthTransactionService},
-        auditor_authentication::{AuditorAuthenticationError, AuditorAuthenticationService},
-        auditor_portal::AuditorPortalReadModelService,
-        document_downloads::{DocumentDownloadService, DownloadError},
+    read_models::{
+        AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
+        AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
+        AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, EvidenceDetail,
+        FrameworkRequirementDetail,
     },
+    routes::{error::ApiError, request_context::RequestId},
+    services::document_downloads::{DocumentDownloadService, DownloadError},
 };
 use chrono::{DateTime, Utc};
 
@@ -41,11 +65,13 @@ const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
 
 #[derive(Clone)]
 pub struct AuditorAccessState {
-    pub grants: AuditorAccessGrantService,
-    pub auth_transactions: AuditorAuthTransactionService,
-    pub authentication: AuditorAuthenticationService,
-    pub sessions: AuditorAccessSessionService,
-    pub portal: AuditorPortalReadModelService,
+    pub resolve_grant: ResolveAuditorGrantBySecretHandler,
+    pub start_auth: StartAuditorAuthTransactionHandler,
+    pub claim_auth: ClaimAuditorAuthTransactionHandler,
+    pub complete_auth: CompleteAuditorAuthenticationHandler,
+    pub resolve_session: ResolveAuditorSessionByDigestHandler,
+    pub revoke_session: RevokeAuditorSessionHandler,
+    pub read_portal: ReadAuditorPortalHandler,
     pub downloads: DocumentDownloadService,
     pub secure_cookie: bool,
 }
@@ -116,11 +142,16 @@ async fn open_invite(
     let Some(token) = query.token.filter(|token| !token.trim().is_empty()) else {
         return Ok(unavailable_response());
     };
-    let grant = match state.grants.load_for_use(workspace_id.into(), &token).await {
-        Ok(grant) => grant,
-        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
-            return Ok(unavailable_response());
-        }
+    let grant = match state
+        .resolve_grant
+        .handle(ResolveAuditorGrantBySecret {
+            workspace_id: workspace_id.into(),
+            raw_secret: SecretString::from(token.clone()),
+        })
+        .await
+    {
+        Ok(Some(grant)) => grant,
+        Ok(None) => return Ok(unavailable_response()),
         Err(error) => return Err(grant_error(error)),
     };
 
@@ -140,9 +171,16 @@ async fn start_login(
     Form(payload): Form<InvitePayload>,
 ) -> Result<Response, ApiError> {
     let token = payload.token.trim();
-    let grant = match state.grants.load_for_use(workspace_id.into(), token).await {
-        Ok(grant) => grant,
-        Err(AuditorAccessGrantError::Unavailable | AuditorAccessGrantError::Denied) => {
+    let grant = match state
+        .resolve_grant
+        .handle(ResolveAuditorGrantBySecret {
+            workspace_id: workspace_id.into(),
+            raw_secret: SecretString::from(token),
+        })
+        .await
+    {
+        Ok(Some(grant)) => grant,
+        Ok(None) => {
             audit_auth_start_failed(request_id.0, "grant_unavailable", AuditOutcome::Denied);
             return Ok(unavailable_response());
         }
@@ -151,9 +189,19 @@ async fn start_login(
             return Err(grant_error(error));
         }
     };
-    let start = match state.auth_transactions.start(&grant).await {
+    let start = match state
+        .start_auth
+        .handle(
+            StartAuditorAuthTransaction {
+                workspace_id: grant.workspace_id,
+                grant_id: grant.id,
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
+        .await
+    {
         Ok(start) => start,
-        Err(AuditorAuthTransactionError::Unavailable) => {
+        Err(StartAuditorAuthTransactionError::Unavailable) => {
             audit_auth_start_failed(request_id.0, "grant_unavailable", AuditOutcome::Denied);
             return Ok(unavailable_response());
         }
@@ -196,14 +244,30 @@ async fn auth0_callback(
     };
     if query.error.is_some() {
         if let Some(callback_state) = query.state.as_deref() {
-            let _ = state.auth_transactions.claim(callback_state).await;
+            let _ = state
+                .claim_auth
+                .handle(
+                    ClaimAuditorAuthTransaction {
+                        state: SecretString::from(callback_state),
+                    },
+                    ExecutionMetadata::for_request(request_id.0),
+                )
+                .await;
         }
         audit_auth_failed(request_id.0, "provider_rejected");
         return Ok(authentication_rejected_response());
     }
     let Some(code) = query.code.filter(|value| !value.trim().is_empty()) else {
         if let Some(callback_state) = query.state.as_deref() {
-            let _ = state.auth_transactions.claim(callback_state).await;
+            let _ = state
+                .claim_auth
+                .handle(
+                    ClaimAuditorAuthTransaction {
+                        state: SecretString::from(callback_state),
+                    },
+                    ExecutionMetadata::for_request(request_id.0),
+                )
+                .await;
         }
         audit_auth_failed(request_id.0, "invalid_callback");
         return Ok(authentication_rejected_response());
@@ -213,21 +277,31 @@ async fn auth0_callback(
         return Ok(authentication_rejected_response());
     };
 
-    let completed = match state.authentication.complete(&callback_state, &code).await {
+    let completed = match state
+        .complete_auth
+        .handle(
+            CompleteAuditorAuthentication {
+                state: SecretString::from(callback_state),
+                authorization_code: SecretString::from(code),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
+        .await
+    {
         Ok(completed) => completed,
-        Err(AuditorAuthenticationError::Rejected) => {
+        Err(CompleteAuditorAuthenticationError::Rejected) => {
             audit_auth_failed(request_id.0, "rejected");
             return Ok(authentication_rejected_response());
         }
-        Err(AuditorAuthenticationError::GrantUnavailable) => {
+        Err(CompleteAuditorAuthenticationError::GrantUnavailable) => {
             audit_auth_failed(request_id.0, "grant_unavailable");
             return Ok(unavailable_response());
         }
-        Err(AuditorAuthenticationError::ProviderUnavailable) => {
+        Err(CompleteAuditorAuthenticationError::ProviderUnavailable) => {
             audit_auth_failed(request_id.0, "provider_unavailable");
             return Ok(authentication_unavailable_response());
         }
-        Err(AuditorAuthenticationError::PersistenceUnavailable) => {
+        Err(CompleteAuditorAuthenticationError::PersistenceUnavailable) => {
             audit_auth_failed(request_id.0, "persistence_unavailable");
             return Ok(authentication_unavailable_response());
         }
@@ -267,20 +341,31 @@ async fn logout(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if let Some(raw_session) = auditor_session_cookie(&headers) {
-        if let Some(session) = state
-            .sessions
-            .revoke_session(raw_session)
+        match state
+            .revoke_session
+            .handle(
+                RevokeAuditorSession {
+                    raw_session: SecretString::from(raw_session),
+                },
+                ExecutionMetadata::for_request(request_id.0),
+            )
             .await
-            .map_err(session_error)?
         {
-            audit(
-                "auditor_access_session.revoked",
-                "logout_auditor_access_session",
-                request_id.0,
-                Uuid::from(session.workspace_id),
-                Uuid::from(session.id),
-                &session.auditor_email,
-            );
+            Ok(result) if result.transition == AuditorSessionTransition::Revoked => {
+                audit(
+                    "auditor_access_session.revoked",
+                    "logout_auditor_access_session",
+                    request_id.0,
+                    Uuid::from(result.session.workspace_id),
+                    Uuid::from(result.session.id),
+                    &result.session.auditor_email,
+                );
+            }
+            Ok(_) | Err(RevokeAuditorSessionError::Unavailable) => {}
+            Err(RevokeAuditorSessionError::Repository(error)) => {
+                tracing::error!(%error, "auditor access session repository failure");
+                return Err(ApiError::Internal);
+            }
         }
     }
 
@@ -308,16 +393,11 @@ async fn portal_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -337,16 +417,11 @@ async fn policies_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -376,16 +451,11 @@ async fn policy_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -418,16 +488,11 @@ async fn standalone_control_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -451,16 +516,11 @@ async fn requirement_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -484,16 +544,11 @@ async fn control_page(
     let Some(raw_session) = auditor_session_cookie(&headers) else {
         return Ok(unavailable_response());
     };
-    let session = match state.sessions.load_session(raw_session).await {
-        Ok(session) => session,
-        Err(AuditorAccessSessionError::Unavailable) => return Ok(unavailable_response()),
-        Err(error) => return Err(session_error(error)),
+    let session = match resolve_session(&state, raw_session).await? {
+        Some(session) => session,
+        None => return Ok(unavailable_response()),
     };
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -514,16 +569,10 @@ async fn portal_data(
     headers: HeaderMap,
 ) -> Result<Json<AuditorPortalReadModelResponse>, ApiError> {
     let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
-    let session = state
-        .sessions
-        .load_session(raw_session)
-        .await
-        .map_err(session_error)?;
-    let model = state
-        .portal
-        .read_model(&session)
-        .await
-        .map_err(portal_error)?;
+    let session = resolve_session(&state, raw_session)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let model = read_portal(&state, &session, request_id.0).await?;
 
     audit_portal_read(
         request_id.0,
@@ -549,11 +598,9 @@ async fn download_document(
 ) -> Result<Response, ApiError> {
     let identity = parse_download_path(&download_path)?;
     let raw_session = auditor_session_cookie(&headers).ok_or(ApiError::NotFound)?;
-    let session = state
-        .sessions
-        .load_session(raw_session)
-        .await
-        .map_err(session_error)?;
+    let session = resolve_session(&state, raw_session)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     let (document, object) = match identity {
         AuditorDownloadIdentity::Evidence {
             submission_id,
@@ -971,7 +1018,7 @@ fn control_detail_path(model: &AuditorPortalReadModel, control_id: Uuid) -> Stri
 
 fn render_requirement_row(
     model: &AuditorPortalReadModel,
-    requirement: &FrameworkRequirement,
+    requirement: &FrameworkRequirementDetail,
 ) -> String {
     let controls = controls_for_requirement(model, Uuid::from(requirement.id));
     let evidence_count = controls
@@ -1056,7 +1103,7 @@ fn render_requirement_page(model: &AuditorPortalReadModel, requirement_id: Uuid)
 }
 
 fn render_control_row(
-    requirement: &FrameworkRequirement,
+    requirement: &FrameworkRequirementDetail,
     control: &AuditorPortalControl,
 ) -> String {
     let evidence_count = control.evidence.len();
@@ -1116,7 +1163,7 @@ fn render_standalone_control_page(
 
 fn render_control_detail_page(
     model: &AuditorPortalReadModel,
-    requirement: Option<&FrameworkRequirement>,
+    requirement: Option<&FrameworkRequirementDetail>,
     control: &AuditorPortalControl,
 ) -> String {
     let submission_count = control
@@ -1878,34 +1925,51 @@ fn audit_policy_catalog_read(
     .emit();
 }
 
-fn grant_error(error: AuditorAccessGrantError) -> ApiError {
-    match error {
-        AuditorAccessGrantError::Unavailable => ApiError::NotFound,
-        AuditorAccessGrantError::Denied => ApiError::NotFound,
-        AuditorAccessGrantError::ExpiresAtInPast => {
-            ApiError::BadRequest(vec!["expires_at must be in the future".to_owned()])
-        }
-        AuditorAccessGrantError::InvalidEmail => {
-            ApiError::BadRequest(vec!["auditor_email is invalid".to_owned()])
-        }
-        AuditorAccessGrantError::Secret(_) | AuditorAccessGrantError::Repository(_) => {
-            ApiError::Internal
-        }
-    }
+fn grant_error(error: crate::persistence::Error) -> ApiError {
+    tracing::error!(%error, "auditor access grant repository failure");
+    ApiError::Internal
 }
 
-fn session_error(error: AuditorAccessSessionError) -> ApiError {
+fn session_error(error: ResolveAuditorSessionByDigestError) -> ApiError {
     match error {
-        AuditorAccessSessionError::Unavailable => ApiError::NotFound,
-        AuditorAccessSessionError::Random => ApiError::Internal,
-        AuditorAccessSessionError::Repository(error) => {
+        ResolveAuditorSessionByDigestError::Repository(error) => {
             tracing::error!(%error, "auditor access session repository failure");
             ApiError::Internal
         }
     }
 }
 
-fn portal_error(error: crate::services::Error) -> ApiError {
+async fn resolve_session(
+    state: &AuditorAccessState,
+    raw_session: &str,
+) -> Result<Option<ResolvedAuditorSession>, ApiError> {
+    state
+        .resolve_session
+        .handle(ResolveAuditorSessionByDigest {
+            raw_session: SecretString::from(raw_session),
+        })
+        .await
+        .map_err(session_error)
+}
+
+async fn read_portal(
+    state: &AuditorAccessState,
+    session: &ResolvedAuditorSession,
+    request_id: Uuid,
+) -> Result<AuditorPortalReadModel, ApiError> {
+    state
+        .read_portal
+        .handle(
+            ReadAuditorPortal {
+                session: session.clone(),
+            },
+            ExecutionMetadata::for_request(request_id),
+        )
+        .await
+        .map_err(portal_error)
+}
+
+fn portal_error(error: crate::persistence::Error) -> ApiError {
     tracing::error!(%error, "auditor portal read model failure");
     ApiError::Internal
 }
@@ -2087,8 +2151,8 @@ struct FrameworkRequirementResponse {
     description: String,
 }
 
-impl From<FrameworkRequirement> for FrameworkRequirementResponse {
-    fn from(requirement: FrameworkRequirement) -> Self {
+impl From<FrameworkRequirementDetail> for FrameworkRequirementResponse {
+    fn from(requirement: FrameworkRequirementDetail) -> Self {
         Self {
             id: Uuid::from(requirement.id),
             framework_id: Uuid::from(requirement.framework_id),
@@ -2131,8 +2195,8 @@ struct EvidenceResponse {
     updated_at: DateTime<Utc>,
 }
 
-impl From<Evidence> for EvidenceResponse {
-    fn from(evidence: Evidence) -> Self {
+impl From<EvidenceDetail> for EvidenceResponse {
+    fn from(evidence: EvidenceDetail) -> Self {
         Self {
             id: Uuid::from(evidence.id),
             title: evidence.title,

@@ -177,7 +177,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
         "Uploaded",
     );
     assert_eq!(
-        body_projection(&catalog.text()),
+        body_read_model(&catalog.text()),
         policies_body(workspace_name, auditor_email, 1, 1, &catalog_row)
     );
 
@@ -188,7 +188,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
         .await;
     policy_response.assert_status_ok();
     assert_eq!(
-        body_projection(&policy_response.text()),
+        body_read_model(&policy_response.text()),
         policy_body(
             workspace_name,
             auditor_email,
@@ -224,7 +224,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
         &submissions,
     );
     assert_eq!(
-        body_projection(&control_response.text()),
+        body_read_model(&control_response.text()),
         control_body(
             workspace_name,
             auditor_email,

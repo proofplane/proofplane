@@ -3,16 +3,24 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::documents::{
+            DocumentCommandOutcome, FinalizeDocument,
+            FinalizeDocumentHandler as FinalizeDocumentCommandHandler,
+        },
+        ExecutionMetadata,
+    },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
     object_storage::{ObjectKey, ObjectStore},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::{Postgres, TypedDocumentUploadWork},
+    persistence::{Postgres, TypedDocumentUploadWork},
     worker::{RetryableWorkerError, WorkerMessage},
 };
 
 pub struct DocumentFinalizationHandler<S> {
     repository: Arc<Postgres>,
     object_store: Arc<S>,
+    command_handler: FinalizeDocumentCommandHandler,
 }
 
 impl<S> Clone for DocumentFinalizationHandler<S> {
@@ -20,6 +28,7 @@ impl<S> Clone for DocumentFinalizationHandler<S> {
         Self {
             repository: self.repository.clone(),
             object_store: self.object_store.clone(),
+            command_handler: self.command_handler.clone(),
         }
     }
 }
@@ -27,6 +36,7 @@ impl<S> Clone for DocumentFinalizationHandler<S> {
 impl<S> DocumentFinalizationHandler<S> {
     pub fn new(repository: Arc<Postgres>, object_store: Arc<S>) -> Self {
         Self {
+            command_handler: FinalizeDocumentCommandHandler::new(repository.clone()),
             repository,
             object_store,
         }
@@ -52,12 +62,10 @@ where
             }
         };
 
-        let Some(work) = self
-            .repository
-            .load_finalizing_typed_document_upload_work(
-                payload.identity,
-                payload.object_key.as_str(),
-            )
+        let reads = self.repository.reads().await.map_err(retryable)?;
+        let Some(work) = reads
+            .documents()
+            .load_finalizing_upload_work(payload.identity, payload.object_key.as_str())
             .await
             .map_err(retryable)?
         else {
@@ -78,15 +86,22 @@ where
 
         tracing::debug!("object copied");
 
-        let updated = self
-            .repository
-            .mark_typed_document_uploaded(&work, final_key.as_str())
+        let outcome = self
+            .command_handler
+            .handle(
+                FinalizeDocument {
+                    identity: work.identity,
+                    quarantine_object_key: work.object_key.clone(),
+                    final_object_key: final_key.as_str().to_owned(),
+                },
+                worker_metadata(&message),
+            )
             .await
             .map_err(retryable)?;
 
         tracing::debug!("document marked as uploaded in repository");
 
-        if updated {
+        if outcome == DocumentCommandOutcome::Applied {
             emit_worker_finalization_audit(&work, message.request_id);
             self.object_store
                 .delete_object(&payload.object_key)
@@ -102,6 +117,17 @@ where
 
         Ok(())
     }
+}
+
+fn worker_metadata(message: &WorkerMessage) -> ExecutionMetadata {
+    let mut metadata = ExecutionMetadata::background();
+    if let Some(correlation_id) = message.request_id {
+        metadata = metadata.with_correlation_id(correlation_id);
+    }
+    if let Ok(causation_id) = Uuid::parse_str(&message.message_id) {
+        metadata = metadata.with_causation_id(causation_id);
+    }
+    metadata
 }
 
 fn emit_worker_finalization_audit(work: &TypedDocumentUploadWork, request_id: Option<Uuid>) {

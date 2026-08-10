@@ -1,22 +1,26 @@
 use std::sync::Arc;
 
 use crate::{
+    application::{
+        commands::documents::{
+            ArchiveDocument, ArchiveDocumentHandler, ArchiveDocumentOutcome,
+            CreateEvidenceSubmissionDocument, CreateEvidenceSubmissionDocumentHandler,
+            CreatedDocument, DocumentCommandError,
+        },
+        ExecutionMetadata,
+    },
+    authentication::AgentConnectionContext,
     domain::{
-        AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload,
-        CreateEvidenceSubmissionPayload, Document, DocumentId, DocumentOwner, EvidenceId,
-        EvidenceSubmissionDetail, EvidenceSubmissionId, WorkspaceId,
+        AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload, Document, DocumentId,
+        DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{ArchiveDocumentResult, NewOutboxMessage, Postgres},
+    persistence::{ArchiveDocumentResult, Postgres},
+    read_models::EvidenceSubmissionDetail,
     services::Error,
-    worker::DOCUMENT_SCAN_REQUESTED,
 };
 
-use super::{
-    agent_connections::AgentConnectionContext,
-    documents::{delete_staged_document, stage_evidence_document},
-};
+use super::documents::{delete_staged_document, stage_evidence_document};
 use bytes::Bytes;
 use futures_core::Stream;
 use uuid::Uuid;
@@ -24,6 +28,8 @@ use uuid::Uuid;
 pub struct EvidenceSubmissionService {
     repository: Arc<Postgres>,
     object_store: Arc<FilesystemObjectStore>,
+    create_document: CreateEvidenceSubmissionDocumentHandler,
+    archive_document: ArchiveDocumentHandler,
 }
 
 impl Clone for EvidenceSubmissionService {
@@ -31,6 +37,8 @@ impl Clone for EvidenceSubmissionService {
         Self {
             repository: self.repository.clone(),
             object_store: self.object_store.clone(),
+            create_document: self.create_document.clone(),
+            archive_document: self.archive_document.clone(),
         }
     }
 }
@@ -57,6 +65,8 @@ pub struct StagedEvidenceDocument {
 impl EvidenceSubmissionService {
     pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
         Self {
+            create_document: CreateEvidenceSubmissionDocumentHandler::new(repository.clone()),
+            archive_document: ArchiveDocumentHandler::new(repository.clone()),
             repository,
             object_store,
         }
@@ -69,9 +79,10 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.get_evidence_submission(id).await
-            })
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
+            .get(id)
             .await?)
     }
 
@@ -82,9 +93,10 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.list_evidence_submissions(evidence_id).await
-            })
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
+            .list_for_evidence(evidence_id)
             .await?)
     }
 
@@ -96,11 +108,10 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .list_evidence_submissions_for_coverage(evidence_id, coverage)
-                    .await
-            })
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
+            .list_for_coverage(evidence_id, coverage)
             .await?)
     }
 
@@ -111,11 +122,10 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context
-                    .latest_evidence_submission_for_evidence(evidence_id)
-                    .await
-            })
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
+            .latest_for_evidence(evidence_id)
             .await?)
     }
 
@@ -186,11 +196,10 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_agent_upload_document(submission_id, document_id)
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .evidence_submissions()
+            .get_agent_upload_document(submission_id, document_id)
             .await?)
     }
 
@@ -208,11 +217,7 @@ impl EvidenceSubmissionService {
         payload: StagedEvidenceDocument,
     ) -> Result<Option<Document>, Error> {
         let object_key = payload.object_key.clone();
-        let submission_payload = CreateEvidenceSubmissionPayload {
-            id: submission_id,
-            evidence_id,
-            coverage,
-        };
+        let document_id = DocumentId::from(Uuid::new_v4());
         let document_payload = CreateDocumentPayload {
             owner: DocumentOwner::EvidenceSubmission(submission_id),
             filename: payload.filename,
@@ -224,40 +229,32 @@ impl EvidenceSubmissionService {
         };
 
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    if context
-                        .create_evidence_submission(&submission_payload)
-                        .await?
-                        .is_none()
-                    {
-                        return Ok(None);
-                    }
-                    let document = context.create_evidence_document(&document_payload).await?;
-                    context
-                        .append_outbox_message(&document_scan_requested_message(
-                            &document, request_id,
-                        ))
-                        .await?;
-
-                    Ok(Some(document))
+            .create_document
+            .handle(
+                CreateEvidenceSubmissionDocument {
+                    connection: *connection,
+                    submission_id,
+                    evidence_id,
+                    coverage,
+                    document_id,
+                    document: document_payload,
+                    received_at: chrono::Utc::now(),
                 },
+                ExecutionMetadata::for_request(request_id),
             )
             .await;
 
         match result {
-            Ok(Some(document)) => Ok(Some(document)),
-            Ok(None) => {
+            Ok(CreatedDocument::Created(document) | CreatedDocument::Replayed(document)) => {
+                Ok(Some(document))
+            }
+            Err(DocumentCommandError::Unavailable | DocumentCommandError::Invalid) => {
                 let _ = self.delete_uploaded_document_object(&object_key).await;
                 Ok(None)
             }
             Err(error) => {
                 let _ = self.delete_uploaded_document_object(&object_key).await;
-                Err(error.into())
+                Err(command_error(error))
             }
         }
     }
@@ -268,35 +265,36 @@ impl EvidenceSubmissionService {
         submission_id: EvidenceSubmissionId,
         document_id: DocumentId,
     ) -> Result<ArchiveDocumentResult, Error> {
-        Ok(self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    context
-                        .archive_evidence_document(submission_id, document_id)
-                        .await
+        let outcome = self
+            .archive_document
+            .handle(
+                ArchiveDocument {
+                    connection: *connection,
+                    identity: DocumentIdentity::Evidence {
+                        evidence_submission_id: submission_id,
+                        document_id,
+                    },
                 },
+                ExecutionMetadata::background(),
             )
-            .await?)
+            .await
+            .map_err(command_error)?;
+        Ok(match outcome {
+            ArchiveDocumentOutcome::Archived => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Replayed => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Unavailable => ArchiveDocumentResult::NotFound,
+            ArchiveDocumentOutcome::NotTerminal => ArchiveDocumentResult::NotTerminal,
+        })
     }
 }
 
-pub(crate) fn document_scan_requested_message(
-    document: &Document,
-    request_id: Uuid,
-) -> NewOutboxMessage {
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "evidence_document".to_owned(),
-        aggregate_id: Uuid::from(document.id()).to_string(),
-        payload: serde_json::json!({
-            "evidence_submission_id": document.owner().owner_uuid().to_string(),
-            "object_key": document.object_key,
-        }),
-        request_id: Some(request_id),
+fn command_error(error: DocumentCommandError) -> Error {
+    match error {
+        DocumentCommandError::Repository(error) => Error::Repository(error),
+        DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+            Error::Repository(crate::persistence::Error::InvariantViolation(
+                "validated document command was rejected",
+            ))
+        }
     }
 }

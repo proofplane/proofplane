@@ -41,6 +41,13 @@ CREATE TABLE outbox_messages (
     aggregate_id TEXT NOT NULL,
     payload JSONB NOT NULL,
     request_id UUID,
+    message_kind TEXT NOT NULL CHECK (message_kind IN ('command', 'event')),
+    message_type TEXT NOT NULL,
+    message_version INTEGER NOT NULL CHECK (message_version >= 0),
+    message_id UUID NOT NULL DEFAULT gen_random_uuid(),
+    subject TEXT NOT NULL,
+    correlation_id UUID,
+    causation_id UUID,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     next_available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -261,7 +268,8 @@ CREATE TABLE document_upload_grants (
     CONSTRAINT document_upload_grants_coverage_window
         CHECK (valid_until >= valid_from),
     CHECK (expires_at > issued_at),
-    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+    CONSTRAINT document_upload_grants_redemption
+        CHECK (redeemed_at IS NULL OR (redeemed_at >= issued_at AND redeemed_at < expires_at))
 );
 
 CREATE INDEX idx_document_upload_grants_redemption
@@ -402,7 +410,8 @@ CREATE TABLE policy_document_upload_grants (
     expires_at TIMESTAMPTZ NOT NULL,
     redeemed_at TIMESTAMPTZ,
     CHECK (expires_at > issued_at),
-    CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at)
+    CONSTRAINT policy_document_upload_grants_redemption
+        CHECK (redeemed_at IS NULL OR (redeemed_at >= issued_at AND redeemed_at < expires_at))
 );
 
 CREATE INDEX policy_document_upload_grants_redemption_idx
@@ -410,3 +419,113 @@ CREATE INDEX policy_document_upload_grants_redemption_idx
 
 CREATE INDEX policy_document_upload_grants_expiry_idx
     ON policy_document_upload_grants (expires_at, redeemed_at);
+
+CREATE TABLE auditor_auth_transactions (
+    id UUID PRIMARY KEY,
+    grant_id UUID NOT NULL REFERENCES auditor_access_grants(id) ON DELETE CASCADE,
+    state_digest BYTEA NOT NULL UNIQUE,
+    nonce_digest BYTEA NOT NULL,
+    pkce_verifier TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (octet_length(state_digest) = 32),
+    CHECK (octet_length(nonce_digest) = 32),
+    CHECK (char_length(pkce_verifier) BETWEEN 43 AND 128)
+);
+
+CREATE TABLE agent_evidence_upload_grants (
+    id UUID PRIMARY KEY,
+    submission_id UUID NOT NULL UNIQUE,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    evidence_id UUID NOT NULL REFERENCES evidence(id),
+    valid_from TIMESTAMPTZ NOT NULL,
+    valid_until TIMESTAMPTZ NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    expected_content_length BIGINT NOT NULL,
+    expected_sha256 BYTEA,
+    issued_by_user_id UUID NOT NULL REFERENCES users(id),
+    issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    document_id UUID UNIQUE REFERENCES documents(id),
+    CONSTRAINT agent_evidence_upload_grants_coverage_window
+        CHECK (valid_until >= valid_from),
+    CONSTRAINT agent_evidence_upload_grants_filename
+        CHECK (filename <> '' AND octet_length(filename) <= 255),
+    CONSTRAINT agent_evidence_upload_grants_content_type
+        CHECK (
+            content_type <> ''
+            AND content_type = btrim(content_type)
+            AND octet_length(content_type) <= 255
+        ),
+    CONSTRAINT agent_evidence_upload_grants_content_length
+        CHECK (expected_content_length >= 0),
+    CONSTRAINT agent_evidence_upload_grants_sha256
+        CHECK (expected_sha256 IS NULL OR octet_length(expected_sha256) = 32),
+    CONSTRAINT agent_evidence_upload_grants_expiry
+        CHECK (expires_at > issued_at),
+    CONSTRAINT agent_evidence_upload_grants_completion
+        CHECK (
+            (completed_at IS NULL AND document_id IS NULL)
+            OR
+            (
+                completed_at IS NOT NULL
+                AND document_id IS NOT NULL
+                AND completed_at >= issued_at
+                AND completed_at < expires_at
+            )
+        )
+);
+
+CREATE INDEX agent_evidence_upload_grants_eligibility_idx
+    ON agent_evidence_upload_grants (id, workspace_id, expires_at)
+    WHERE completed_at IS NULL;
+
+CREATE TABLE agent_policy_document_upload_grants (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    policy_id UUID NOT NULL REFERENCES policies(id),
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    expected_content_length BIGINT NOT NULL,
+    expected_sha256 BYTEA,
+    issued_by_user_id UUID NOT NULL REFERENCES users(id),
+    issued_via_agent_connection_id UUID NOT NULL REFERENCES agent_connections(id),
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    document_id UUID UNIQUE REFERENCES documents(id),
+    CONSTRAINT agent_policy_document_upload_grants_filename
+        CHECK (filename <> '' AND octet_length(filename) <= 255),
+    CONSTRAINT agent_policy_document_upload_grants_content_type
+        CHECK (
+            content_type <> ''
+            AND content_type = btrim(content_type)
+            AND octet_length(content_type) <= 255
+        ),
+    CONSTRAINT agent_policy_document_upload_grants_content_length
+        CHECK (expected_content_length >= 0),
+    CONSTRAINT agent_policy_document_upload_grants_sha256
+        CHECK (expected_sha256 IS NULL OR octet_length(expected_sha256) = 32),
+    CONSTRAINT agent_policy_document_upload_grants_expiry
+        CHECK (expires_at > issued_at),
+    CONSTRAINT agent_policy_document_upload_grants_completion
+        CHECK (
+            (completed_at IS NULL AND document_id IS NULL)
+            OR
+            (
+                completed_at IS NOT NULL
+                AND document_id IS NOT NULL
+                AND completed_at >= issued_at
+                AND completed_at < expires_at
+            )
+        )
+);
+
+CREATE INDEX agent_policy_document_upload_grants_eligibility_idx
+    ON agent_policy_document_upload_grants (id, workspace_id, expires_at)
+    WHERE completed_at IS NULL;

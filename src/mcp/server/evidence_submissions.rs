@@ -15,9 +15,9 @@ use super::{
 };
 use crate::{
     domain::{
-        Document, EvidenceSubmission, EvidenceSubmissionDetail, EvidenceSubmissionId,
-        EvidenceSubmitter, WorkspacePermission,
+        Document, EvidenceSubmission, EvidenceSubmissionId, EvidenceSubmitter, WorkspacePermission,
     },
+    read_models::EvidenceSubmissionDetail,
     validate,
 };
 

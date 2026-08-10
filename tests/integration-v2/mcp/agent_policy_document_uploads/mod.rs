@@ -28,7 +28,7 @@ pub(super) use crate::support::{
     },
     mcp::{assert_not_found, assert_validation_error, McpClient, McpError},
     oauth::authorize_agent_connection,
-    policy_documents::{assert_policy_projection, ExpectedPolicyDocument},
+    policy_documents::{assert_policy_read_model, ExpectedPolicyDocument},
     scenario::ScenarioBuilder,
 };
 

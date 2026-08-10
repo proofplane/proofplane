@@ -309,7 +309,7 @@ async fn complete_safe_graph_is_workspace_scoped_and_emits_exact_read_audits() {
             .collect::<Vec<_>>(),
         ["PP-AUD-01", "PP-AUD-02"]
     );
-    assert_control_projection(&controls[0], mapped_control);
+    assert_control_read_model(&controls[0], mapped_control);
     assert_eq!(
         controls[0]["framework_requirements"],
         json!([]),
@@ -319,7 +319,7 @@ async fn complete_safe_graph_is_workspace_scoped_and_emits_exact_read_audits() {
         .as_array()
         .expect("control evidence is an array");
     assert_eq!(evidence.len(), 1);
-    assert_evidence_projection(
+    assert_evidence_read_model(
         &evidence[0],
         mapped_evidence.id,
         "Mapped access review evidence",
@@ -338,15 +338,15 @@ async fn complete_safe_graph_is_workspace_scoped_and_emits_exact_read_audits() {
             .collect::<Vec<_>>(),
         ["pending-evidence.txt", "uploaded-evidence.txt"]
     );
-    assert_submission_projection(&submissions[0], &pending_evidence_submission, false);
-    assert_submission_projection(&submissions[1], uploaded_submission, true);
+    assert_submission_read_model(&submissions[0], &pending_evidence_submission, false);
+    assert_submission_read_model(&submissions[1], uploaded_submission, true);
     let control_policies = controls[0]["policies"]
         .as_array()
         .expect("control policies is an array");
     assert_eq!(control_policies.len(), 1);
-    assert_policy_summary_projection(&control_policies[0], mapped_policy, Some(false));
+    assert_policy_summary_read_model(&control_policies[0], mapped_policy, Some(false));
 
-    assert_control_projection(&controls[1], standalone_control);
+    assert_control_read_model(&controls[1], standalone_control);
     assert_eq!(controls[1]["framework_requirements"], json!([]));
     assert_eq!(controls[1]["evidence"], json!([]));
     assert_eq!(controls[1]["policies"], json!([]));
@@ -360,13 +360,13 @@ async fn complete_safe_graph_is_workspace_scoped_and_emits_exact_read_audits() {
             .collect::<Vec<_>>(),
         ["Mapped Policy", "Unmapped Policy"]
     );
-    assert_policy_projection(
+    assert_policy_read_model(
         &policies[0],
         mapped_policy,
         &[mapped_control],
         Some((&pending_policy_document, false)),
     );
-    assert_policy_projection(&policies[1], unmapped_policy, &[], None);
+    assert_policy_read_model(&policies[1], unmapped_policy, &[], None);
 
     assert_eq!(portal_logs.len(), 2);
     assert_portal_read_audit_event(

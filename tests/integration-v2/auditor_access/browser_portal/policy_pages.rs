@@ -279,7 +279,7 @@ async fn policy_pages_render_every_document_label_download_rule_and_safe_catalog
     ]
     .join("");
     assert_eq!(
-        body_projection(&catalog.text()),
+        body_read_model(&catalog.text()),
         policies_body(workspace_name, auditor_email, 5, 5, &policy_rows)
     );
     assert_eq!(catalog_logs.len(), 2);
@@ -328,7 +328,7 @@ async fn policy_pages_render_every_document_label_download_rule_and_safe_catalog
             .await;
         response.assert_status_ok();
         assert_eq!(
-            body_projection(&response.text()),
+            body_read_model(&response.text()),
             policy_body(
                 workspace_name,
                 auditor_email,
@@ -371,7 +371,7 @@ async fn policy_pages_render_every_document_label_download_rule_and_safe_catalog
         (missing_policy.id, "Echo Missing", "gap", "Missing"),
     ]);
     assert_eq!(
-        body_projection(&standalone_response.text()),
+        body_read_model(&standalone_response.text()),
         control_body(
             workspace_name,
             auditor_email,

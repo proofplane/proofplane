@@ -16,26 +16,42 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use futures_util::stream;
+use secrecy::SecretString;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::{
+            issue_evidence_document_upload_grant::EvidenceDocumentUploadGrantHandlerError,
+            redeem_evidence_document_upload_grant::{
+                RedeemEvidenceDocumentUploadGrant, RedeemEvidenceDocumentUploadGrantHandler,
+            },
+        },
+        queries::evidence_catalog::{
+            EvidenceCatalogError, ListEvidenceControlMappings, ListEvidenceControlMappingsHandler,
+        },
+        queries::resolve_evidence_document_upload_grant_authority::{
+            ResolveEvidenceDocumentUploadGrantAuthority,
+            ResolveEvidenceDocumentUploadGrantAuthorityHandler,
+        },
+        ExecutionMetadata,
+    },
+    authentication::AgentConnectionContext,
     domain::{
         validate_document_filename, CoverageWindow, Document, DocumentId, DocumentUploadStatus,
-        EvidenceId, EvidenceSubmissionDetail, EvidenceSubmissionId,
+        EvidenceId, EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::ArchiveDocumentResult,
+    persistence::ArchiveDocumentResult,
+    read_models::EvidenceSubmissionDetail,
     routes::{
         error::{domain_errors, ApiError},
         request_context::RequestId,
     },
     services::{
-        agent_connections::AgentConnectionContext,
-        controls::ControlService,
         document_downloads::DownloadGrantIssuer,
         document_downloads::{DocumentDownloadService, DownloadError},
-        document_upload_grants::{DocumentUploadGrantService, UploadGrantError},
         evidence_submissions::{
             EvidenceSubmissionService, StageEvidenceDocumentInput, StagedEvidenceDocument,
         },
@@ -55,11 +71,12 @@ enum DocumentUploadDigest {
 
 #[derive(Clone)]
 pub struct DocumentUploadSessionState {
-    pub grants: DocumentUploadGrantService,
+    pub resolve_grant: ResolveEvidenceDocumentUploadGrantAuthorityHandler,
+    pub redeem_grant: RedeemEvidenceDocumentUploadGrantHandler,
     pub downloads: DocumentDownloadService,
     pub sessions: UploadSessionTokenService,
     pub submissions: EvidenceSubmissionService,
-    pub controls: ControlService,
+    pub list_control_mappings: ListEvidenceControlMappingsHandler,
     pub secure_cookie: bool,
     pub max_document_bytes: usize,
 }
@@ -132,7 +149,7 @@ async fn open_upload_session(
     let body = render_upload_page(
         &inventory(
             &state.submissions,
-            &state.controls,
+            &state.list_control_mappings,
             session.evidence_id,
             session.coverage,
             session_context(&session),
@@ -157,7 +174,7 @@ async fn upload_file(
     let connection = session_context(&session);
     let before = inventory(
         &state.submissions,
-        &state.controls,
+        &state.list_control_mappings,
         session.evidence_id,
         session.coverage,
         connection,
@@ -309,7 +326,7 @@ async fn archive_file(
         ArchiveDocumentResult::NotTerminal => {
             let page = inventory(
                 &state.submissions,
-                &state.controls,
+                &state.list_control_mappings,
                 session.evidence_id,
                 session.coverage,
                 connection,
@@ -352,10 +369,35 @@ async fn redeem_grant(
         return Ok(unavailable_response());
     }
 
-    let grant = match state.grants.redeem(&token).await {
+    let authority = match state
+        .resolve_grant
+        .handle(
+            ResolveEvidenceDocumentUploadGrantAuthority {
+                credential: SecretString::from(token),
+            },
+            ExecutionMetadata::background(),
+        )
+        .await
+    {
+        Ok(authority) => authority,
+        Err(_) => return Ok(unavailable_response()),
+    };
+    let grant = match state
+        .redeem_grant
+        .handle(
+            RedeemEvidenceDocumentUploadGrant { authority },
+            ExecutionMetadata::background(),
+        )
+        .await
+    {
         Ok(grant) => grant,
-        Err(UploadGrantError::Unavailable) => return Ok(unavailable_response()),
-        Err(UploadGrantError::Internal | UploadGrantError::Repository(_)) => {
+        Err(EvidenceDocumentUploadGrantHandlerError::Unavailable) => {
+            return Ok(unavailable_response());
+        }
+        Err(
+            EvidenceDocumentUploadGrantHandlerError::Internal
+            | EvidenceDocumentUploadGrantHandlerError::Repository(_),
+        ) => {
             return Err(ApiError::Internal);
         }
     };
@@ -389,7 +431,7 @@ async fn redeem_grant(
 
 async fn inventory(
     submissions: &EvidenceSubmissionService,
-    controls: &ControlService,
+    controls: &ListEvidenceControlMappingsHandler,
     evidence_id: EvidenceId,
     coverage: CoverageWindow,
     connection: AgentConnectionContext,
@@ -398,7 +440,10 @@ async fn inventory(
         .list_for_coverage(connection, evidence_id, coverage)
         .await?;
     let mappings = controls
-        .list_evidence_control_mappings(connection, evidence_id)
+        .handle(ListEvidenceControlMappings {
+            connection,
+            evidence_id,
+        })
         .await?
         .ok_or_else(unavailable)?;
 
@@ -416,6 +461,15 @@ async fn inventory(
             })
             .collect(),
     })
+}
+
+impl From<EvidenceCatalogError> for ApiError {
+    fn from(error: EvidenceCatalogError) -> Self {
+        match error {
+            EvidenceCatalogError::Unavailable => Self::NotFound,
+            EvidenceCatalogError::Repository(error) => error.into(),
+        }
+    }
 }
 
 fn upload_session_document_from_detail(

@@ -22,11 +22,10 @@ use proofplane::{
     app::AppDependencies,
     authentication::{
         paseto::{
-            AgentEvidenceUploadGrantDecryptor, AgentEvidenceUploadGrantEncryptor,
-            AgentPolicyDocumentUploadGrantDecryptor, AgentPolicyDocumentUploadGrantEncryptor,
+            AgentEvidenceUploadGrantEncryptor, AgentPolicyDocumentUploadGrantEncryptor,
             DownloadGrantDecryptor, DownloadGrantEncryptor, McpOAuthDecryptor, McpOAuthEncryptor,
             PolicyUploadGrantDecryptor, PolicyUploadGrantEncryptor, UploadGrantDecryptor,
-            UploadGrantEncryptor,
+            UploadGrantEncryptor, POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         },
         UserAuthenticator,
     },
@@ -34,14 +33,13 @@ use proofplane::{
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::FilesystemObjectStore,
+    persistence::Postgres,
     pubsub::{ensure_worker_subscription, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
-    repository::Postgres,
     routes::authentication::AUTHORIZATION_HEADER,
     services::{
         agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
         agent_policy_document_upload_grants::AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
         client_resolver::ClientResolver, oauth::OAuthService,
-        policy_document_upload_grants::POLICY_UPLOAD_GRANT_AUDIENCE,
     },
 };
 use serde_json::Value;
@@ -49,11 +47,14 @@ use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 use testcontainers_modules::postgres;
 use tokio_util::sync::CancellationToken;
 
-use proofplane::store;
+use proofplane::persistence;
 use uuid::Uuid;
 
 const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
 const POSTGRES_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Must track the Postgres image in `docker-compose.yml`, so this suite covers
+/// the same major version the application runs against.
+const POSTGRES_IMAGE_TAG: &str = "17-alpine";
 const DOWNLOAD_AUDIENCE: &str = "proofplane-document-download";
 const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
 
@@ -90,6 +91,7 @@ impl Harness {
         auth0::start();
 
         let container = postgres::Postgres::default()
+            .with_tag(POSTGRES_IMAGE_TAG)
             .with_startup_timeout(POSTGRES_STARTUP_TIMEOUT)
             .start()
             .await
@@ -106,10 +108,10 @@ impl Harness {
 
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-        let mut database = store::conn(&database_url)
+        let mut database = persistence::conn(&database_url)
             .await
             .expect("fixture database connection opens");
-        store::migrate(&mut database)
+        persistence::migrate(&mut database)
             .await
             .expect("database migrations run");
 
@@ -119,7 +121,7 @@ impl Harness {
             url::Url::parse("https://api.proofplane.test/").expect("public API base URL parses"),
         );
 
-        let pool = store::conn_pool(&database_url, 8)
+        let pool = persistence::conn_pool(&database_url, 8)
             .await
             .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));
@@ -353,33 +355,21 @@ fn build_mcp_server(
             &app_config.paseto.upload_grant,
         )
         .expect("agent evidence upload grant encryptor initializes"),
-        agent_upload_grant_decryptor: AgentEvidenceUploadGrantDecryptor::from_config(
-            issuer.clone(),
-            AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
-            &app_config.paseto.upload_grant,
-        )
-        .expect("agent evidence upload grant decryptor initializes"),
         agent_policy_upload_grant_encryptor: AgentPolicyDocumentUploadGrantEncryptor::from_config(
             issuer.clone(),
             AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &app_config.paseto.upload_grant,
         )
         .expect("agent policy upload grant encryptor initializes"),
-        agent_policy_upload_grant_decryptor: AgentPolicyDocumentUploadGrantDecryptor::from_config(
-            issuer.clone(),
-            AGENT_POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
-            &app_config.paseto.upload_grant,
-        )
-        .expect("agent policy upload grant decryptor initializes"),
         policy_upload_grant_encryptor: PolicyUploadGrantEncryptor::from_config(
             issuer.clone(),
-            POLICY_UPLOAD_GRANT_AUDIENCE,
+            POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &app_config.paseto.upload_grant,
         )
         .expect("policy upload grant encryptor initializes"),
         policy_upload_grant_decryptor: PolicyUploadGrantDecryptor::from_config(
             issuer,
-            POLICY_UPLOAD_GRANT_AUDIENCE,
+            POLICY_DOCUMENT_UPLOAD_GRANT_AUDIENCE,
             &app_config.paseto.upload_grant,
         )
         .expect("policy upload grant decryptor initializes"),

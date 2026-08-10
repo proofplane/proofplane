@@ -5,19 +5,24 @@ use futures_core::Stream;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        commands::documents::{
+            ArchiveDocument, ArchiveDocumentHandler, ArchiveDocumentOutcome, CreatePolicyDocument,
+            CreatePolicyDocumentHandler, CreatePolicyDocumentOutcome, DocumentCommandError,
+        },
+        ExecutionMetadata,
+    },
+    authentication::AgentConnectionContext,
     domain::{
-        AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId, DocumentOwner,
-        PolicyId, WorkspaceId,
+        AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId,
+        DocumentIdentity, DocumentOwner, PolicyId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
-    repository::{ArchiveDocumentResult, CreatePolicyDocumentResult, NewOutboxMessage, Postgres},
-    worker::DOCUMENT_SCAN_REQUESTED,
+    persistence::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
 };
 
 use super::{
-    agent_connections::AgentConnectionContext,
     documents::{
         delete_staged_document, stage_bounded_document, stage_document, BoundedStagingRequest,
     },
@@ -28,6 +33,8 @@ use super::{
 pub struct PolicyDocumentService {
     repository: Arc<Postgres>,
     object_store: Arc<FilesystemObjectStore>,
+    create_document: CreatePolicyDocumentHandler,
+    archive_document: ArchiveDocumentHandler,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +51,8 @@ pub struct UploadPolicyDocumentPayload {
 impl PolicyDocumentService {
     pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
         Self {
+            create_document: CreatePolicyDocumentHandler::new(repository.clone()),
+            archive_document: ArchiveDocumentHandler::new(repository.clone()),
             repository,
             object_store,
         }
@@ -125,11 +134,10 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(workspace_id, async move |context| {
-                context
-                    .get_policy_document_for_agent_upload(policy_id, document_id)
-                    .await
-            })
+            .workspace_reads(workspace_id)
+            .await?
+            .policies()
+            .get_agent_upload_document(policy_id, document_id)
             .await?)
     }
 
@@ -141,7 +149,7 @@ impl PolicyDocumentService {
         mut payload: UploadPolicyDocumentPayload,
     ) -> Result<CreatePolicyDocumentResult, Error> {
         payload.policy_id = policy_id;
-        let create_payload = CreateDocumentPayload {
+        let document = CreateDocumentPayload {
             owner: DocumentOwner::Policy(policy_id),
             filename: payload.filename,
             content_type: payload.content_type,
@@ -152,27 +160,21 @@ impl PolicyDocumentService {
         };
 
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    let result = context.create_policy_document(&create_payload).await?;
-                    if let CreatePolicyDocumentResult::Created(document) = &result {
-                        context
-                            .append_outbox_message(&policy_document_scan_requested_message(
-                                document, request_id,
-                            ))
-                            .await?;
-                    }
-                    Ok(result)
+            .create_document
+            .handle(
+                CreatePolicyDocument {
+                    connection: *connection,
+                    policy_id,
+                    document_id: DocumentId::from(Uuid::new_v4()),
+                    document,
+                    created_at: chrono::Utc::now(),
                 },
+                ExecutionMetadata::for_request(request_id),
             )
             .await;
 
         match result {
-            Ok(CreatePolicyDocumentResult::Created(document)) => {
+            Ok(CreatePolicyDocumentOutcome::Created(document)) => {
                 emit_document_audit(
                     "policy_document.accepted",
                     "accept_policy_document",
@@ -183,13 +185,21 @@ impl PolicyDocumentService {
                 );
                 Ok(CreatePolicyDocumentResult::Created(document))
             }
-            Ok(result) => {
+            Ok(CreatePolicyDocumentOutcome::PolicyUnavailable) => {
                 self.delete_staged_object(&payload.object_key).await?;
-                Ok(result)
+                Ok(CreatePolicyDocumentResult::PolicyNotFound)
+            }
+            Ok(CreatePolicyDocumentOutcome::CurrentDocument) => {
+                self.delete_staged_object(&payload.object_key).await?;
+                Ok(CreatePolicyDocumentResult::DocumentExists)
+            }
+            Ok(CreatePolicyDocumentOutcome::Replayed(_)) => {
+                self.delete_staged_object(&payload.object_key).await?;
+                Ok(CreatePolicyDocumentResult::DocumentExists)
             }
             Err(error) => {
                 self.delete_staged_object(&payload.object_key).await?;
-                Err(error.into())
+                Err(command_error(error))
             }
         }
     }
@@ -201,9 +211,10 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .in_workspace_context_read(connection.workspace_id, async move |context| {
-                context.get_current_policy_document(policy_id).await
-            })
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .policies()
+            .get_current_document(policy_id)
             .await?)
     }
 
@@ -215,19 +226,27 @@ impl PolicyDocumentService {
         document_id: DocumentId,
     ) -> Result<ArchiveDocumentResult, Error> {
         let result = self
-            .repository
-            .in_agent_connection_workspace_context(
-                connection.workspace_id,
-                connection.user_id,
-                connection.connection_id,
-                async move |context| {
-                    context
-                        .archive_policy_document(policy_id, document_id)
-                        .await
+            .archive_document
+            .handle(
+                ArchiveDocument {
+                    connection: *connection,
+                    identity: DocumentIdentity::Policy {
+                        policy_id,
+                        document_id,
+                    },
                 },
+                ExecutionMetadata::for_request(request_id),
             )
-            .await?;
-        if result == ArchiveDocumentResult::Archived {
+            .await
+            .map_err(command_error)?;
+        let archived = result == ArchiveDocumentOutcome::Archived;
+        let result = match result {
+            ArchiveDocumentOutcome::Archived => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Replayed => ArchiveDocumentResult::Archived,
+            ArchiveDocumentOutcome::Unavailable => ArchiveDocumentResult::NotFound,
+            ArchiveDocumentOutcome::NotTerminal => ArchiveDocumentResult::NotTerminal,
+        };
+        if archived {
             AuditEvent::new(
                 "policy_document.archived",
                 AuditOutcome::Success,
@@ -250,20 +269,14 @@ impl PolicyDocumentService {
     }
 }
 
-pub(crate) fn policy_document_scan_requested_message(
-    document: &Document,
-    request_id: Uuid,
-) -> NewOutboxMessage {
-    NewOutboxMessage {
-        topic: TopicName::new(MESSAGE_BUS_TOPIC),
-        event_type: DOCUMENT_SCAN_REQUESTED.to_owned(),
-        aggregate_type: "policy_document".to_owned(),
-        aggregate_id: Uuid::from(document.id()).to_string(),
-        payload: serde_json::json!({
-            "policy_id": document.owner().owner_uuid().to_string(),
-            "object_key": document.object_key,
-        }),
-        request_id: Some(request_id),
+fn command_error(error: DocumentCommandError) -> super::Error {
+    match error {
+        DocumentCommandError::Repository(error) => super::Error::Repository(error),
+        DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+            super::Error::Repository(crate::persistence::Error::InvariantViolation(
+                "validated document command was rejected",
+            ))
+        }
     }
 }
 

@@ -16,12 +16,15 @@ use super::{
     ProofplaneMcp,
 };
 use crate::{
+    application::{
+        commands::issue_evidence_document_upload_grant::{
+            EvidenceDocumentUploadGrantHandlerError, IssueEvidenceDocumentUploadGrant,
+            IssuedEvidenceDocumentUploadGrant,
+        },
+        ExecutionMetadata,
+    },
     domain::{CoverageWindow, EvidenceId, WorkspacePermission},
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    services::{
-        document_upload_grants::{IssuedUploadGrant, UploadGrantError},
-        Error as ServiceError,
-    },
     validate,
 };
 
@@ -41,8 +44,15 @@ impl ProofplaneMcp {
             authorize_token_workspace(&ctx, WorkspacePermission::WriteEvidenceSubmissions)?;
         let workspace_id = context.connection.workspace_id;
         let grant = self
-            .document_upload_grants
-            .issue(&context.agent_connection_context(), evidence_id, coverage)
+            .issue_evidence_document_upload_grant
+            .handle(
+                IssueEvidenceDocumentUploadGrant {
+                    connection: context.agent_connection_context(),
+                    evidence_id,
+                    coverage,
+                },
+                ExecutionMetadata::for_request(context.request_id.0),
+            )
             .await?;
 
         AuditEvent::new(
@@ -80,8 +90,8 @@ struct ManageEvidenceSubmissionsResponse {
     intended_use: &'static str,
 }
 
-impl From<IssuedUploadGrant> for ManageEvidenceSubmissionsResponse {
-    fn from(grant: IssuedUploadGrant) -> Self {
+impl From<IssuedEvidenceDocumentUploadGrant> for ManageEvidenceSubmissionsResponse {
+    fn from(grant: IssuedEvidenceDocumentUploadGrant) -> Self {
         Self {
             url: grant.url.to_string(),
             expires_at: format_datetime(grant.expires_at),
@@ -112,16 +122,17 @@ fn parse_manage_submissions_request(
     Ok((evidence_id, coverage))
 }
 
-impl From<UploadGrantError> for ErrorData {
-    fn from(error: UploadGrantError) -> Self {
+impl From<EvidenceDocumentUploadGrantHandlerError> for ErrorData {
+    fn from(error: EvidenceDocumentUploadGrantHandlerError) -> Self {
         match error {
-            UploadGrantError::Unavailable => not_found(),
-            UploadGrantError::Internal => {
+            EvidenceDocumentUploadGrantHandlerError::Unavailable => not_found(),
+            EvidenceDocumentUploadGrantHandlerError::Internal => {
                 tracing::error!(%error, "MCP document upload grant failure");
                 ErrorData::internal_error("internal error", None)
             }
-            UploadGrantError::Repository(repository_error) => {
-                ServiceError::from(repository_error).into()
+            EvidenceDocumentUploadGrantHandlerError::Repository(repository_error) => {
+                tracing::error!(%repository_error, "MCP document upload grant repository failure");
+                ErrorData::internal_error("dependency failure", None)
             }
         }
     }

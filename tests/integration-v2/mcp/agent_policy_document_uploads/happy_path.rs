@@ -90,7 +90,7 @@ async fn valid_machine_policy_upload_exposes_descriptor_provenance_audits_and_re
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &pending,
             policy,
             Some(ExpectedPolicyDocument {
@@ -120,7 +120,7 @@ async fn valid_machine_policy_upload_exposes_descriptor_provenance_audits_and_re
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &uploaded,
             policy,
             Some(ExpectedPolicyDocument {
