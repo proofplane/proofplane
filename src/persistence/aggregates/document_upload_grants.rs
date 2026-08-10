@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error,
 };
 
@@ -64,24 +64,17 @@ impl EvidenceDocumentUploadGrantRepository<'_> {
         };
         rows.into_iter()
             .next()
-            .map(|row| EvidenceGrantRecord::try_from(row).and_then(TryInto::try_into))
+            .map(|row| EvidenceDocumentUploadGrantRecord::try_from_row(&row)?.into_domain())
             .transpose()
     }
 
     pub async fn save(&self, grant: &DomainEvidenceDocumentUploadGrant) -> Result<(), Error> {
         let transaction = match self.connection {
             SnapshotConnection::Transaction(unit_of_work) => &unit_of_work.transaction,
-            SnapshotConnection::Workspace(workspace) => {
-                if grant.workspace_id() != workspace.workspace_id {
-                    return Err(Error::InvariantViolation(
-                        "evidence human upload grant workspace must match its repository scope",
-                    ));
-                }
-                workspace.transaction
-            }
+            SnapshotConnection::Workspace(workspace) => workspace.transaction,
         };
-        let record = EvidenceGrantRecord::from(grant);
-        save_workspace_snapshot(transaction, record.as_workspace_snapshot()).await
+        let record = EvidenceDocumentUploadGrantRecord::from_domain(grant)?;
+        save_snapshot(transaction, record.as_snapshot()).await
     }
 }
 
@@ -94,8 +87,8 @@ WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 "#;
 
-workspace_snapshot_record! {
-    struct EvidenceGrantRecord {
+snapshot_record! {
+    struct EvidenceDocumentUploadGrantRecord {
         id: Uuid,
         workspace_id: Uuid,
         evidence_id: Uuid,
@@ -109,13 +102,10 @@ workspace_snapshot_record! {
     }
     table: document_upload_grants,
     conflict: id,
-    scope: workspace_id,
 }
 
-impl TryFrom<Row> for EvidenceGrantRecord {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl EvidenceDocumentUploadGrantRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             workspace_id: row.try_get("workspace_id")?,
@@ -129,30 +119,8 @@ impl TryFrom<Row> for EvidenceGrantRecord {
             redeemed_at: row.try_get("redeemed_at")?,
         })
     }
-}
-
-impl TryFrom<EvidenceGrantRecord> for DomainEvidenceDocumentUploadGrant {
-    type Error = Error;
-
-    fn try_from(record: EvidenceGrantRecord) -> Result<Self, Self::Error> {
-        DomainEvidenceDocumentUploadGrant::rehydrate(
-            record.id.into(),
-            record.workspace_id.into(),
-            record.evidence_id.into(),
-            CoverageWindow::new(record.valid_from, record.valid_until)?,
-            record.issued_by_user_id.into(),
-            record.issued_via_agent_connection_id.into(),
-            record.issued_at,
-            record.expires_at,
-            record.redeemed_at,
-        )
-        .map_err(|_| Error::InvariantViolation("persisted evidence human upload grant is invalid"))
-    }
-}
-
-impl From<&DomainEvidenceDocumentUploadGrant> for EvidenceGrantRecord {
-    fn from(grant: &DomainEvidenceDocumentUploadGrant) -> Self {
-        Self {
+    fn from_domain(grant: &DomainEvidenceDocumentUploadGrant) -> Result<Self, Error> {
+        Ok(Self {
             id: grant.id().into(),
             workspace_id: grant.workspace_id().into(),
             evidence_id: grant.evidence_id().into(),
@@ -163,6 +131,21 @@ impl From<&DomainEvidenceDocumentUploadGrant> for EvidenceGrantRecord {
             issued_at: grant.issued_at(),
             expires_at: grant.expires_at(),
             redeemed_at: grant.redeemed_at(),
-        }
+        })
+    }
+
+    fn into_domain(self) -> Result<DomainEvidenceDocumentUploadGrant, Error> {
+        DomainEvidenceDocumentUploadGrant::rehydrate(
+            self.id.into(),
+            self.workspace_id.into(),
+            self.evidence_id.into(),
+            CoverageWindow::new(self.valid_from, self.valid_until)?,
+            self.issued_by_user_id.into(),
+            self.issued_via_agent_connection_id.into(),
+            self.issued_at,
+            self.expires_at,
+            self.redeemed_at,
+        )
+        .map_err(|_| Error::InvariantViolation("persisted evidence human upload grant is invalid"))
     }
 }

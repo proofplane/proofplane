@@ -73,6 +73,7 @@ const SQL: &str = "SELECT d.workspace_id, d.filename, d.content_type, d.content_
 pub(super) fn document_from_row(row: &Row, identity: DocumentIdentity) -> Result<Document, Error> {
     Ok(Document {
         identity,
+        workspace_id: WorkspaceId::from(row.try_get::<_, Uuid>("workspace_id")?),
         created_by_user_id: UserId::from(row.try_get::<_, Uuid>("created_by_user_id")?),
         filename: row.try_get("filename")?,
         content_type: row.try_get("content_type")?,

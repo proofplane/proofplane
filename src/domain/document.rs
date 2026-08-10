@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{ids::uuid_id, DomainError, EvidenceSubmissionId, PolicyId, UserId};
+use super::{ids::uuid_id, DomainError, EvidenceSubmissionId, PolicyId, UserId, WorkspaceId};
 
 uuid_id!(DocumentId);
 
@@ -114,6 +114,7 @@ impl DocumentIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     pub identity: DocumentIdentity,
+    pub workspace_id: WorkspaceId,
     pub created_by_user_id: UserId,
     pub filename: String,
     pub content_type: String,
@@ -138,6 +139,7 @@ impl Document {
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         identity: DocumentIdentity,
+        workspace_id: WorkspaceId,
         created_by_user_id: UserId,
         payload: CreateDocumentPayload,
         created_at: DateTime<Utc>,
@@ -150,6 +152,7 @@ impl Document {
         }
         let document = Self {
             identity,
+            workspace_id,
             created_by_user_id,
             filename: payload.filename,
             content_type: payload.content_type,
@@ -332,6 +335,7 @@ mod tests {
         };
         let (mut document, created) = Document::create(
             identity,
+            Uuid::new_v4().into(),
             Uuid::new_v4().into(),
             CreateDocumentPayload {
                 owner: identity.owner(),

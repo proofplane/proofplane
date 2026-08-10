@@ -63,6 +63,20 @@ narrow `get` and `save` operations: `get` rehydrates the complete aggregate,
 and `save` persists its complete current snapshot. Snapshot `save` methods must
 not add aggregate-specific eligibility or relationship queries.
 
+Name each aggregate's private primary persistence record after the aggregate,
+and give it explicit `try_from_row(&Row)`, `from_domain(&Domain)`, and
+`into_domain(...)` methods. Repository methods load rows into records and bind
+records to SQL; they must not construct aggregates directly from rows or bind
+domain fields directly in save SQL. Persist primary and companion records with
+the shared full-snapshot upsert, which updates every non-conflict column.
+
+Keep multi-table orchestration inside the owning repository. Synchronize
+optional companion records to the aggregate snapshot. Replace owned child
+collections by deleting the aggregate's current rows and inserting the complete
+current collection in the same transaction. Workspace filtering belongs in
+`get` and read operations; application handlers own authorization, tenant
+boundaries, parent eligibility, and relationship checks before `save`.
+
 Name aggregate roots with the bare ubiquitous-language noun, such as `Control`
 or `Evidence`; do not use an `Aggregate` suffix. Read-only shapes live under
 `src/read_models/` and use names that describe their role, such as `ControlDetail`

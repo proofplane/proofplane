@@ -3,7 +3,10 @@ use uuid::Uuid;
 
 use crate::domain::{ProvisionUserPayload, User, UserId};
 
-use super::{constraints::classify_db_error, Error, Postgres, UnitOfWork};
+use super::{
+    snapshot::{save_snapshot, snapshot_record},
+    Error, Postgres, UnitOfWork,
+};
 
 enum RepositoryConnection<'a> {
     Postgres(&'a Postgres),
@@ -44,7 +47,7 @@ RETURNING id, auth0_sub, email, name, last_login_at, created_at
                 &[&payload.auth0_sub, &payload.email, &payload.name],
             )
             .await?;
-        user_from_row(row)
+        UserRecord::try_from_row(&row)?.into_domain()
     }
 }
 
@@ -73,7 +76,10 @@ impl UserRepository<'_> {
                     .await?
             }
         };
-        rows.into_iter().next().map(user_from_row).transpose()
+        rows.into_iter()
+            .next()
+            .map(|row| UserRecord::try_from_row(&row)?.into_domain())
+            .transpose()
     }
 
     pub async fn save(&self, user: &User) -> Result<(), Error> {
@@ -82,37 +88,8 @@ impl UserRepository<'_> {
                 "users must be saved in a transaction",
             ));
         };
-        let affected = unit_of_work
-            .transaction
-            .execute(
-                r#"
-INSERT INTO users (id, auth0_sub, email, name, last_login_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (id) DO UPDATE
-SET
-    auth0_sub = EXCLUDED.auth0_sub,
-    email = EXCLUDED.email,
-    name = EXCLUDED.name,
-    last_login_at = EXCLUDED.last_login_at,
-    created_at = EXCLUDED.created_at
-"#,
-                &[
-                    &Uuid::from(user.id),
-                    &user.auth0_sub,
-                    &user.email,
-                    &user.name,
-                    &user.last_login_at,
-                    &user.created_at,
-                ],
-            )
-            .await
-            .map_err(classify_db_error)?;
-        if affected != 1 {
-            return Err(Error::InvariantViolation(
-                "user snapshot save affected an unexpected row count",
-            ));
-        }
-        Ok(())
+        let record = UserRecord::from_domain(user)?;
+        save_snapshot(&unit_of_work.transaction, record.as_snapshot()).await
     }
 }
 
@@ -121,14 +98,51 @@ const GET_BY_ID_SQL: &str =
 const GET_BY_ID_FOR_UPDATE_SQL: &str =
     "SELECT id, auth0_sub, email, name, last_login_at, created_at FROM users WHERE id = $1 FOR UPDATE";
 
-fn user_from_row(row: Row) -> Result<User, Error> {
-    User::rehydrate(
-        UserId::from(row.try_get::<_, Uuid>("id")?),
-        row.try_get("auth0_sub")?,
-        row.try_get("email")?,
-        row.try_get("name")?,
-        row.try_get("last_login_at")?,
-        row.try_get("created_at")?,
-    )
-    .map_err(|_| Error::InvariantViolation("persisted user lifecycle is inconsistent"))
+snapshot_record! {
+    struct UserRecord {
+        id: Uuid,
+        auth0_sub: String,
+        email: Option<String>,
+        name: Option<String>,
+        last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    table: users,
+    conflict: id,
+}
+
+impl UserRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            auth0_sub: row.try_get("auth0_sub")?,
+            email: row.try_get("email")?,
+            name: row.try_get("name")?,
+            last_login_at: row.try_get("last_login_at")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    fn from_domain(user: &User) -> Result<Self, Error> {
+        Ok(Self {
+            id: user.id.into(),
+            auth0_sub: user.auth0_sub.clone(),
+            email: user.email.clone(),
+            name: user.name.clone(),
+            last_login_at: user.last_login_at,
+            created_at: user.created_at,
+        })
+    }
+
+    fn into_domain(self) -> Result<User, Error> {
+        User::rehydrate(
+            UserId::from(self.id),
+            self.auth0_sub,
+            self.email,
+            self.name,
+            self.last_login_at,
+            self.created_at,
+        )
+        .map_err(|_| Error::InvariantViolation("persisted user lifecycle is inconsistent"))
+    }
 }

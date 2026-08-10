@@ -38,6 +38,24 @@ before commit. Authorization, parent eligibility, relationships, and
 orchestration remain in handlers. Lists, details, reverse mappings, portal
 views, catalogs, downloads, and authority resolution are query models.
 
+Every mutable repository maps its primary table through a private record named
+for the aggregate. Records implement `try_from_row(&Row)`,
+`from_domain(&Domain)`, and `into_domain(...)`; auxiliary arguments to
+`into_domain` carry companion or child state loaded by the repository. Primary
+and companion records are persisted with the shared full-snapshot upsert,
+which updates every non-conflict column, applies uniform constraint
+classification, and accepts only one affected row.
+
+Repositories retain local orchestration for aggregate state spanning tables.
+Evidence and policy mappings, control requirement references, workspace
+memberships, and agent permissions are deleted and reinserted as the complete
+current collection inside the transaction. Agent authorization state and OAuth
+authorization codes are companion records; optional companion state is
+inserted, updated, or removed to match the aggregate. Save paths trust the
+application's authorized orchestration and do not add tenant-boundary,
+authorization, eligibility, or relationship queries. Workspace filtering
+remains on `get` and read-gateway operations.
+
 `UnitOfWork` owns only the database transaction. Commands derive a
 `WorkspaceUnitOfWork` scope from it when they need workspace-bound aggregate
 repositories or transactional reads. Authentication and actor identity do not
@@ -108,6 +126,10 @@ backfill path is required before the first deployment.
 
 ## Revisions
 
+- 2026-08-09: Standardized mutable repositories on method-oriented private
+  records and one unscoped full-snapshot saver. Multi-table synchronization
+  remains repository-local, and auditor sessions and authentication
+  transactions now persist domain-owned `updated_at` lifecycle state.
 - 2026-08-09: Completed the adapter cutover. Snapshot handlers now own write
   transitions, typed scan/finalization commands commit atomically with document
   snapshots, and unused compatibility services and SQL-shaped worker mutations

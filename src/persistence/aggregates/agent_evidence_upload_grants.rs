@@ -8,7 +8,7 @@ use crate::domain::{
 };
 
 use super::{
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, WorkspaceUnitOfWork,
 };
 
@@ -63,7 +63,7 @@ impl AgentEvidenceUploadGrantRepository<'_> {
         };
         rows.into_iter()
             .next()
-            .map(|row| GrantRecord::try_from(row).and_then(AgentEvidenceUploadGrant::try_from))
+            .map(|row| AgentEvidenceUploadGrantRecord::try_from_row(&row)?.into_domain())
             .transpose()
     }
 
@@ -74,13 +74,8 @@ impl AgentEvidenceUploadGrantRepository<'_> {
                 "machine upload grants must be saved in a workspace transaction",
             ));
         };
-        if grant.workspace_id() != workspace.workspace_id {
-            return Err(Error::InvariantViolation(
-                "machine upload grant workspace must match its repository scope",
-            ));
-        }
-        let record = GrantRecord::try_from(grant)?;
-        save_workspace_snapshot(workspace.transaction, record.as_workspace_snapshot()).await
+        let record = AgentEvidenceUploadGrantRecord::from_domain(grant)?;
+        save_snapshot(workspace.transaction, record.as_snapshot()).await
     }
 }
 
@@ -107,8 +102,8 @@ WHERE id = $1 AND workspace_id = $2
     "FOR UPDATE"
 );
 
-workspace_snapshot_record! {
-    struct GrantRecord {
+snapshot_record! {
+    struct AgentEvidenceUploadGrantRecord {
         id: Uuid,
         submission_id: Uuid,
         workspace_id: Uuid,
@@ -128,13 +123,10 @@ workspace_snapshot_record! {
     }
     table: agent_evidence_upload_grants,
     conflict: id,
-    scope: workspace_id,
 }
 
-impl TryFrom<Row> for GrantRecord {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl AgentEvidenceUploadGrantRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             submission_id: row.try_get("submission_id")?,
@@ -154,17 +146,12 @@ impl TryFrom<Row> for GrantRecord {
             document_id: row.try_get("document_id")?,
         })
     }
-}
-
-impl TryFrom<GrantRecord> for AgentEvidenceUploadGrant {
-    type Error = Error;
-
-    fn try_from(record: GrantRecord) -> Result<Self, Self::Error> {
+    fn into_domain(self) -> Result<AgentEvidenceUploadGrant, Error> {
         let expected_content_length =
-            u64::try_from(record.expected_content_length).map_err(|_| {
+            u64::try_from(self.expected_content_length).map_err(|_| {
                 Error::InvariantViolation("persisted machine upload length is negative")
             })?;
-        let expected_sha256 = record
+        let expected_sha256 = self
             .expected_sha256
             .map(|bytes| {
                 bytes.try_into().map(Sha256Digest::from_bytes).map_err(|_| {
@@ -173,8 +160,8 @@ impl TryFrom<GrantRecord> for AgentEvidenceUploadGrant {
             })
             .transpose()?;
         let declaration = AgentEvidenceUploadDeclaration::rehydrate(
-            record.filename,
-            record.content_type,
+            self.filename,
+            self.content_type,
             expected_content_length,
             expected_sha256,
         )
@@ -182,27 +169,22 @@ impl TryFrom<GrantRecord> for AgentEvidenceUploadGrant {
             Error::InvariantViolation("persisted machine upload declaration is invalid")
         })?;
         AgentEvidenceUploadGrant::rehydrate(
-            record.id.into(),
-            record.submission_id.into(),
-            record.workspace_id.into(),
-            record.evidence_id.into(),
-            CoverageWindow::new(record.valid_from, record.valid_until)?,
+            self.id.into(),
+            self.submission_id.into(),
+            self.workspace_id.into(),
+            self.evidence_id.into(),
+            CoverageWindow::new(self.valid_from, self.valid_until)?,
             declaration,
-            record.issued_by_user_id.into(),
-            AgentConnectionId::from(record.issued_via_agent_connection_id),
-            record.issued_at,
-            record.expires_at,
-            record.completed_at,
-            record.document_id.map(DocumentId::from),
+            self.issued_by_user_id.into(),
+            AgentConnectionId::from(self.issued_via_agent_connection_id),
+            self.issued_at,
+            self.expires_at,
+            self.completed_at,
+            self.document_id.map(DocumentId::from),
         )
         .map_err(|_| Error::InvariantViolation("persisted machine upload grant is inconsistent"))
     }
-}
-
-impl TryFrom<&AgentEvidenceUploadGrant> for GrantRecord {
-    type Error = Error;
-
-    fn try_from(grant: &AgentEvidenceUploadGrant) -> Result<Self, Self::Error> {
+    fn from_domain(grant: &AgentEvidenceUploadGrant) -> Result<Self, Error> {
         Ok(Self {
             id: grant.id().into(),
             submission_id: grant.submission_id().into(),
@@ -276,20 +258,6 @@ mod tests {
         .expect("machine grant issues")
     }
 
-    async fn save(
-        postgres: &Postgres,
-        workspace: &TestWorkspace,
-        grant: AgentEvidenceUploadGrant,
-    ) -> Result<(), Error> {
-        postgres
-            .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.workspace(workspace.workspace_id);
-                let repository = workspace.agent_evidence_upload_grants();
-                repository.save(&grant).await
-            })
-            .await
-    }
-
     #[test]
     fn verification_and_transactional_reads_have_distinct_locking_sql() {
         assert!(!GET_SQL.contains("FOR UPDATE"));
@@ -331,49 +299,6 @@ mod tests {
             .await
             .expect("tenant-scoped lookup succeeds")
             .is_none());
-    }
-
-    #[tokio::test]
-    async fn save_does_not_overwrite_a_same_id_grant_in_another_workspace() {
-        let postgres = test_support::database().await;
-        let owner = test_support::workspace(&postgres, "Owner").await;
-        let intruder = test_support::workspace(&postgres, "Intruder").await;
-        let owner_evidence =
-            test_support::evidence(&postgres, owner.workspace_id, "Access review").await;
-        let intruder_evidence =
-            test_support::evidence(&postgres, intruder.workspace_id, "Access review").await;
-        let grant_id = AgentEvidenceUploadGrantId::from(Uuid::new_v4());
-        let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
-
-        save(
-            &postgres,
-            &owner,
-            grant(&owner, owner_evidence, grant_id, submission_id),
-        )
-        .await
-        .expect("owner grant saves");
-
-        let collision = save(
-            &postgres,
-            &intruder,
-            grant(
-                &intruder,
-                intruder_evidence,
-                grant_id,
-                EvidenceSubmissionId::from(Uuid::new_v4()),
-            ),
-        )
-        .await;
-        assert!(matches!(collision, Err(Error::InvariantViolation(_))));
-
-        assert_eq!(
-            postgres
-                .agent_evidence_upload_grants()
-                .get(grant_id, owner.workspace_id)
-                .await
-                .expect("owner grant loads"),
-            Some(grant(&owner, owner_evidence, grant_id, submission_id))
-        );
     }
 
     #[tokio::test]

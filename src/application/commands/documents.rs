@@ -254,6 +254,7 @@ impl CreateEvidenceSubmissionDocumentHandler {
                 submission_repository.save(&submission).await?;
                 let (document, transition) = Document::create(
                     identity,
+                    command.connection.workspace_id,
                     command.connection.user_id,
                     command.document,
                     command.received_at,
@@ -315,6 +316,7 @@ impl CreatePolicyDocumentHandler {
                 }
                 let (document, transition) = Document::create(
                     identity,
+                    command.connection.workspace_id,
                     command.connection.user_id,
                     command.document,
                     command.created_at,
@@ -404,13 +406,18 @@ impl CompleteAgentEvidenceUploadHandler {
                     evidence_submission_id: grant.submission_id(),
                     document_id: command.document_id,
                 };
-                let (document, transition) =
-                    Document::create(identity, user_id, command.document, command.completed_at)
-                        .map_err(|_| {
-                            RepositoryError::InvariantViolation(
-                                "validated machine evidence document is invalid",
-                            )
-                        })?;
+                let (document, transition) = Document::create(
+                    identity,
+                    workspace_id,
+                    user_id,
+                    command.document,
+                    command.completed_at,
+                )
+                .map_err(|_| {
+                    RepositoryError::InvariantViolation(
+                        "validated machine evidence document is invalid",
+                    )
+                })?;
                 workspace.aggregates().documents().save(&document).await?;
                 append_transition_message(&workspace, transition.event, metadata).await?;
                 grant
@@ -484,13 +491,18 @@ impl CompleteAgentPolicyDocumentUploadHandler {
                     policy_id: grant.policy_id(),
                     document_id: command.document_id,
                 };
-                let (document, transition) =
-                    Document::create(identity, user_id, command.document, command.completed_at)
-                        .map_err(|_| {
-                            RepositoryError::InvariantViolation(
-                                "validated machine policy document is invalid",
-                            )
-                        })?;
+                let (document, transition) = Document::create(
+                    identity,
+                    workspace_id,
+                    user_id,
+                    command.document,
+                    command.completed_at,
+                )
+                .map_err(|_| {
+                    RepositoryError::InvariantViolation(
+                        "validated machine policy document is invalid",
+                    )
+                })?;
                 workspace.aggregates().documents().save(&document).await?;
                 append_transition_message(&workspace, transition.event, metadata).await?;
                 grant

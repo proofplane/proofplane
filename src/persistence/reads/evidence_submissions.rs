@@ -180,7 +180,7 @@ impl EvidenceSubmissionReads<'_, TransactionalReadExecutor<'_>> {
 }
 
 const DETAIL_FROM: &str = "FROM evidence_submissions s JOIN evidence e ON e.id = s.evidence_id LEFT JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id JOIN documents a ON a.owner_id = s.id AND a.owner_type = 'evidence_submission' AND a.workspace_id = e.workspace_id AND a.archived = false";
-const DOCUMENT_SQL: &str = "SELECT a.id AS document_id, a.owner_id AS document_submission_id, a.filename, a.content_type, a.content_length, a.object_key, a.checksum_sha256, a.checksum_crc32c, a.created_by_user_id, a.upload_status, a.created_at FROM documents a JOIN evidence_submissions s ON s.id = a.owner_id AND a.owner_type = 'evidence_submission' JOIN evidence e ON e.id = s.evidence_id WHERE s.id = $1 AND a.id = $2 AND e.workspace_id = $3 AND a.workspace_id = e.workspace_id";
+const DOCUMENT_SQL: &str = "SELECT a.workspace_id, a.id AS document_id, a.owner_id AS document_submission_id, a.filename, a.content_type, a.content_length, a.object_key, a.checksum_sha256, a.checksum_crc32c, a.created_by_user_id, a.upload_status, a.created_at FROM documents a JOIN evidence_submissions s ON s.id = a.owner_id AND a.owner_type = 'evidence_submission' JOIN evidence e ON e.id = s.evidence_id WHERE s.id = $1 AND a.id = $2 AND e.workspace_id = $3 AND a.workspace_id = e.workspace_id";
 const DOWNLOAD_SQL: &str = "SELECT a.workspace_id, a.id AS document_id, a.owner_id AS document_submission_id, a.filename, a.content_type, a.content_length, a.object_key, a.checksum_sha256, a.checksum_crc32c, a.created_by_user_id, a.upload_status, a.created_at FROM documents a JOIN evidence_submissions s ON s.id = a.owner_id WHERE a.workspace_id = $1 AND a.owner_type = 'evidence_submission' AND s.id = $2 AND a.id = $3 AND a.archived = false";
 
 const SUBMISSION_DETAIL_COLUMNS: &str = r#"
@@ -192,6 +192,7 @@ const SUBMISSION_DETAIL_COLUMNS: &str = r#"
     s.valid_from,
     s.valid_until,
     a.id AS document_id,
+    a.workspace_id,
     a.owner_id AS document_submission_id,
     a.filename,
     a.content_type,

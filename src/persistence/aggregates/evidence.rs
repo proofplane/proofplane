@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error,
 };
 
@@ -32,23 +32,18 @@ impl EvidenceRepository<'_> {
             "SELECT id, workspace_id, title, description, collection_instructions, status, created_at, updated_at FROM evidence WHERE id = $1 AND workspace_id = $2 FOR UPDATE",
             &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)],
         ).await? else { return Ok(None); };
-        let record = EvidenceRecord::try_from(row)?;
+        let record = EvidenceRecord::try_from_row(&row)?;
         let mappings = self.workspace.transaction.query(
             "SELECT control_id, rationale, created_at FROM evidence_control_mappings WHERE evidence_id = $1 ORDER BY control_id",
             &[&Uuid::from(id)],
         ).await?.into_iter().map(mapping_from_row).collect::<Result<Vec<_>, _>>()?;
-        record.into_aggregate(mappings).map(Some)
+        record.into_domain(mappings).map(Some)
     }
 
     /// Persists the aggregate's complete definition, status, and mapping snapshot.
     pub async fn save(&self, evidence: &Evidence) -> Result<(), Error> {
-        if evidence.workspace_id() != self.workspace.workspace_id {
-            return Err(Error::InvariantViolation(
-                "evidence workspace must match its repository scope",
-            ));
-        }
-        let record = EvidenceRecord::from(evidence);
-        save_workspace_snapshot(self.workspace.transaction, record.as_workspace_snapshot()).await?;
+        let record = EvidenceRecord::from_domain(evidence)?;
+        save_snapshot(self.workspace.transaction, record.as_snapshot()).await?;
         self.workspace
             .transaction
             .execute(
@@ -56,17 +51,39 @@ impl EvidenceRepository<'_> {
                 &[&Uuid::from(evidence.id())],
             )
             .await?;
-        for mapping in evidence.mappings() {
+        for mapping in evidence
+            .mappings()
+            .iter()
+            .map(|mapping| EvidenceControlMappingRecord::from_domain(record.id, mapping))
+        {
             self.workspace.transaction.execute(
                 "INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale, created_at) VALUES ($1, $2, $3, $4)",
-                &[&Uuid::from(evidence.id()), &Uuid::from(mapping.control_id()), &mapping.rationale(), &mapping.created_at()],
+                &[&mapping.evidence_id, &mapping.control_id, &mapping.rationale, &mapping.created_at],
             ).await?;
         }
         Ok(())
     }
 }
 
-workspace_snapshot_record! {
+struct EvidenceControlMappingRecord {
+    evidence_id: Uuid,
+    control_id: Uuid,
+    rationale: String,
+    created_at: DateTime<Utc>,
+}
+
+impl EvidenceControlMappingRecord {
+    fn from_domain(evidence_id: Uuid, mapping: &EvidenceControlMappingState) -> Self {
+        Self {
+            evidence_id,
+            control_id: mapping.control_id().into(),
+            rationale: mapping.rationale().to_owned(),
+            created_at: mapping.created_at(),
+        }
+    }
+}
+
+snapshot_record! {
     struct EvidenceRecord {
         id: Uuid,
         workspace_id: Uuid,
@@ -79,12 +96,10 @@ workspace_snapshot_record! {
     }
     table: evidence,
     conflict: id,
-    scope: workspace_id,
 }
 
-impl TryFrom<Row> for EvidenceRecord {
-    type Error = Error;
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl EvidenceRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             workspace_id: row.try_get("workspace_id")?,
@@ -99,7 +114,20 @@ impl TryFrom<Row> for EvidenceRecord {
 }
 
 impl EvidenceRecord {
-    fn into_aggregate(self, mappings: Vec<EvidenceControlMappingState>) -> Result<Evidence, Error> {
+    fn from_domain(evidence: &Evidence) -> Result<Self, Error> {
+        Ok(Self {
+            id: evidence.id().into(),
+            workspace_id: evidence.workspace_id().into(),
+            title: evidence.title().to_owned(),
+            description: evidence.description().to_owned(),
+            collection_instructions: evidence.collection_instructions().to_owned(),
+            status: evidence.status().as_str().to_owned(),
+            created_at: evidence.created_at(),
+            updated_at: evidence.updated_at(),
+        })
+    }
+
+    fn into_domain(self, mappings: Vec<EvidenceControlMappingState>) -> Result<Evidence, Error> {
         let definition =
             EvidenceDefinition::new(self.title, self.description, self.collection_instructions)
                 .into_result()
@@ -117,21 +145,6 @@ impl EvidenceRecord {
             self.updated_at,
         )
         .map_err(|_| Error::InvariantViolation("persisted evidence snapshot is inconsistent"))
-    }
-}
-
-impl From<&Evidence> for EvidenceRecord {
-    fn from(evidence: &Evidence) -> Self {
-        Self {
-            id: evidence.id().into(),
-            workspace_id: evidence.workspace_id().into(),
-            title: evidence.title().to_owned(),
-            description: evidence.description().to_owned(),
-            collection_instructions: evidence.collection_instructions().to_owned(),
-            status: evidence.status().as_str().to_owned(),
-            created_at: evidence.created_at(),
-            updated_at: evidence.updated_at(),
-        }
     }
 }
 

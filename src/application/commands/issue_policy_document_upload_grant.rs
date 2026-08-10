@@ -130,12 +130,11 @@ impl IssuePolicyDocumentUploadGrantHandler {
                 url.query_pairs_mut().append_pair("token", &issued.token);
                 let repository = workspace.aggregates().policy_document_upload_grants();
                 repository.save(&grant).await?;
-                let grant = repository
-                    .get(grant.id(), grant.workspace_id())
-                    .await?
-                    .ok_or(crate::persistence::Error::InvariantViolation(
+                let grant = repository.get(grant.id()).await?.ok_or(
+                    crate::persistence::Error::InvariantViolation(
                         "saved policy human upload grant must be readable",
-                    ))?;
+                    ),
+                )?;
                 Ok(IssueOutcome::Issued(Box::new(
                     IssuedPolicyDocumentUploadGrant {
                         url,

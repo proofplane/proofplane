@@ -15,6 +15,7 @@ pub struct AuditorAuthTransaction {
     expires_at: DateTime<Utc>,
     consumed_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -50,6 +51,7 @@ impl AuditorAuthTransaction {
             expires_at,
             consumed_at: None,
             created_at,
+            updated_at: created_at,
         })
     }
 
@@ -63,6 +65,7 @@ impl AuditorAuthTransaction {
         created_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         consumed_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     ) -> Result<Self, AuditorAuthTransactionLifecycleError> {
         let mut transaction = Self::start(
             id,
@@ -74,10 +77,14 @@ impl AuditorAuthTransaction {
             expires_at,
         )
         .map_err(|_| AuditorAuthTransactionLifecycleError::InvalidRehydration)?;
-        if consumed_at.is_some_and(|value| value < created_at || value >= expires_at) {
+        if consumed_at.is_some_and(|value| value < created_at || value >= expires_at)
+            || updated_at < created_at
+            || consumed_at.is_some_and(|value| updated_at < value)
+        {
             return Err(AuditorAuthTransactionLifecycleError::InvalidRehydration);
         }
         transaction.consumed_at = consumed_at;
+        transaction.updated_at = updated_at;
         Ok(transaction)
     }
 
@@ -92,6 +99,7 @@ impl AuditorAuthTransaction {
             return Err(AuditorAuthTransactionLifecycleError::Unavailable);
         }
         self.consumed_at = Some(consumed_at);
+        self.updated_at = consumed_at;
         Ok(())
     }
 
@@ -126,6 +134,10 @@ impl AuditorAuthTransaction {
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
+
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
 }
 
 #[cfg(test)]
@@ -151,13 +163,16 @@ mod tests {
             expires_at,
         )
         .unwrap();
+        assert_eq!(transaction.updated_at(), created_at);
 
         assert_eq!(transaction.claim(created_at), Ok(()));
         assert_eq!(transaction.consumed_at(), Some(created_at));
+        assert_eq!(transaction.updated_at(), created_at);
         assert_eq!(
             transaction.claim(created_at + Duration::seconds(1)),
             Err(AuditorAuthTransactionLifecycleError::Unavailable)
         );
+        assert_eq!(transaction.updated_at(), created_at);
 
         let mut expired = AuditorAuthTransaction::start(
             Uuid::new_v4().into(),
@@ -173,5 +188,24 @@ mod tests {
             expired.claim(expires_at),
             Err(AuditorAuthTransactionLifecycleError::Unavailable)
         );
+        assert_eq!(expired.updated_at(), created_at);
+    }
+
+    #[test]
+    fn rehydration_rejects_updated_at_before_consumption() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let consumed_at = created_at + Duration::seconds(2);
+        let result = AuditorAuthTransaction::rehydrate(
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            Sha256Digest::digest(b"state"),
+            Sha256Digest::digest(b"nonce"),
+            SecretString::from("a".repeat(43)),
+            created_at,
+            created_at + Duration::minutes(10),
+            Some(consumed_at),
+            created_at + Duration::seconds(1),
+        );
+        assert!(result.is_err());
     }
 }

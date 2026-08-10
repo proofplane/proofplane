@@ -1,4 +1,3 @@
-use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -7,7 +6,10 @@ use crate::{
     persistence::WorkspaceUnitOfWork,
 };
 
-use super::Error;
+use super::{
+    snapshot::{save_snapshot, snapshot_record},
+    Error,
+};
 
 /// Complete-snapshot repository for the submission provenance aggregate.
 pub struct EvidenceSubmissionRepository<'a> {
@@ -35,38 +37,15 @@ FOR UPDATE OF s"#,
                 &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)],
             )
             .await?
-            .map(|row| evidence_submission_from_row(&row))
+            .map(|row| EvidenceSubmissionRecord::try_from_row(&row)?.into_domain(&row))
             .transpose()
     }
 
     /// Persists the entire submission snapshot; evidence eligibility is checked
     /// by the command handler before this boundary is called.
     pub async fn save(&self, submission: &EvidenceSubmission) -> Result<(), Error> {
-        let EvidenceSubmitter::AgentConnection {
-            agent_connection_id,
-            ..
-        } = submission.submitted_by;
-        let changed = self.workspace.transaction.execute(
-            r#"INSERT INTO evidence_submissions (id, evidence_id, submitted_by_agent_connection_id, received_at, valid_from, valid_until)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (id) DO UPDATE SET evidence_id = EXCLUDED.evidence_id,
- submitted_by_agent_connection_id = EXCLUDED.submitted_by_agent_connection_id,
- received_at = EXCLUDED.received_at, valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until
-WHERE EXISTS (
-    SELECT 1 FROM evidence existing_evidence
-    WHERE existing_evidence.id = evidence_submissions.evidence_id
-      AND existing_evidence.workspace_id = $7
-)"#,
-            &[&Uuid::from(submission.id), &Uuid::from(submission.evidence_id), &Uuid::from(agent_connection_id),
-              &submission.received_at, &submission.valid_from, &submission.valid_until,
-              &Uuid::from(self.workspace.workspace_id)],
-        ).await?;
-        if changed != 1 {
-            return Err(Error::InvariantViolation(
-                "submission snapshot save must affect one row",
-            ));
-        }
-        Ok(())
+        let record = EvidenceSubmissionRecord::from_domain(submission)?;
+        save_snapshot(self.workspace.transaction, record.as_snapshot()).await
     }
 }
 
@@ -77,28 +56,57 @@ pub enum ArchiveDocumentResult {
     NotTerminal,
 }
 
-fn evidence_submission_from_row(row: &Row) -> Result<EvidenceSubmission, Error> {
-    Ok(EvidenceSubmission {
-        id: EvidenceSubmissionId::from(row.try_get::<_, Uuid>("id")?),
-        evidence_id: EvidenceId::from(row.try_get::<_, Uuid>("evidence_id")?),
-        submitted_by: evidence_submitter_from_row(row)?,
-        received_at: row.try_get("received_at")?,
-        valid_from: row.try_get("valid_from")?,
-        valid_until: row.try_get("valid_until")?,
-    })
+snapshot_record! {
+    struct EvidenceSubmissionRecord {
+        id: Uuid,
+        evidence_id: Uuid,
+        submitted_by_agent_connection_id: Uuid,
+        received_at: chrono::DateTime<chrono::Utc>,
+        valid_from: chrono::DateTime<chrono::Utc>,
+        valid_until: chrono::DateTime<chrono::Utc>,
+    }
+    table: evidence_submissions,
+    conflict: id,
 }
 
-fn evidence_submitter_from_row(row: &Row) -> Result<EvidenceSubmitter, Error> {
-    let user_id = row.try_get::<_, Uuid>("submitted_by_user_id")?.into();
-    let agent_connection_id = row.try_get::<_, Option<Uuid>>("submitted_by_agent_connection_id")?;
+impl EvidenceSubmissionRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            evidence_id: row.try_get("evidence_id")?,
+            submitted_by_agent_connection_id: row.try_get("submitted_by_agent_connection_id")?,
+            received_at: row.try_get("received_at")?,
+            valid_from: row.try_get("valid_from")?,
+            valid_until: row.try_get("valid_until")?,
+        })
+    }
 
-    match agent_connection_id {
-        Some(agent_connection_id) => Ok(EvidenceSubmitter::AgentConnection {
-            agent_connection_id: agent_connection_id.into(),
-            user_id,
-        }),
-        None => Err(Error::InvariantViolation(
-            "evidence submission must have an agent connection submitter",
-        )),
+    fn from_domain(submission: &EvidenceSubmission) -> Result<Self, Error> {
+        let EvidenceSubmitter::AgentConnection {
+            agent_connection_id,
+            ..
+        } = submission.submitted_by;
+        Ok(Self {
+            id: submission.id.into(),
+            evidence_id: submission.evidence_id.into(),
+            submitted_by_agent_connection_id: agent_connection_id.into(),
+            received_at: submission.received_at,
+            valid_from: submission.valid_from,
+            valid_until: submission.valid_until,
+        })
+    }
+
+    fn into_domain(self, row: &Row) -> Result<EvidenceSubmission, Error> {
+        Ok(EvidenceSubmission {
+            id: EvidenceSubmissionId::from(self.id),
+            evidence_id: EvidenceId::from(self.evidence_id),
+            submitted_by: EvidenceSubmitter::AgentConnection {
+                agent_connection_id: self.submitted_by_agent_connection_id.into(),
+                user_id: row.try_get::<_, Uuid>("submitted_by_user_id")?.into(),
+            },
+            received_at: self.received_at,
+            valid_from: self.valid_from,
+            valid_until: self.valid_until,
+        })
     }
 }

@@ -7,7 +7,10 @@ use crate::domain::{
     UserId, WorkspacePermission,
 };
 
-use super::{Error, UnitOfWork};
+use super::{
+    snapshot::{save_snapshot, snapshot_record},
+    Error, UnitOfWork,
+};
 
 /// Complete-snapshot persistence for OAuth authorization flows.
 pub struct OAuthAuthorizationFlowRepository<'a> {
@@ -35,77 +38,36 @@ impl OAuthAuthorizationFlowRepository<'_> {
                 &[&Uuid::from(request_id)],
             )
             .await?
-            .map(flow_from_row)
+            .map(|row| {
+                let code = OAuthCodeRecord::try_from_row(&row)?
+                    .map(OAuthCodeRecord::into_domain)
+                    .transpose()?;
+                OAuthAuthorizationFlowRecord::try_from_row(&row)?.into_domain(code)
+            })
             .transpose()
     }
 
     pub async fn save(&self, flow: &OAuthAuthorizationFlow) -> Result<(), Error> {
-        let record = OAuthFlowRecord::from(flow);
-        let affected = self
-            .unit_of_work
-            .transaction
-            .execute(
-                FLOW_SAVE_SQL,
-                &[
-                    &record.id,
-                    &record.client_id,
-                    &record.client_name,
-                    &record.redirect_uri,
-                    &record.code_challenge,
-                    &record.state,
-                    &record.resource,
-                    &record.scopes,
-                    &record.csrf_digest,
-                    &record.auth0_subject,
-                    &record.user_id,
-                    &record.expires_at,
-                    &record.created_at,
-                    &record.consumed_at,
-                ],
-            )
-            .await?;
-        if affected != 1 {
-            return Err(Error::InvariantViolation(
-                "OAuth authorization flow snapshot save affected an unexpected row count",
-            ));
-        }
-        if let Some(code) = OAuthCodeRecord::from(flow) {
-            let affected = self
-                .unit_of_work
+        let record = OAuthAuthorizationFlowRecord::from_domain(flow)?;
+        save_snapshot(&self.unit_of_work.transaction, record.as_snapshot()).await?;
+        if let Some(code) = OAuthCodeRecord::from_domain(flow)? {
+            save_snapshot(&self.unit_of_work.transaction, code.as_snapshot()).await?;
+        } else {
+            self.unit_of_work
                 .transaction
                 .execute(
-                    CODE_SAVE_SQL,
-                    &[
-                        &code.code_digest,
-                        &code.request_id,
-                        &code.agent_connection_id,
-                        &code.workspace_id,
-                        &code.client_id,
-                        &code.redirect_uri,
-                        &code.code_challenge,
-                        &code.resource,
-                        &code.scopes,
-                        &code.expires_at,
-                        &code.created_at,
-                        &code.consumed_at,
-                    ],
+                    "DELETE FROM oauth_authorization_codes WHERE request_id = $1",
+                    &[&Uuid::from(flow.id())],
                 )
                 .await?;
-            if affected != 1 {
-                return Err(Error::InvariantViolation(
-                    "OAuth authorization code snapshot save affected an unexpected row count",
-                ));
-            }
         }
         Ok(())
     }
 }
 
 const FLOW_SELECT_SQL: &str = r#"SELECT r.id, r.client_id, r.client_name, r.redirect_uri, r.code_challenge, r.state, r.resource, r.scopes, r.csrf_token_digest, r.auth0_subject, r.user_id, r.expires_at AS request_expires_at, r.created_at AS request_created_at, r.consumed_at AS request_consumed_at, c.code_digest, c.agent_connection_id, c.workspace_id, c.expires_at AS code_expires_at, c.created_at AS code_created_at, c.consumed_at AS code_consumed_at FROM oauth_authorization_requests r LEFT JOIN oauth_authorization_codes c ON c.request_id = r.id"#;
-const FLOW_SAVE_SQL: &str = r#"INSERT INTO oauth_authorization_requests (id, client_id, client_name, redirect_uri, code_challenge, state, resource, scopes, csrf_token_digest, auth0_subject, user_id, expires_at, created_at, consumed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (id) DO UPDATE SET client_id = EXCLUDED.client_id, client_name = EXCLUDED.client_name, redirect_uri = EXCLUDED.redirect_uri, code_challenge = EXCLUDED.code_challenge, state = EXCLUDED.state, resource = EXCLUDED.resource, scopes = EXCLUDED.scopes, csrf_token_digest = EXCLUDED.csrf_token_digest, auth0_subject = EXCLUDED.auth0_subject, user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at, consumed_at = EXCLUDED.consumed_at"#;
-const CODE_SAVE_SQL: &str = r#"INSERT INTO oauth_authorization_codes (code_digest, request_id, agent_connection_id, workspace_id, client_id, redirect_uri, code_challenge, resource, scopes, expires_at, created_at, consumed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (request_id) DO UPDATE SET code_digest = EXCLUDED.code_digest, agent_connection_id = EXCLUDED.agent_connection_id, workspace_id = EXCLUDED.workspace_id, client_id = EXCLUDED.client_id, redirect_uri = EXCLUDED.redirect_uri, code_challenge = EXCLUDED.code_challenge, resource = EXCLUDED.resource, scopes = EXCLUDED.scopes, expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at, consumed_at = EXCLUDED.consumed_at"#;
-
-struct OAuthFlowRecord {
+snapshot_record! {
+struct OAuthAuthorizationFlowRecord {
     id: Uuid,
     client_id: String,
     client_name: String,
@@ -114,16 +76,38 @@ struct OAuthFlowRecord {
     state: String,
     resource: String,
     scopes: Vec<String>,
-    csrf_digest: Vec<u8>,
+    csrf_token_digest: Vec<u8>,
     auth0_subject: Option<String>,
     user_id: Option<Uuid>,
     expires_at: DateTime<Utc>,
     created_at: DateTime<Utc>,
     consumed_at: Option<DateTime<Utc>>,
 }
-impl From<&OAuthAuthorizationFlow> for OAuthFlowRecord {
-    fn from(flow: &OAuthAuthorizationFlow) -> Self {
-        Self {
+table: oauth_authorization_requests,
+conflict: id,
+}
+impl OAuthAuthorizationFlowRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            client_id: row.try_get("client_id")?,
+            client_name: row.try_get("client_name")?,
+            redirect_uri: row.try_get("redirect_uri")?,
+            code_challenge: row.try_get("code_challenge")?,
+            state: row.try_get("state")?,
+            resource: row.try_get("resource")?,
+            scopes: row.try_get("scopes")?,
+            csrf_token_digest: row.try_get("csrf_token_digest")?,
+            auth0_subject: row.try_get("auth0_subject")?,
+            user_id: row.try_get("user_id")?,
+            expires_at: row.try_get("request_expires_at")?,
+            created_at: row.try_get("request_created_at")?,
+            consumed_at: row.try_get("request_consumed_at")?,
+        })
+    }
+
+    fn from_domain(flow: &OAuthAuthorizationFlow) -> Result<Self, Error> {
+        Ok(Self {
             id: flow.id().into(),
             client_id: flow.client_id().to_owned(),
             client_name: flow.client_name().to_owned(),
@@ -132,15 +116,46 @@ impl From<&OAuthAuthorizationFlow> for OAuthFlowRecord {
             state: flow.state().to_owned(),
             resource: flow.resource().to_owned(),
             scopes: permission_strings(flow.scopes()),
-            csrf_digest: flow.csrf_digest().as_bytes().to_vec(),
+            csrf_token_digest: flow.csrf_digest().as_bytes().to_vec(),
             auth0_subject: flow.auth0_subject().map(str::to_owned),
             user_id: flow.user_id().map(Uuid::from),
             expires_at: flow.expires_at(),
             created_at: flow.created_at(),
             consumed_at: flow.consumed_at(),
-        }
+        })
+    }
+
+    fn into_domain(
+        self,
+        code: Option<OAuthAuthorizationFlowCode>,
+    ) -> Result<OAuthAuthorizationFlow, Error> {
+        let csrf: [u8; 32] = self
+            .csrf_token_digest
+            .try_into()
+            .map_err(|_| Error::InvariantViolation("OAuth CSRF digest must contain 32 bytes"))?;
+        OAuthAuthorizationFlow::rehydrate(
+            self.id.into(),
+            self.client_id,
+            self.client_name,
+            self.redirect_uri,
+            self.code_challenge,
+            self.state,
+            self.resource,
+            parse_permissions(self.scopes)?,
+            Sha256Digest::from_bytes(csrf),
+            self.auth0_subject,
+            self.user_id.map(UserId::from),
+            self.expires_at,
+            self.created_at,
+            self.consumed_at,
+            code,
+        )
+        .map_err(|_| {
+            Error::InvariantViolation("persisted OAuth authorization flow is inconsistent")
+        })
     }
 }
+snapshot_record! {
 struct OAuthCodeRecord {
     code_digest: Vec<u8>,
     request_id: Uuid,
@@ -155,9 +170,32 @@ struct OAuthCodeRecord {
     created_at: DateTime<Utc>,
     consumed_at: Option<DateTime<Utc>>,
 }
+table: oauth_authorization_codes,
+conflict: request_id,
+}
 impl OAuthCodeRecord {
-    fn from(flow: &OAuthAuthorizationFlow) -> Option<Self> {
-        flow.authorization_code().map(|code| Self {
+    fn try_from_row(row: &Row) -> Result<Option<Self>, Error> {
+        let Some(code_digest) = row.try_get::<_, Option<Vec<u8>>>("code_digest")? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            code_digest,
+            request_id: row.try_get("id")?,
+            agent_connection_id: row.try_get("agent_connection_id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            client_id: row.try_get("client_id")?,
+            redirect_uri: row.try_get("redirect_uri")?,
+            code_challenge: row.try_get("code_challenge")?,
+            resource: row.try_get("resource")?,
+            scopes: row.try_get("scopes")?,
+            expires_at: row.try_get("code_expires_at")?,
+            created_at: row.try_get("code_created_at")?,
+            consumed_at: row.try_get("code_consumed_at")?,
+        }))
+    }
+
+    fn from_domain(flow: &OAuthAuthorizationFlow) -> Result<Option<Self>, Error> {
+        Ok(flow.authorization_code().map(|code| Self {
             code_digest: code.code_digest().as_bytes().to_vec(),
             request_id: flow.id().into(),
             agent_connection_id: code.agent_connection_id().into(),
@@ -170,52 +208,26 @@ impl OAuthCodeRecord {
             expires_at: code.expires_at(),
             created_at: code.created_at(),
             consumed_at: code.consumed_at(),
+        }))
+    }
+
+    fn into_domain(self) -> Result<OAuthAuthorizationFlowCode, Error> {
+        let digest: [u8; 32] = self
+            .code_digest
+            .try_into()
+            .map_err(|_| Error::InvariantViolation("OAuth code digest must contain 32 bytes"))?;
+        OAuthAuthorizationFlowCode::rehydrate(
+            Sha256Digest::from_bytes(digest),
+            self.agent_connection_id.into(),
+            self.workspace_id.into(),
+            self.expires_at,
+            self.created_at,
+            self.consumed_at,
+        )
+        .map_err(|_| {
+            Error::InvariantViolation("persisted OAuth authorization code is inconsistent")
         })
     }
-}
-
-fn flow_from_row(row: Row) -> Result<OAuthAuthorizationFlow, Error> {
-    let csrf: [u8; 32] = row
-        .try_get::<_, Vec<u8>>("csrf_token_digest")?
-        .try_into()
-        .map_err(|_| Error::InvariantViolation("OAuth CSRF digest must contain 32 bytes"))?;
-    let code = row
-        .try_get::<_, Option<Vec<u8>>>("code_digest")?
-        .map(|bytes| {
-            let digest: [u8; 32] = bytes.try_into().map_err(|_| {
-                Error::InvariantViolation("OAuth code digest must contain 32 bytes")
-            })?;
-            OAuthAuthorizationFlowCode::rehydrate(
-                Sha256Digest::from_bytes(digest),
-                row.try_get::<_, Uuid>("agent_connection_id")?.into(),
-                row.try_get::<_, Uuid>("workspace_id")?.into(),
-                row.try_get("code_expires_at")?,
-                row.try_get("code_created_at")?,
-                row.try_get("code_consumed_at")?,
-            )
-            .map_err(|_| {
-                Error::InvariantViolation("persisted OAuth authorization code is inconsistent")
-            })
-        })
-        .transpose()?;
-    OAuthAuthorizationFlow::rehydrate(
-        row.try_get::<_, Uuid>("id")?.into(),
-        row.try_get("client_id")?,
-        row.try_get("client_name")?,
-        row.try_get("redirect_uri")?,
-        row.try_get("code_challenge")?,
-        row.try_get("state")?,
-        row.try_get("resource")?,
-        parse_permissions(row.try_get("scopes")?)?,
-        Sha256Digest::from_bytes(csrf),
-        row.try_get("auth0_subject")?,
-        row.try_get::<_, Option<Uuid>>("user_id")?.map(UserId::from),
-        row.try_get("request_expires_at")?,
-        row.try_get("request_created_at")?,
-        row.try_get("request_consumed_at")?,
-        code,
-    )
-    .map_err(|_| Error::InvariantViolation("persisted OAuth authorization flow is inconsistent"))
 }
 
 fn permission_strings(permissions: &[WorkspacePermission]) -> Vec<String> {
@@ -238,26 +250,11 @@ fn parse_permissions(values: Vec<String>) -> Result<Vec<WorkspacePermission>, Er
 
 #[cfg(test)]
 mod snapshot_tests {
-    use super::{CODE_SAVE_SQL, FLOW_SAVE_SQL, FLOW_SELECT_SQL};
+    use super::FLOW_SELECT_SQL;
 
     #[test]
     fn flow_snapshot_loads_and_saves_request_and_code_state() {
         assert!(FLOW_SELECT_SQL.contains("LEFT JOIN oauth_authorization_codes"));
-        for field in [
-            "csrf_token_digest",
-            "auth0_subject",
-            "user_id",
-            "consumed_at",
-        ] {
-            assert!(FLOW_SAVE_SQL.contains(field));
-        }
-        for field in [
-            "code_digest",
-            "agent_connection_id",
-            "workspace_id",
-            "consumed_at",
-        ] {
-            assert!(CODE_SAVE_SQL.contains(field));
-        }
+        assert!(FLOW_SELECT_SQL.contains("code_digest"));
     }
 }

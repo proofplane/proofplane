@@ -3,7 +3,11 @@ use uuid::Uuid;
 
 use crate::domain::{UserId, Workspace, WorkspaceId, WorkspaceMembership, WorkspaceRole};
 
-use super::{constraints::classify_db_error, Error, UnitOfWork};
+use super::{
+    constraints::classify_db_error,
+    snapshot::{save_snapshot, snapshot_record},
+    Error, UnitOfWork,
+};
 
 /// Complete-snapshot persistence for a workspace and all of its memberships.
 pub struct WorkspaceRepository<'a> {
@@ -44,60 +48,27 @@ impl WorkspaceRepository<'_> {
     }
 
     pub async fn save(&self, workspace: &Workspace) -> Result<(), Error> {
-        let affected = self
-            .unit_of_work
-            .transaction
-            .execute(
-                r#"
-INSERT INTO workspaces (id, slug, name, created_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (id) DO UPDATE
-SET slug = EXCLUDED.slug, name = EXCLUDED.name, created_at = EXCLUDED.created_at
-"#,
-                &[
-                    &Uuid::from(workspace.id()),
-                    &workspace.slug(),
-                    &workspace.name(),
-                    &workspace.created_at(),
-                ],
-            )
-            .await
-            .map_err(classify_db_error)?;
-        if affected != 1 {
-            return Err(Error::InvariantViolation(
-                "workspace snapshot save affected an unexpected row count",
-            ));
-        }
-
-        let member_ids = workspace
-            .memberships()
-            .iter()
-            .map(|membership| Uuid::from(membership.user_id))
-            .collect::<Vec<_>>();
+        let record = WorkspaceRecord::from_domain(workspace)?;
+        save_snapshot(&self.unit_of_work.transaction, record.as_snapshot()).await?;
         self.unit_of_work
             .transaction
             .execute(
-                "DELETE FROM workspace_memberships WHERE workspace_id = $1 AND NOT (user_id = ANY($2::uuid[]))",
-                &[&Uuid::from(workspace.id()), &member_ids],
+                "DELETE FROM workspace_memberships WHERE workspace_id = $1",
+                &[&Uuid::from(workspace.id())],
             )
             .await?;
 
         for membership in workspace.memberships() {
+            let membership = WorkspaceMembershipRecord::from_domain(membership);
             let affected = self
                 .unit_of_work
                 .transaction
                 .execute(
-                    r#"
-INSERT INTO workspace_memberships (user_id, workspace_id, role, created_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (user_id) DO UPDATE
-SET role = EXCLUDED.role, created_at = EXCLUDED.created_at
-WHERE workspace_memberships.workspace_id = EXCLUDED.workspace_id
-"#,
+                    "INSERT INTO workspace_memberships (user_id, workspace_id, role, created_at) VALUES ($1, $2, $3, $4)",
                     &[
-                        &Uuid::from(membership.user_id),
-                        &Uuid::from(membership.workspace_id),
-                        &membership.role.as_str(),
+                    &membership.user_id,
+                    &membership.workspace_id,
+                    &membership.role,
                         &membership.created_at,
                     ],
                 )
@@ -113,7 +84,7 @@ WHERE workspace_memberships.workspace_id = EXCLUDED.workspace_id
     }
 
     async fn aggregate_from_workspace_row(&self, row: Row) -> Result<Workspace, Error> {
-        let workspace = workspace_from_row(row)?;
+        let workspace = WorkspaceRecord::try_from_row(&row)?;
         let rows = self
             .unit_of_work
             .transaction
@@ -130,13 +101,66 @@ FOR UPDATE
             .await?;
         let memberships = rows
             .into_iter()
-            .map(workspace_membership_from_row)
+            .map(|row| workspace_membership_from_row(&row))
             .collect::<Result<Vec<_>, _>>()?;
+        workspace.into_domain(memberships)
+    }
+}
+
+struct WorkspaceMembershipRecord {
+    user_id: Uuid,
+    workspace_id: Uuid,
+    role: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl WorkspaceMembershipRecord {
+    fn from_domain(membership: &WorkspaceMembership) -> Self {
+        Self {
+            user_id: membership.user_id.into(),
+            workspace_id: membership.workspace_id.into(),
+            role: membership.role.as_str().to_owned(),
+            created_at: membership.created_at,
+        }
+    }
+}
+
+snapshot_record! {
+    struct WorkspaceRecord {
+        id: Uuid,
+        slug: Option<String>,
+        name: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    table: workspaces,
+    conflict: id,
+}
+
+impl WorkspaceRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            slug: row.try_get("slug")?,
+            name: row.try_get("name")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    fn from_domain(workspace: &Workspace) -> Result<Self, Error> {
+        Ok(Self {
+            id: workspace.id().into(),
+            slug: workspace.slug().map(str::to_owned),
+            name: workspace.name().to_owned(),
+            created_at: workspace.created_at(),
+        })
+    }
+
+    fn into_domain(self, memberships: Vec<WorkspaceMembership>) -> Result<Workspace, Error> {
         Workspace::rehydrate(
-            workspace.id.into(),
-            workspace.slug,
-            workspace.name,
-            workspace.created_at,
+            self.id.into(),
+            self.slug,
+            self.name,
+            self.created_at,
             memberships,
         )
         .map_err(|_| {
@@ -145,23 +169,7 @@ FOR UPDATE
     }
 }
 
-struct WorkspaceRecord {
-    id: Uuid,
-    slug: Option<String>,
-    name: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-fn workspace_from_row(row: Row) -> Result<WorkspaceRecord, Error> {
-    Ok(WorkspaceRecord {
-        id: row.try_get("id")?,
-        slug: row.try_get("slug")?,
-        name: row.try_get("name")?,
-        created_at: row.try_get("created_at")?,
-    })
-}
-
-fn workspace_membership_from_row(row: Row) -> Result<WorkspaceMembership, Error> {
+fn workspace_membership_from_row(row: &Row) -> Result<WorkspaceMembership, Error> {
     let role = row
         .try_get::<_, String>("role")?
         .parse::<WorkspaceRole>()

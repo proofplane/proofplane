@@ -57,23 +57,19 @@ impl RedeemPolicyDocumentUploadGrantHandler {
                     {
                         return Ok(RedeemOutcome::Unavailable);
                     }
-                    let repository = unit_of_work.aggregates().policy_document_upload_grants();
-                    let Some(mut grant) = repository
-                        .get(command.authority.id(), command.authority.workspace_id())
-                        .await?
-                    else {
+                    let repository = workspace.aggregates().policy_document_upload_grants();
+                    let Some(mut grant) = repository.get(command.authority.id()).await? else {
                         return Ok(RedeemOutcome::Unavailable);
                     };
                     if grant.redeem(command.authority, Utc::now()).is_err() {
                         return Ok(RedeemOutcome::Unavailable);
                     }
                     repository.save(&grant).await?;
-                    let grant = repository
-                        .get(grant.id(), grant.workspace_id())
-                        .await?
-                        .ok_or(crate::persistence::Error::InvariantViolation(
+                    let grant = repository.get(grant.id()).await?.ok_or(
+                        crate::persistence::Error::InvariantViolation(
                             "redeemed policy human upload grant must be readable",
-                        ))?;
+                        ),
+                    )?;
                     let redeemed_at = grant.redeemed_at().ok_or(
                         crate::persistence::Error::InvariantViolation(
                             "redeemed policy human upload grant has a redemption time",

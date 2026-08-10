@@ -16,6 +16,7 @@ pub struct AuditorSession {
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_used_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     session_digest: Sha256Digest,
 }
 
@@ -68,6 +69,7 @@ impl AuditorSession {
             revoked_at: None,
             last_used_at: created_at,
             created_at,
+            updated_at: created_at,
             session_digest,
         })
     }
@@ -85,6 +87,7 @@ impl AuditorSession {
         revoked_at: Option<DateTime<Utc>>,
         last_used_at: DateTime<Utc>,
         created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
     ) -> Result<Self, AuditorSessionLifecycleError> {
         let mut session = Self::create(
             id,
@@ -98,11 +101,17 @@ impl AuditorSession {
             created_at,
         )
         .map_err(|_| AuditorSessionLifecycleError::InvalidRehydration)?;
-        if last_used_at < created_at || revoked_at.is_some_and(|value| value < created_at) {
+        if last_used_at < created_at
+            || revoked_at.is_some_and(|value| value < created_at)
+            || updated_at < created_at
+            || updated_at < last_used_at
+            || revoked_at.is_some_and(|value| updated_at < value)
+        {
             return Err(AuditorSessionLifecycleError::InvalidRehydration);
         }
         session.revoked_at = revoked_at;
         session.last_used_at = last_used_at;
+        session.updated_at = updated_at;
         Ok(session)
     }
 
@@ -123,6 +132,7 @@ impl AuditorSession {
             return Err(AuditorSessionLifecycleError::InvalidTransition);
         }
         self.last_used_at = used_at;
+        self.updated_at = used_at;
         Ok(AuditorSessionTransition::Used)
     }
 
@@ -137,6 +147,7 @@ impl AuditorSession {
             return Err(AuditorSessionLifecycleError::InvalidTransition);
         }
         self.revoked_at = Some(revoked_at);
+        self.updated_at = revoked_at;
         Ok(AuditorSessionTransition::Revoked)
     }
 
@@ -180,10 +191,12 @@ mod tests {
             created_at,
         )
         .unwrap();
+        assert_eq!(session.updated_at, created_at);
 
         let used_at = created_at + Duration::seconds(1);
         assert_eq!(session.touch(used_at), Ok(AuditorSessionTransition::Used));
         assert_eq!(session.last_used_at, used_at);
+        assert_eq!(session.updated_at, used_at);
         assert_eq!(
             session.revoke(used_at + Duration::seconds(1)),
             Ok(AuditorSessionTransition::Revoked)
@@ -192,7 +205,9 @@ mod tests {
             session.revoke(used_at + Duration::seconds(2)),
             Ok(AuditorSessionTransition::AlreadyRevoked)
         );
+        assert_eq!(session.updated_at, used_at + Duration::seconds(1));
         assert!(session.touch(used_at + Duration::seconds(2)).is_err());
+        assert_eq!(session.updated_at, used_at + Duration::seconds(1));
         assert!(AuditorSession::create(
             Uuid::new_v4().into(),
             Uuid::new_v4().into(),
@@ -205,5 +220,26 @@ mod tests {
             created_at,
         )
         .is_err());
+    }
+
+    #[test]
+    fn rehydration_rejects_updated_at_before_lifecycle_state() {
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 12, 0, 0).unwrap();
+        let last_used_at = created_at + Duration::seconds(2);
+        let result = AuditorSession::rehydrate(
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            Uuid::new_v4().into(),
+            "auditor@example.com".to_owned(),
+            Sha256Digest::digest(b"session"),
+            "email|auditor".to_owned(),
+            created_at + Duration::days(7),
+            AuditReviewPeriod::new(created_at - Duration::days(90), created_at).unwrap(),
+            None,
+            last_used_at,
+            created_at,
+            created_at + Duration::seconds(1),
+        );
+        assert!(result.is_err());
     }
 }

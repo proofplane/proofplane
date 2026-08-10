@@ -8,7 +8,7 @@ use crate::domain::{
 };
 
 use super::{
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, WorkspaceUnitOfWork,
 };
 
@@ -67,9 +67,7 @@ impl AgentPolicyDocumentUploadGrantRepository<'_> {
         };
         rows.into_iter()
             .next()
-            .map(|row| {
-                GrantRecord::try_from(row).and_then(AgentPolicyDocumentUploadGrant::try_from)
-            })
+            .map(|row| AgentPolicyDocumentUploadGrantRecord::try_from_row(&row)?.into_domain())
             .transpose()
     }
 
@@ -80,13 +78,8 @@ impl AgentPolicyDocumentUploadGrantRepository<'_> {
                 "policy machine upload grants must be saved in a workspace transaction",
             ));
         };
-        if grant.workspace_id() != workspace.workspace_id {
-            return Err(Error::InvariantViolation(
-                "policy machine upload grant workspace must match its repository scope",
-            ));
-        }
-        let record = GrantRecord::try_from(grant)?;
-        save_workspace_snapshot(workspace.transaction, record.as_workspace_snapshot()).await
+        let record = AgentPolicyDocumentUploadGrantRecord::from_domain(grant)?;
+        save_snapshot(workspace.transaction, record.as_snapshot()).await
     }
 }
 
@@ -111,8 +104,8 @@ WHERE id = $1 AND workspace_id = $2
     "FOR UPDATE"
 );
 
-workspace_snapshot_record! {
-    struct GrantRecord {
+snapshot_record! {
+    struct AgentPolicyDocumentUploadGrantRecord {
         id: Uuid,
         workspace_id: Uuid,
         policy_id: Uuid,
@@ -129,13 +122,10 @@ workspace_snapshot_record! {
     }
     table: agent_policy_document_upload_grants,
     conflict: id,
-    scope: workspace_id,
 }
 
-impl TryFrom<Row> for GrantRecord {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl AgentPolicyDocumentUploadGrantRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             workspace_id: row.try_get("workspace_id")?,
@@ -152,17 +142,12 @@ impl TryFrom<Row> for GrantRecord {
             document_id: row.try_get("document_id")?,
         })
     }
-}
-
-impl TryFrom<GrantRecord> for AgentPolicyDocumentUploadGrant {
-    type Error = Error;
-
-    fn try_from(record: GrantRecord) -> Result<Self, Self::Error> {
+    fn into_domain(self) -> Result<AgentPolicyDocumentUploadGrant, Error> {
         let expected_content_length =
-            u64::try_from(record.expected_content_length).map_err(|_| {
+            u64::try_from(self.expected_content_length).map_err(|_| {
                 Error::InvariantViolation("persisted policy machine upload length is negative")
             })?;
-        let expected_sha256 = record
+        let expected_sha256 = self
             .expected_sha256
             .map(|bytes| {
                 bytes.try_into().map(Sha256Digest::from_bytes).map_err(|_| {
@@ -171,8 +156,8 @@ impl TryFrom<GrantRecord> for AgentPolicyDocumentUploadGrant {
             })
             .transpose()?;
         let declaration = AgentPolicyDocumentUploadDeclaration::rehydrate(
-            record.filename,
-            record.content_type,
+            self.filename,
+            self.content_type,
             expected_content_length,
             expected_sha256,
         )
@@ -180,27 +165,22 @@ impl TryFrom<GrantRecord> for AgentPolicyDocumentUploadGrant {
             Error::InvariantViolation("persisted policy machine upload declaration is invalid")
         })?;
         AgentPolicyDocumentUploadGrant::rehydrate(
-            record.id.into(),
-            record.workspace_id.into(),
-            record.policy_id.into(),
+            self.id.into(),
+            self.workspace_id.into(),
+            self.policy_id.into(),
             declaration,
-            record.issued_by_user_id.into(),
-            AgentConnectionId::from(record.issued_via_agent_connection_id),
-            record.issued_at,
-            record.expires_at,
-            record.completed_at,
-            record.document_id.map(DocumentId::from),
+            self.issued_by_user_id.into(),
+            AgentConnectionId::from(self.issued_via_agent_connection_id),
+            self.issued_at,
+            self.expires_at,
+            self.completed_at,
+            self.document_id.map(DocumentId::from),
         )
         .map_err(|_| {
             Error::InvariantViolation("persisted policy machine upload grant is inconsistent")
         })
     }
-}
-
-impl TryFrom<&AgentPolicyDocumentUploadGrant> for GrantRecord {
-    type Error = Error;
-
-    fn try_from(grant: &AgentPolicyDocumentUploadGrant) -> Result<Self, Self::Error> {
+    fn from_domain(grant: &AgentPolicyDocumentUploadGrant) -> Result<Self, Error> {
         Ok(Self {
             id: grant.id().into(),
             workspace_id: grant.workspace_id().into(),
@@ -267,20 +247,6 @@ mod tests {
         .expect("policy machine grant issues")
     }
 
-    async fn save(
-        postgres: &Postgres,
-        workspace: &TestWorkspace,
-        grant: AgentPolicyDocumentUploadGrant,
-    ) -> Result<(), Error> {
-        postgres
-            .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.workspace(workspace.workspace_id);
-                let repository = workspace.agent_policy_document_upload_grants();
-                repository.save(&grant).await
-            })
-            .await
-    }
-
     #[test]
     fn verification_and_transactional_reads_have_distinct_locking_sql() {
         assert!(!GET_SQL.contains("FOR UPDATE"));
@@ -316,38 +282,5 @@ mod tests {
             .await
             .expect("tenant-scoped lookup succeeds")
             .is_none());
-    }
-
-    #[tokio::test]
-    async fn save_does_not_overwrite_a_same_id_grant_in_another_workspace() {
-        let postgres = test_support::database().await;
-        let owner = test_support::workspace(&postgres, "Owner").await;
-        let intruder = test_support::workspace(&postgres, "Intruder").await;
-        let owner_policy =
-            test_support::policy(&postgres, owner.workspace_id, "Access control").await;
-        let intruder_policy =
-            test_support::policy(&postgres, intruder.workspace_id, "Access control").await;
-        let grant_id = AgentPolicyDocumentUploadGrantId::from(Uuid::new_v4());
-
-        save(&postgres, &owner, grant(&owner, owner_policy, grant_id))
-            .await
-            .expect("owner grant saves");
-
-        let collision = save(
-            &postgres,
-            &intruder,
-            grant(&intruder, intruder_policy, grant_id),
-        )
-        .await;
-        assert!(matches!(collision, Err(Error::InvariantViolation(_))));
-
-        assert_eq!(
-            postgres
-                .agent_policy_document_upload_grants()
-                .get(grant_id, owner.workspace_id)
-                .await
-                .expect("owner grant loads"),
-            Some(grant(&owner, owner_policy, grant_id))
-        );
     }
 }

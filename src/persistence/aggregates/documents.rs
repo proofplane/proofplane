@@ -3,10 +3,12 @@ use uuid::Uuid;
 
 use crate::domain::{
     Document, DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, UserId,
-    WorkspaceId,
 };
 
-use super::{Error, UnitOfWork, WorkspaceUnitOfWork};
+use super::{
+    snapshot::{save_snapshot, snapshot_record},
+    Error, UnitOfWork, WorkspaceUnitOfWork,
+};
 
 /// Complete-snapshot persistence for the document aggregate. Transactional
 /// reads retain a row lock so scan and finalization deliveries race safely.
@@ -18,23 +20,34 @@ pub struct WorkspaceDocumentRepository<'a> {
     workspace: &'a WorkspaceUnitOfWork<'a>,
 }
 
-/// Private persistence shape for a complete document snapshot.
-struct DocumentRecord {
-    created_by_user_id: Uuid,
-    filename: String,
-    content_type: String,
-    content_length: i64,
-    object_key: String,
-    checksum_sha256: String,
-    checksum_crc32c: String,
-    archived: bool,
-    upload_status: String,
-    created_at: chrono::DateTime<chrono::Utc>,
+snapshot_record! {
+    struct DocumentRecord {
+        id: Uuid,
+        workspace_id: Uuid,
+        owner_type: String,
+        owner_id: Uuid,
+        created_by_user_id: Uuid,
+        filename: String,
+        content_type: String,
+        content_length: i64,
+        object_key: String,
+        checksum_sha256: String,
+        checksum_crc32c: String,
+        archived: bool,
+        upload_status: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    table: documents,
+    conflict: id,
 }
 
 impl DocumentRecord {
     fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
+            id: row.try_get("id")?,
+            workspace_id: row.try_get("workspace_id")?,
+            owner_type: row.try_get("owner_type")?,
+            owner_id: row.try_get("owner_id")?,
             created_by_user_id: row.try_get("created_by_user_id")?,
             filename: row.try_get("filename")?,
             content_type: row.try_get("content_type")?,
@@ -48,9 +61,30 @@ impl DocumentRecord {
         })
     }
 
+    fn from_domain(document: &Document) -> Result<Self, Error> {
+        let owner = document.owner();
+        Ok(Self {
+            id: document.id().into(),
+            workspace_id: document.workspace_id.into(),
+            owner_type: owner.owner_type().to_owned(),
+            owner_id: owner.owner_uuid(),
+            created_by_user_id: document.created_by_user_id.into(),
+            filename: document.filename.clone(),
+            content_type: document.content_type.clone(),
+            content_length: document.content_length,
+            object_key: document.object_key.clone(),
+            checksum_sha256: document.checksum_sha256.clone(),
+            checksum_crc32c: document.checksum_crc32c.clone(),
+            archived: document.archived,
+            upload_status: document.upload_status.as_str().to_owned(),
+            created_at: document.created_at,
+        })
+    }
+
     fn into_domain(self, identity: DocumentIdentity) -> Result<Document, Error> {
         Ok(Document {
             identity,
+            workspace_id: self.workspace_id.into(),
             created_by_user_id: UserId::from(self.created_by_user_id),
             filename: self.filename,
             content_type: self.content_type,
@@ -96,38 +130,10 @@ FROM documents WHERE id = $1 AND owner_type = $2 AND owner_id = $3 FOR UPDATE"#,
             .transpose()
     }
 
-    /// Saves all mutable document snapshot fields for an already locked row.
+    /// Saves the complete document snapshot for an already locked row.
     pub async fn save(&self, document: &Document) -> Result<(), Error> {
-        let owner = document.owner();
-        let updated = self
-            .unit_of_work
-            .transaction
-            .execute(
-                r#"UPDATE documents SET filename = $4, content_type = $5, content_length = $6,
-object_key = $7, checksum_sha256 = $8, checksum_crc32c = $9, archived = $10,
-upload_status = $11
-WHERE id = $1 AND owner_type = $2 AND owner_id = $3"#,
-                &[
-                    &Uuid::from(document.id()),
-                    &owner.owner_type(),
-                    &owner.owner_uuid(),
-                    &document.filename,
-                    &document.content_type,
-                    &document.content_length,
-                    &document.object_key,
-                    &document.checksum_sha256,
-                    &document.checksum_crc32c,
-                    &document.archived,
-                    &document.upload_status.as_str(),
-                ],
-            )
-            .await?;
-        if updated != 1 {
-            return Err(Error::InvariantViolation(
-                "document snapshot disappeared while locked",
-            ));
-        }
-        Ok(())
+        let record = DocumentRecord::from_domain(document)?;
+        save_snapshot(&self.unit_of_work.transaction, record.as_snapshot()).await
     }
 }
 
@@ -146,12 +152,7 @@ FROM documents WHERE id = $1 AND workspace_id = $2 AND owner_type = $3 AND owner
     }
 
     pub async fn save(&self, document: &Document) -> Result<(), Error> {
-        save_workspace_document_snapshot(
-            self.workspace.transaction,
-            self.workspace.workspace_id,
-            document,
-        )
-        .await
+        save_workspace_document_snapshot(self.workspace.transaction, document).await
     }
 }
 
@@ -170,31 +171,10 @@ fn document_identity(id: DocumentId, owner: DocumentOwner) -> DocumentIdentity {
 
 async fn save_workspace_document_snapshot(
     transaction: &deadpool_postgres::Transaction<'_>,
-    workspace_id: WorkspaceId,
     document: &Document,
 ) -> Result<(), Error> {
-    let owner = document.owner();
-    let saved = transaction.execute(
-        r#"INSERT INTO documents (id, workspace_id, owner_type, owner_id, created_by_user_id, filename, content_type, content_length, object_key, checksum_sha256, checksum_crc32c, archived, upload_status, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-ON CONFLICT (id) DO UPDATE SET owner_type = EXCLUDED.owner_type, owner_id = EXCLUDED.owner_id,
-created_by_user_id = EXCLUDED.created_by_user_id, filename = EXCLUDED.filename,
-content_type = EXCLUDED.content_type, content_length = EXCLUDED.content_length,
-object_key = EXCLUDED.object_key, checksum_sha256 = EXCLUDED.checksum_sha256,
-checksum_crc32c = EXCLUDED.checksum_crc32c, archived = EXCLUDED.archived,
-upload_status = EXCLUDED.upload_status, created_at = EXCLUDED.created_at
-WHERE documents.workspace_id = EXCLUDED.workspace_id"#,
-        &[&Uuid::from(document.id()), &Uuid::from(workspace_id), &owner.owner_type(), &owner.owner_uuid(),
-          &Uuid::from(document.created_by_user_id), &document.filename, &document.content_type,
-          &document.content_length, &document.object_key, &document.checksum_sha256,
-          &document.checksum_crc32c, &document.archived, &document.upload_status.as_str(), &document.created_at],
-    ).await?;
-    if saved != 1 {
-        return Err(Error::InvariantViolation(
-            "document snapshot save must affect one row",
-        ));
-    }
-    Ok(())
+    let record = DocumentRecord::from_domain(document)?;
+    save_snapshot(transaction, record.as_snapshot()).await
 }
 
 #[cfg(test)]
@@ -217,10 +197,11 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_updates_include_archive_and_upload_lifecycle() {
+    fn snapshot_record_includes_archive_and_upload_lifecycle() {
         let source = include_str!("documents.rs");
-        assert!(source.contains("archived = $10"));
-        assert!(source.contains("upload_status = $11"));
+        assert!(source.contains("archived: bool"));
+        assert!(source.contains("upload_status: String"));
+        assert!(source.contains("save_snapshot"));
     }
 
     #[tokio::test]
@@ -233,6 +214,7 @@ mod tests {
         };
         let (document, _) = Document::create(
             identity,
+            workspace.workspace_id,
             workspace.user_id,
             CreateDocumentPayload {
                 owner: identity.owner(),

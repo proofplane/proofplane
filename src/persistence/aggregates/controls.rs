@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     constraints::classify_db_error,
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error,
 };
 
@@ -42,7 +42,7 @@ FOR UPDATE
         else {
             return Ok(None);
         };
-        let record = ControlRecord::try_from(row)?;
+        let record = ControlRecord::try_from_row(&row)?;
         let requirement_ids = self
             .workspace
             .transaction
@@ -63,18 +63,13 @@ ORDER BY framework_requirement_id
                     .map_err(Error::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        record.into_aggregate(requirement_ids).map(Some)
+        record.into_domain(requirement_ids).map(Some)
     }
 
     /// Persists the aggregate's complete definition and reference snapshot.
     pub async fn save(&self, control: &Control) -> Result<(), Error> {
-        if control.workspace_id() != self.workspace.workspace_id {
-            return Err(Error::InvariantViolation(
-                "control workspace must match its repository scope",
-            ));
-        }
-        let record = ControlRecord::from(control);
-        save_workspace_snapshot(self.workspace.transaction, record.as_workspace_snapshot())
+        let record = ControlRecord::from_domain(control)?;
+        save_snapshot(self.workspace.transaction, record.as_snapshot())
             .await
             .map_err(|error| match error {
                 Error::Database(error) => classify_db_error(error),
@@ -111,7 +106,7 @@ FROM unnest($2::uuid[]) AS requested(framework_requirement_id)
     }
 }
 
-workspace_snapshot_record! {
+snapshot_record! {
     struct ControlRecord {
         id: Uuid,
         workspace_id: Uuid,
@@ -123,13 +118,10 @@ workspace_snapshot_record! {
     }
     table: controls,
     conflict: id,
-    scope: workspace_id,
 }
 
-impl TryFrom<Row> for ControlRecord {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl ControlRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             workspace_id: row.try_get("workspace_id")?,
@@ -143,10 +135,19 @@ impl TryFrom<Row> for ControlRecord {
 }
 
 impl ControlRecord {
-    fn into_aggregate(
-        self,
-        requirement_ids: Vec<FrameworkRequirementId>,
-    ) -> Result<Control, Error> {
+    fn from_domain(control: &Control) -> Result<Self, Error> {
+        Ok(Self {
+            id: control.id().into(),
+            workspace_id: control.workspace_id().into(),
+            code: control.code().to_owned(),
+            title: control.title().to_owned(),
+            description: control.description().to_owned(),
+            created_at: control.created_at(),
+            updated_at: control.updated_at(),
+        })
+    }
+
+    fn into_domain(self, requirement_ids: Vec<FrameworkRequirementId>) -> Result<Control, Error> {
         let definition = ControlDefinition::new(self.code, self.title, self.description)
             .into_result()
             .map_err(|_| Error::InvariantViolation("persisted control definition is invalid"))?;
@@ -159,19 +160,5 @@ impl ControlRecord {
             self.updated_at,
         )
         .map_err(|_| Error::InvariantViolation("persisted control snapshot is inconsistent"))
-    }
-}
-
-impl From<&Control> for ControlRecord {
-    fn from(control: &Control) -> Self {
-        Self {
-            id: control.id().into(),
-            workspace_id: control.workspace_id().into(),
-            code: control.code().to_owned(),
-            title: control.title().to_owned(),
-            description: control.description().to_owned(),
-            created_at: control.created_at(),
-            updated_at: control.updated_at(),
-        }
     }
 }

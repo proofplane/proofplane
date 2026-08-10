@@ -25,5 +25,16 @@ invariants, read models, and asynchronous contracts independent.
 - Authentication and authorization remain application concerns; repository
   APIs receive workspace identity only where it is required for tenant-safe
   SQL filtering.
+- Each mutable aggregate repository maps its primary row through a private,
+  aggregate-named `Record`. Records expose `try_from_row`, `from_domain`, and
+  `into_domain` methods; repository methods do not bind domain fields directly
+  or construct aggregates directly from SQL rows.
+- Primary and companion records use the shared full-snapshot upsert. It updates
+  every non-conflict column, classifies constraint failures uniformly, and
+  requires exactly one affected row. Saves do not perform workspace,
+  authorization, parent-eligibility, or relationship checks.
+- Multi-table orchestration stays local to the owning repository. Optional
+  companion rows are synchronized to the domain snapshot, while owned child
+  collections are replaced completely in the same transaction.
 - Existing asynchronous document processing remains at-least-once and workers
   retain compatibility with queued legacy messages during the cutover.

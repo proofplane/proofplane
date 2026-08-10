@@ -173,12 +173,12 @@ maps and upserts the aggregate's complete current snapshot without interpreting
 which domain operation changed it. Existing aggregates are saved only after the
 service reloads them under that transaction lock.
 
-A crate-private workspace snapshot helper generates that atomic, tenant-guarded
-upsert from a single private record declaration. Every declared record field is
+A crate-private snapshot helper generates the atomic full-snapshot upsert from
+a single private record declaration. Every declared record field is
 inserted and every non-conflict field is replaced from the aggregate snapshot;
 repositories do not hand-maintain column, parameter, and assignment lists. The
-machine grant is the initial consumer. Other repositories are not migrated by
-this revision.
+machine grant was the initial consumer; all mutable aggregate repositories now
+use the same helper.
 
 Credential decoding produces a typed authority value but makes no authorization
 decision. The grant issuance service checks workspace-scoped evidence
@@ -275,7 +275,8 @@ is cryptographically bound to the connection that issued it and checked
 against the persisted provenance. This distinction must be explicit in code
 and documentation.
 
-All repository reads and writes are workspace-scoped. Errors must not reveal
+Repository reads are workspace-scoped, while saves trust the workspace and
+authorization checks performed by command orchestration. Errors must not reveal
 cross-workspace evidence, submission, document, grant, user, or connection
 identifiers. Logs and metrics must not contain evidence metadata, filenames,
 content types, checksums, byte content, tokens, authorization headers, or

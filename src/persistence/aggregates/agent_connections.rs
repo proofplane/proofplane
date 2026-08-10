@@ -4,7 +4,7 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::{
-    snapshot::{save_workspace_snapshot, workspace_snapshot_record},
+    snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, UnitOfWork,
 };
 use crate::domain::{AgentConnection, AgentConnectionId, Sha256Digest, WorkspacePermission};
@@ -56,7 +56,10 @@ impl AgentConnectionRepository<'_> {
         };
         rows.into_iter()
             .next()
-            .map(AgentConnection::try_from)
+            .map(|row| {
+                let authorization = AgentAuthorizationTransactionRecord::try_from_row(&row)?;
+                AgentConnectionRecord::try_from_row(&row)?.into_domain(&row, authorization)
+            })
             .transpose()
     }
 
@@ -67,8 +70,8 @@ impl AgentConnectionRepository<'_> {
                 "agent connections must be saved in a transaction",
             ));
         };
-        let record = ConnectionRecord::from(connection);
-        save_workspace_snapshot(&unit_of_work.transaction, record.as_workspace_snapshot()).await?;
+        let record = AgentConnectionRecord::from_domain(connection)?;
+        save_snapshot(&unit_of_work.transaction, record.as_snapshot()).await?;
         unit_of_work
             .transaction
             .execute(
@@ -76,28 +79,42 @@ impl AgentConnectionRepository<'_> {
                 &[&record.id],
             )
             .await?;
-        for permission in &connection.permissions {
-            unit_of_work.transaction.execute("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[&record.id, &permission.as_str()]).await?;
+        for permission in connection
+            .permissions
+            .iter()
+            .map(|permission| AgentConnectionPermissionRecord::from_domain(record.id, *permission))
+        {
+            unit_of_work.transaction.execute("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[&permission.agent_connection_id, &permission.permission]).await?;
         }
-        unit_of_work.transaction.execute(
-            "INSERT INTO agent_authorization_transactions (id, agent_connection_id, continuation_digest, nonce_digest, consumed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (agent_connection_id) DO UPDATE SET id = EXCLUDED.id, continuation_digest = EXCLUDED.continuation_digest, nonce_digest = EXCLUDED.nonce_digest, consumed_at = EXCLUDED.consumed_at",
-            &[&Uuid::from(connection.authorization_transaction_id()), &record.id, &connection.continuation_digest().as_bytes().as_slice(), &connection.nonce_digest().as_bytes().as_slice(), &connection.continuation_consumed_at(), &connection.created_at]
-        ).await?;
-        Ok(())
+        let authorization = AgentAuthorizationTransactionRecord::from_domain(connection)?;
+        save_snapshot(&unit_of_work.transaction, authorization.as_snapshot()).await
+    }
+}
+
+struct AgentConnectionPermissionRecord {
+    agent_connection_id: Uuid,
+    permission: String,
+}
+
+impl AgentConnectionPermissionRecord {
+    fn from_domain(agent_connection_id: Uuid, permission: WorkspacePermission) -> Self {
+        Self {
+            agent_connection_id,
+            permission: permission.as_str().to_owned(),
+        }
     }
 }
 
 const GET_SQL: &str = r#"SELECT c.id, c.user_id, c.workspace_id, c.auth0_subject, c.auth0_client_id, c.client_display_name, c.resource, c.status, c.pending_expires_at, c.activated_at, c.last_used_at, c.revoked_at, c.created_at, t.id AS transaction_id, t.continuation_digest, t.nonce_digest, t.consumed_at, COALESCE((SELECT array_agg(p.permission ORDER BY array_position(ARRAY['read_evidence','write_evidence','read_evidence_submissions','write_evidence_submissions','read_controls','write_controls','manage_auditor_access'], p.permission)) FROM agent_connection_permissions p WHERE p.agent_connection_id = c.id), ARRAY[]::text[]) AS permissions FROM agent_connections c JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id WHERE c.id = $1"#;
 const GET_FOR_UPDATE_SQL: &str = "FOR UPDATE OF c, t";
 
-workspace_snapshot_record! {
-    struct ConnectionRecord { id: Uuid, user_id: Uuid, workspace_id: Uuid, auth0_subject: String, auth0_client_id: String, client_display_name: String, resource: String, status: String, pending_expires_at: DateTime<Utc>, activated_at: Option<DateTime<Utc>>, last_used_at: Option<DateTime<Utc>>, revoked_at: Option<DateTime<Utc>>, created_at: DateTime<Utc>, }
-    table: agent_connections, conflict: id, scope: workspace_id,
+snapshot_record! {
+    struct AgentConnectionRecord { id: Uuid, user_id: Uuid, workspace_id: Uuid, auth0_subject: String, auth0_client_id: String, client_display_name: String, resource: String, status: String, pending_expires_at: DateTime<Utc>, activated_at: Option<DateTime<Utc>>, last_used_at: Option<DateTime<Utc>>, revoked_at: Option<DateTime<Utc>>, created_at: DateTime<Utc>, }
+    table: agent_connections, conflict: id,
 }
 
-impl TryFrom<Row> for ConnectionRecord {
-    type Error = Error;
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
+impl AgentConnectionRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
             user_id: row.try_get("user_id")?,
@@ -114,19 +131,17 @@ impl TryFrom<Row> for ConnectionRecord {
             created_at: row.try_get("created_at")?,
         })
     }
-}
-impl TryFrom<Row> for AgentConnection {
-    type Error = Error;
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let record = ConnectionRecord::try_from(row.clone())?;
-        let continuation: [u8; 32] = row
-            .try_get::<_, Vec<u8>>("continuation_digest")?
-            .try_into()
-            .map_err(|_| {
+    fn into_domain(
+        self,
+        row: &Row,
+        authorization: AgentAuthorizationTransactionRecord,
+    ) -> Result<AgentConnection, Error> {
+        let continuation: [u8; 32] =
+            authorization.continuation_digest.try_into().map_err(|_| {
                 Error::InvariantViolation("agent continuation digest must contain 32 bytes")
             })?;
-        let nonce: [u8; 32] = row
-            .try_get::<_, Vec<u8>>("nonce_digest")?
+        let nonce: [u8; 32] = authorization
+            .nonce_digest
             .try_into()
             .map_err(|_| Error::InvariantViolation("agent nonce digest must contain 32 bytes"))?;
         let permissions = row
@@ -139,34 +154,32 @@ impl TryFrom<Row> for AgentConnection {
             })
             .collect::<Result<Vec<WorkspacePermission>, Error>>()?;
         AgentConnection::rehydrate(
-            record.id.into(),
-            record.user_id.into(),
-            record.workspace_id.into(),
-            record.auth0_subject,
-            record.auth0_client_id,
-            record.client_display_name,
-            record.resource,
-            record
-                .status
+            self.id.into(),
+            self.user_id.into(),
+            self.workspace_id.into(),
+            self.auth0_subject,
+            self.auth0_client_id,
+            self.client_display_name,
+            self.resource,
+            self.status
                 .parse()
                 .map_err(|_| Error::InvariantViolation("unknown agent connection status"))?,
             permissions,
-            record.pending_expires_at,
-            record.activated_at,
-            record.last_used_at,
-            record.revoked_at,
-            record.created_at,
-            row.try_get::<_, Uuid>("transaction_id")?.into(),
+            self.pending_expires_at,
+            self.activated_at,
+            self.last_used_at,
+            self.revoked_at,
+            self.created_at,
+            authorization.id.into(),
             Sha256Digest::from_bytes(continuation),
             Sha256Digest::from_bytes(nonce),
-            row.try_get("consumed_at")?,
+            authorization.consumed_at,
         )
         .map_err(|_| Error::InvariantViolation("persisted agent connection is inconsistent"))
     }
-}
-impl From<&AgentConnection> for ConnectionRecord {
-    fn from(value: &AgentConnection) -> Self {
-        Self {
+
+    fn from_domain(value: &AgentConnection) -> Result<Self, Error> {
+        Ok(Self {
             id: value.id.into(),
             user_id: value.user_id.into(),
             workspace_id: value.workspace_id.into(),
@@ -180,7 +193,44 @@ impl From<&AgentConnection> for ConnectionRecord {
             last_used_at: value.last_used_at,
             revoked_at: value.revoked_at,
             created_at: value.created_at,
-        }
+        })
+    }
+}
+
+snapshot_record! {
+    struct AgentAuthorizationTransactionRecord {
+        id: Uuid,
+        agent_connection_id: Uuid,
+        continuation_digest: Vec<u8>,
+        nonce_digest: Vec<u8>,
+        consumed_at: Option<DateTime<Utc>>,
+        created_at: DateTime<Utc>,
+    }
+    table: agent_authorization_transactions,
+    conflict: agent_connection_id,
+}
+
+impl AgentAuthorizationTransactionRecord {
+    fn try_from_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.try_get("transaction_id")?,
+            agent_connection_id: row.try_get("id")?,
+            continuation_digest: row.try_get("continuation_digest")?,
+            nonce_digest: row.try_get("nonce_digest")?,
+            consumed_at: row.try_get("consumed_at")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    fn from_domain(connection: &AgentConnection) -> Result<Self, Error> {
+        Ok(Self {
+            id: connection.authorization_transaction_id().into(),
+            agent_connection_id: connection.id.into(),
+            continuation_digest: connection.continuation_digest().as_bytes().to_vec(),
+            nonce_digest: connection.nonce_digest().as_bytes().to_vec(),
+            consumed_at: connection.continuation_consumed_at(),
+            created_at: connection.created_at,
+        })
     }
 }
 

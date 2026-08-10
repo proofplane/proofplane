@@ -155,7 +155,7 @@ Model the grant as a policy-specific aggregate with private state and
 read-only accessors. It owns exact credential-authority binding, expiry and
 pending eligibility, declared-versus-received matching, rehydration
 consistency, and the one-way completion transition. Reuse the evidence grant's
-workspace snapshot persistence pattern rather than creating a second style of
+full-snapshot record persistence pattern rather than creating a second style of
 grant repository.
 
 ### Revision: evidence aggregate and snapshot repository alignment (2026-08-01)
@@ -167,11 +167,10 @@ completion orchestration. The private persistence record maps the complete
 aggregate snapshot, and the repository exposes only workspace-scoped `get` and
 transaction-backed `save` operations.
 
-`get` rehydrates the complete snapshot with `FOR UPDATE`. An autocommit
+`get` rehydrates the complete workspace-filtered snapshot with `FOR UPDATE`. An autocommit
 verification read releases that lock immediately, while a transaction-backed
-completion read holds it through commit. `save` verifies only that the
-aggregate workspace matches the transaction workspace, then performs the
-tenant-guarded full-snapshot upsert. It does not interpret the operation that
+completion read holds it through commit. `save` performs the shared unscoped
+full-snapshot upsert after authorized command orchestration. It does not interpret the operation that
 changed the aggregate or query policy and agent-connection relationships;
 those checks remain in workspace-scoped services and existing foreign keys.
 This revision changes no schema, HTTP, MCP, credential, or domain behavior.
