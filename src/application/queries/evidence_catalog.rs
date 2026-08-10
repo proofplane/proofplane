@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     authentication::AgentConnectionContext,
     domain::{ControlId, EvidenceId, WorkspacePermission},
-    projections::{ControlEvidenceMapping, EvidenceControlMapping, EvidenceDetail},
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::{ControlEvidenceMapping, EvidenceControlMapping, EvidenceDetail},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -29,7 +29,9 @@ impl ListEvidenceHandler {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
-            .evidence_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .evidence()
             .list()
             .await?)
     }
@@ -58,7 +60,9 @@ impl GetEvidenceHandler {
         authorize_evidence(query.connection)?;
         Ok(self
             .repository
-            .evidence_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .evidence()
             .get(query.evidence_id)
             .await?)
     }
@@ -93,7 +97,9 @@ impl ListEvidenceControlMappingsHandler {
         }
         Ok(self
             .repository
-            .control_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .controls()
             .list_evidence_mappings(query.evidence_id)
             .await?)
     }
@@ -128,7 +134,9 @@ impl ListControlEvidenceMappingsHandler {
         }
         Ok(self
             .repository
-            .control_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .controls()
             .list_evidence_for_control(query.control_id)
             .await?)
     }
@@ -164,7 +172,7 @@ mod tests {
     use crate::{
         authentication::AgentConnectionContext,
         domain::{AgentConnectionId, EvidenceId, UserId, WorkspaceId, WorkspacePermissions},
-        repository::Postgres,
+        persistence::Postgres,
     };
 
     use super::{

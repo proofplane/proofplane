@@ -13,7 +13,7 @@ use crate::{
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
     object_storage::{ObjectKey, ObjectStore},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::{Postgres, TypedDocumentUploadWork},
+    persistence::{Postgres, TypedDocumentUploadWork},
     worker::{RetryableWorkerError, WorkerMessage},
 };
 
@@ -62,12 +62,10 @@ where
             }
         };
 
-        let Some(work) = self
-            .repository
-            .load_finalizing_typed_document_upload_work(
-                payload.identity,
-                payload.object_key.as_str(),
-            )
+        let reads = self.repository.reads().await.map_err(retryable)?;
+        let Some(work) = reads
+            .documents()
+            .load_finalizing_upload_work(payload.identity, payload.object_key.as_str())
             .await
             .map_err(retryable)?
         else {

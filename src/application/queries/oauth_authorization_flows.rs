@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{OAuthAuthorizationRequestId, UserId, WorkspaceId, WorkspacePermission},
-    repository::{Error, Postgres},
+    persistence::{Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]

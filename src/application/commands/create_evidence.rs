@@ -7,8 +7,8 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{Evidence, EvidenceDefinition, EvidenceId, EvidenceStatus, WorkspacePermission},
-    projections::EvidenceDetail,
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::EvidenceDetail,
 };
 
 #[derive(Debug, Clone)]
@@ -65,9 +65,9 @@ impl CreateEvidenceHandler {
         let evidence = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                workspace.evidence().save(&evidence).await?;
-                workspace.evidence_projections().get(id).await?.ok_or(
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                workspace.aggregates().evidence().save(&evidence).await?;
+                workspace.reads().evidence().get(id).await?.ok_or(
                     RepositoryError::InvariantViolation(
                         "created evidence must be readable in its transaction",
                     ),

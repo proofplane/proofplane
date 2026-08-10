@@ -14,7 +14,7 @@ use crate::{
         PolicyDocumentUploadGrant, PolicyDocumentUploadGrantId, PolicyId, UserId, WorkspaceId,
         WorkspacePermission,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 const GRANT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -78,10 +78,11 @@ impl IssuePolicyDocumentUploadGrantHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                if context
-                    .lock_policy_document_upload_eligibility(command.policy_id)
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                if workspace
+                    .reads()
+                    .policies()
+                    .lock_document_upload_eligibility(command.policy_id)
                     .await?
                     .is_none()
                 {
@@ -127,12 +128,12 @@ impl IssuePolicyDocumentUploadGrantHandler {
                     Err(_) => return Ok(IssueOutcome::Internal),
                 };
                 url.query_pairs_mut().append_pair("token", &issued.token);
-                let repository = context.policy_document_upload_grants();
+                let repository = workspace.aggregates().policy_document_upload_grants();
                 repository.save(&grant).await?;
                 let grant = repository
                     .get(grant.id(), grant.workspace_id())
                     .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
+                    .ok_or(crate::persistence::Error::InvariantViolation(
                         "saved policy human upload grant must be readable",
                     ))?;
                 Ok(IssueOutcome::Issued(Box::new(
@@ -172,5 +173,5 @@ pub enum PolicyDocumentUploadGrantHandlerError {
     #[error("internal policy document upload grant error")]
     Internal,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

@@ -25,7 +25,7 @@ use crate::{
     },
     domain::AgentConnectionId,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::UserAgentConnectionSummary,
+    read_models::UserAgentConnectionSummary,
     routes::{
         authentication::authenticate_user, error::ApiError, me::UserRouteAuthState,
         request_context::RequestId,
@@ -133,7 +133,7 @@ fn map_command_error(error: AgentConnectionCommandError) -> ApiError {
     ApiError::Internal
 }
 
-fn map_query_error(error: crate::repository::Error) -> ApiError {
+fn map_query_error(error: crate::persistence::Error) -> ApiError {
     tracing::error!(%error, "agent connection query failed");
     ApiError::Internal
 }

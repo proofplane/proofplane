@@ -12,7 +12,7 @@ use crate::{
         AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest,
         WorkspacePermission,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 const DEFAULT_GRANT_TTL_DAYS: i64 = 30;
@@ -47,7 +47,7 @@ pub enum IssueAuditorAccessGrantError {
     #[error("auditor access grant secret failed")]
     Secret(#[source] crate::authentication::opaque_token::OpaqueTokenError),
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 impl IssueAuditorAccessGrantHandler {
@@ -78,8 +78,7 @@ impl IssueAuditorAccessGrantHandler {
         let grant = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(connection.workspace_id);
-                let context = &workspace;
+                let workspace = unit_of_work.workspace(connection.workspace_id);
                 let grant = AuditorAccessGrant::issue(
                     grant_id,
                     connection.workspace_id,
@@ -92,16 +91,16 @@ impl IssueAuditorAccessGrantHandler {
                     period,
                 )
                 .map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "auditor access grant issuance must be valid",
                     )
                 })?;
-                let repository = context.auditor_access_grants();
+                let repository = workspace.aggregates().auditor_access_grants();
                 repository.save(&grant).await?;
                 repository
                     .get(grant.id, connection.workspace_id)
                     .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
+                    .ok_or(crate::persistence::Error::InvariantViolation(
                         "saved auditor access grant must be readable",
                     ))
             })

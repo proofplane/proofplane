@@ -102,7 +102,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         .await
         .assert_status(StatusCode::SEE_OTHER);
     let pending_interception = pending_gate.await_interception().await;
-    let pending_projection = owner
+    let pending_read_model = owner
         .call_tool(
             "list_evidence_submissions",
             json!({ "evidence_id": access_review.id }),
@@ -114,7 +114,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         .find(|submission| submission["document"]["filename"] == "pending-access-review.txt")
         .expect("pending submission is listed")
         .clone();
-    let pending = TestEvidenceSubmission::from_mcp(&pending_projection);
+    let pending = TestEvidenceSubmission::from_mcp(&pending_read_model);
     assert_eq!(
         pending_interception.aggregate_id,
         pending.document_id.to_string()
@@ -168,7 +168,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
     ]
     .join("");
     assert_eq!(
-        body_projection(&portal.text()),
+        body_read_model(&portal.text()),
         portal_body(workspace_name, auditor_email, 2, 3, &portal_rows)
     );
 
@@ -205,7 +205,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
     ]
     .join("");
     assert_eq!(
-        body_projection(&cc61_response.text()),
+        body_read_model(&cc61_response.text()),
         requirement_body(workspace_name, auditor_email, cc61, 2, &cc61_rows)
     );
 
@@ -229,7 +229,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         "Awaiting submission",
     );
     assert_eq!(
-        body_projection(&cc71_response.text()),
+        body_read_model(&cc71_response.text()),
         requirement_body(workspace_name, auditor_email, cc71, 1, &cc71_rows)
     );
 
@@ -254,7 +254,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         &submissions,
     );
     assert_eq!(
-        body_projection(&control_response.text()),
+        body_read_model(&control_response.text()),
         control_body(
             workspace_name,
             auditor_email,

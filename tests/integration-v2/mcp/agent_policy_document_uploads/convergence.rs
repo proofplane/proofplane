@@ -126,7 +126,7 @@ async fn matching_policy_replay_tracks_the_lifecycle_and_rejects_completed_misma
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &current,
             policy,
             Some(ExpectedPolicyDocument {
@@ -225,7 +225,7 @@ async fn concurrent_matching_policy_transfers_converge_on_one_document() {
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
     assert_eq!(
-        assert_policy_projection(
+        assert_policy_read_model(
             &current,
             policy,
             Some(ExpectedPolicyDocument {

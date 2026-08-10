@@ -1,7 +1,7 @@
 use crate::{
     application::ExecutionMetadata,
     domain::{AuditorSession, AuditorSessionTransition, Sha256Digest},
-    repository::Postgres,
+    persistence::Postgres,
 };
 use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
@@ -31,16 +31,33 @@ impl RevokeAuditorSessionHandler {
     ) -> Result<RevokeAuditorSessionResult, RevokeAuditorSessionError> {
         let digest = Sha256Digest::digest(command.raw_session.expose_secret().as_bytes());
         self.repository
-            .in_unit_of_work(async move |context| {
-                let Some(mut session) = context.auditor_sessions().get(digest).await? else {
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(session_id) = unit_of_work
+                    .reads()
+                    .auditor_sessions()
+                    .resolve_id_by_digest(digest)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                let Some(mut session) = unit_of_work
+                    .aggregates()
+                    .auditor_sessions()
+                    .get(session_id)
+                    .await?
+                else {
                     return Ok(None);
                 };
                 let result = session.revoke(Utc::now()).map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "auditor session revocation is invalid",
                     )
                 })?;
-                context.auditor_sessions().save(&session).await?;
+                unit_of_work
+                    .aggregates()
+                    .auditor_sessions()
+                    .save(&session)
+                    .await?;
                 Ok(Some(RevokeAuditorSessionResult {
                     session,
                     transition: result,
@@ -52,7 +69,7 @@ impl RevokeAuditorSessionHandler {
                     Ok(result)
                 }
                 AuditorSessionTransition::Used => Err(RevokeAuditorSessionError::Repository(
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "session revocation returned an invalid transition",
                     ),
                 )),
@@ -66,5 +83,5 @@ pub enum RevokeAuditorSessionError {
     #[error("auditor access is unavailable")]
     Unavailable,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

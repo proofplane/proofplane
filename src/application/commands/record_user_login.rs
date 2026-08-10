@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     application::ExecutionMetadata,
     domain::{User, UserId, UserTransition},
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,13 +31,13 @@ impl RecordUserLoginHandler {
     ) -> Result<User, RecordUserLoginError> {
         let outcome = self
             .repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.users();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().users();
                 let Some(mut user) = repository.get(command.user_id).await? else {
                     return Ok(LoginOutcome::Unavailable);
                 };
                 let transition = user.record_login(command.logged_in_at).map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "login timestamp predates user provisioning",
                     )
                 })?;
@@ -65,5 +65,5 @@ pub enum RecordUserLoginError {
     #[error("user is unavailable")]
     Unavailable,
     #[error("user login repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

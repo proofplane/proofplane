@@ -13,7 +13,7 @@ use crate::{
     },
     domain::DomainError,
     object_storage::StorageError,
-    repository::{ConflictKind, Error as RepositoryError},
+    persistence::{ConflictKind, Error as RepositoryError},
     services::Error as ServiceError,
 };
 

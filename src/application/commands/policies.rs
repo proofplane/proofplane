@@ -10,8 +10,8 @@ use crate::{
         ControlId, Policy, PolicyControlMappingState, PolicyDefinition, PolicyError, PolicyId,
         WorkspacePermission,
     },
-    projections::{PolicyControlMapping, PolicyDetail},
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{ConflictKind, Error as RepositoryError, Postgres},
+    read_models::{PolicyControlMapping, PolicyDetail},
 };
 
 #[derive(Debug, Clone)]
@@ -62,9 +62,12 @@ impl CreatePolicyHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let present = context.existing_control_ids(&requested).await?;
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let present = workspace
+                    .reads()
+                    .controls()
+                    .existing_ids(&requested)
+                    .await?;
                 let unknown = requested
                     .iter()
                     .copied()
@@ -73,7 +76,7 @@ impl CreatePolicyHandler {
                 if !unknown.is_empty() {
                     return Ok(CreateOutcome::Rejected { unknown });
                 }
-                let mut policy = Policy::define(id, context.workspace_id, definition, Utc::now());
+                let mut policy = Policy::define(id, workspace.workspace_id, definition, Utc::now());
                 policy
                     .replace_mappings(
                         requested
@@ -83,9 +86,9 @@ impl CreatePolicyHandler {
                             .collect(),
                     )
                     .map_err(invariant)?;
-                context.policies().save(&policy).await?;
+                workspace.aggregates().policies().save(&policy).await?;
                 Ok(CreateOutcome::Created(Box::new(
-                    context.policy_projections().get(id).await?.ok_or(
+                    workspace.reads().policies().get(id).await?.ok_or(
                         RepositoryError::InvariantViolation(
                             "created policy must be readable in its transaction",
                         ),
@@ -140,9 +143,8 @@ impl ReplacePolicyHandler {
         let detail = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let repository = context.policies();
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let repository = workspace.aggregates().policies();
                 let Some(mut policy) = repository.get(id).await? else {
                     return Ok(None);
                 };
@@ -151,7 +153,7 @@ impl ReplacePolicyHandler {
                 }
                 policy.replace(definition, Utc::now()).map_err(invariant)?;
                 repository.save(&policy).await?;
-                context.policy_projections().get(id).await
+                workspace.reads().policies().get(id).await
             })
             .await?;
         detail
@@ -188,16 +190,20 @@ impl ArchivePolicyHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let repository = context.policies();
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let repository = workspace.aggregates().policies();
                 let Some(mut policy) = repository.get(id).await? else {
                     return Ok(None);
                 };
                 if policy.archived_at().is_some() {
                     return Ok(None);
                 }
-                if context.policy_document_in_progress(id).await? {
+                if workspace
+                    .reads()
+                    .policies()
+                    .document_in_progress(id)
+                    .await?
+                {
                     return Ok(Some(Err(())));
                 }
                 policy.archive(Utc::now()).map_err(invariant)?;
@@ -372,16 +378,19 @@ async fn change_mappings(
     let response_control_ids = requested.clone();
     let outcome = repository
         .in_unit_of_work(async move |unit_of_work| {
-            let workspace = unit_of_work.for_workspace(connection.workspace_id);
-            let context = &workspace;
-            let repository = context.policies();
+            let workspace = unit_of_work.workspace(connection.workspace_id);
+            let repository = workspace.aggregates().policies();
             let Some(mut policy) = repository.get(policy_id).await? else {
                 return Ok(None);
             };
             if policy.archived_at().is_some() {
                 return Ok(None);
             }
-            let existing = context.existing_control_ids(&requested).await?;
+            let existing = workspace
+                .reads()
+                .controls()
+                .existing_ids(&requested)
+                .await?;
             let unknown = requested
                 .iter()
                 .copied()
@@ -424,8 +433,9 @@ async fn change_mappings(
             if attach {
                 for id in &requested {
                     mappings.push(
-                        context
-                            .policy_projections()
+                        workspace
+                            .reads()
+                            .policies()
                             .get_control_mapping(policy_id, *id)
                             .await?
                             .ok_or(RepositoryError::InvariantViolation(
@@ -462,17 +472,18 @@ async fn change_control_policies(
     let response_policy_ids = requested.clone();
     let outcome = repository
         .in_unit_of_work(async move |unit_of_work| {
-            let workspace = unit_of_work.for_workspace(connection.workspace_id);
-            let context = &workspace;
-            if !context
-                .existing_control_ids(&[control_id])
+            let workspace = unit_of_work.workspace(connection.workspace_id);
+            if !workspace
+                .reads()
+                .controls()
+                .existing_ids(&[control_id])
                 .await?
                 .contains(&control_id)
             {
                 return Ok(ControlPolicyOutcome::ControlUnavailable);
             }
 
-            let policy_repository = context.policies();
+            let policy_repository = workspace.aggregates().policies();
             let mut lock_order = requested.clone();
             lock_order.sort_unstable_by_key(|id| Uuid::from(*id));
             let mut policies = Vec::with_capacity(lock_order.len());

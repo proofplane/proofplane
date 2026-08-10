@@ -454,7 +454,7 @@ async fn evidence_downloads_conceal_pipeline_archive_identifier_tenant_and_sessi
         .await
         .assert_status(StatusCode::SEE_OTHER);
     let pending_interception = pending_gate.await_interception().await;
-    let pending_projection = owner
+    let pending_read_model = owner
         .call_tool(
             "list_evidence_submissions",
             json!({ "evidence_id": evidence.id }),
@@ -466,7 +466,7 @@ async fn evidence_downloads_conceal_pipeline_archive_identifier_tenant_and_sessi
         .find(|submission| submission["document"]["filename"] == "pending-evidence.txt")
         .expect("pending evidence is listed")
         .clone();
-    let pending = TestEvidenceSubmission::from_mcp(&pending_projection);
+    let pending = TestEvidenceSubmission::from_mcp(&pending_read_model);
     assert_eq!(pending.upload_status, "pending");
     assert_eq!(
         pending_interception.aggregate_id,
@@ -482,7 +482,7 @@ async fn evidence_downloads_conceal_pipeline_archive_identifier_tenant_and_sessi
         .multipart(upload_form(ERROR_TRIGGER, "failed-evidence.txt"))
         .await
         .assert_status(StatusCode::SEE_OTHER);
-    let failed_projection = owner
+    let failed_read_model = owner
         .call_tool(
             "list_evidence_submissions",
             json!({ "evidence_id": evidence.id }),
@@ -494,7 +494,7 @@ async fn evidence_downloads_conceal_pipeline_archive_identifier_tenant_and_sessi
         .find(|submission| submission["document"]["filename"] == "failed-evidence.txt")
         .expect("failed evidence is listed")
         .clone();
-    let failed = TestEvidenceSubmission::from_mcp(&failed_projection);
+    let failed = TestEvidenceSubmission::from_mcp(&failed_read_model);
     assert_eq!(
         failed_events
             .await_event(DOCUMENT_SCAN_REQUESTED, &failed.document_id.to_string())

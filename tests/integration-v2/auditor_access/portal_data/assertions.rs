@@ -39,12 +39,12 @@ pub(super) fn assert_framework_catalog(body: &Value, scenario: &Scenario) {
         .expect("framework requirements is an array");
     let soc2 = scenario.framework("soc2");
     assert_eq!(requirements.len(), 2);
-    assert_requirement_projection(&requirements[0], soc2.requirement("CC6.1"), soc2);
-    assert_requirement_projection(&requirements[1], soc2.requirement("CC7.1"), soc2);
+    assert_requirement_read_model(&requirements[0], soc2.requirement("CC6.1"), soc2);
+    assert_requirement_read_model(&requirements[1], soc2.requirement("CC7.1"), soc2);
 }
 
 #[track_caller]
-fn assert_requirement_projection(
+fn assert_requirement_read_model(
     actual: &Value,
     expected: &TestFrameworkRequirement,
     framework: &TestFramework,
@@ -73,7 +73,7 @@ fn assert_requirement_projection(
 }
 
 #[track_caller]
-pub(super) fn assert_control_projection(actual: &Value, expected: &TestControl) {
+pub(super) fn assert_control_read_model(actual: &Value, expected: &TestControl) {
     assert_eq!(
         object_keys(actual),
         [
@@ -98,7 +98,7 @@ pub(super) fn assert_control_projection(actual: &Value, expected: &TestControl) 
 }
 
 #[track_caller]
-pub(super) fn assert_evidence_projection(
+pub(super) fn assert_evidence_read_model(
     actual: &Value,
     evidence_id: Uuid,
     title: &str,
@@ -147,7 +147,7 @@ pub(super) fn assert_evidence_projection(
 }
 
 #[track_caller]
-pub(super) fn assert_submission_projection(
+pub(super) fn assert_submission_read_model(
     actual: &Value,
     expected: &TestEvidenceSubmission,
     download_eligible: bool,
@@ -185,7 +185,7 @@ pub(super) fn assert_submission_projection(
     );
     assert_same_instant(&submission["valid_from"], &expected.valid_from);
     assert_same_instant(&submission["valid_until"], &expected.valid_until);
-    assert_submitter_projection(
+    assert_submitter_read_model(
         &submission["submitted_by"],
         expected.submitted_by_user_id,
         expected.submitted_by_agent_connection_id,
@@ -204,7 +204,7 @@ pub(super) fn assert_submission_projection(
 }
 
 #[track_caller]
-fn assert_submitter_projection(actual: &Value, user_id: Uuid, agent_connection_id: Uuid) {
+fn assert_submitter_read_model(actual: &Value, user_id: Uuid, agent_connection_id: Uuid) {
     assert_eq!(
         object_keys(actual),
         ["agent_connection_id", "user_id"].into_iter().collect()
@@ -225,7 +225,7 @@ fn assert_same_instant(actual: &Value, expected: &chrono::DateTime<chrono::Fixed
 }
 
 #[track_caller]
-pub(super) fn assert_policy_summary_projection(
+pub(super) fn assert_policy_summary_read_model(
     actual: &Value,
     expected: &TestPolicy,
     document_eligibility: Option<bool>,
@@ -252,7 +252,7 @@ pub(super) fn assert_policy_summary_projection(
 }
 
 #[track_caller]
-pub(super) fn assert_policy_projection(
+pub(super) fn assert_policy_read_model(
     actual: &Value,
     expected: &TestPolicy,
     controls: &[&TestControl],

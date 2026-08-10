@@ -4,10 +4,10 @@ use crate::{
     application::{
         queries::resolve_auditor_session_by_digest::ResolvedAuditorSession, ExecutionMetadata,
     },
-    projections::{
+    persistence::{Error, Postgres},
+    read_models::{
         AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary, AuditorPortalReadModel,
     },
-    repository::{Error, Postgres},
 };
 
 #[derive(Debug, Clone)]
@@ -31,23 +31,25 @@ impl ReadAuditorPortalHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<AuditorPortalReadModel, Error> {
         let mut framework_requirements = Vec::new();
-        for framework in self.repository.framework_projections().list().await? {
+        for framework in self.repository.reads().await?.frameworks().list().await? {
             framework_requirements.extend(
                 self.repository
-                    .framework_projections()
+                    .reads()
+                    .await?
+                    .frameworks()
                     .list_requirements(framework.id)
                     .await?,
             );
         }
 
         let session = query.session;
-        let projections = self
-            .repository
-            .auditor_portal_projections(session.workspace_id);
-        let mut controls = projections
+        let reads = self.repository.reads().await?;
+        let reads = reads.workspace(session.workspace_id);
+        let portal_reads = reads.auditor_portal();
+        let mut controls = portal_reads
             .controls(session.period.start, session.period.end)
             .await?;
-        let policies = projections.policies().await?;
+        let policies = portal_reads.policies().await?;
         let control_indices = controls
             .iter()
             .enumerate()
@@ -77,7 +79,9 @@ impl ReadAuditorPortalHandler {
 
         let workspace = self
             .repository
-            .workspace_projections()
+            .reads()
+            .await?
+            .workspaces()
             .get(session.workspace_id)
             .await?
             .ok_or(Error::InvariantViolation(

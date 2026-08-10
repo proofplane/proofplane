@@ -16,7 +16,7 @@ use crate::{
         AgentEvidenceUploadDeclaration, AgentEvidenceUploadGrant, AgentEvidenceUploadGrantId,
         CoverageWindow, EvidenceId, EvidenceSubmissionId, WorkspacePermission,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 const GRANT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -67,10 +67,10 @@ impl IssueAgentEvidenceUploadGrantHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                if context
-                    .evidence_projections()
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                if workspace
+                    .reads()
+                    .evidence()
                     .get(command.evidence_id)
                     .await?
                     .is_none()
@@ -118,12 +118,12 @@ impl IssueAgentEvidenceUploadGrantHandler {
                     Ok(grant) => grant,
                     Err(_) => return Ok(IssueOutcome::Internal),
                 };
-                let repository = context.agent_evidence_upload_grants();
+                let repository = workspace.aggregates().agent_evidence_upload_grants();
                 repository.save(&grant).await?;
                 let grant = repository
                     .get(grant.id(), grant.workspace_id())
                     .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
+                    .ok_or(crate::persistence::Error::InvariantViolation(
                         "saved machine upload grant must be readable",
                     ))?;
 
@@ -157,7 +157,7 @@ pub enum AgentEvidenceUploadGrantError {
     #[error("internal agent evidence upload grant error")]
     Internal,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 #[cfg(test)]
@@ -169,7 +169,7 @@ mod tests {
     use crate::{
         config::{PasetoUploadGrantConfig, PasetoUploadGrantKey},
         domain::{Sha256Digest, WorkspacePermissions},
-        repository::test_support::{self, TestWorkspace},
+        persistence::test_support::{self, TestWorkspace},
     };
 
     use super::*;

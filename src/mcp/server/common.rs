@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::super::context::McpRequestContext;
 use crate::{
     domain::{BatchError, DomainError, WorkspacePermission},
-    repository::{ConflictKind, Error as RepositoryError},
+    persistence::{ConflictKind, Error as RepositoryError},
     services::Error as ServiceError,
     validation::Validation,
 };

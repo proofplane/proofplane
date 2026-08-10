@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrantId, WorkspaceId},
-    repository::{Error, Postgres},
+    persistence::{Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]

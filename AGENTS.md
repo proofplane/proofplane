@@ -4,7 +4,7 @@
 
 Proofplane is a single Rust crate. Application code lives in `src/`, organized
 by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
-persistence in `repository/` and `store/`, types in `domain/`, and external
+persistence in `persistence/`, types in `domain/` and `read_models/`, and external
 adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
 and `seed`).
@@ -40,6 +40,13 @@ independent of generated adapter types. Prefer existing concrete Postgres
 gateways for internal persistence and traits for genuine external adapter
 boundaries.
 
+Name persistence values for their concrete role: use `unit_of_work` for
+`UnitOfWork`, `workspace` for `WorkspaceUnitOfWork`, `reads` for read gateway
+collections, and `repository` or an aggregate-specific name such as
+`policy_repository` for individual aggregate repositories. Do not use generic
+`context` names for persistence values; reserve `context` for genuine
+authentication, request, audit, and workflow context objects.
+
 Never call `.expect(...)` in long-running server or runtime paths where a panic
 could cause application downtime. This includes the API, MCP server, worker,
 dequeuer, and shared library code reachable by those processes. Propagate
@@ -58,11 +65,12 @@ not add aggregate-specific eligibility or relationship queries.
 
 Name aggregate roots with the bare ubiquitous-language noun, such as `Control`
 or `Evidence`; do not use an `Aggregate` suffix. Read-only shapes live under
-`src/projections/` and use names that describe their role, such as `ControlDetail`
+`src/read_models/` and use names that describe their role, such as `ControlDetail`
 or `PolicyCatalogEntry`. Aggregate repositories return aggregates only. Lists,
 details, summaries, reverse mappings, and other read shapes must be loaded by a
-dedicated projection repository, including when a command needs a projection
-from its current transaction.
+dedicated read gateway, including when a command needs a read model from its
+current transaction. Reserve “projection” for a process that constructs or
+maintains derived read-side state.
 
 ## Testing Guidelines
 

@@ -56,7 +56,7 @@ use crate::{
         UpdateControlPayload, WorkspacePermission,
     },
     mcp::server::common::McpArgumentError,
-    projections::{
+    read_models::{
         ControlDetail, EvidenceControlMapping, FrameworkDetail, FrameworkRequirementDetail,
     },
 };
@@ -1362,7 +1362,7 @@ fn invalid_framework_requirement_references() -> ErrorData {
     )
 }
 
-fn control_dependency_error(error: crate::repository::Error) -> ErrorData {
+fn control_dependency_error(error: crate::persistence::Error) -> ErrorData {
     tracing::error!(%error, "MCP control handler repository failure");
     ErrorData::internal_error(
         "dependency failure",

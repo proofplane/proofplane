@@ -4,9 +4,9 @@ use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
+    persistence::{self, Postgres},
     pubsub::{self, ensure_worker_subscription, GoogleCloudPublisher},
-    repository::Postgres,
-    store, VERSION,
+    VERSION,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -25,7 +25,7 @@ async fn main() {
 #[derive(Debug, Error)]
 enum Error {
     #[error("postgres connection error")]
-    StoreConnection(#[from] store::conn::Error),
+    DatabaseConnection(#[from] persistence::connection::Error),
 
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
@@ -56,14 +56,14 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = store::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
 
     debug!("running migrations");
-    store::migrate(&mut client).await?;
+    persistence::migrate(&mut client).await?;
     debug!("done running migrations");
     drop(client);
 
-    let pool = store::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
+    let pool = persistence::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
     let postgres = Postgres::new(pool);
     if env::var_os(pubsub::PUBSUB_EMULATOR_HOST).is_none() {
         // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set

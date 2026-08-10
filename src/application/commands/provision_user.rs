@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::{
     application::ExecutionMetadata,
-    domain::{User, UserId, UserTransition},
-    repository::Postgres,
+    domain::{User, UserId},
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,27 +32,32 @@ impl ProvisionUserHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<User, ProvisionUserError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.users();
-                let (user, changed) = match repository.get_by_auth0_sub(&command.auth0_sub).await? {
-                    Some(mut user) => {
-                        let transition = user.provision_profile(command.email, command.name);
-                        (user, transition == UserTransition::Applied)
+            .in_unit_of_work(async move |unit_of_work| {
+                let existing_user_id = unit_of_work
+                    .reads()
+                    .users()
+                    .resolve_id_by_auth0_sub(&command.auth0_sub)
+                    .await?;
+                let repository = unit_of_work.aggregates().users();
+                let user = match existing_user_id {
+                    Some(user_id) => {
+                        let mut user = repository.get(user_id).await?.ok_or(
+                            crate::persistence::Error::InvariantViolation(
+                                "resolved user must exist",
+                            ),
+                        )?;
+                        let _transition = user.provision_profile(command.email, command.name);
+                        user
                     }
-                    None => (
-                        User::provision(
-                            UserId::from(Uuid::new_v4()),
-                            command.auth0_sub,
-                            command.email,
-                            command.name,
-                            Utc::now(),
-                        ),
-                        true,
+                    None => User::provision(
+                        UserId::from(Uuid::new_v4()),
+                        command.auth0_sub,
+                        command.email,
+                        command.name,
+                        Utc::now(),
                     ),
                 };
-                if changed {
-                    repository.save(&user).await?;
-                }
+                repository.save(&user).await?;
                 Ok(user)
             })
             .await
@@ -63,5 +68,5 @@ impl ProvisionUserHandler {
 #[derive(Debug, thiserror::Error)]
 pub enum ProvisionUserError {
     #[error("user provisioning repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

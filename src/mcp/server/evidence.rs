@@ -26,7 +26,7 @@ use crate::{
         required_text, CreateEvidencePayload, EvidenceId, EvidenceStatus, WorkspacePermission,
     },
     observability::audit::{AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::EvidenceDetail,
+    read_models::EvidenceDetail,
     validate,
 };
 use uuid::Uuid;

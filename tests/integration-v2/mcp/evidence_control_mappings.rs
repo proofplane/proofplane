@@ -79,7 +79,7 @@ async fn single_mapping_round_trips_conflicts_conceals_writes_and_removes_once()
             (created, request_id)
         })
         .await;
-    assert_mapping_projection(
+    assert_mapping_read_model(
         &created,
         evidence_id,
         control,
@@ -328,13 +328,13 @@ async fn map_evidence_to_controls_creates_two_in_request_order_and_rejects_atomi
         .as_array()
         .expect("mappings is an array");
     assert_eq!(mappings.len(), 2);
-    assert_mapping_projection(
+    assert_mapping_read_model(
         &mappings[0],
         evidence_id,
         first_control,
         "Covers access review.",
     );
-    assert_mapping_projection(
+    assert_mapping_read_model(
         &mappings[1],
         evidence_id,
         second_control,
@@ -630,9 +630,9 @@ async fn unmap_evidence_from_controls_removes_two_in_request_order_and_rejects_a
         .as_array()
         .expect("mappings is an array");
     assert_eq!(mappings.len(), 3);
-    assert_mapping_projection(&mappings[0], evidence_id, first_control, "Alpha proof.");
-    assert_mapping_projection(&mappings[1], evidence_id, second_control, "Bravo proof.");
-    assert_mapping_projection(
+    assert_mapping_read_model(&mappings[0], evidence_id, first_control, "Alpha proof.");
+    assert_mapping_read_model(&mappings[1], evidence_id, second_control, "Bravo proof.");
+    assert_mapping_read_model(
         &mappings[2],
         evidence_id,
         remaining_control,
@@ -921,11 +921,11 @@ fn assert_single_mapping_listing(
         .as_array()
         .expect("mappings is an array");
     assert_eq!(mappings.len(), 1);
-    assert_mapping_projection(&mappings[0], evidence_id, control, rationale);
+    assert_mapping_read_model(&mappings[0], evidence_id, control, rationale);
 }
 
 #[track_caller]
-fn assert_mapping_projection(
+fn assert_mapping_read_model(
     mapping: &Value,
     evidence_id: Uuid,
     control: &TestControl,

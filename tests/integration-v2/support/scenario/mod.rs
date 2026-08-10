@@ -461,11 +461,11 @@ impl<'app> ScenarioBuilder<'app> {
                                 submission["document"]["filename"] == fixture.filename
                             })
                             .expect("settled fixture evidence submission is listed");
-                        let projection = TestEvidenceSubmission::from_mcp(settled);
-                        assert_eq!(projection.submitted_by_user_id, id);
-                        assert_eq!(projection.submitted_by_agent_connection_id, connection_id);
-                        assert_eq!(projection.upload_status, "uploaded");
-                        evidence.submissions.push(projection);
+                        let read_model = TestEvidenceSubmission::from_mcp(settled);
+                        assert_eq!(read_model.submitted_by_user_id, id);
+                        assert_eq!(read_model.submitted_by_agent_connection_id, connection_id);
+                        assert_eq!(read_model.upload_status, "uploaded");
+                        evidence.submissions.push(read_model);
                     }
                 }
 
@@ -687,11 +687,11 @@ impl<'app> ScenarioBuilder<'app> {
                             let settled = client
                                 .call_tool("get_policy", json!({ "policy_id": policy.id }))
                                 .await;
-                            let projection =
+                            let read_model =
                                 TestPolicyDocument::from_mcp(policy.id, &settled["document"]);
-                            assert_eq!(projection.filename, fixture.filename);
-                            assert_eq!(projection.upload_status, "uploaded");
-                            policy.document = Some(projection);
+                            assert_eq!(read_model.filename, fixture.filename);
+                            assert_eq!(read_model.upload_status, "uploaded");
+                            policy.document = Some(read_model);
                         }
                     }
                 }

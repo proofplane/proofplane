@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrantId, AuditorSessionId, WorkspaceId},
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 /// A read-only locator for the session cookie. It deliberately returns no digest.
@@ -47,13 +47,13 @@ impl ResolveAuditorSessionByDigestHandler {
             .repository
             .get()
             .await
-            .map_err(crate::repository::Error::from)?;
+            .map_err(crate::persistence::Error::from)?;
         let row = client
             .query_opt(SQL, &[&digest])
             .await
-            .map_err(crate::repository::Error::from)?;
+            .map_err(crate::persistence::Error::from)?;
         row.map(
-            |row| -> Result<ResolvedAuditorSession, crate::repository::Error> {
+            |row| -> Result<ResolvedAuditorSession, crate::persistence::Error> {
                 Ok(ResolvedAuditorSession {
                     id: AuditorSessionId::from(row.try_get::<_, Uuid>("id")?),
                     grant_id: AuditorAccessGrantId::from(row.try_get::<_, Uuid>("grant_id")?),
@@ -66,7 +66,7 @@ impl ResolveAuditorSessionByDigestHandler {
                         row.try_get("period_end")?,
                     )
                     .map_err(|_| {
-                        crate::repository::Error::InvariantViolation(
+                        crate::persistence::Error::InvariantViolation(
                             "persisted auditor session period is invalid",
                         )
                     })?,
@@ -89,7 +89,7 @@ WHERE s.session_digest = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveAuditorSessionByDigestError {
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 #[cfg(test)]
 mod tests {

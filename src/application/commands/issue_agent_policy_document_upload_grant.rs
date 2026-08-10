@@ -17,7 +17,7 @@ use crate::{
         AgentPolicyDocumentUploadDeclaration, AgentPolicyDocumentUploadGrant,
         AgentPolicyDocumentUploadGrantId, PolicyId, WorkspacePermission,
     },
-    repository::{PolicyDocumentUploadEligibility, Postgres},
+    persistence::{PolicyDocumentUploadEligibility, Postgres},
 };
 
 const GRANT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -103,10 +103,11 @@ impl IssueAgentPolicyDocumentUploadGrantHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                match context
-                    .lock_policy_document_upload_eligibility(grant.policy_id())
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                match workspace
+                    .reads()
+                    .policies()
+                    .lock_document_upload_eligibility(grant.policy_id())
                     .await?
                 {
                     None => return Ok(IssueOutcome::Unavailable),
@@ -115,12 +116,12 @@ impl IssueAgentPolicyDocumentUploadGrantHandler {
                     }
                     Some(PolicyDocumentUploadEligibility::Eligible) => {}
                 }
-                let repository = context.agent_policy_document_upload_grants();
+                let repository = workspace.aggregates().agent_policy_document_upload_grants();
                 repository.save(&grant).await?;
                 let grant = repository
                     .get(grant.id(), grant.workspace_id())
                     .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
+                    .ok_or(crate::persistence::Error::InvariantViolation(
                         "saved policy machine upload grant must be readable",
                     ))?;
                 Ok(IssueOutcome::Issued(Box::new(grant)))
@@ -159,5 +160,5 @@ pub enum AgentPolicyDocumentUploadGrantError {
     #[error("internal agent policy document upload grant error")]
     Internal,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

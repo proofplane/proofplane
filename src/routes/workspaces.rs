@@ -24,7 +24,7 @@ use crate::{
     },
     domain::{required_text, UserId, WorkspaceId},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::{WorkspaceDetails, WorkspaceWithRole},
+    read_models::{WorkspaceDetails, WorkspaceWithRole},
     routes::{
         authentication::authenticate_user,
         error::{domain_errors, ApiError},

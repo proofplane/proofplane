@@ -19,7 +19,7 @@ use crate::{
     },
     object_storage::{FilesystemObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
+    persistence::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
 };
 
 use super::{
@@ -134,7 +134,9 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .policy_projections(workspace_id)
+            .workspace_reads(workspace_id)
+            .await?
+            .policies()
             .get_agent_upload_document(policy_id, document_id)
             .await?)
     }
@@ -209,7 +211,9 @@ impl PolicyDocumentService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .policy_projections(connection.workspace_id)
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .policies()
             .get_current_document(policy_id)
             .await?)
     }
@@ -269,7 +273,7 @@ fn command_error(error: DocumentCommandError) -> super::Error {
     match error {
         DocumentCommandError::Repository(error) => super::Error::Repository(error),
         DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
-            super::Error::Repository(crate::repository::Error::InvariantViolation(
+            super::Error::Repository(crate::persistence::Error::InvariantViolation(
                 "validated document command was rejected",
             ))
         }

@@ -1,7 +1,7 @@
 use crate::{
     application::ExecutionMetadata,
     domain::{AuditorAccessGrantId, AuditorAuthTransactionId, Sha256Digest},
-    repository::Postgres,
+    persistence::Postgres,
 };
 use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
@@ -37,15 +37,26 @@ impl ClaimAuditorAuthTransactionHandler {
         }
         let digest = Sha256Digest::digest(command.state.expose_secret().as_bytes());
         self.repository
-            .in_unit_of_work(async move |context| {
-                let Some(mut transaction) = context.auditor_auth_transactions().get(digest).await?
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(transaction_id) = unit_of_work
+                    .reads()
+                    .auditor_auth_transactions()
+                    .resolve_id_by_state_digest(digest)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                let Some(mut transaction) = unit_of_work
+                    .auditor_auth_transactions()
+                    .get(transaction_id)
+                    .await?
                 else {
                     return Ok(None);
                 };
                 if transaction.claim(Utc::now()).is_err() {
                     return Ok(None);
                 }
-                context
+                unit_of_work
                     .auditor_auth_transactions()
                     .save(&transaction)
                     .await?;
@@ -56,7 +67,7 @@ impl ClaimAuditorAuthTransactionHandler {
                     pkce_verifier: transaction.pkce_verifier().clone(),
                     expires_at: transaction.expires_at(),
                     consumed_at: transaction.consumed_at().ok_or(
-                        crate::repository::Error::InvariantViolation(
+                        crate::persistence::Error::InvariantViolation(
                             "claimed transaction must record consumption",
                         ),
                     )?,
@@ -71,5 +82,5 @@ pub enum ClaimAuditorAuthTransactionError {
     #[error("auditor authentication transaction is unavailable")]
     Unavailable,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

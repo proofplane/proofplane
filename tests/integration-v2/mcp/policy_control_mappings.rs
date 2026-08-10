@@ -51,7 +51,7 @@ async fn singular_policy_control_mapping_covers_attach_duplicate_detach_and_miss
     let empty = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&empty, policy, &[]);
+    assert_policy_read_model(&empty, policy, &[]);
 
     let ((attached, attach_request_id), attach_logs) = app
         .capture_audit_logs(async |request_id| {
@@ -83,10 +83,10 @@ async fn singular_policy_control_mapping_covers_attach_duplicate_detach_and_miss
         json!({ "policy_id": policy.id, "control_id": control.id }),
     );
 
-    let attached_projection = client
+    let attached_read_model = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&attached_projection, policy, &[control]);
+    assert_policy_read_model(&attached_read_model, policy, &[control]);
 
     let (duplicate, duplicate_logs) = app
         .capture_audit_logs(async |request_id| {
@@ -114,7 +114,7 @@ async fn singular_policy_control_mapping_covers_attach_duplicate_detach_and_miss
         client
             .call_tool("get_policy", json!({ "policy_id": policy.id }))
             .await,
-        attached_projection
+        attached_read_model
     );
 
     let ((detached, detach_request_id), detach_logs) = app
@@ -147,10 +147,10 @@ async fn singular_policy_control_mapping_covers_attach_duplicate_detach_and_miss
         json!({ "policy_id": policy.id, "control_id": control.id }),
     );
 
-    let detached_projection = client
+    let detached_read_model = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&detached_projection, policy, &[]);
+    assert_policy_read_model(&detached_read_model, policy, &[]);
 
     let (missing, missing_logs) = app
         .capture_audit_logs(async |request_id| {
@@ -169,7 +169,7 @@ async fn singular_policy_control_mapping_covers_attach_duplicate_detach_and_miss
         client
             .call_tool("get_policy", json!({ "policy_id": policy.id }))
             .await,
-        detached_projection
+        detached_read_model
     );
 }
 
@@ -211,7 +211,7 @@ async fn attach_policy_to_controls_attaches_two_in_request_order_and_audits_once
     let before = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&before, policy, &[]);
+    assert_policy_read_model(&before, policy, &[]);
 
     let ((attached, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -258,7 +258,7 @@ async fn attach_policy_to_controls_attaches_two_in_request_order_and_audits_once
     let after = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&after, policy, &[first_control, second_control]);
+    assert_policy_read_model(&after, policy, &[first_control, second_control]);
 }
 
 #[tokio::test]
@@ -292,7 +292,7 @@ async fn attach_policy_to_controls_rejects_valid_plus_unknown_atomically() {
     let before = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&before, policy, &[]);
+    assert_policy_read_model(&before, policy, &[]);
     let unknown_control_id = Uuid::new_v4();
 
     let (rejected, logs) = app
@@ -366,8 +366,8 @@ async fn attach_control_to_policies_attaches_two_in_request_order_and_audits_onc
     let second_before = client
         .call_tool("get_policy", json!({ "policy_id": second_policy.id }))
         .await;
-    assert_policy_projection(&first_before, first_policy, &[]);
-    assert_policy_projection(&second_before, second_policy, &[]);
+    assert_policy_read_model(&first_before, first_policy, &[]);
+    assert_policy_read_model(&second_before, second_policy, &[]);
 
     let ((attached, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -417,8 +417,8 @@ async fn attach_control_to_policies_attaches_two_in_request_order_and_audits_onc
     let second_after = client
         .call_tool("get_policy", json!({ "policy_id": second_policy.id }))
         .await;
-    assert_policy_projection(&first_after, first_policy, &[control]);
-    assert_policy_projection(&second_after, second_policy, &[control]);
+    assert_policy_read_model(&first_after, first_policy, &[control]);
+    assert_policy_read_model(&second_after, second_policy, &[control]);
 }
 
 #[tokio::test]
@@ -462,8 +462,8 @@ async fn attach_control_to_policies_rejects_valid_plus_already_attached_atomical
     let valid_before = client
         .call_tool("get_policy", json!({ "policy_id": valid_policy.id }))
         .await;
-    assert_policy_projection(&attached_before, attached_policy, &[control]);
-    assert_policy_projection(&valid_before, valid_policy, &[]);
+    assert_policy_read_model(&attached_before, attached_policy, &[control]);
+    assert_policy_read_model(&valid_before, valid_policy, &[]);
 
     let (rejected, logs) = app
         .capture_audit_logs(async |request_id| {
@@ -540,7 +540,7 @@ async fn detach_policy_from_controls_removes_two_in_request_order_and_audits_onc
     let before = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&before, policy, &[first_control, second_control]);
+    assert_policy_read_model(&before, policy, &[first_control, second_control]);
 
     let ((detached, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -587,7 +587,7 @@ async fn detach_policy_from_controls_removes_two_in_request_order_and_audits_onc
     let after = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&after, policy, &[]);
+    assert_policy_read_model(&after, policy, &[]);
 }
 
 #[tokio::test]
@@ -628,7 +628,7 @@ async fn detach_policy_from_controls_rejects_mapped_plus_not_mapped_atomically()
     let before = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&before, policy, &[mapped_control]);
+    assert_policy_read_model(&before, policy, &[mapped_control]);
 
     let (rejected, logs) = app
         .capture_audit_logs(async |request_id| {
@@ -703,8 +703,8 @@ async fn detach_control_from_policies_removes_two_in_request_order_and_audits_on
     let second_before = client
         .call_tool("get_policy", json!({ "policy_id": second_policy.id }))
         .await;
-    assert_policy_projection(&first_before, first_policy, &[control]);
-    assert_policy_projection(&second_before, second_policy, &[control]);
+    assert_policy_read_model(&first_before, first_policy, &[control]);
+    assert_policy_read_model(&second_before, second_policy, &[control]);
 
     let ((detached, request_id), logs) = app
         .capture_audit_logs(async |request_id| {
@@ -754,8 +754,8 @@ async fn detach_control_from_policies_removes_two_in_request_order_and_audits_on
     let second_after = client
         .call_tool("get_policy", json!({ "policy_id": second_policy.id }))
         .await;
-    assert_policy_projection(&first_after, first_policy, &[]);
-    assert_policy_projection(&second_after, second_policy, &[]);
+    assert_policy_read_model(&first_after, first_policy, &[]);
+    assert_policy_read_model(&second_after, second_policy, &[]);
 }
 
 #[tokio::test]
@@ -794,7 +794,7 @@ async fn detach_control_from_policies_rejects_mapped_plus_unknown_atomically() {
     let before = client
         .call_tool("get_policy", json!({ "policy_id": policy.id }))
         .await;
-    assert_policy_projection(&before, policy, &[control]);
+    assert_policy_read_model(&before, policy, &[control]);
     let unknown_policy_id = Uuid::new_v4();
 
     let (rejected, logs) = app
@@ -829,7 +829,7 @@ async fn detach_control_from_policies_rejects_mapped_plus_unknown_atomically() {
 }
 
 #[track_caller]
-fn assert_policy_projection(policy: &Value, expected: &TestPolicy, controls: &[&TestControl]) {
+fn assert_policy_read_model(policy: &Value, expected: &TestPolicy, controls: &[&TestControl]) {
     assert_eq!(
         object_keys(policy),
         [

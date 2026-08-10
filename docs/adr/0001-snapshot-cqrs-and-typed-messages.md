@@ -15,11 +15,13 @@ invariants, read models, and asynchronous contracts independent.
 - Snapshots, not event streams, remain the write-side source of truth.
 - Commands and queries are invoked through concrete typed handlers; there is
   no runtime handler registry or service locator.
+- Purpose-built query DTOs are read models loaded by read gateways. The term
+  projection is reserved for a process that maintains derived read-side state.
 - Domain events are explicit transition results and are not replayed to
   reconstruct aggregates.
 - A unit of work owns transaction lifetime only. Workspace scoping is applied
   separately when obtaining aggregate repositories, while ordinary read-side
-  handlers call workspace-scoped projection repositories directly.
+  handlers call workspace-scoped read gateways directly.
 - Authentication and authorization remain application concerns; repository
   APIs receive workspace identity only where it is required for tenant-safe
   SQL filtering.

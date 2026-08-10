@@ -11,7 +11,7 @@ use crate::{
         AgentConnectionId, PolicyDocumentUploadGrantAuthority, PolicyDocumentUploadGrantId,
         PolicyId, UserId, WorkspaceId,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -45,52 +45,51 @@ impl RedeemPolicyDocumentUploadGrantHandler {
         command: RedeemPolicyDocumentUploadGrant,
         _metadata: ExecutionMetadata,
     ) -> Result<RedeemedPolicyDocumentUploadGrant, PolicyDocumentUploadGrantHandlerError> {
-        let outcome = self
-            .repository
-            .in_unit_of_work(async move |context| {
-                if !context
-                    .policy_is_active(
-                        command.authority.workspace_id(),
-                        command.authority.policy_id(),
-                    )
-                    .await?
-                {
-                    return Ok(RedeemOutcome::Unavailable);
-                }
-                let repository = context.policy_document_upload_grants();
-                let Some(mut grant) = repository
-                    .get(command.authority.id(), command.authority.workspace_id())
-                    .await?
-                else {
-                    return Ok(RedeemOutcome::Unavailable);
-                };
-                if grant.redeem(command.authority, Utc::now()).is_err() {
-                    return Ok(RedeemOutcome::Unavailable);
-                }
-                repository.save(&grant).await?;
-                let grant = repository
-                    .get(grant.id(), grant.workspace_id())
-                    .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
-                        "redeemed policy human upload grant must be readable",
-                    ))?;
-                let redeemed_at =
-                    grant
-                        .redeemed_at()
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "redeemed policy human upload grant has a redemption time",
+        let outcome =
+            self.repository
+                .in_unit_of_work(async move |unit_of_work| {
+                    let workspace = unit_of_work.workspace(command.authority.workspace_id());
+                    if !workspace
+                        .reads()
+                        .policies()
+                        .is_active(command.authority.policy_id())
+                        .await?
+                    {
+                        return Ok(RedeemOutcome::Unavailable);
+                    }
+                    let repository = unit_of_work.aggregates().policy_document_upload_grants();
+                    let Some(mut grant) = repository
+                        .get(command.authority.id(), command.authority.workspace_id())
+                        .await?
+                    else {
+                        return Ok(RedeemOutcome::Unavailable);
+                    };
+                    if grant.redeem(command.authority, Utc::now()).is_err() {
+                        return Ok(RedeemOutcome::Unavailable);
+                    }
+                    repository.save(&grant).await?;
+                    let grant = repository
+                        .get(grant.id(), grant.workspace_id())
+                        .await?
+                        .ok_or(crate::persistence::Error::InvariantViolation(
+                            "redeemed policy human upload grant must be readable",
                         ))?;
-                Ok(RedeemOutcome::Redeemed(RedeemedPolicyDocumentUploadGrant {
-                    id: grant.id(),
-                    workspace_id: grant.workspace_id(),
-                    policy_id: grant.policy_id(),
-                    issued_by_user_id: grant.issued_by_user_id(),
-                    issued_via_agent_connection_id: grant.issued_via_agent_connection_id(),
-                    expires_at: grant.expires_at(),
-                    redeemed_at,
-                }))
-            })
-            .await?;
+                    let redeemed_at = grant.redeemed_at().ok_or(
+                        crate::persistence::Error::InvariantViolation(
+                            "redeemed policy human upload grant has a redemption time",
+                        ),
+                    )?;
+                    Ok(RedeemOutcome::Redeemed(RedeemedPolicyDocumentUploadGrant {
+                        id: grant.id(),
+                        workspace_id: grant.workspace_id(),
+                        policy_id: grant.policy_id(),
+                        issued_by_user_id: grant.issued_by_user_id(),
+                        issued_via_agent_connection_id: grant.issued_via_agent_connection_id(),
+                        expires_at: grant.expires_at(),
+                        redeemed_at,
+                    }))
+                })
+                .await?;
 
         match outcome {
             RedeemOutcome::Redeemed(redeemed) => Ok(redeemed),

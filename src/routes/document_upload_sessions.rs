@@ -43,8 +43,8 @@ use crate::{
         EvidenceId, EvidenceSubmissionId,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::EvidenceSubmissionDetail,
-    repository::ArchiveDocumentResult,
+    persistence::ArchiveDocumentResult,
+    read_models::EvidenceSubmissionDetail,
     routes::{
         error::{domain_errors, ApiError},
         request_context::RequestId,

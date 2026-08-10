@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     application::ExecutionMetadata,
     domain::{AuditorAccessGrantId, AuditorSession, AuditorSessionId, Sha256Digest, WorkspaceId},
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 const SESSION_TTL_DAYS: i64 = 7;
@@ -48,18 +48,20 @@ impl CreateAuthenticatedAuditorSessionHandler {
         let digest = Sha256Digest::digest(raw_session.as_bytes());
         let now = Utc::now();
         self.repository
-            .in_unit_of_work(async move |context| {
-                let grants = context.auditor_access_grants();
-                let Some(grant) = grants.get(command.grant_id, command.workspace_id).await? else {
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.workspace(command.workspace_id);
+                let Some(grant) = workspace
+                    .reads()
+                    .auditor_access_grants()
+                    .get_active(command.grant_id, now)
+                    .await?
+                else {
                     return Ok(None);
                 };
-                if grant.ensure_active_at(now).is_err() {
-                    return Ok(None);
-                }
                 let session = AuditorSession::create(
                     AuditorSessionId::from(Uuid::new_v4()),
                     grant.id,
-                    grant.workspace_id,
+                    command.workspace_id,
                     grant.auditor_email.clone(),
                     digest,
                     command.auth0_subject,
@@ -68,11 +70,15 @@ impl CreateAuthenticatedAuditorSessionHandler {
                     now,
                 )
                 .map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "auditor session creation is invalid",
                     )
                 })?;
-                context.auditor_sessions().save(&session).await?;
+                unit_of_work
+                    .aggregates()
+                    .auditor_sessions()
+                    .save(&session)
+                    .await?;
                 Ok(Some(session))
             })
             .await?
@@ -97,5 +103,5 @@ pub enum CreateAuthenticatedAuditorSessionError {
     #[error("random generation failed")]
     Random,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

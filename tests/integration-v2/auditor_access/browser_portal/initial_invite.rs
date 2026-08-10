@@ -41,7 +41,7 @@ async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requir
     let invite = app.app_server().get(&local_path(invite_url.as_str())).await;
     invite.assert_status_ok();
     assert_eq!(
-        body_projection(&invite.text()),
+        body_read_model(&invite.text()),
         invite_body(workspace_id, &invite_token, auditor_email)
     );
 
@@ -80,7 +80,7 @@ async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requir
     ]
     .join("");
     assert_eq!(
-        body_projection(&portal.text()),
+        body_read_model(&portal.text()),
         portal_body(workspace_name, auditor_email, 2, 0, &rows)
     );
 }

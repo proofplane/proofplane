@@ -10,8 +10,8 @@ use crate::{
         Control, ControlDefinition, ControlId, DomainError, FrameworkRequirementId,
         WorkspacePermission,
     },
-    projections::ControlDetail,
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{ConflictKind, Error as RepositoryError, Postgres},
+    read_models::ControlDetail,
 };
 
 #[derive(Debug, Clone)]
@@ -66,22 +66,22 @@ impl CreateControlHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
                 if !workspace
-                    .framework_requirements_exist(control.framework_requirement_ids())
+                    .reads()
+                    .frameworks()
+                    .requirements_exist(control.framework_requirement_ids())
                     .await?
                 {
                     return Ok(CreateOutcome::InvalidFrameworkRequirementReferences);
                 }
-                workspace.controls().save(&control).await?;
-                let projection = workspace
-                    .control_projections()
-                    .get(control_id)
-                    .await?
-                    .ok_or(RepositoryError::InvariantViolation(
+                workspace.aggregates().controls().save(&control).await?;
+                let read_model = workspace.reads().controls().get(control_id).await?.ok_or(
+                    RepositoryError::InvariantViolation(
                         "created control must be readable in its transaction",
-                    ))?;
-                Ok(CreateOutcome::Created(projection))
+                    ),
+                )?;
+                Ok(CreateOutcome::Created(read_model))
             })
             .await
             .map_err(CreateControlError::from)?;
@@ -135,7 +135,7 @@ mod tests {
         application::ExecutionMetadata,
         authentication::AgentConnectionContext,
         domain::{AgentConnectionId, UserId, WorkspaceId, WorkspacePermissions},
-        repository::Postgres,
+        persistence::Postgres,
     };
 
     use super::{CreateControl, CreateControlError, CreateControlHandler};

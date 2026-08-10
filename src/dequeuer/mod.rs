@@ -5,8 +5,8 @@ use serde_json::json;
 use thiserror::Error;
 
 use crate::{
+    persistence::{OutboxMessage, Postgres},
     pubsub::{OutboundMessage, Publisher},
-    repository::{OutboxMessage, Postgres},
 };
 use tracing::warn;
 
@@ -38,7 +38,7 @@ impl Default for OutboxDequeuerConfig {
 #[derive(Debug, Error)]
 pub enum OutboxDequeuerError {
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 pub struct OutboxDequeuer<'a, P> {
@@ -207,8 +207,8 @@ mod tests {
 
     use crate::{
         messaging::IntegrationMessageKind,
+        persistence::OutboxMessage,
         pubsub::{fake::FakePublisher, Publisher, TopicName, MESSAGE_BUS_TOPIC},
-        repository::OutboxMessage,
     };
 
     use super::{

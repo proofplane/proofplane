@@ -7,7 +7,7 @@ use crate::{
         AgentConnectionUse, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
         WorkspacePermissions,
     },
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{ConflictKind, Error as RepositoryError, Postgres},
 };
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -178,12 +178,17 @@ impl RequestAgentConnectionHandler {
         )
         .map_err(|_| AgentConnectionCommandError::Invalid)?;
         self.repository
-            .in_unit_of_work(async move |context| {
-                let user = context.users().get(connection.user_id).await?.ok_or(
-                    RepositoryError::InvariantViolation("agent connection requester must exist"),
-                )?;
-                if user.auth0_sub != connection.auth0_subject
-                    || context
+            .in_unit_of_work(async move |unit_of_work| {
+                let auth0_sub = unit_of_work
+                    .reads()
+                    .users()
+                    .auth0_sub(connection.user_id)
+                    .await?
+                    .ok_or(RepositoryError::InvariantViolation(
+                        "agent connection requester must exist",
+                    ))?;
+                if auth0_sub != connection.auth0_subject
+                    || unit_of_work
                         .get_membership_role(connection.workspace_id, connection.user_id)
                         .await?
                         .is_none()
@@ -192,7 +197,11 @@ impl RequestAgentConnectionHandler {
                         "agent connection requester is ineligible",
                     ));
                 }
-                context.agent_connections().save(&connection).await?;
+                unit_of_work
+                    .aggregates()
+                    .agent_connections()
+                    .save(&connection)
+                    .await?;
                 Ok(connection)
             })
             .await
@@ -250,8 +259,8 @@ impl DenyAgentConnectionHandler {
             return Ok(false);
         };
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(id).await? else {
                     return Ok(false);
                 };
@@ -282,17 +291,18 @@ impl ConsumeAgentConnectionContinuationHandler {
             return Ok(ConsumeAgentConnectionOutcome::Invalid);
         };
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(id).await? else {
                     return Ok(ConsumeAgentConnectionOutcome::Invalid);
                 };
-                let user_is_eligible = context
+                let user_is_eligible = unit_of_work
+                    .reads()
                     .users()
-                    .get(connection.user_id)
+                    .auth0_sub(connection.user_id)
                     .await?
-                    .is_some_and(|user| user.auth0_sub == connection.auth0_subject)
-                    && context
+                    .is_some_and(|auth0_sub| auth0_sub == connection.auth0_subject)
+                    && unit_of_work
                         .get_membership_role(connection.workspace_id, connection.user_id)
                         .await?
                         .is_some();
@@ -318,12 +328,12 @@ impl ActivateAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<ActivateAgentConnectionOutcome, AgentConnectionCommandError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(ActivateAgentConnectionOutcome::Rejected);
                 };
-                if context
+                if unit_of_work
                     .get_membership_role(connection.workspace_id, connection.user_id)
                     .await?
                     .is_none()
@@ -352,8 +362,8 @@ impl AuthorizeAgentConnectionHandler {
             .map_err(|_| AgentConnectionCommandError::Invalid)?;
         let result = self
             .repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(None);
                 };
@@ -365,12 +375,13 @@ impl AuthorizeAgentConnectionHandler {
                 {
                     return Ok(None);
                 }
-                let user_is_eligible = context
+                let user_is_eligible = unit_of_work
+                    .reads()
                     .users()
-                    .get(connection.user_id)
+                    .auth0_sub(connection.user_id)
                     .await?
-                    .is_some_and(|user| user.auth0_sub == connection.auth0_subject)
-                    && context
+                    .is_some_and(|auth0_sub| auth0_sub == connection.auth0_subject)
+                    && unit_of_work
                         .get_membership_role(connection.workspace_id, connection.user_id)
                         .await?
                         .is_some();
@@ -408,8 +419,8 @@ impl UseAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<bool, AgentConnectionCommandError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(false);
                 };
@@ -430,8 +441,8 @@ impl RevokeAgentConnectionHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<bool, AgentConnectionCommandError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.agent_connections();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().agent_connections();
                 let Some(mut connection) = repository.get(command.connection_id).await? else {
                     return Ok(false);
                 };

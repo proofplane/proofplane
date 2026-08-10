@@ -15,7 +15,7 @@ use crate::{
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
     object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    repository::{Postgres, TypedDocumentUploadWork},
+    persistence::{Postgres, TypedDocumentUploadWork},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
     worker::{RetryableWorkerError, WorkerMessage},
 };
@@ -79,9 +79,10 @@ impl DocumentScanHandler {
             }
         };
 
-        let Some(work) = self
-            .repository
-            .load_pending_typed_document_upload_work(payload.identity, payload.object_key.as_str())
+        let reads = self.repository.reads().await.map_err(retryable)?;
+        let Some(work) = reads
+            .documents()
+            .load_pending_upload_work(payload.identity, payload.object_key.as_str())
             .await
             .map_err(retryable)?
         else {

@@ -44,7 +44,7 @@ use crate::{
     },
     config::AppConfig,
     object_storage::FilesystemObjectStore,
-    repository::Postgres,
+    persistence::Postgres,
     routes::{
         agent_connections::{self, AgentConnectionsState},
         agent_evidence_uploads::{self, AgentEvidenceUploadState},

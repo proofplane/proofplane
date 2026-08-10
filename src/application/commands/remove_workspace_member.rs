@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     application::ExecutionMetadata,
     domain::{UserId, WorkspaceId, WorkspaceMemberError},
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +29,17 @@ impl RemoveWorkspaceMemberHandler {
     ) -> Result<WorkspaceId, RemoveWorkspaceMemberError> {
         let outcome = self
             .repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.workspaces();
-                let Some(mut aggregate) = repository.get_for_member(command.actor_user_id).await?
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(workspace_id) = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .resolve_id_for_member(command.actor_user_id)
+                    .await?
                 else {
+                    return Ok(RemoveOutcome::Unavailable);
+                };
+                let repository = unit_of_work.aggregates().workspaces();
+                let Some(mut aggregate) = repository.get(workspace_id).await? else {
                     return Ok(RemoveOutcome::Unavailable);
                 };
                 let workspace_id = aggregate.id();
@@ -73,5 +80,5 @@ pub enum RemoveWorkspaceMemberError {
     #[error("the workspace must retain at least one owner")]
     LastOwner,
     #[error("workspace repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

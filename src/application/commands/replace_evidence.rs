@@ -6,8 +6,8 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{EvidenceDefinition, EvidenceError, EvidenceId, EvidenceStatus, WorkspacePermission},
-    projections::EvidenceDetail,
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::EvidenceDetail,
 };
 
 #[derive(Debug, Clone)]
@@ -54,9 +54,8 @@ impl ReplaceEvidenceHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let repository = context.evidence();
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let repository = workspace.aggregates().evidence();
                 let Some(mut evidence) = repository.get(evidence_id).await? else {
                     return Ok(None);
                 };
@@ -72,7 +71,7 @@ impl ReplaceEvidenceHandler {
                         }
                     })?;
                 repository.save(&evidence).await?;
-                context.evidence_projections().get(evidence_id).await
+                workspace.reads().evidence().get(evidence_id).await
             })
             .await?;
         outcome

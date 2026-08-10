@@ -229,13 +229,13 @@ async fn owner_archives_filter_documents_and_mcp_archive_filters_the_policy() {
 
     let controls = body["controls"].as_array().expect("controls is an array");
     assert_eq!(controls.len(), 1);
-    assert_control_projection(&controls[0], control);
+    assert_control_read_model(&controls[0], control);
     assert_eq!(controls[0]["framework_requirements"], json!([]));
     let mappings = controls[0]["evidence"]
         .as_array()
         .expect("evidence mappings is an array");
     assert_eq!(mappings.len(), 1);
-    assert_evidence_projection(
+    assert_evidence_read_model(
         &mappings[0],
         evidence.id,
         "Archive-filtered evidence",
@@ -245,7 +245,7 @@ async fn owner_archives_filter_documents_and_mcp_archive_filters_the_policy() {
         .as_array()
         .expect("submissions is an array");
     assert_eq!(submissions.len(), 1);
-    assert_submission_projection(&submissions[0], active_evidence_submission, true);
+    assert_submission_read_model(&submissions[0], active_evidence_submission, true);
     let control_policies = controls[0]["policies"]
         .as_array()
         .expect("control policies is an array");
@@ -257,8 +257,8 @@ async fn owner_archives_filter_documents_and_mcp_archive_filters_the_policy() {
             .collect::<Vec<_>>(),
         ["Active Document Policy", "Archived Document Policy"]
     );
-    assert_policy_summary_projection(&control_policies[0], active_policy, Some(true));
-    assert_policy_summary_projection(&control_policies[1], document_archived_policy, None);
+    assert_policy_summary_read_model(&control_policies[0], active_policy, Some(true));
+    assert_policy_summary_read_model(&control_policies[1], document_archived_policy, None);
 
     let policies = body["policies"].as_array().expect("policies is an array");
     assert_eq!(policies.len(), 2);
@@ -269,11 +269,11 @@ async fn owner_archives_filter_documents_and_mcp_archive_filters_the_policy() {
             .collect::<Vec<_>>(),
         ["Active Document Policy", "Archived Document Policy"]
     );
-    assert_policy_projection(
+    assert_policy_read_model(
         &policies[0],
         active_policy,
         &[control],
         Some((active_policy_document, true)),
     );
-    assert_policy_projection(&policies[1], document_archived_policy, &[control], None);
+    assert_policy_read_model(&policies[1], document_archived_policy, &[control], None);
 }

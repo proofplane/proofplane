@@ -2,7 +2,7 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{ControlId, EvidenceId, WorkspacePermission},
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 use std::sync::Arc;
 #[derive(Debug, Clone)]
@@ -40,13 +40,16 @@ impl UnmapEvidenceFromControlsHandler {
         let result = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let repository = context.evidence();
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let repository = workspace.aggregates().evidence();
                 let Some(mut evidence) = repository.get(evidence_id).await? else {
                     return Ok(UnmapOutcome::Unavailable);
                 };
-                let existing_controls = context.existing_control_ids(&requested).await?;
+                let existing_controls = workspace
+                    .reads()
+                    .controls()
+                    .existing_ids(&requested)
+                    .await?;
                 let unknown = requested
                     .iter()
                     .copied()

@@ -8,7 +8,7 @@ use crate::{
         canonical_permissions, AgentConnectionId, OAuthAuthorizationFlow,
         OAuthAuthorizationRequestId, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
     },
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 
 #[derive(Debug, Clone)]
@@ -132,8 +132,8 @@ impl RequestOAuthAuthorizationHandler {
         )
         .map_err(|_| OAuthAuthorizationCommandError::Invalid)?;
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.oauth_authorization_flows();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().oauth_authorization_flows();
                 if let Some(existing) = repository.get(flow.id()).await? {
                     if existing == flow {
                         return Ok(existing);
@@ -157,9 +157,17 @@ impl AttachOAuthAuthorizationSubjectHandler {
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         let digest = Sha256Digest::digest(command.csrf_token.as_bytes());
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.oauth_authorization_flows();
-                let Some(mut flow) = repository.get_by_csrf_digest(digest).await? else {
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(flow_id) = unit_of_work
+                    .reads()
+                    .oauth_authorization_flows()
+                    .resolve_id_by_csrf_digest(digest)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                let repository = unit_of_work.aggregates().oauth_authorization_flows();
+                let Some(mut flow) = repository.get(flow_id).await? else {
                     return Ok(None);
                 };
                 if flow
@@ -182,8 +190,8 @@ impl CancelOAuthAuthorizationHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.oauth_authorization_flows();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().oauth_authorization_flows();
                 let Some(mut flow) = repository.get(command.request_id).await? else {
                     return Ok(None);
                 };
@@ -205,8 +213,8 @@ impl ApproveOAuthAuthorizationHandler {
     ) -> Result<OAuthAuthorizationFlow, OAuthAuthorizationCommandError> {
         let code_digest = Sha256Digest::digest(command.code.as_bytes());
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.oauth_authorization_flows();
+            .in_unit_of_work(async move |unit_of_work| {
+                let repository = unit_of_work.aggregates().oauth_authorization_flows();
                 let Some(mut flow) = repository.get(command.request_id).await? else {
                     return Ok(None);
                 };
@@ -237,9 +245,17 @@ impl ConsumeOAuthAuthorizationCodeHandler {
     ) -> Result<OAuthAuthorizationCodeGrant, OAuthAuthorizationCommandError> {
         let digest = Sha256Digest::digest(command.code.as_bytes());
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.oauth_authorization_flows();
-                let Some(mut flow) = repository.get_by_code_digest(digest).await? else {
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(flow_id) = unit_of_work
+                    .reads()
+                    .oauth_authorization_flows()
+                    .resolve_id_by_code_digest(digest)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                let repository = unit_of_work.aggregates().oauth_authorization_flows();
+                let Some(mut flow) = repository.get(flow_id).await? else {
                     return Ok(None);
                 };
                 if flow

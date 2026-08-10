@@ -38,7 +38,7 @@ That means:
 The fixed reference catalog is suite topology, not test arrangement. After migrations,
 the harness inserts exactly the v1 SOC 2, CC6.1, and CC7.1 definitions before the servers
 start. Test bodies never invoke the seeder or see its raw IDs; every completed `Scenario`
-exposes the same projections through `scenario.framework("soc2")` and chained requirement
+exposes the same read models through `scenario.framework("soc2")` and chained requirement
 lookup. This does not relax the prohibition on per-test database setup.
 
 When behavior genuinely isn't reachable this way, cover it at the appropriate
@@ -116,7 +116,7 @@ valid_until)` or `.with_policy_document(workspace_name, policy_name, filename, b
 Evidence filenames must be unique within one evidence item, and a policy may declare only
 one document. The builder copies the bytes, issues and redeems a real MCP grant, uploads
 the multipart file through the browser route, waits for scan and finalization delivery,
-and rereads the MCP projection before requiring `upload_status == "uploaded"`. Evidence
+and rereads the MCP read model before requiring `upload_status == "uploaded"`. Evidence
 documents use a dedicated workspace connection scoped to read/write evidence submissions;
 policy documents reuse the policy fixture connection, adding read access so `get_policy`
 can verify the result. Evidence fixtures run sequentially in declaration order.
@@ -144,7 +144,7 @@ let soc2 = scenario.framework("soc2");
 let cc61_id = soc2.requirement("CC6.1").id;
 ```
 
-`TestFramework` and `TestFrameworkRequirement` expose their IDs and complete projection
+`TestFramework` and `TestFrameworkRequirement` expose their IDs and complete read-model
 fields. Tests must not hard-code the fixture UUIDs.
 
 ## No negative assertions
@@ -255,7 +255,7 @@ only repeated protocol mechanics and complete assertion helpers are shared.
 | `oauth` | Walks the real authorize → consent → token flow and returns an access token. |
 | `mcp` | `McpClient` — a real `rmcp` client over the streamable HTTP transport. |
 | `reference_data` | One support-only transaction that inserts only SOC 2, CC6.1, and CC7.1 before server startup; raw IDs stay private. |
-| `scenario` | `ScenarioBuilder` for users, workspaces, and OAuth/MCP/browser/worker-backed prerequisite evidence, controls, control-requirement links resolved through the seeded catalog, minimal policies, clean terminal documents, evidence-control mappings, and policy-control mappings; every result also carries typed chained lookups and the fixed reference-catalog projections. |
+| `scenario` | `ScenarioBuilder` for users, workspaces, and OAuth/MCP/browser/worker-backed prerequisite evidence, controls, control-requirement links resolved through the seeded catalog, minimal policies, clean terminal documents, evidence-control mappings, and policy-control mappings; every result also carries typed chained lookups and the fixed reference-catalog read models. |
 | `audit_log` | The tracing sink behind `capture_audit_logs`. |
 
 `TestApp` deliberately has **no request helpers**. It hands you servers; tests

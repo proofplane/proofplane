@@ -6,7 +6,7 @@ use crate::{
     application::ExecutionMetadata,
     authentication::AgentConnectionContext,
     domain::{ControlId, Evidence, EvidenceControlMappingState, EvidenceId, WorkspacePermission},
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 
 #[derive(Debug, Clone)]
@@ -66,12 +66,16 @@ impl MapControlToEvidenceHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                if !context.controls_exist(&[control_id]).await? {
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                if !workspace
+                    .reads()
+                    .controls()
+                    .ids_exist(&[control_id])
+                    .await?
+                {
                     return Ok(MapOutcome::ControlNotFound);
                 }
-                let repository = context.evidence();
+                let repository = workspace.aggregates().evidence();
                 let mut evidence = Vec::<Evidence>::new();
                 for evidence_id in lock_order {
                     if let Some(aggregate) = repository.get(evidence_id).await? {

@@ -7,7 +7,7 @@ use crate::{
     },
     authentication::auth0::{TokenVerifier, VerifiedClaims, VerifyError},
     domain::{AgentConnectionId, UserId, WorkspaceId, WorkspacePermissions},
-    repository,
+    persistence,
 };
 
 pub mod auth0;
@@ -53,7 +53,7 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for UserAuthenticator<V> {
 }
 
 impl<V: TokenVerifier<Claims = VerifiedClaims>> UserAuthenticator<V> {
-    pub fn new(verifier: Arc<V>, repository: Arc<repository::Postgres>) -> Self {
+    pub fn new(verifier: Arc<V>, repository: Arc<persistence::Postgres>) -> Self {
         Self {
             verifier,
             provision_user: ProvisionUserHandler::new(repository),
@@ -93,7 +93,7 @@ pub enum AuthError {
     #[error("token verifier unavailable")]
     VerifierUnavailable(#[source] VerifyError),
     #[error("user provisioning failed")]
-    Repository(#[source] repository::Error),
+    Repository(#[source] persistence::Error),
 }
 
 impl AuthError {
@@ -109,7 +109,7 @@ impl AuthError {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("credential repository error")]
-    Repository(#[source] repository::Error),
+    Repository(#[source] persistence::Error),
     #[error("PASETO initialization failed")]
     Paseto(#[from] paseto::Error),
 }

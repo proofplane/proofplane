@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     domain::{User, UserId},
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +20,7 @@ impl GetUserHandler {
         Self { repository }
     }
 
-    pub async fn handle(&self, query: GetUser) -> Result<Option<User>, crate::repository::Error> {
+    pub async fn handle(&self, query: GetUser) -> Result<Option<User>, crate::persistence::Error> {
         self.repository.users().get(query.user_id).await
     }
 }

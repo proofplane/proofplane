@@ -62,7 +62,7 @@ use crate::{
     config::HealthConfig,
     domain::WorkspacePermission,
     object_storage::FilesystemObjectStore,
-    repository::Postgres,
+    persistence::Postgres,
     routes::{
         health::{self, ReadyState},
         metrics::{self, MetricsState},

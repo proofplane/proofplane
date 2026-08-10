@@ -11,9 +11,8 @@ use proofplane::{
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage, observability, repository,
+    object_storage, observability, persistence,
     services::{client_resolver::ClientResolver, oauth::OAuthService},
-    store,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -32,7 +31,7 @@ async fn main() {
 #[derive(Debug, Error)]
 enum Error {
     #[error("postgres connection error")]
-    StoreConnection(#[from] store::conn::Error),
+    DatabaseConnection(#[from] persistence::connection::Error),
     #[error("database migration error")]
     Migrations(#[from] refinery::Error),
     #[error("prometheus initialization error")]
@@ -61,13 +60,13 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = store::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
     debug!("running migrations");
-    store::migrate(&mut client).await?;
+    persistence::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = store::conn_pool(config.postgres.expose_secret(), 200).await?;
-    let postgres = Arc::new(repository::Postgres::new(pool));
+    let pool = persistence::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let postgres = Arc::new(persistence::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),

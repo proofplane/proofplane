@@ -26,7 +26,7 @@ use crate::{
         },
         audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     },
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 
 use super::{

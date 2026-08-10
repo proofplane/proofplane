@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use crate::{
     application::ExecutionMetadata,
     domain::{UserId, Workspace, WorkspaceId, WorkspaceRole},
-    projections::{WorkspaceDetails, WorkspaceWithRole},
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{ConflictKind, Error as RepositoryError, Postgres},
+    read_models::{WorkspaceDetails, WorkspaceWithRole},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,18 +34,45 @@ impl CreateOwnedWorkspaceHandler {
         _metadata: ExecutionMetadata,
     ) -> Result<WorkspaceWithRole, CreateOwnedWorkspaceError> {
         self.repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.workspaces();
-                if let Some(existing) = repository.get_for_member(command.actor_user_id).await? {
-                    if existing.id() != command.workspace_id {
+            .in_unit_of_work(async move |unit_of_work| {
+                let existing_workspace_id = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .resolve_id_for_member(command.actor_user_id)
+                    .await?;
+                if let Some(existing_workspace_id) = existing_workspace_id {
+                    let existing = unit_of_work
+                        .reads()
+                        .workspaces()
+                        .get(existing_workspace_id)
+                        .await?
+                        .ok_or(RepositoryError::InvariantViolation(
+                            "workspace membership must reference an existing workspace",
+                        ))?;
+                    if existing.id != command.workspace_id {
                         return Err(RepositoryError::Conflict(
                             ConflictKind::WorkspaceMembershipExists,
                         ));
                     }
-                    return workspace_for_replayed_command(&existing, &command);
+                    let role = unit_of_work
+                        .reads()
+                        .workspaces()
+                        .role_for(existing.id, command.actor_user_id)
+                        .await?;
+                    return workspace_for_replayed_command(existing, role, &command);
                 }
-                if let Some(existing) = repository.get(command.workspace_id).await? {
-                    return workspace_for_replayed_command(&existing, &command);
+                if let Some(existing) = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .get(command.workspace_id)
+                    .await?
+                {
+                    let role = unit_of_work
+                        .reads()
+                        .workspaces()
+                        .role_for(existing.id, command.actor_user_id)
+                        .await?;
+                    return workspace_for_replayed_command(existing, role, &command);
                 }
 
                 let workspace = Workspace::create_owned(
@@ -55,7 +82,11 @@ impl CreateOwnedWorkspaceHandler {
                     command.created_at,
                     command.actor_user_id,
                 );
-                repository.save(&workspace).await?;
+                unit_of_work
+                    .aggregates()
+                    .workspaces()
+                    .save(&workspace)
+                    .await?;
                 Ok(WorkspaceWithRole {
                     workspace: WorkspaceDetails {
                         id: workspace.id(),
@@ -72,21 +103,17 @@ impl CreateOwnedWorkspaceHandler {
 }
 
 fn workspace_for_replayed_command(
-    existing: &Workspace,
+    existing: WorkspaceDetails,
+    role: Option<WorkspaceRole>,
     command: &CreateOwnedWorkspace,
 ) -> Result<WorkspaceWithRole, RepositoryError> {
-    if existing.slug() == command.slug.as_deref()
-        && existing.name() == command.name
-        && existing.created_at() == command.created_at
-        && existing.role_for(command.actor_user_id) == Some(WorkspaceRole::Owner)
+    if existing.slug == command.slug
+        && existing.name == command.name
+        && existing.created_at == command.created_at
+        && role == Some(WorkspaceRole::Owner)
     {
         return Ok(WorkspaceWithRole {
-            workspace: WorkspaceDetails {
-                id: existing.id(),
-                slug: existing.slug().map(str::to_owned),
-                name: existing.name().to_owned(),
-                created_at: existing.created_at(),
-            },
+            workspace: existing,
             role: WorkspaceRole::Owner,
         });
     }

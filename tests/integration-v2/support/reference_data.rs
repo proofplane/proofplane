@@ -1,4 +1,4 @@
-use proofplane::repository::Postgres;
+use proofplane::persistence::Postgres;
 use uuid::Uuid;
 
 use super::scenario::types::{TestFramework, TestFrameworkRequirement};

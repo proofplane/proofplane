@@ -51,8 +51,8 @@ use crate::{
         WorkspacePermissions,
     },
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::PolicyDetail,
-    repository::{ArchiveDocumentResult, CreatePolicyDocumentResult},
+    persistence::{ArchiveDocumentResult, CreatePolicyDocumentResult},
+    read_models::PolicyDetail,
     routes::{
         document_downloads::content_disposition,
         error::{domain_errors, ApiError},

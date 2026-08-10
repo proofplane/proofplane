@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     authentication::AgentConnectionContext,
     domain::{FrameworkId, WorkspacePermission},
-    projections::{FrameworkDetail, FrameworkRequirementDetail},
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::{FrameworkDetail, FrameworkRequirementDetail},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +27,7 @@ impl ListFrameworksHandler {
         query: ListFrameworks,
     ) -> Result<Vec<FrameworkDetail>, FrameworkCatalogError> {
         authorize(query.connection)?;
-        Ok(self.repository.framework_projections().list().await?)
+        Ok(self.repository.reads().await?.frameworks().list().await?)
     }
 }
 
@@ -54,7 +54,9 @@ impl ListFrameworkRequirementsHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .framework_projections()
+            .reads()
+            .await?
+            .frameworks()
             .list_requirements(query.framework_id)
             .await?)
     }

@@ -79,11 +79,11 @@ async fn preparation_rejects_invalid_declarations_permissions_and_unavailable_po
                 )
                 .await;
             assert_eq!(
-                assert_policy_projection(&active_before, active_policy, None),
+                assert_policy_read_model(&active_before, active_policy, None),
                 None
             );
             assert_eq!(
-                assert_policy_projection(
+                assert_policy_read_model(
                     &documented_before,
                     documented_policy,
                     Some(ExpectedPolicyDocument {

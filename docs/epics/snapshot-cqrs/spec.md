@@ -31,19 +31,19 @@ locator. A composition-root catalog may group concrete handlers for wiring.
 
 Aggregate repositories expose narrow complete-snapshot `get` and `save`
 operations and return only aggregates named with the bare domain noun.
-Read-only shapes live in the projections boundary, use role-specific names,
-and are returned by projection repositories. Transaction-scoped projection
-repositories support command responses that must observe an aggregate save
+Read-only shapes live in the read-model boundary, use role-specific names,
+and are returned by read gateways. Transaction-scoped reads support command
+responses that must observe an aggregate save
 before commit. Authorization, parent eligibility, relationships, and
 orchestration remain in handlers. Lists, details, reverse mappings, portal
 views, catalogs, downloads, and authority resolution are query models.
 
 `UnitOfWork` owns only the database transaction. Commands derive a
-`WorkspaceRepositories` scope from it when they need workspace-bound aggregate
-or transactional projection repositories. Authentication and actor identity
-do not enter the persistence boundary. Ordinary queries call projection
-repositories directly with the authorized workspace ID; the projection
-repository owns pooled-client acquisition and workspace filtering.
+`WorkspaceUnitOfWork` scope from it when they need workspace-bound aggregate
+repositories or transactional reads. Authentication and actor identity do not
+enter the persistence boundary. Ordinary queries call read gateways directly
+with the authorized workspace ID; the read gateway owns pooled-client
+acquisition and workspace filtering.
 
 ## Commands, queries, and execution metadata
 

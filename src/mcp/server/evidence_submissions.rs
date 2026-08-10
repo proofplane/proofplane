@@ -17,7 +17,7 @@ use crate::{
     domain::{
         Document, EvidenceSubmission, EvidenceSubmissionId, EvidenceSubmitter, WorkspacePermission,
     },
-    projections::EvidenceSubmissionDetail,
+    read_models::EvidenceSubmissionDetail,
     validate,
 };
 

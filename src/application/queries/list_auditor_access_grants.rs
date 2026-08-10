@@ -3,8 +3,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    authentication::AgentConnectionContext, domain::WorkspacePermission,
-    projections::AuditorAccessGrantSummary, repository::Postgres,
+    authentication::AgentConnectionContext, domain::WorkspacePermission, persistence::Postgres,
+    read_models::AuditorAccessGrantSummary,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -22,7 +22,7 @@ pub enum ListAuditorAccessGrantsError {
     #[error("auditor access grant request is denied")]
     Denied,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 impl ListAuditorAccessGrantsHandler {
@@ -38,7 +38,9 @@ impl ListAuditorAccessGrantsHandler {
 
         Ok(self
             .repository
-            .auditor_access_grant_projections()
+            .reads()
+            .await?
+            .auditor_access_grants()
             .list(query.connection.workspace_id)
             .await?)
     }

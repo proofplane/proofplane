@@ -25,7 +25,7 @@ use crate::{
         },
         audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     },
-    repository::{Error as RepositoryError, PolicyDocumentUploadEligibility, Postgres},
+    persistence::{Error as RepositoryError, PolicyDocumentUploadEligibility, Postgres},
 };
 
 use super::{
@@ -225,10 +225,11 @@ impl AgentPolicyDocumentUploadService {
         let eligibility = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(grant.workspace_id());
-                let context = &workspace;
-                context
-                    .lock_policy_document_upload_eligibility(policy_id)
+                let workspace = unit_of_work.workspace(grant.workspace_id());
+                workspace
+                    .reads()
+                    .policies()
+                    .lock_document_upload_eligibility(policy_id)
                     .await
             })
             .await?;

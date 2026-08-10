@@ -7,7 +7,7 @@ use crate::{
     application::queries::resolve_active_auditor_grant::ResolvedActiveAuditorGrant,
     authentication::opaque_token::parse_auditor_invite_secret,
     domain::{AuditReviewPeriod, WorkspaceId},
-    repository::{Error, Postgres},
+    persistence::{Error, Postgres},
 };
 
 #[derive(Debug)]

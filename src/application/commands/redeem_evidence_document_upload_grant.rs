@@ -13,7 +13,7 @@ use crate::{
         DocumentUploadGrantId, EvidenceDocumentUploadGrantAuthority, EvidenceId, UserId,
         WorkspaceId,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -48,48 +48,47 @@ impl RedeemEvidenceDocumentUploadGrantHandler {
         command: RedeemEvidenceDocumentUploadGrant,
         _metadata: ExecutionMetadata,
     ) -> Result<RedeemedEvidenceDocumentUploadGrant, EvidenceDocumentUploadGrantHandlerError> {
-        let outcome = self
-            .repository
-            .in_unit_of_work(async move |context| {
-                let repository = context.evidence_document_upload_grants();
-                let Some(mut grant) = repository
-                    .get(command.authority.id(), command.authority.workspace_id())
-                    .await?
-                else {
-                    return Ok(RedeemOutcome::Unavailable);
-                };
-                if grant.redeem(command.authority, Utc::now()).is_err() {
-                    return Ok(RedeemOutcome::Unavailable);
-                }
-                repository.save(&grant).await?;
-                let grant = repository
-                    .get(grant.id(), grant.workspace_id())
-                    .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
-                        "redeemed evidence human upload grant must be readable",
-                    ))?;
-                let redeemed_at =
-                    grant
-                        .redeemed_at()
-                        .ok_or(crate::repository::Error::InvariantViolation(
-                            "redeemed evidence human upload grant has a redemption time",
+        let outcome =
+            self.repository
+                .in_unit_of_work(async move |unit_of_work| {
+                    let repository = unit_of_work.aggregates().evidence_document_upload_grants();
+                    let Some(mut grant) = repository
+                        .get(command.authority.id(), command.authority.workspace_id())
+                        .await?
+                    else {
+                        return Ok(RedeemOutcome::Unavailable);
+                    };
+                    if grant.redeem(command.authority, Utc::now()).is_err() {
+                        return Ok(RedeemOutcome::Unavailable);
+                    }
+                    repository.save(&grant).await?;
+                    let grant = repository
+                        .get(grant.id(), grant.workspace_id())
+                        .await?
+                        .ok_or(crate::persistence::Error::InvariantViolation(
+                            "redeemed evidence human upload grant must be readable",
                         ))?;
-                Ok(RedeemOutcome::Redeemed(
-                    RedeemedEvidenceDocumentUploadGrant {
-                        id: grant.id(),
-                        workspace_id: grant.workspace_id(),
-                        evidence_id: grant.evidence_id(),
-                        coverage: grant.coverage(),
-                        issued_by_user_id: grant.issued_by_user_id(),
-                        issued_via: EvidenceDocumentUploadGrantIssuer::AgentConnection(
-                            grant.issued_via_agent_connection_id(),
+                    let redeemed_at = grant.redeemed_at().ok_or(
+                        crate::persistence::Error::InvariantViolation(
+                            "redeemed evidence human upload grant has a redemption time",
                         ),
-                        expires_at: grant.expires_at(),
-                        redeemed_at,
-                    },
-                ))
-            })
-            .await?;
+                    )?;
+                    Ok(RedeemOutcome::Redeemed(
+                        RedeemedEvidenceDocumentUploadGrant {
+                            id: grant.id(),
+                            workspace_id: grant.workspace_id(),
+                            evidence_id: grant.evidence_id(),
+                            coverage: grant.coverage(),
+                            issued_by_user_id: grant.issued_by_user_id(),
+                            issued_via: EvidenceDocumentUploadGrantIssuer::AgentConnection(
+                                grant.issued_via_agent_connection_id(),
+                            ),
+                            expires_at: grant.expires_at(),
+                            redeemed_at,
+                        },
+                    ))
+                })
+                .await?;
 
         match outcome {
             RedeemOutcome::Redeemed(redeemed) => Ok(redeemed),

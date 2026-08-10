@@ -17,7 +17,7 @@ pub mod upload_sessions;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 
     #[error("object storage error")]
     Storage(#[from] crate::object_storage::StorageError),

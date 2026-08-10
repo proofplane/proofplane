@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     authentication::AgentConnectionContext,
     domain::{ControlId, PolicyId, WorkspacePermission},
-    projections::{ControlPolicyMapping, PolicyCatalogEntry, PolicyDetail},
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::{ControlPolicyMapping, PolicyCatalogEntry, PolicyDetail},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -26,7 +26,9 @@ impl ListPoliciesHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .policy_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .policies()
             .list_catalog()
             .await?)
     }
@@ -52,7 +54,9 @@ impl GetPolicyHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .policy_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .policies()
             .get(query.policy_id)
             .await?)
     }
@@ -78,7 +82,9 @@ impl ListControlPolicyMappingsHandler {
         authorize(query.connection)?;
         Ok(self
             .repository
-            .control_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .controls()
             .list_policies_for_control(query.control_id)
             .await?)
     }

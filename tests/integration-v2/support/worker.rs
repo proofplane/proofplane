@@ -13,7 +13,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     config::AppConfig,
     object_storage::FilesystemObjectStore,
-    repository::Postgres,
+    persistence::Postgres,
     scanner::ClamAvMalwareScanner,
     worker::{create_worker_app, decode_worker_message, WorkerAppDependencies},
 };

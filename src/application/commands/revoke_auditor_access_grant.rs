@@ -9,7 +9,7 @@ use crate::{
     domain::{
         AuditorAccessGrant, AuditorAccessGrantId, AuditorAccessGrantRevocation, WorkspacePermission,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +30,7 @@ pub enum RevokeAuditorAccessGrantError {
     #[error("auditor access grant request is denied")]
     Denied,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 
 impl RevokeAuditorAccessGrantHandler {
@@ -47,9 +47,8 @@ impl RevokeAuditorAccessGrantHandler {
         let connection = command.connection;
         self.repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(connection.workspace_id);
-                let context = &workspace;
-                let repository = context.auditor_access_grants();
+                let workspace = unit_of_work.workspace(connection.workspace_id);
+                let repository = workspace.aggregates().auditor_access_grants();
                 let Some(mut grant) = repository
                     .get(command.grant_id, connection.workspace_id)
                     .await?
@@ -57,7 +56,7 @@ impl RevokeAuditorAccessGrantHandler {
                     return Ok(None);
                 };
                 match grant.revoke(Utc::now()).map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "auditor access grant revocation must be valid",
                     )
                 })? {

@@ -33,8 +33,8 @@ use proofplane::{
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::FilesystemObjectStore,
+    persistence::Postgres,
     pubsub::{ensure_worker_subscription, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
-    repository::Postgres,
     routes::authentication::AUTHORIZATION_HEADER,
     services::{
         agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
@@ -47,7 +47,7 @@ use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 use testcontainers_modules::postgres;
 use tokio_util::sync::CancellationToken;
 
-use proofplane::store;
+use proofplane::persistence;
 use uuid::Uuid;
 
 const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
@@ -108,10 +108,10 @@ impl Harness {
 
         let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-        let mut database = store::conn(&database_url)
+        let mut database = persistence::conn(&database_url)
             .await
             .expect("fixture database connection opens");
-        store::migrate(&mut database)
+        persistence::migrate(&mut database)
             .await
             .expect("database migrations run");
 
@@ -121,7 +121,7 @@ impl Harness {
             url::Url::parse("https://api.proofplane.test/").expect("public API base URL parses"),
         );
 
-        let pool = store::conn_pool(&database_url, 8)
+        let pool = persistence::conn_pool(&database_url, 8)
             .await
             .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));

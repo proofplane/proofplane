@@ -15,8 +15,8 @@ use crate::{
         DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionId, WorkspaceId,
     },
     object_storage::{FilesystemObjectStore, StorageError},
-    projections::EvidenceSubmissionDetail,
-    repository::{ArchiveDocumentResult, Postgres},
+    persistence::{ArchiveDocumentResult, Postgres},
+    read_models::EvidenceSubmissionDetail,
     services::Error,
 };
 
@@ -79,7 +79,9 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .evidence_submission_projections(connection.workspace_id)
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
             .get(id)
             .await?)
     }
@@ -91,7 +93,9 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .evidence_submission_projections(connection.workspace_id)
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
             .list_for_evidence(evidence_id)
             .await?)
     }
@@ -104,7 +108,9 @@ impl EvidenceSubmissionService {
     ) -> Result<Vec<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .evidence_submission_projections(connection.workspace_id)
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
             .list_for_coverage(evidence_id, coverage)
             .await?)
     }
@@ -116,7 +122,9 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<EvidenceSubmissionDetail>, Error> {
         Ok(self
             .repository
-            .evidence_submission_projections(connection.workspace_id)
+            .workspace_reads(connection.workspace_id)
+            .await?
+            .evidence_submissions()
             .latest_for_evidence(evidence_id)
             .await?)
     }
@@ -188,7 +196,9 @@ impl EvidenceSubmissionService {
     ) -> Result<Option<Document>, Error> {
         Ok(self
             .repository
-            .evidence_submission_projections(workspace_id)
+            .workspace_reads(workspace_id)
+            .await?
+            .evidence_submissions()
             .get_agent_upload_document(submission_id, document_id)
             .await?)
     }
@@ -281,8 +291,10 @@ impl EvidenceSubmissionService {
 fn command_error(error: DocumentCommandError) -> Error {
     match error {
         DocumentCommandError::Repository(error) => Error::Repository(error),
-        DocumentCommandError::Unavailable | DocumentCommandError::Invalid => Error::Repository(
-            crate::repository::Error::InvariantViolation("validated document command was rejected"),
-        ),
+        DocumentCommandError::Unavailable | DocumentCommandError::Invalid => {
+            Error::Repository(crate::persistence::Error::InvariantViolation(
+                "validated document command was rejected",
+            ))
+        }
     }
 }

@@ -100,7 +100,7 @@ pub(super) fn assert_pending_result(
 
 #[allow(clippy::too_many_arguments)]
 #[track_caller]
-pub(super) fn assert_submission_projection(
+pub(super) fn assert_submission_read_model(
     detail: &Value,
     submission_id: Uuid,
     document_id: Uuid,

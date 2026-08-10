@@ -119,7 +119,7 @@ async fn valid_machine_upload_exposes_descriptor_provenance_audits_and_reaches_u
             json!({ "submission_id": descriptor.submission_id }),
         )
         .await;
-    assert_submission_projection(
+    assert_submission_read_model(
         &uploaded,
         descriptor.submission_id,
         document_id,

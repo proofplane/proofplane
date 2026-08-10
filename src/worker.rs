@@ -26,7 +26,7 @@ use crate::{
         LEGACY_DOCUMENT_SCAN_REQUESTED,
     },
     object_storage::FilesystemObjectStore,
-    repository::Postgres,
+    persistence::Postgres,
     routes::{
         error::not_found,
         health::{self, ReadyState},

@@ -14,7 +14,7 @@ use crate::{
         AgentConnectionId, CoverageWindow, DocumentUploadGrantId, EvidenceDocumentUploadGrant,
         EvidenceId, UserId, WorkspaceId, WorkspacePermission,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 
 const GRANT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -94,10 +94,10 @@ impl IssueEvidenceDocumentUploadGrantHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                if context
-                    .evidence_projections()
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                if workspace
+                    .reads()
+                    .evidence()
                     .get(command.evidence_id)
                     .await?
                     .is_none()
@@ -147,12 +147,12 @@ impl IssueEvidenceDocumentUploadGrantHandler {
                     Err(_) => return Ok(IssueOutcome::Internal),
                 };
                 url.query_pairs_mut().append_pair("token", &issued.token);
-                let repository = context.evidence_document_upload_grants();
+                let repository = workspace.aggregates().evidence_document_upload_grants();
                 repository.save(&grant).await?;
                 let grant = repository
                     .get(grant.id(), grant.workspace_id())
                     .await?
-                    .ok_or(crate::repository::Error::InvariantViolation(
+                    .ok_or(crate::persistence::Error::InvariantViolation(
                         "saved evidence human upload grant must be readable",
                     ))?;
                 Ok(IssueOutcome::Issued(Box::new(
@@ -196,5 +196,5 @@ pub enum EvidenceDocumentUploadGrantHandlerError {
     #[error("internal document upload grant error")]
     Internal,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }

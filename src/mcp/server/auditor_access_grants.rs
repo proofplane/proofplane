@@ -34,7 +34,7 @@ use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, WorkspacePermission},
     mcp::server::common::McpArgumentError,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::AuditorAccessGrantSummary,
+    read_models::AuditorAccessGrantSummary,
     services::Error as ServiceError,
     validate,
     validation::Validation,

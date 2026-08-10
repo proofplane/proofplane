@@ -28,7 +28,7 @@ use crate::{
             FindReusableAgentConnection, FindReusableAgentConnectionHandler,
         },
         queries::oauth_authorization_flows::{
-            OAuthConsentContext as OAuthConsentContextProjection, ReadOAuthConsentContext,
+            OAuthConsentContext as OAuthConsentContextReadModel, ReadOAuthConsentContext,
             ReadOAuthConsentContextHandler,
         },
         ExecutionMetadata,
@@ -41,7 +41,7 @@ use crate::{
         canonical_permissions, OAuthAuthorizationFlow, OAuthAuthorizationRequest,
         OAuthAuthorizationRequestId, WorkspacePermission,
     },
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
 };
 
 use super::client_resolver::{ClientResolutionError, ClientResolver};
@@ -388,7 +388,7 @@ impl OAuthService {
 
     async fn issue_code_redirect_from_context(
         &self,
-        context: &OAuthConsentContextProjection,
+        context: &OAuthConsentContextReadModel,
         connection_id: crate::domain::AgentConnectionId,
         workspace_id: crate::domain::WorkspaceId,
     ) -> Result<Url, OAuthError> {
@@ -414,7 +414,7 @@ impl OAuthService {
     async fn read_consent_context(
         &self,
         request_id: OAuthAuthorizationRequestId,
-    ) -> Result<OAuthConsentContextProjection, OAuthError> {
+    ) -> Result<OAuthConsentContextReadModel, OAuthError> {
         self.read_consent_context
             .handle(ReadOAuthConsentContext {
                 request_id,

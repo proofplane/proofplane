@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     authentication::AgentConnectionContext,
     domain::{ControlId, WorkspacePermission},
-    projections::ControlDetail,
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::ControlDetail,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +35,9 @@ impl ListControlsHandler {
         }
         Ok(self
             .repository
-            .control_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .controls()
             .list()
             .await?)
     }
@@ -78,7 +80,9 @@ impl GetControlHandler {
         }
         Ok(self
             .repository
-            .control_projections(query.connection.workspace_id)
+            .workspace_reads(query.connection.workspace_id)
+            .await?
+            .controls()
             .get(query.control_id)
             .await?)
     }
@@ -103,7 +107,7 @@ mod tests {
     use crate::{
         authentication::AgentConnectionContext,
         domain::{AgentConnectionId, ControlId, UserId, WorkspaceId, WorkspacePermissions},
-        repository::Postgres,
+        persistence::Postgres,
     };
 
     use super::{

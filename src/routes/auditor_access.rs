@@ -49,7 +49,7 @@ use crate::{
     domain::{AuditorSessionTransition, Document, EvidenceSubmission, EvidenceSubmissionId},
     object_storage::ObjectStream,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    projections::{
+    read_models::{
         AuditorPortalControl, AuditorPortalDocument, AuditorPortalEvidence, AuditorPortalPolicy,
         AuditorPortalPolicyDocument, AuditorPortalPolicyDocumentStatus, AuditorPortalPolicySummary,
         AuditorPortalReadModel, AuditorPortalSubmission, ControlSummary, EvidenceDetail,
@@ -1925,7 +1925,7 @@ fn audit_policy_catalog_read(
     .emit();
 }
 
-fn grant_error(error: crate::repository::Error) -> ApiError {
+fn grant_error(error: crate::persistence::Error) -> ApiError {
     tracing::error!(%error, "auditor access grant repository failure");
     ApiError::Internal
 }
@@ -1969,7 +1969,7 @@ async fn read_portal(
         .map_err(portal_error)
 }
 
-fn portal_error(error: crate::repository::Error) -> ApiError {
+fn portal_error(error: crate::persistence::Error) -> ApiError {
     tracing::error!(%error, "auditor portal read model failure");
     ApiError::Internal
 }

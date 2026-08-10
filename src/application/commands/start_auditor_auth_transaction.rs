@@ -5,7 +5,7 @@ use crate::{
         AuditorAccessGrantId, AuditorAuthTransaction, AuditorAuthTransactionId, Sha256Digest,
         WorkspaceId,
     },
-    repository::Postgres,
+    persistence::Postgres,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, Utc};
@@ -65,14 +65,16 @@ impl StartAuditorAuthTransactionHandler {
         let transaction_id = AuditorAuthTransactionId::from(Uuid::new_v4());
         let email = self
             .repository
-            .in_unit_of_work(async move |context| {
-                let grants = context.auditor_access_grants();
-                let Some(grant) = grants.get(command.grant_id, command.workspace_id).await? else {
+            .in_unit_of_work(async move |unit_of_work| {
+                let workspace = unit_of_work.workspace(command.workspace_id);
+                let Some(grant) = workspace
+                    .reads()
+                    .auditor_access_grants()
+                    .get_active(command.grant_id, now)
+                    .await?
+                else {
                     return Ok(None);
                 };
-                if grant.ensure_active_at(now).is_err() {
-                    return Ok(None);
-                }
                 let transaction = AuditorAuthTransaction::start(
                     transaction_id,
                     grant.id,
@@ -83,11 +85,11 @@ impl StartAuditorAuthTransactionHandler {
                     expires_at,
                 )
                 .map_err(|_| {
-                    crate::repository::Error::InvariantViolation(
+                    crate::persistence::Error::InvariantViolation(
                         "auditor authentication transaction creation is invalid",
                     )
                 })?;
-                context
+                unit_of_work
                     .auditor_auth_transactions()
                     .save(&transaction)
                     .await?;
@@ -145,7 +147,7 @@ pub enum StartAuditorAuthTransactionError {
     #[error("random generation failed")]
     Random,
     #[error("repository error")]
-    Repository(#[from] crate::repository::Error),
+    Repository(#[from] crate::persistence::Error),
 }
 #[cfg(test)]
 mod tests {

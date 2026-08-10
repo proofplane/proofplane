@@ -8,8 +8,8 @@ use crate::{
     domain::{
         ControlId, EvidenceControlMappingState, EvidenceError, EvidenceId, WorkspacePermission,
     },
-    projections::EvidenceControlMapping,
-    repository::{Error as RepositoryError, Postgres},
+    persistence::{Error as RepositoryError, Postgres},
+    read_models::EvidenceControlMapping,
 };
 
 #[derive(Debug, Clone)]
@@ -53,9 +53,8 @@ impl MapEvidenceToControlsHandler {
         let result = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                let repository = context.evidence();
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                let repository = workspace.aggregates().evidence();
                 let Some(mut evidence) = repository.get(evidence_id).await? else {
                     return Ok(MapOutcome::Unavailable);
                 };
@@ -64,7 +63,11 @@ impl MapEvidenceToControlsHandler {
                 for mapping in &requested {
                     requested_ids.push(mapping.control_id);
                 }
-                let existing_controls = context.existing_control_ids(&requested_ids).await?;
+                let existing_controls = workspace
+                    .reads()
+                    .controls()
+                    .existing_ids(&requested_ids)
+                    .await?;
                 let unknown = requested_ids
                     .iter()
                     .copied()
@@ -109,11 +112,12 @@ impl MapEvidenceToControlsHandler {
                         _ => RepositoryError::InvariantViolation("evidence snapshot is invalid"),
                     })?;
                 repository.save(&evidence).await?;
-                let projections = context.control_projections();
+                let reads = workspace.reads();
+                let control_reads = reads.controls();
                 let mut saved = Vec::with_capacity(requested_ids.len());
                 for control_id in requested_ids.iter().copied() {
                     saved.push(
-                        projections
+                        control_reads
                             .get_evidence_mapping(evidence_id, control_id)
                             .await?
                             .ok_or(RepositoryError::InvariantViolation(
@@ -182,7 +186,7 @@ mod tests {
         application::ExecutionMetadata,
         authentication::AgentConnectionContext,
         domain::{ControlId, WorkspacePermission, WorkspacePermissions},
-        repository::test_support,
+        persistence::test_support,
     };
 
     use super::{
@@ -228,7 +232,10 @@ mod tests {
                 if unknown == vec![ControlId::from(foreign_control_id)] && already_mapped.is_empty()
         ));
         let mappings = postgres
-            .control_projections(workspace.workspace_id)
+            .workspace_reads(workspace.workspace_id)
+            .await
+            .unwrap()
+            .controls()
             .list_evidence_mappings(evidence_id)
             .await
             .unwrap()

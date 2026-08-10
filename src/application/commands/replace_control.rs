@@ -9,8 +9,8 @@ use crate::{
         ControlDefinition, ControlError, ControlId, DomainError, FrameworkRequirementId,
         WorkspacePermission,
     },
-    projections::ControlDetail,
-    repository::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{ConflictKind, Error as RepositoryError, Postgres},
+    read_models::ControlDetail,
 };
 
 #[derive(Debug, Clone)]
@@ -59,15 +59,16 @@ impl ReplaceControlHandler {
         let outcome = self
             .repository
             .in_unit_of_work(async move |unit_of_work| {
-                let workspace = unit_of_work.for_workspace(command.connection.workspace_id);
-                let context = &workspace;
-                if !context
-                    .framework_requirements_exist(&requirement_ids)
+                let workspace = unit_of_work.workspace(command.connection.workspace_id);
+                if !workspace
+                    .reads()
+                    .frameworks()
+                    .requirements_exist(&requirement_ids)
                     .await?
                 {
                     return Ok(ReplaceOutcome::InvalidFrameworkRequirementReferences);
                 }
-                let repository = context.controls();
+                let repository = workspace.aggregates().controls();
                 let Some(mut control) = repository.get(control_id).await? else {
                     return Ok(ReplaceOutcome::Unavailable);
                 };
@@ -85,12 +86,12 @@ impl ReplaceControlHandler {
                     }
                 }
                 repository.save(&control).await?;
-                let projection = context.control_projections().get(control_id).await?.ok_or(
+                let read_model = workspace.reads().controls().get(control_id).await?.ok_or(
                     RepositoryError::InvariantViolation(
                         "replaced control must be readable in its transaction",
                     ),
                 )?;
-                Ok(ReplaceOutcome::Replaced(projection))
+                Ok(ReplaceOutcome::Replaced(read_model))
             })
             .await
             .map_err(ReplaceControlError::from)?;
