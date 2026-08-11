@@ -22,6 +22,11 @@ services:
     image: ghcr.io/jeffijoe/deltio:latest
     ports:
       - "8085:8085"
+    # Push subscriptions deliver to a worker running on the host, which the
+    # integration-v2 suite relies on. Docker Desktop resolves this name on its
+    # own; Docker Engine on Linux only does with this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 8085"]
       interval: 5s

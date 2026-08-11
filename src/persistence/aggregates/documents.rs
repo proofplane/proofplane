@@ -206,7 +206,8 @@ mod tests {
 
     #[tokio::test]
     async fn document_snapshot_and_scan_message_rollback_together() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let workspace = test_support::workspace(&postgres, "Document owner").await;
         let identity = DocumentIdentity::Policy {
             policy_id: PolicyId::from(Uuid::new_v4()),

@@ -3,11 +3,22 @@
 This black-box suite exercises Proofplane the way a real client does — over HTTP
 and MCP — and asserts only on what a real client can observe.
 
-Run with `cargo test --test integration-v2`. Docker must be available.
+Start the local stack first, then run the suite:
+
+```bash
+make up
+cargo test --test integration-v2
+```
+
+The suite does not start its own services. It uses the Postgres and deltio
+Pub/Sub emulator that `docker compose up` provides, and fails immediately with a
+message naming the missing service if either is unreachable. It never touches
+the `proofplane` database you develop against: it drops and recreates a database
+of its own, `proofplane_integration_v2`, on every run.
 
 The suite owns one application topology for the lifetime of the test binary. A
 dedicated OS thread runs a long-lived multi-thread Tokio runtime containing one
-Postgres container and pool, one transactionally seeded SOC 2 reference catalog, one
+Postgres pool, one transactionally seeded SOC 2 reference catalog, one
 filesystem object store, a fake clamd server,
 one worker, one observable push proxy, one deltio Pub/Sub project, one dequeuer,
 one controlled auditor identity-provider boundary, and one API and MCP server.
@@ -250,7 +261,8 @@ only repeated protocol mechanics and complete assertion helpers are shared.
 | `auth` | `FakeTokenVerifier` — the bearer token *is* the `auth0_sub`. Plus `assert_unauthorized`. |
 | `auth0` | A fake upstream tenant on `127.0.0.1:9099` for owner OAuth, plus the injected auditor identity-provider boundary. Auditor outcomes and recorded exchanges are keyed by a test-unique authorization code; unregistered codes are rejected. |
 | `clamd` | Concurrent test-only INSTREAM server. Chooses clean, EICAR, or scanner-error replies from uploaded bytes and provides a scoped content-matched hang after reading a complete scan request. |
-| `pubsub` | Suite-wide deltio container with container-to-host routing for push delivery. |
+| `local_stack` | The compose-provided Postgres and deltio: readiness checks that name what is missing, and the per-run suite database. |
+| `pubsub` | Drops the worker subscription a previous run left behind, so no stale backlog reaches this one. |
 | `worker` | Real worker server plus the `0.0.0.0` push proxy, post-response pipeline event stream, request-ID-reserved holds, and one-shot redelivery injection. |
 | `oauth` | Walks the real authorize → consent → token flow and returns an access token. |
 | `mcp` | `McpClient` — a real `rmcp` client over the streamable HTTP transport. |
@@ -281,7 +293,12 @@ assume it's how the product works.
 
 - **Postgres is shared across the whole binary.** Every test needs unique
   `auth0_sub` values and workspace names. Prefix subjects with the file or test:
-  `auth0|upload-redeem`.
+  `auth0|upload-redeem`. Those values only have to be unique within a run — the
+  suite database is recreated at startup — so they stay fixed literals rather
+  than randomized ones.
+- **The stack has to be up.** `make up` first, or the suite fails at startup.
+  Only one run at a time: the fake Auth0 tenant binds a fixed port, and a second
+  run would recreate the suite database out from under the first.
 - **A user gets one workspace.** A second `POST /workspace` is a conflict, so
   cross-tenant tests need a second user.
 - **Reusing a `client_name` for the same user** resolves to the existing agent

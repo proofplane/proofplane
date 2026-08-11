@@ -196,7 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn mapping_rejects_foreign_or_unknown_parent_controls_without_partial_save() {
-        let postgres = Arc::new(test_support::database().await);
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
         let workspace = test_support::workspace(&postgres, "mapping owner").await;
         let foreign = test_support::workspace(&postgres, "mapping foreign").await;
         let evidence_id =

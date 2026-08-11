@@ -11,6 +11,7 @@ pub mod harness;
 pub mod http;
 pub mod id;
 pub mod json;
+pub mod local_stack;
 pub mod machine_uploads;
 pub mod mcp;
 pub mod oauth;
