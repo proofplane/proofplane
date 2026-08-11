@@ -30,9 +30,6 @@ pub struct TestDatabase {
 }
 
 /// A migrated, empty database of its own, in a container of its own.
-///
-/// Tests run in parallel and each one owns its container outright, so there is
-/// no shared state to scope around and nothing left running afterwards.
 pub async fn database() -> TestDatabase {
     let container = postgres::Postgres::default()
         .with_tag(POSTGRES_IMAGE_TAG)

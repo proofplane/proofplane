@@ -1,9 +1,3 @@
-//! The Postgres and Pub/Sub emulator that `docker compose up` provides.
-//!
-//! The suite used to start these itself. It now expects them to be running
-//! already, so the only work left here is proving they are reachable and
-//! carving out a database the suite can own.
-
 use std::time::{Duration, Instant};
 
 use proofplane::persistence;
@@ -12,9 +6,7 @@ use tokio_postgres::Client;
 
 const POSTGRES_ADDRESS: &str = "127.0.0.1:5432";
 const POSTGRES_ADMIN_URL: &str = "postgres://proofplane:proofplane@127.0.0.1:5432/postgres";
-/// The suite's own database, never the developer's `proofplane` one.
 const SUITE_DATABASE: &str = "proofplane_integration_v2";
-/// The deltio emulator, as `PUBSUB_EMULATOR_HOST` wants it.
 pub const PUBSUB_EMULATOR_ADDRESS: &str = "127.0.0.1:8085";
 
 /// Nothing listening means the stack is down, and waiting will not change that.
@@ -51,15 +43,10 @@ pub async fn reset_suite_database() -> Result<String, String> {
     ))
 }
 
-/// deltio answers no readiness endpoint, so an open port is all compose itself
-/// checks for, and all this checks for.
 pub async fn wait_for_pubsub() -> Result<(), String> {
     wait_for_listener("The Pub/Sub emulator", PUBSUB_EMULATOR_ADDRESS).await
 }
 
-/// `make up` returns before Postgres has finished starting, so the port can
-/// accept a connection while the server still answers every query with "the
-/// database system is starting up". Readiness means a query succeeded.
 async fn wait_for_postgres() -> Result<Client, String> {
     wait_for_listener("Postgres", POSTGRES_ADDRESS).await?;
 

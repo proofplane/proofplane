@@ -81,9 +81,6 @@ pub struct TestApp {
 static APP: OnceLock<Result<TestApp, String>> = OnceLock::new();
 
 impl Harness {
-    /// `Err` is reserved for a local stack that is not up: the one failure a
-    /// developer can act on, and the one worth reporting to every test rather
-    /// than as a panic inside the suite thread.
     async fn start() -> Result<Self, String> {
         auth0::start();
 
