@@ -140,8 +140,9 @@ impl Postgres {
         now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<OutboxMessage>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let rows = transaction
             .query(
                 r#"
 SELECT
@@ -170,6 +171,7 @@ LIMIT $2
                 &[&now, &limit],
             )
             .await?;
+        transaction.commit().await?;
 
         rows.into_iter().map(outbox_message_from_row).collect()
     }
@@ -179,8 +181,9 @@ LIMIT $2
         max_attempts: i32,
         limit: i64,
     ) -> Result<Vec<OutboxMessage>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let rows = transaction
             .query(
                 r#"
 SELECT
@@ -209,15 +212,18 @@ LIMIT $2
                 &[&max_attempts, &limit],
             )
             .await?;
+        transaction.commit().await?;
 
         rows.into_iter().map(outbox_message_from_row).collect()
     }
 
     pub async fn delete_outbox_message(&self, id: i64) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let deleted = client
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let deleted = transaction
             .execute("DELETE FROM outbox_messages WHERE id = $1", &[&id])
             .await?;
+        transaction.commit().await?;
 
         Ok(deleted > 0)
     }
@@ -227,8 +233,9 @@ LIMIT $2
         id: i64,
         next_available_at: DateTime<Utc>,
     ) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let updated = client
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let updated = transaction
             .execute(
                 r#"
 UPDATE outbox_messages
@@ -240,6 +247,7 @@ WHERE id = $1
                 &[&id, &next_available_at],
             )
             .await?;
+        transaction.commit().await?;
 
         Ok(updated > 0)
     }

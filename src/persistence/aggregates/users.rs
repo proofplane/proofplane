@@ -31,9 +31,9 @@ impl Postgres {
         &self,
         payload: &ProvisionUserPayload,
     ) -> Result<User, Error> {
-        let row = self
-            .get()
-            .await?
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let row = transaction
             .query_one(
                 r#"
 INSERT INTO users (auth0_sub, email, name)
@@ -47,6 +47,8 @@ RETURNING id, auth0_sub, email, name, last_login_at, created_at
                 &[&payload.auth0_sub, &payload.email, &payload.name],
             )
             .await?;
+        transaction.commit().await?;
+
         UserRecord::try_from_row(&row)?.into_domain()
     }
 }
@@ -63,11 +65,11 @@ impl UserRepository<'_> {
     pub async fn get(&self, id: UserId) -> Result<Option<User>, Error> {
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                postgres
-                    .get()
-                    .await?
-                    .query(GET_BY_ID_SQL, &[&Uuid::from(id)])
-                    .await?
+                let mut client = postgres.get().await?;
+                let transaction = client.transaction().await?;
+                let rows = transaction.query(GET_BY_ID_SQL, &[&Uuid::from(id)]).await?;
+                transaction.commit().await?;
+                rows
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work

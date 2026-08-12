@@ -6,7 +6,9 @@ server:
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://127.0.0.1:3000"
 
-postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
+# Port 6432 is the local PgBouncer, standing in for the Supavisor transaction
+# pooler production runtime traffic goes through. Postgres itself is on 5432.
+postgres: "postgres://proofplane:proofplane@127.0.0.1:6432/proofplane"
 
 pubsub:
   project_id: "proofplane-local"

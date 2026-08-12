@@ -38,11 +38,11 @@ impl AgentConnectionRepository<'_> {
     pub async fn get(&self, id: AgentConnectionId) -> Result<Option<AgentConnection>, Error> {
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                postgres
-                    .get()
-                    .await?
-                    .query(GET_SQL, &[&Uuid::from(id)])
-                    .await?
+                let mut client = postgres.get().await?;
+                let transaction = client.transaction().await?;
+                let rows = transaction.query(GET_SQL, &[&Uuid::from(id)]).await?;
+                transaction.commit().await?;
+                rows
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work

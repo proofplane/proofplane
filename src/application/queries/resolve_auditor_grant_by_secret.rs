@@ -33,10 +33,9 @@ impl ResolveAuditorGrantBySecretHandler {
         let Ok(digest) = parse_auditor_invite_secret(query.raw_secret.expose_secret()) else {
             return Ok(None);
         };
-        let row = self
-            .repository
-            .get()
-            .await?
+        let mut client = self.repository.get().await?;
+        let transaction = client.transaction().await?;
+        let row = transaction
             .query_opt(
                 SQL,
                 &[
@@ -45,6 +44,7 @@ impl ResolveAuditorGrantBySecretHandler {
                 ],
             )
             .await?;
+        transaction.commit().await?;
         row.map(|row| {
             Ok(ResolvedActiveAuditorGrant {
                 id: row.try_get::<_, Uuid>("id")?.into(),

@@ -107,7 +107,8 @@ pub async fn seed_local_data(
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
-    let client = repository.get().await?;
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
     for (id, slug, name) in [
         (
             local_authorized_workspace_id(),
@@ -120,7 +121,7 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
             "Local Unauthorized Workspace".to_owned(),
         ),
     ] {
-        client
+        transaction
             .execute(
                 r#"INSERT INTO workspaces (id, slug, name)
 VALUES ($1, $2, $3)
@@ -129,6 +130,7 @@ ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name"#,
             )
             .await?;
     }
+    transaction.commit().await?;
 
     Ok(())
 }
@@ -174,8 +176,9 @@ async fn seed_agent_connection(
     let connection_id = local_agent_connection_id();
     let permissions = WorkspacePermission::ALL.to_vec();
 
-    let client = repository.get().await?;
-    client
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
+    transaction
         .execute(
             r#"
 INSERT INTO agent_connections (
@@ -212,20 +215,21 @@ SET user_id = EXCLUDED.user_id,
             ],
         )
         .await?;
-    client
+    transaction
         .execute(
             "DELETE FROM agent_connection_permissions WHERE agent_connection_id = $1",
             &[&Uuid::from(connection_id)],
         )
         .await?;
     for permission in permissions {
-        client
+        transaction
             .execute(
                 "INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)",
                 &[&Uuid::from(connection_id), &permission.as_str()],
             )
             .await?;
     }
+    transaction.commit().await?;
 
     Ok(AgentConnectionContext {
         user_id,

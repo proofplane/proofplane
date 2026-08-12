@@ -220,7 +220,8 @@ async fn continuation_connection(
     continuation: Sha256Digest,
     nonce: Option<Sha256Digest>,
 ) -> Result<Option<AgentConnectionId>, RepositoryError> {
-    let client = repository.get().await?;
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
     let sql = if nonce.is_some() {
         "SELECT agent_connection_id FROM agent_authorization_transactions WHERE continuation_digest = $1 AND nonce_digest = $2"
     } else {
@@ -228,7 +229,7 @@ async fn continuation_connection(
     };
     let row = match nonce {
         Some(nonce) => {
-            client
+            transaction
                 .query_opt(
                     sql,
                     &[
@@ -239,11 +240,13 @@ async fn continuation_connection(
                 .await?
         }
         None => {
-            client
+            transaction
                 .query_opt(sql, &[&continuation.as_bytes().as_slice()])
                 .await?
         }
     };
+    transaction.commit().await?;
+
     Ok(row.map(|row| AgentConnectionId::from(row.get::<_, Uuid>("agent_connection_id"))))
 }
 impl DenyAgentConnectionHandler {

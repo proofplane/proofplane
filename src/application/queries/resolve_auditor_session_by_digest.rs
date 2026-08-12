@@ -43,13 +43,21 @@ impl ResolveAuditorSessionByDigestHandler {
         let digest =
             crate::domain::Sha256Digest::digest(query.raw_session.expose_secret().as_bytes());
         let digest: &[u8] = digest.as_bytes();
-        let client = self
+        let mut client = self
             .repository
             .get()
             .await
             .map_err(crate::persistence::Error::from)?;
-        let row = client
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(crate::persistence::Error::from)?;
+        let row = transaction
             .query_opt(SQL, &[&digest])
+            .await
+            .map_err(crate::persistence::Error::from)?;
+        transaction
+            .commit()
             .await
             .map_err(crate::persistence::Error::from)?;
         row.map(

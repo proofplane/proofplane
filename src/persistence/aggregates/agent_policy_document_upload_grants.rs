@@ -56,7 +56,11 @@ impl AgentPolicyDocumentUploadGrantRepository<'_> {
             [&Uuid::from(upload_id), &Uuid::from(workspace_id)];
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                postgres.get().await?.query(GET_SQL, &parameters).await?
+                let mut client = postgres.get().await?;
+                let transaction = client.transaction().await?;
+                let rows = transaction.query(GET_SQL, &parameters).await?;
+                transaction.commit().await?;
+                rows
             }
             RepositoryConnection::Transaction(workspace) => {
                 workspace

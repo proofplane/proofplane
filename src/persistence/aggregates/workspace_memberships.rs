@@ -61,13 +61,15 @@ impl Postgres {
         workspace_id: WorkspaceId,
         user_id: UserId,
     ) -> Result<Option<WorkspaceRole>, Error> {
-        let client = self.get().await?;
-        let rows = client
+        let mut client = self.get().await?;
+        let transaction = client.transaction().await?;
+        let rows = transaction
             .query(
                 "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2",
                 &[&Uuid::from(workspace_id), &Uuid::from(user_id)],
             )
             .await?;
+        transaction.commit().await?;
 
         rows.into_iter().next().map(role_from_row).transpose()
     }

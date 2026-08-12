@@ -18,8 +18,8 @@ notes live in `docs/`.
 - `make check`: run formatting checks, Clippy with warnings denied, and all
   tests. Run `make up` first: the integration-v2 suite uses the compose stack
   rather than starting services of its own.
-- `make up && make health`: start and verify local Postgres, Pub/Sub, and
-  ClamAV dependencies.
+- `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
+  and ClamAV dependencies.
 - `make seed`: run database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
@@ -148,6 +148,22 @@ integration-v2 suite starts nothing: it uses the Postgres and Pub/Sub emulator
 from the compose stack, so `make up` has to have been run first, and it drops
 and recreates its own `proofplane_integration_v2` database on every run rather
 than touching the `proofplane` database you develop against.
+
+The compose stack also runs PgBouncer in transaction mode on 6432, standing in
+for the Supavisor transaction pooler that production runtime traffic goes
+through. The integration-v2 application under test connects through it, so the
+suite proves pooler compatibility on every run; only the suite's own
+`DROP DATABASE`/`CREATE DATABASE` reaches Postgres directly on 5432, because
+neither can run through a transaction pooler. `config/local.yaml` points at 6432
+too, so `make api` and friends exercise the same path.
+
+Because of that pooler, **every statement must run inside a transaction**, even
+a lone read. `tokio_postgres` names the prepared statement it creates for each
+query, and a transaction pooler only keeps one server connection assigned for
+the length of a transaction, so an autocommit statement fails with
+`prepared statement "sN" does not exist`. Use `in_unit_of_work` where one
+exists; outside one, open a transaction on the pooled client rather than calling
+`.query(...)` on it directly.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test
