@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 use crate::{
     application::ExecutionMetadata,
-    authentication::{opaque_token::generate_auditor_invite_secret, AgentConnectionContext},
+    authentication::{
+        normalize_email as normalize_authority_email, opaque_token::generate_auditor_invite_secret,
+        AgentConnectionContext,
+    },
     domain::{
         AuditReviewPeriod, AuditorAccessGrant, AuditorAccessGrantId, Sha256Digest,
         WorkspacePermission,
@@ -114,14 +117,7 @@ impl IssueAuditorAccessGrantHandler {
 }
 
 pub fn normalize_email(value: &str) -> Result<String, IssueAuditorAccessGrantError> {
-    let email = value.trim().to_ascii_lowercase();
-    let Some((local, domain)) = email.split_once('@') else {
-        return Err(IssueAuditorAccessGrantError::InvalidEmail);
-    };
-    if local.is_empty() || domain.is_empty() || domain.contains('@') {
-        return Err(IssueAuditorAccessGrantError::InvalidEmail);
-    }
-    Ok(email)
+    normalize_authority_email(value).ok_or(IssueAuditorAccessGrantError::InvalidEmail)
 }
 
 fn authorize(connection: &AgentConnectionContext) -> Result<(), IssueAuditorAccessGrantError> {

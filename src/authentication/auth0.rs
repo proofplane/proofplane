@@ -12,7 +12,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    authentication::jwks::JwksVerifier,
+    authentication::{jwks::JwksVerifier, VerifiedManagementIdentity},
     config::Auth0Config,
     domain::{
         canonical_permissions, AgentConnectionId, DomainError, Sha256Digest, WorkspaceId,
@@ -27,6 +27,7 @@ pub struct VerifiedClaims {
     pub sub: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    pub verified_management_identity: Option<VerifiedManagementIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +195,18 @@ struct UserExtraClaims {
     email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(
+        default,
+        rename = "https://proofplane.com/email",
+        skip_serializing_if = "Option::is_none"
+    )]
+    management_email: Option<serde_json::Value>,
+    #[serde(
+        default,
+        rename = "https://proofplane.com/email_verified",
+        skip_serializing_if = "Option::is_none"
+    )]
+    management_email_verified: Option<serde_json::Value>,
 }
 
 struct UserPolicy;
@@ -211,6 +224,10 @@ impl ClaimsPolicy for UserPolicy {
             sub,
             email: claims.extra.email.clone(),
             name: claims.extra.name.clone(),
+            verified_management_identity: VerifiedManagementIdentity::from_auth0_claims(
+                claims.extra.management_email.as_ref(),
+                claims.extra.management_email_verified.as_ref(),
+            ),
         })
     }
 }
@@ -832,6 +849,8 @@ mod tests {
         with_profile.claims_mut().extra = UserExtraClaims {
             email: Some("human@example.com".to_owned()),
             name: Some("Human Example".to_owned()),
+            management_email: None,
+            management_email_verified: None,
         };
         let verified = verifier
             .verify(&sign_with(&signing_key, with_profile))
@@ -843,6 +862,7 @@ mod tests {
                 sub: "auth0|profile".to_owned(),
                 email: Some("human@example.com".to_owned()),
                 name: Some("Human Example".to_owned()),
+                verified_management_identity: None,
             }
         );
 
@@ -853,6 +873,60 @@ mod tests {
             .expect("token verifies");
         assert_eq!(verified.email, None);
         assert_eq!(verified.name, None);
+        assert_eq!(verified.verified_management_identity, None);
+    }
+
+    #[tokio::test]
+    async fn user_policy_projects_only_verified_namespaced_management_email_claims() {
+        let (verifier, signing_key) = user_fixture();
+        let mut claims = user_claims(ISSUER, API_AUDIENCE, "auth0|member");
+        claims.claims_mut().extra.management_email = Some(serde_json::Value::String(
+            "  Member@Example.COM ".to_owned(),
+        ));
+        claims.claims_mut().extra.management_email_verified = Some(serde_json::Value::Bool(true));
+
+        let verified = verifier
+            .verify(&sign_with(&signing_key, claims))
+            .await
+            .expect("token verifies");
+
+        assert_eq!(
+            verified.verified_management_identity,
+            Some(VerifiedManagementIdentity {
+                email: "member@example.com".to_owned(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_or_unverified_management_claims_do_not_reject_existing_authentication() {
+        let (verifier, signing_key) = user_fixture();
+
+        for (email, email_verified) in [
+            (None, Some(serde_json::Value::Bool(true))),
+            (
+                Some(serde_json::Value::String(" ".to_owned())),
+                Some(serde_json::Value::Bool(true)),
+            ),
+            (
+                Some(serde_json::Value::String("member@example.com".to_owned())),
+                Some(serde_json::Value::Bool(false)),
+            ),
+            (
+                Some(serde_json::Value::Number(42.into())),
+                Some(serde_json::Value::String("true".to_owned())),
+            ),
+        ] {
+            let mut claims = user_claims(ISSUER, API_AUDIENCE, "auth0|member");
+            claims.claims_mut().extra.management_email = email;
+            claims.claims_mut().extra.management_email_verified = email_verified;
+
+            let verified = verifier
+                .verify(&sign_with(&signing_key, claims))
+                .await
+                .expect("token remains valid");
+            assert_eq!(verified.verified_management_identity, None);
+        }
     }
 
     #[tokio::test]

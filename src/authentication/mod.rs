@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use crate::{
     application::{
         commands::provision_user::{ProvisionUser, ProvisionUserError, ProvisionUserHandler},
@@ -30,12 +32,62 @@ pub struct AgentConnectionContext {
 pub struct UserContext {
     pub user_id: UserId,
     pub auth0_sub: String,
+    pub verified_management_identity: Option<VerifiedManagementIdentity>,
 }
 
 impl UserContext {
-    pub fn new(user_id: UserId, auth0_sub: String) -> Self {
-        Self { user_id, auth0_sub }
+    pub fn new(
+        user_id: UserId,
+        auth0_sub: String,
+        verified_management_identity: Option<VerifiedManagementIdentity>,
+    ) -> Self {
+        Self {
+            user_id,
+            auth0_sub,
+            verified_management_identity,
+        }
     }
+
+    /// Returns the email authority required by operations that bind a user to a mailbox.
+    pub fn require_verified_management_identity(
+        &self,
+    ) -> Result<&VerifiedManagementIdentity, VerifiedManagementIdentityError> {
+        self.verified_management_identity
+            .as_ref()
+            .ok_or(VerifiedManagementIdentityError::Unavailable)
+    }
+}
+
+/// A mailbox identity asserted by Auth0 and verified for management-plane use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedManagementIdentity {
+    pub email: String,
+}
+
+impl VerifiedManagementIdentity {
+    pub(crate) fn from_auth0_claims(
+        email: Option<&Value>,
+        email_verified: Option<&Value>,
+    ) -> Option<Self> {
+        (email_verified == Some(&Value::Bool(true)))
+            .then(|| email?.as_str())
+            .flatten()
+            .and_then(normalize_email)
+            .map(|email| Self { email })
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum VerifiedManagementIdentityError {
+    #[error("verified management identity is unavailable")]
+    Unavailable,
+}
+
+/// Normalizes the mailbox format accepted wherever Proofplane uses email authority.
+pub fn normalize_email(value: &str) -> Option<String> {
+    let email = value.trim().to_ascii_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(email)
 }
 
 pub struct UserAuthenticator<V: TokenVerifier<Claims = VerifiedClaims>> {
@@ -82,7 +134,11 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> UserAuthenticator<V> {
                 ProvisionUserError::Repository(error) => AuthError::Repository(error),
             })?;
 
-        Ok(UserContext::new(user.id, user.auth0_sub))
+        Ok(UserContext::new(
+            user.id,
+            user.auth0_sub,
+            claims.verified_management_identity,
+        ))
     }
 }
 
@@ -115,4 +171,58 @@ pub enum Error {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn verified_management_identity_normalizes_only_verified_mailboxes() {
+        let identity = VerifiedManagementIdentity::from_auth0_claims(
+            Some(&Value::String("  Member@Example.COM ".to_owned())),
+            Some(&Value::Bool(true)),
+        );
+
+        assert_eq!(
+            identity,
+            Some(VerifiedManagementIdentity {
+                email: "member@example.com".to_owned(),
+            })
+        );
+
+        for (email, verified) in [
+            (None, Some(Value::Bool(true))),
+            (
+                Some(Value::String("   ".to_owned())),
+                Some(Value::Bool(true)),
+            ),
+            (
+                Some(Value::String("member".to_owned())),
+                Some(Value::Bool(true)),
+            ),
+            (
+                Some(Value::String("member@example.com".to_owned())),
+                Some(Value::Bool(false)),
+            ),
+            (
+                Some(Value::String("member@example.com".to_owned())),
+                Some(Value::String("true".to_owned())),
+            ),
+            (Some(Value::Number(42.into())), Some(Value::Bool(true))),
+        ] {
+            assert_eq!(
+                VerifiedManagementIdentity::from_auth0_claims(email.as_ref(), verified.as_ref()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn context_only_rejects_missing_identity_when_an_operation_requests_it() {
+        let context = UserContext::new(UserId::from(Uuid::new_v4()), "auth0|user".to_owned(), None);
+
+        assert_eq!(
+            context.require_verified_management_identity(),
+            Err(VerifiedManagementIdentityError::Unavailable)
+        );
+    }
+}
