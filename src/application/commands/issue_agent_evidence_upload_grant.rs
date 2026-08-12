@@ -225,7 +225,8 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_failure_returns_no_credential_and_leaves_no_grant() {
-        let postgres = Arc::new(test_support::database().await);
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
         let workspace = test_support::workspace(&postgres, "Owner").await;
         let evidence_id =
             test_support::evidence(&postgres, workspace.workspace_id, "Access review").await;
@@ -275,7 +276,8 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_grant_save();
 
     #[tokio::test]
     async fn a_grant_is_issued_for_evidence_in_every_status() {
-        let postgres = Arc::new(test_support::database().await);
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
         let workspace = test_support::workspace(&postgres, "Owner").await;
         let handler = handler(&postgres);
 
@@ -302,7 +304,8 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_grant_save();
 
     #[tokio::test]
     async fn a_connection_without_submission_write_permission_is_told_nothing() {
-        let postgres = Arc::new(test_support::database().await);
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
         let workspace = test_support::workspace(&postgres, "Owner").await;
         let evidence_id =
             test_support::evidence(&postgres, workspace.workspace_id, "Access review").await;

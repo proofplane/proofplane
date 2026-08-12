@@ -323,7 +323,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_persists_the_typed_envelope_and_mirrors_it_onto_legacy_columns() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let correlation_id = Uuid::new_v4();
         let causation_id = Uuid::new_v4();
 
@@ -350,7 +351,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_rolls_back_with_the_domain_write() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let message = scan_message(None, None);
 
         let result = postgres
@@ -371,7 +373,8 @@ mod tests {
 
     #[tokio::test]
     async fn due_messages_are_listed_deleted_and_rescheduled_after_failure() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let first = append(&postgres, scan_message(None, None)).await;
         let second = append(&postgres, scan_message(None, None)).await;
 

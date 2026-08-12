@@ -3,7 +3,8 @@ use crate::support::{
     auth::FakeTokenVerifier,
     auth0::{self, FakeAuditorIdentityProvider},
     clamd::{ClamdControls, FakeClamd},
-    pubsub::TestPubSub,
+    local_stack,
+    pubsub::reset_worker_subscription,
     reference_data,
     scenario::types::TestFramework,
     worker::{start_worker, PipelineControls, PipelineEvents, PushProxy},
@@ -43,25 +44,16 @@ use proofplane::{
     },
 };
 use serde_json::Value;
-use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
-use testcontainers_modules::postgres;
 use tokio_util::sync::CancellationToken;
 
 use proofplane::persistence;
 use uuid::Uuid;
 
 const MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
-const POSTGRES_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
-/// Must track the Postgres image in `docker-compose.yml`, so this suite covers
-/// the same major version the application runs against.
-const POSTGRES_IMAGE_TAG: &str = "17-alpine";
 const DOWNLOAD_AUDIENCE: &str = "proofplane-document-download";
 const UPLOAD_GRANT_AUDIENCE: &str = "proofplane-document-upload-grant";
 
 struct Harness {
-    // Never read: held so the container outlives the test binary.
-    _postgres_container: ContainerAsync<postgres::Postgres>,
-    _pubsub: TestPubSub,
     _clamd: FakeClamd,
     // The servers also retain these dependencies. Keeping them here makes the
     // suite runtime's ownership of all runtime-bound resources explicit.
@@ -84,29 +76,16 @@ pub struct TestApp {
     reference_data: Arc<[TestFramework]>,
 }
 
-static APP: OnceLock<TestApp> = OnceLock::new();
+// Holds the failure as well as the success. A stack that is not up would
+// otherwise be rediscovered by every test in turn, each paying the wait again.
+static APP: OnceLock<Result<TestApp, String>> = OnceLock::new();
 
 impl Harness {
-    async fn start() -> Self {
+    async fn start() -> Result<Self, String> {
         auth0::start();
 
-        let container = postgres::Postgres::default()
-            .with_tag(POSTGRES_IMAGE_TAG)
-            .with_startup_timeout(POSTGRES_STARTUP_TIMEOUT)
-            .start()
-            .await
-            .expect("Postgres test container starts");
-
-        let host = container
-            .get_host()
-            .await
-            .expect("Postgres test container has a host");
-        let port = container
-            .get_host_port_ipv4(5432)
-            .await
-            .expect("Postgres test container exposes Postgres");
-
-        let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        local_stack::wait_for_pubsub().await?;
+        let database_url = local_stack::reset_suite_database().await?;
 
         let mut database = persistence::conn(&database_url)
             .await
@@ -144,8 +123,12 @@ impl Harness {
             PushProxy::start(&worker, pipeline_events.clone(), pipeline_controls.clone()).await;
         app_config.pubsub.subscriptions.worker_push_endpoint = proxy.container_endpoint();
 
-        let pubsub = TestPubSub::start().await;
-        std::env::set_var(PUBSUB_EMULATOR_HOST, pubsub.emulator_host());
+        std::env::set_var(PUBSUB_EMULATOR_HOST, local_stack::PUBSUB_EMULATOR_ADDRESS);
+        reset_worker_subscription(
+            &app_config.pubsub.project_id,
+            &app_config.pubsub.subscriptions.worker,
+        )
+        .await;
         ensure_worker_subscription(
             &app_config.pubsub.project_id,
             &app_config.pubsub.subscriptions,
@@ -168,9 +151,7 @@ impl Harness {
                 .expect("suite outbox dequeuer runs");
         });
 
-        Self {
-            _postgres_container: container,
-            _pubsub: pubsub,
+        Ok(Self {
             _clamd: clamd,
             _postgres: postgres.clone(),
             _object_store: object_store.clone(),
@@ -191,7 +172,7 @@ impl Harness {
                 clamd_controls,
                 reference_data: reference_data.into(),
             },
-        }
+        })
     }
 }
 
@@ -386,7 +367,7 @@ fn build_mcp_server(
     TestServer::builder().http_transport().build(app)
 }
 
-fn start_suite() -> TestApp {
+fn start_suite() -> Result<TestApp, String> {
     let (ready, started) = mpsc::sync_channel(1);
 
     thread::Builder::new()
@@ -399,9 +380,15 @@ fn start_suite() -> TestApp {
                 .expect("integration-v2 suite runtime builds");
 
             runtime.block_on(async move {
-                let environment = Harness::start().await;
+                let environment = match Harness::start().await {
+                    Ok(environment) => environment,
+                    Err(unavailable) => {
+                        let _ = ready.send(Err(unavailable));
+                        return;
+                    }
+                };
                 ready
-                    .send(environment.app.clone())
+                    .send(Ok(environment.app.clone()))
                     .expect("integration-v2 harness receiver remains available");
 
                 // The suite environment and its runtime-bound resources live
@@ -412,11 +399,16 @@ fn start_suite() -> TestApp {
         })
         .expect("integration-v2 suite thread spawns");
 
-    started
-        .recv()
-        .expect("integration-v2 suite thread stopped before initialization completed")
+    started.recv().unwrap_or_else(|_| {
+        Err("\n\nThe integration-v2 suite failed to start. \
+             Its panic is reported above this one.\n"
+            .to_owned())
+    })
 }
 
 pub async fn app() -> TestApp {
-    APP.get_or_init(start_suite).clone()
+    match APP.get_or_init(start_suite) {
+        Ok(app) => app.clone(),
+        Err(unavailable) => panic!("{unavailable}"),
+    }
 }

@@ -8,8 +8,8 @@ help:
 		'  make fmt               Format Rust code' \
 		'  make fmt-check         Check Rust formatting' \
 		'  make lint              Run clippy with warnings denied' \
-		'  make test              Run all tests' \
-		'  make check             Run fmt-check, lint, and test' \
+		'  make test              Run all tests (needs make up first)' \
+		'  make check             Run fmt-check, lint, and test (needs make up first)' \
 		'  make build             Build package' \
 		'  make up                Start local Docker dependencies' \
 		'  make down              Stop local Docker dependencies' \
@@ -55,9 +55,9 @@ reset-local:
 	mkdir -p .local/storage
 	docker compose up -d
 
-# Testcontainers harnesses hold their containers for the life of the test
-# process, so `ContainerAsync`'s remove-on-drop never runs and every `cargo test`
-# leaves containers behind. This clears them on demand.
+# Each Postgres-backed test owns its container and `ContainerAsync`'s
+# remove-on-drop clears it, so a test run that finishes leaves nothing behind.
+# A run killed partway through does. This sweeps up after those.
 docker-clean:
 	@ids="$$(docker ps -aq --filter label=org.testcontainers.managed-by=testcontainers)"; \
 	if [ -n "$$ids" ]; then \

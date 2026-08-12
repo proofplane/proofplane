@@ -1,37 +1,23 @@
-use testcontainers::{
-    core::{Host, IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
-    ContainerAsync, GenericImage, ImageExt,
-};
+use google_cloud_pubsub::client::{Client, ClientConfig};
 
-pub struct TestPubSub {
-    // Keep deltio alive for the whole test suite.
-    _container: ContainerAsync<GenericImage>,
-    emulator_host: String,
-}
+/// Deletes the worker subscription a previous run left behind.
+pub async fn reset_worker_subscription(project_id: &str, subscription_id: &str) {
+    let client = Client::new(ClientConfig {
+        project_id: Some(project_id.to_owned()),
+        ..Default::default()
+    })
+    .await
+    .expect("Pub/Sub emulator client connects");
 
-impl TestPubSub {
-    pub async fn start() -> Self {
-        let container = GenericImage::new("ghcr.io/jeffijoe/deltio", "latest")
-            .with_exposed_port(8085.tcp())
-            .with_wait_for(WaitFor::seconds(2))
-            .with_host("host.docker.internal", Host::HostGateway)
-            .start()
+    let subscription = client.subscription(subscription_id);
+    if subscription
+        .exists(None)
+        .await
+        .expect("previous worker subscription is queried")
+    {
+        subscription
+            .delete(None)
             .await
-            .expect("deltio starts");
-        let host = container.get_host().await.expect("deltio has a host");
-        let port = container
-            .get_host_port_ipv4(8085)
-            .await
-            .expect("deltio exposes Pub/Sub");
-
-        Self {
-            _container: container,
-            emulator_host: format!("{host}:{port}"),
-        }
-    }
-
-    pub fn emulator_host(&self) -> &str {
-        &self.emulator_host
+            .expect("previous worker subscription is deleted");
     }
 }

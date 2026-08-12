@@ -266,7 +266,8 @@ mod tests {
 
     #[tokio::test]
     async fn reads_are_scoped_to_the_owning_workspace_and_round_trip_the_full_snapshot() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let owner = test_support::workspace(&postgres, "Owner").await;
         let other = test_support::workspace(&postgres, "Other").await;
         let evidence_id =
@@ -303,7 +304,8 @@ mod tests {
 
     #[tokio::test]
     async fn save_requires_a_workspace_transaction() {
-        let postgres = test_support::database().await;
+        let database = test_support::database().await;
+        let postgres = database.postgres;
         let owner = test_support::workspace(&postgres, "Owner").await;
         let evidence_id =
             test_support::evidence(&postgres, owner.workspace_id, "Access review").await;

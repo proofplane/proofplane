@@ -16,7 +16,8 @@ notes live in `docs/`.
 
 - `make build`: compile the package and generated bindings.
 - `make check`: run formatting checks, Clippy with warnings denied, and all
-  tests.
+  tests. Run `make up` first: the integration-v2 suite uses the compose stack
+  rather than starting services of its own.
 - `make up && make health`: start and verify local Postgres, Pub/Sub, and
   ClamAV dependencies.
 - `make seed`: run database migrations and seed local data.
@@ -140,7 +141,13 @@ that owns it:
   tests after observable outcomes, such as
   `malicious_scan_marks_document_contains_virus`.
 
-Docker is required for the latter two test boundaries.
+Both of those boundaries need Docker, in different ways. Tests backed by
+`persistence::test_support` start a Postgres container of their own per test and
+remove it when the test ends, so they need only a working Docker daemon. The
+integration-v2 suite starts nothing: it uses the Postgres and Pub/Sub emulator
+from the compose stack, so `make up` has to have been run first, and it drops
+and recreates its own `proofplane_integration_v2` database on every run rather
+than touching the `proofplane` database you develop against.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test
@@ -168,7 +175,8 @@ containers, then prunes dangling volumes machine-wide, which is not limited to
 Proofplane. The local dev database survives while the compose stack is running or
 merely stopped, but `make down` removes those containers and leaves
 `proofplane_proofplane-postgres-data` dangling, so running `make docker-clean`
-after `make down` deletes it.
+after `make down` deletes it. A normal test run cleans up after itself now, so
+reach for this only after a run was killed partway through.
 
 ## Agent skills
 

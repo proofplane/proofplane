@@ -708,7 +708,8 @@ mod tests {
 
     #[tokio::test]
     async fn evidence_submission_and_document_snapshot_are_created_atomically() {
-        let postgres = Arc::new(test_support::database().await);
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
         let workspace = test_support::workspace(&postgres, "Evidence owner").await;
         let evidence_id =
             test_support::evidence(&postgres, workspace.workspace_id, "Bank statement").await;

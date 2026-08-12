@@ -22,6 +22,12 @@ services:
     image: ghcr.io/jeffijoe/deltio:latest
     ports:
       - "8085:8085"
+    # deltio pushes via push subscriptions to a worker running on the host
+    # (i.e., a CI job runner). This means the deltio container needs a DNS
+    # name where it can reach the worker. On Mac, this is redundant because
+    # Docker Desktop injects it, but on Linux it's necessary.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 8085"]
       interval: 5s

@@ -217,9 +217,11 @@ token). Point it at your MCP URL and complete the browser authorization; use the
 
 ## Validation
 
-Run the standard repository check before submitting code:
+Run the standard repository check before submitting code, with the local stack
+already running:
 
 ```bash
+make up
 make check
 ```
 
@@ -229,9 +231,20 @@ That runs:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 
-The integration-v2 tests use Docker-backed Testcontainers for Postgres and the
-deltio Pub/Sub emulator, so Docker must be available for the full test suite.
-ClamAV behavior is provided by an in-process fake clamd server.
+Docker is needed for the whole of `cargo test`, not just the integration-v2
+binary, but the two test boundaries use it differently:
+
+- The repository and application tests compiled into the library start a
+  Postgres container per test through Testcontainers and remove it when the test
+  finishes. They need a running Docker daemon and nothing else.
+- The integration-v2 suite starts no containers. It uses the Postgres and deltio
+  Pub/Sub emulator from `make up`, and fails at startup with a message naming
+  the missing service if they are not running. It works in
+  `proofplane_integration_v2`, a database it drops and recreates each run, so it
+  never disturbs the `proofplane` database you develop against.
+
+ClamAV behavior is provided by an in-process fake clamd server, so the compose
+`clamav` service is not involved in the test suite.
 
 Useful focused commands:
 
