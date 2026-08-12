@@ -1,11 +1,14 @@
-use http::StatusCode;
-use proofplane::routes::authentication::AUTHORIZATION_HEADER;
+use http::{header, StatusCode};
 use proofplane::{
-    messaging::SEND_WORKSPACE_INVITATION_TYPE, routes::request_context::REQUEST_ID_HEADER,
+    domain::WorkspacePermission,
+    mcp::ENDPOINT,
+    messaging::SEND_WORKSPACE_INVITATION_TYPE,
+    routes::{authentication::AUTHORIZATION_HEADER, request_context::REQUEST_ID_HEADER},
 };
 use serde_json::{json, Value};
+use uuid::Uuid;
 
-use crate::support::{harness, scenario::ScenarioBuilder};
+use crate::support::{harness, oauth::authorize_agent_connection, scenario::ScenarioBuilder};
 
 #[tokio::test]
 async fn copyable_invitation_previews_accepts_and_replays_without_leaking_authority() {
@@ -319,6 +322,173 @@ async fn stale_generation_worker_command_acks_without_sending_wrong_generation()
 }
 
 #[tokio::test]
+async fn people_lists_members_and_removal_preserves_boundaries_and_revokes_agent_authority() {
+    let app = harness::app().await;
+    let owner = "auth0|people-removal-owner";
+    let invitee = "auth0|people-removal-invitee";
+    let outsider = "auth0|people-removal-outsider";
+    let foreign_owner = "auth0|people-removal-foreign-owner";
+    let scenario = ScenarioBuilder::new(&app)
+        .with_user(owner)
+        .with_user(invitee)
+        .with_user(outsider)
+        .with_user(foreign_owner)
+        .with_workspace(owner, "People Workspace")
+        .with_workspace(foreign_owner, "Foreign Workspace")
+        .build()
+        .await;
+
+    let accepted_invitation = app
+        .app_server()
+        .post("/workspace/invitations")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {owner}"))
+        .json(&json!({ "email": format!("{invitee}@example.com") }))
+        .await;
+    accepted_invitation.assert_status_ok();
+    let accepted_invitation: Value = accepted_invitation.json();
+    let invitation_url = url::Url::parse(accepted_invitation["url"].as_str().unwrap()).unwrap();
+    let invitation_token = invitation_url
+        .fragment()
+        .unwrap()
+        .strip_prefix("token=")
+        .unwrap();
+    app.app_server()
+        .post("/workspace-invitations/accept")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {invitee}"))
+        .json(&json!({ "token": invitation_token }))
+        .await
+        .assert_status_ok();
+
+    app.app_server()
+        .post("/workspace/invitations")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {owner}"))
+        .json(&json!({ "email": "pending-member@example.com" }))
+        .await
+        .assert_status_ok();
+
+    let people = app
+        .app_server()
+        .get("/workspace/people")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {owner}"))
+        .await;
+    people.assert_status_ok();
+    let people: Value = people.json();
+    assert_eq!(
+        keys(&people),
+        ["actor_role", "members", "pending_invitations", "workspace"]
+    );
+    assert_eq!(keys(&people["workspace"]), ["id", "name"]);
+    assert_eq!(people["workspace"]["name"], "People Workspace");
+    assert_eq!(people["actor_role"], "owner");
+    assert_eq!(people["members"].as_array().unwrap().len(), 2);
+    for member in people["members"].as_array().unwrap() {
+        assert_eq!(
+            keys(member),
+            ["display_name", "email", "joined_at", "role", "user_id"]
+        );
+        assert!(member["display_name"].is_string());
+        assert!(member["email"].is_string());
+        assert!(member["joined_at"].is_string());
+    }
+    assert_eq!(people["pending_invitations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        people["pending_invitations"][0]["invited_email"],
+        "pending-member@example.com"
+    );
+
+    let invitee_id = scenario.user(invitee).id;
+    let foreign_owner_id = scenario.user(foreign_owner).id;
+    let agent_token = authorize_agent_connection(
+        &app,
+        invitee,
+        "Removal Regression Client",
+        &WorkspacePermission::ALL,
+    )
+    .await;
+    app.mcp_server()
+        .post(ENDPOINT)
+        .add_header(header::ACCEPT, "application/json, text/event-stream")
+        .add_header(header::AUTHORIZATION, format!("Bearer {agent_token}"))
+        .json(&mcp_initialize_body())
+        .await
+        .assert_status_ok();
+
+    let self_removal = app
+        .app_server()
+        .delete(&format!("/workspace/members/{invitee_id}"))
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {invitee}"))
+        .await;
+    assert_eq!(self_removal.status_code(), StatusCode::CONFLICT);
+    assert_eq!(
+        self_removal.json::<Value>(),
+        json!({ "error": { "code": "self_removal", "message": "workspace members may not remove themselves", "details": [] } })
+    );
+
+    for (actor, target) in [
+        (owner, foreign_owner_id),
+        (owner, Uuid::new_v4()),
+        (outsider, invitee_id),
+    ] {
+        app.app_server()
+            .delete(&format!("/workspace/members/{target}"))
+            .add_header(AUTHORIZATION_HEADER, format!("Bearer {actor}"))
+            .await
+            .assert_status_not_found();
+    }
+
+    let (removed, logs) = app
+        .capture_audit_logs(async |request_id| {
+            app.app_server()
+                .delete(&format!("/workspace/members/{invitee_id}"))
+                .add_header(AUTHORIZATION_HEADER, format!("Bearer {owner}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .await
+        })
+        .await;
+    removed.assert_status_ok();
+    assert_eq!(logs.len(), 1);
+    let fields = &logs[0]["fields"];
+    assert_eq!(fields["event_name"], "workspace.member_removed");
+    assert_eq!(fields["outcome"], "success");
+    assert_eq!(fields["operation"], "remove_workspace_member");
+    assert_eq!(fields["user_id"], scenario.user(owner).id.to_string());
+    assert_eq!(fields["object_type"], "user");
+    assert_eq!(fields["object_id"], invitee_id.to_string());
+
+    app.mcp_server()
+        .post(ENDPOINT)
+        .add_header(header::ACCEPT, "application/json, text/event-stream")
+        .add_header(header::AUTHORIZATION, format!("Bearer {agent_token}"))
+        .json(&mcp_initialize_body())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let remaining_people = app
+        .app_server()
+        .get("/workspace/people")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {owner}"))
+        .await;
+    remaining_people.assert_status_ok();
+    let remaining_people: Value = remaining_people.json();
+    assert_eq!(remaining_people["members"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        remaining_people["members"][0]["user_id"],
+        scenario.user(owner).id.to_string()
+    );
+    assert_eq!(
+        remaining_people["pending_invitations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        remaining_people["pending_invitations"][0]["invited_email"],
+        "pending-member@example.com"
+    );
+}
+
+#[tokio::test]
 async fn duplicate_and_cross_workspace_link_requests_are_stable_and_concealed() {
     let app = harness::app().await;
     let owner = "auth0|invitation-duplicate-owner";
@@ -426,4 +596,17 @@ fn keys(value: &Value) -> Vec<&str> {
         .keys()
         .map(String::as_str)
         .collect()
+}
+
+fn mcp_initialize_body() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "integration-v2", "version": "0" },
+        },
+    })
 }

@@ -76,6 +76,8 @@ pub enum WorkspaceMemberError {
     NotFound,
     #[error("the workspace must retain at least one owner")]
     LastOwner,
+    #[error("workspace members may not remove themselves")]
+    SelfRemoval,
 }
 
 impl Workspace {
@@ -205,6 +207,9 @@ impl Workspace {
         {
             return Err(WorkspaceMemberError::LastOwner);
         }
+        if actor_user_id == target_user_id {
+            return Err(WorkspaceMemberError::SelfRemoval);
+        }
         self.memberships.remove(index);
         Ok(())
     }
@@ -249,6 +254,23 @@ mod tests {
         assert_eq!(
             workspace.remove_member(owner_id, owner_id),
             Err(WorkspaceMemberError::LastOwner)
+        );
+        assert_eq!(workspace, before);
+    }
+
+    #[test]
+    fn aggregate_rejects_self_removal_without_mutating_memberships() {
+        let owner_id = UserId::from(Uuid::new_v4());
+        let admin_id = UserId::from(Uuid::new_v4());
+        let mut workspace = owned_workspace(owner_id);
+        workspace
+            .add_member(admin_id, WorkspaceRole::Admin, timestamp())
+            .unwrap();
+        let before = workspace.clone();
+
+        assert_eq!(
+            workspace.remove_member(admin_id, admin_id),
+            Err(WorkspaceMemberError::SelfRemoval)
         );
         assert_eq!(workspace, before);
     }

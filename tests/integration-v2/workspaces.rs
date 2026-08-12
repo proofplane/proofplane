@@ -143,6 +143,16 @@ async fn cannot_remove_the_last_owner() {
         .add_header(AUTHORIZATION_HEADER, format!("Bearer {alice}"))
         .await;
     assert_eq!(rejected.status_code(), StatusCode::CONFLICT);
+    assert_eq!(
+        rejected.json::<Value>(),
+        json!({
+            "error": {
+                "code": "last_owner",
+                "message": "the workspace must retain at least one owner",
+                "details": [],
+            }
+        })
+    );
 
     // TODO: There's currently no API for adding members to workspaces. Once
     // we add that, we should add a test here that does this which is copy-pasted

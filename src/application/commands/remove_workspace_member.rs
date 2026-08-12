@@ -51,6 +51,7 @@ impl RemoveWorkspaceMemberHandler {
                     Err(WorkspaceMemberError::Unavailable) => Ok(RemoveOutcome::Unavailable),
                     Err(WorkspaceMemberError::NotFound) => Ok(RemoveOutcome::NotFound),
                     Err(WorkspaceMemberError::LastOwner) => Ok(RemoveOutcome::LastOwner),
+                    Err(WorkspaceMemberError::SelfRemoval) => Ok(RemoveOutcome::SelfRemoval),
                 }
             })
             .await?;
@@ -60,6 +61,7 @@ impl RemoveWorkspaceMemberHandler {
             RemoveOutcome::Unavailable => Err(RemoveWorkspaceMemberError::Unavailable),
             RemoveOutcome::NotFound => Err(RemoveWorkspaceMemberError::NotFound),
             RemoveOutcome::LastOwner => Err(RemoveWorkspaceMemberError::LastOwner),
+            RemoveOutcome::SelfRemoval => Err(RemoveWorkspaceMemberError::SelfRemoval),
         }
     }
 }
@@ -69,6 +71,7 @@ enum RemoveOutcome {
     Unavailable,
     NotFound,
     LastOwner,
+    SelfRemoval,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +82,8 @@ pub enum RemoveWorkspaceMemberError {
     NotFound,
     #[error("the workspace must retain at least one owner")]
     LastOwner,
+    #[error("workspace members may not remove themselves")]
+    SelfRemoval,
     #[error("workspace repository error")]
     Repository(#[from] crate::persistence::Error),
 }

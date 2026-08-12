@@ -163,6 +163,10 @@ impl From<RemoveWorkspaceMemberError> for ApiError {
                 code: "last_owner",
                 message: "the workspace must retain at least one owner".to_owned(),
             },
+            RemoveWorkspaceMemberError::SelfRemoval => ApiError::Conflict {
+                code: "self_removal",
+                message: "workspace members may not remove themselves".to_owned(),
+            },
             RemoveWorkspaceMemberError::Repository(error) => repository_error(error),
         }
     }
