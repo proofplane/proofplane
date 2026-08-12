@@ -21,6 +21,7 @@ mod sha256_digest;
 mod user;
 mod validation;
 mod workspace;
+mod workspace_invitation;
 
 pub use agent_connection::{
     AgentAuthorizationTransactionId, AgentConnection, AgentConnectionActivation,
@@ -95,4 +96,8 @@ pub use validation::{optional_text, required_text, validate_document_filename};
 pub use workspace::{
     CreateWorkspacePayload, UpdateWorkspacePayload, Workspace, WorkspaceError, WorkspaceId,
     WorkspaceMemberError, WorkspaceMembership, WorkspaceRole,
+};
+pub use workspace_invitation::{
+    InvitationAcceptance, WorkspaceInvitation, WorkspaceInvitationError, WorkspaceInvitationId,
+    WorkspaceInvitationStatus,
 };

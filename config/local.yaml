@@ -46,6 +46,13 @@ paseto:
       - id: "local-mcp-oauth-001"
         secret: "k4.local.BMyQa9GmLofWmmvtYCedLfePwmuJsMgNn96nW1PtMp0"
 
+workspace_invitations:
+  landing_portal_base_url: "http://127.0.0.1:5173"
+  active_key_id: "local-workspace-invitation-001"
+  keys:
+    - id: "local-workspace-invitation-001"
+      secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
+
 object_storage:
   backend: "filesystem"
   root: ".local/storage"

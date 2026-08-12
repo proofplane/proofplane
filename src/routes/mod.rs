@@ -14,6 +14,7 @@ pub mod policy_document_upload_sessions;
 pub mod protected_resource_metadata;
 pub mod request_context;
 pub mod version;
+pub mod workspace_invitations;
 pub mod workspaces;
 
 pub(crate) fn upload_credential(headers: &axum::http::HeaderMap) -> Option<&str> {

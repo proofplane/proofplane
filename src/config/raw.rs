@@ -17,7 +17,8 @@ use super::{
     HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
     PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    ScannerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
+    WorkspaceInvitationsConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +28,7 @@ pub(super) struct RawAppConfig {
     pub(super) pubsub: RawPubSubConfig,
     pub(super) auth0: RawAuth0Config,
     pub(super) paseto: RawPasetoConfig,
+    pub(super) workspace_invitations: RawWorkspaceInvitationsConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) scanner: RawScannerConfig,
     pub(super) uploads: RawUploadsConfig,
@@ -34,6 +36,86 @@ pub(super) struct RawAppConfig {
     pub(super) worker: RawWorkerConfig,
     pub(super) mcp: RawMcpConfig,
     pub(super) health: RawHealthConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawWorkspaceInvitationsConfig {
+    landing_portal_base_url: String,
+    active_key_id: String,
+    keys: Vec<RawWorkspaceInvitationPasetoKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawWorkspaceInvitationPasetoKey {
+    id: String,
+    secret: SecretString,
+}
+
+impl RawWorkspaceInvitationsConfig {
+    pub(super) fn validate(self) -> Validation<WorkspaceInvitationsConfig, ConfigFieldError> {
+        let mut errors = Vec::new();
+        let landing_portal_base_url =
+            match validate_public_api_base_url(self.landing_portal_base_url)
+                .at("workspace_invitations.landing_portal_base_url")
+            {
+                Validation::Valid(value) => Some(value),
+                Validation::Invalid(mut value) => {
+                    errors.append(&mut value);
+                    None
+                }
+            };
+        let active_key_id = self.active_key_id.trim().to_owned();
+        if active_key_id.is_empty() {
+            errors.push(ConfigFieldError::new(
+                "workspace_invitations.active_key_id",
+                "must not be blank",
+            ));
+        }
+        let mut keys = Vec::new();
+        for (index, key) in self.keys.into_iter().enumerate() {
+            let id = key.id.trim().to_owned();
+            if id.is_empty() {
+                errors.push(ConfigFieldError::new(
+                    format!("workspace_invitations.keys[{index}].id"),
+                    "must not be blank",
+                ));
+            }
+            match paseto_download_key(key.secret) {
+                Ok(secret) => keys.push(WorkspaceInvitationPasetoKey { id, secret }),
+                Err(message) => errors.push(ConfigFieldError::new(
+                    format!("workspace_invitations.keys[{index}].secret"),
+                    message,
+                )),
+            }
+        }
+        if keys.is_empty() {
+            errors.push(ConfigFieldError::new(
+                "workspace_invitations.keys",
+                "must contain at least one key",
+            ));
+        }
+        add_duplicate_id_errors(
+            "workspace_invitations.keys",
+            keys.iter().map(|key| key.id.as_str()),
+            &mut errors,
+        );
+        if !keys.iter().any(|key| key.id == active_key_id) {
+            errors.push(ConfigFieldError::new(
+                "workspace_invitations.active_key_id",
+                "must exist in workspace_invitations.keys",
+            ));
+        }
+        match (landing_portal_base_url, errors.is_empty()) {
+            (Some(landing_portal_base_url), true) => {
+                Validation::valid(WorkspaceInvitationsConfig {
+                    landing_portal_base_url,
+                    active_key_id,
+                    keys,
+                })
+            }
+            _ => Validation::invalid_many(errors),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

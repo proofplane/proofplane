@@ -15,6 +15,7 @@ mod oauth;
 mod policies;
 mod policy_document_upload_grants;
 mod users;
+mod workspace_invitations;
 mod workspace_memberships;
 mod workspaces;
 
@@ -33,5 +34,6 @@ pub use oauth::OAuthAuthorizationFlowRepository;
 pub use policies::{ArchivePolicyResult, CreatePolicyDocumentResult};
 pub use policy_document_upload_grants::PolicyDocumentUploadGrantRepository;
 pub use users::UserRepository;
+pub use workspace_invitations::WorkspaceInvitationRepository;
 pub use workspace_memberships::NewWorkspaceMembership;
 pub use workspaces::WorkspaceRepository;

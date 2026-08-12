@@ -10,6 +10,7 @@ mod evidence;
 mod evidence_submission;
 mod policy;
 mod workspace;
+mod workspace_people;
 
 pub use agent_connection::{
     AgentConnectionAuthority, ReusableAgentConnection, UserAgentConnectionSummary,
@@ -32,3 +33,6 @@ pub use policy::{
     PolicyDocumentDetail, PolicyDocumentStatus, PolicyDocumentUploadEligibility, PolicySummary,
 };
 pub use workspace::{WorkspaceDetails, WorkspaceWithRole};
+pub use workspace_people::{
+    PendingWorkspaceInvitation, WorkspaceInvitationPreviewSource, WorkspacePeople, WorkspacePerson,
+};

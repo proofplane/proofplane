@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub pubsub: PubSubConfig,
     pub auth0: Auth0Config,
     pub paseto: PasetoConfig,
+    pub workspace_invitations: WorkspaceInvitationsConfig,
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
@@ -118,6 +119,19 @@ pub struct PasetoMcpOAuthConfig {
 
 #[derive(Debug, Clone)]
 pub struct PasetoMcpOAuthKey {
+    pub id: String,
+    pub secret: SecretString,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceInvitationsConfig {
+    pub landing_portal_base_url: Url,
+    pub active_key_id: String,
+    pub keys: Vec<WorkspaceInvitationPasetoKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceInvitationPasetoKey {
     pub id: String,
     pub secret: SecretString,
 }
@@ -264,6 +278,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         pubsub <- raw.pubsub.validate(),
         auth0 <- raw.auth0.validate(),
         paseto <- raw.paseto.validate(),
+        workspace_invitations <- raw.workspace_invitations.validate(),
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
@@ -279,6 +294,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
                 pubsub,
                 auth0,
                 paseto,
+                workspace_invitations,
                 object_storage,
                 scanner,
                 uploads,
@@ -346,6 +362,17 @@ mod tests {
             "local-upload-grant-001"
         );
         assert_eq!(config.paseto.upload_grant.keys.len(), 1);
+        assert_eq!(
+            config
+                .workspace_invitations
+                .landing_portal_base_url
+                .as_str(),
+            "http://127.0.0.1:5173/"
+        );
+        assert_eq!(
+            config.workspace_invitations.active_key_id,
+            "local-workspace-invitation-001"
+        );
         assert_eq!(
             config.auth0.auditor_portal.callback_url.as_str(),
             "http://127.0.0.1:3000/auditor-access/auth0/callback"
@@ -485,6 +512,12 @@ paseto:
     keys:
       - id: ""
         secret: "not-a-paserk"
+workspace_invitations:
+  landing_portal_base_url: "http://example.com/path"
+  active_key_id: ""
+  keys:
+    - id: ""
+      secret: "not-a-paserk"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -547,6 +580,10 @@ health:
                 assert!(paths.contains(&"paseto.mcp_oauth.active_key_id"));
                 assert!(paths.contains(&"paseto.mcp_oauth.keys[0].id"));
                 assert!(paths.contains(&"paseto.mcp_oauth.keys[0].secret"));
+                assert!(paths.contains(&"workspace_invitations.landing_portal_base_url"));
+                assert!(paths.contains(&"workspace_invitations.active_key_id"));
+                assert!(paths.contains(&"workspace_invitations.keys[0].id"));
+                assert!(paths.contains(&"workspace_invitations.keys[0].secret"));
                 assert!(paths.contains(&"object_storage.endpoint_override"));
                 assert!(paths.contains(&"object_storage.credentials_mode"));
                 assert!(paths.contains(&"scanner.clamd_address"));
@@ -596,6 +633,15 @@ health:
         assert!(!debug.contains(config.paseto.download.keys[0].secret.expose_secret()));
         assert!(!debug.contains(config.paseto.upload_grant.keys[0].secret.expose_secret()));
         assert!(debug.contains("Secret"));
+    }
+
+    #[test]
+    fn workspace_invitation_secret_is_redacted_in_debug_output() {
+        let config = load_from_path("config/local.yaml").expect("local config loads");
+        let debug = format!("{:?}", config.workspace_invitations);
+
+        assert!(debug.contains("SecretBox<str>([REDACTED])"));
+        assert!(!debug.contains("mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"));
     }
 
     #[test]
@@ -814,8 +860,8 @@ paseto:
             .expect("local config has paseto")
             .0;
         let after_paseto = local
-            .split_once("\nobject_storage:\n")
-            .expect("local config has object_storage")
+            .split_once("\nworkspace_invitations:\n")
+            .expect("local config has workspace invitations")
             .1;
 
         let paseto = if paseto.contains("mcp_oauth:") {
@@ -826,7 +872,7 @@ paseto:
             )
         };
 
-        format!("{before_paseto}\n{paseto}\nobject_storage:\n{after_paseto}")
+        format!("{before_paseto}\n{paseto}\nworkspace_invitations:\n{after_paseto}")
     }
 
     fn write_temp_config(contents: &str) -> PathBuf {

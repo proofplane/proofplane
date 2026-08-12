@@ -56,3 +56,8 @@ _Avoid_: Auditor session, invitation token
 The lifecycle of one OAuth authorization request from preparation through
 consent, cancellation, code issuance, and consumption.
 _Avoid_: Login session, agent connection
+
+**Workspace invitation**:
+A workspace-scoped, email-bound authority allowing a person to join as an
+administrator before its expiry or revocation.
+_Avoid_: Workspace membership, Auth0 organization invitation

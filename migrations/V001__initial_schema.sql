@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 CREATE TABLE workspaces (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -32,6 +33,46 @@ CREATE INDEX idx_workspace_memberships_user_id
 
 CREATE INDEX idx_workspace_memberships_workspace_role
     ON workspace_memberships (workspace_id, role);
+
+CREATE TABLE workspace_invitations (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    inviter_user_id UUID NOT NULL REFERENCES users(id),
+    invited_email TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role = 'admin'),
+    generation BIGINT NOT NULL CHECK (generation > 0),
+    created_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    accepting_user_id UUID REFERENCES users(id),
+    queued_generation BIGINT,
+    queued_at TIMESTAMPTZ,
+    delivered_generation BIGINT,
+    delivered_at TIMESTAMPTZ,
+    last_delivery_failure TEXT,
+    delivery_failed_at TIMESTAMPTZ,
+    CHECK (invited_email = lower(trim(invited_email))),
+    CHECK (position('@' IN invited_email) > 1),
+    CHECK (expires_at > created_at),
+    CHECK ((accepted_at IS NULL AND accepting_user_id IS NULL) OR
+           (accepted_at IS NOT NULL AND accepting_user_id IS NOT NULL)),
+    CHECK (accepted_at IS NULL OR revoked_at IS NULL),
+    CHECK ((queued_generation IS NULL) = (queued_at IS NULL)),
+    CHECK ((delivered_generation IS NULL) = (delivered_at IS NULL)),
+    CHECK ((last_delivery_failure IS NULL) = (delivery_failed_at IS NULL)),
+    CHECK (queued_generation IS NULL OR queued_generation BETWEEN 1 AND generation),
+    CHECK (delivered_generation IS NULL OR delivered_generation BETWEEN 1 AND generation),
+    CONSTRAINT workspace_invitations_pending_window_excl EXCLUDE USING gist (
+        workspace_id WITH =,
+        invited_email WITH =,
+        tstzrange(created_at, expires_at, '[)') WITH &&
+    ) WHERE (accepted_at IS NULL AND revoked_at IS NULL)
+);
+
+CREATE INDEX workspace_invitations_workspace_pending_idx
+    ON workspace_invitations (workspace_id, expires_at, id)
+    WHERE accepted_at IS NULL AND revoked_at IS NULL;
 
 CREATE TABLE outbox_messages (
     id BIGSERIAL PRIMARY KEY,

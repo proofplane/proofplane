@@ -5,7 +5,8 @@ use proofplane::config::{
     LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
     PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+    ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
+    WorkspaceInvitationsConfig,
 };
 use secrecy::SecretString;
 use uuid::Uuid;
@@ -91,6 +92,15 @@ pub fn config(
                     ),
                 }],
             },
+        },
+        workspace_invitations: WorkspaceInvitationsConfig {
+            landing_portal_base_url: url::Url::parse("https://app.proofplane.test")
+                .expect("landing portal URL parses"),
+            active_key_id: "integration-workspace-invitation-001".to_owned(),
+            keys: vec![WorkspaceInvitationPasetoKey {
+                id: "integration-workspace-invitation-001".to_owned(),
+                secret: SecretString::from("k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"),
+            }],
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         scanner: ScannerConfig {

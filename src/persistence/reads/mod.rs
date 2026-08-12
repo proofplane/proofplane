@@ -18,6 +18,7 @@ mod frameworks;
 mod oauth_authorization_flows;
 mod policies;
 mod users;
+mod workspace_people;
 mod workspaces;
 
 pub(crate) use agent_connections::AgentConnectionReads;
@@ -35,4 +36,5 @@ pub(crate) use frameworks::FrameworkReads;
 pub(crate) use oauth_authorization_flows::OAuthAuthorizationFlowReads;
 pub(crate) use policies::PolicyReads;
 pub(crate) use users::UserReads;
+pub(crate) use workspace_people::WorkspacePeopleReads;
 pub(crate) use workspaces::WorkspaceReads;

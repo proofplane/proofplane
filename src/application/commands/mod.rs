@@ -31,3 +31,4 @@ pub mod revoke_auditor_session;
 pub mod start_auditor_auth_transaction;
 pub mod unmap_control_from_evidence;
 pub mod unmap_evidence_from_controls;
+pub mod workspace_invitations;

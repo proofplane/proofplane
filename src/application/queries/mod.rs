@@ -18,3 +18,4 @@ pub mod resolve_auditor_grant_by_secret;
 pub mod resolve_auditor_session_by_digest;
 pub mod resolve_evidence_document_upload_grant_authority;
 pub mod resolve_policy_document_upload_grant_authority;
+pub mod workspace_invitations;

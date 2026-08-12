@@ -4,7 +4,7 @@ use super::{
     AgentConnectionReads, AuditorAccessGrantReads, AuditorAuthTransactionReads, AuditorPortalReads,
     AuditorSessionReads, ControlReads, DocumentReads, EvidenceReads, EvidenceSubmissionReads,
     FrameworkReads, OAuthAuthorizationFlowReads, PolicyReads, ReadExecutor, UserReads,
-    WorkspaceReads,
+    WorkspacePeopleReads, WorkspaceReads,
 };
 
 pub(crate) struct Reads<E> {
@@ -52,6 +52,10 @@ impl<E: ReadExecutor> Reads<E> {
 
     pub(crate) fn documents(&self) -> DocumentReads<'_, E> {
         DocumentReads::new(&self.executor)
+    }
+
+    pub(crate) fn workspace_people(&self) -> WorkspacePeopleReads<'_, E> {
+        WorkspacePeopleReads::new(&self.executor)
     }
 
     pub(crate) fn workspace(&self, workspace_id: WorkspaceId) -> WorkspaceScopedReads<&E> {

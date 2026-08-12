@@ -194,7 +194,7 @@ struct MemberPath {
 }
 
 #[derive(Debug, Serialize)]
-struct WorkspaceWithRoleResponseDTO {
+pub(crate) struct WorkspaceWithRoleResponseDTO {
     id: Uuid,
     slug: Option<String>,
     name: String,
@@ -202,7 +202,7 @@ struct WorkspaceWithRoleResponseDTO {
     created_at: DateTime<Utc>,
 }
 
-type WorkspaceWithRoleResponse = WorkspaceWithRoleResponseDTO;
+pub(crate) type WorkspaceWithRoleResponse = WorkspaceWithRoleResponseDTO;
 
 impl From<WorkspaceWithRole> for WorkspaceWithRoleResponseDTO {
     fn from(value: WorkspaceWithRole) -> Self {

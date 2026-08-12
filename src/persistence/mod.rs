@@ -27,7 +27,7 @@ pub use aggregates::{
     CreatePolicyDocumentResult, DocumentRepository, EvidenceDocumentUploadGrantRepository,
     EvidenceSubmissionRepository, NewWorkspaceMembership, OAuthAuthorizationFlowRepository,
     PolicyDocumentUploadGrantRepository, UserRepository, WorkspaceDocumentRepository,
-    WorkspaceRepository,
+    WorkspaceInvitationRepository, WorkspaceRepository,
 };
 pub use connection::{conn, conn_pool};
 pub use constraints::ConflictKind;

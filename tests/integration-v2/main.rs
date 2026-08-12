@@ -7,4 +7,5 @@ mod me;
 mod oauth;
 mod policy_document_management;
 mod support;
+mod workspace_invitations;
 mod workspaces;

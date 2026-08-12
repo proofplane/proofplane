@@ -37,6 +37,8 @@ pub enum ApiError {
     NotFound,
     PayloadTooLarge,
     Conflict { code: &'static str, message: String },
+    Forbidden { code: &'static str, message: String },
+    Gone { code: &'static str, message: String },
     ServiceUnavailable { code: &'static str, message: String },
     ReadinessTimeout,
     Unauthorized,
@@ -53,6 +55,8 @@ impl ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            Self::Gone { .. } => StatusCode::GONE,
             Self::ServiceUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => {
@@ -68,7 +72,9 @@ impl ApiError {
             Self::MethodNotAllowed => "method_not_allowed",
             Self::NotFound => "not_found",
             Self::PayloadTooLarge => "payload_too_large",
-            Self::Conflict { code, .. } => code,
+            Self::Conflict { code, .. }
+            | Self::Forbidden { code, .. }
+            | Self::Gone { code, .. } => code,
             Self::ServiceUnavailable { code, .. } => code,
             Self::Unauthorized => "unauthorized",
             Self::ReadinessTimeout | Self::Pool(_) | Self::Postgres(_) => "not_ready",
@@ -82,7 +88,9 @@ impl ApiError {
             Self::MethodNotAllowed => "method not allowed".to_owned(),
             Self::NotFound => "route not found".to_owned(),
             Self::PayloadTooLarge => "request payload is too large".to_owned(),
-            Self::Conflict { message, .. } => message.clone(),
+            Self::Conflict { message, .. }
+            | Self::Forbidden { message, .. }
+            | Self::Gone { message, .. } => message.clone(),
             Self::ServiceUnavailable { message, .. } => message.clone(),
             Self::Unauthorized => "authentication required".to_owned(),
             Self::ReadinessTimeout => "readiness check timed out".to_owned(),
@@ -105,6 +113,8 @@ impl IntoResponse for ApiError {
             | Self::NotFound
             | Self::PayloadTooLarge
             | Self::Conflict { .. }
+            | Self::Forbidden { .. }
+            | Self::Gone { .. }
             | Self::ServiceUnavailable { .. }
             | Self::ReadinessTimeout
             | Self::Unauthorized => {}

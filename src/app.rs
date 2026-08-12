@@ -15,17 +15,24 @@ use crate::{
             remove_workspace_member::RemoveWorkspaceMemberHandler,
             revoke_auditor_session::RevokeAuditorSessionHandler,
             start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
+            workspace_invitations::{
+                AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitationHandler,
+                GetCurrentWorkspaceInvitationLinkHandler,
+            },
         },
         queries::{
             agent_connections::ListUserAgentConnectionsHandler,
-            evidence_catalog::ListEvidenceControlMappingsHandler, get_user::GetUserHandler,
-            get_workspace_for_user::GetWorkspaceForUserHandler, policy_catalog::GetPolicyHandler,
+            evidence_catalog::ListEvidenceControlMappingsHandler,
+            get_user::GetUserHandler,
+            get_workspace_for_user::GetWorkspaceForUserHandler,
+            policy_catalog::GetPolicyHandler,
             read_auditor_portal::ReadAuditorPortalHandler,
             resolve_active_auditor_grant::ResolveActiveAuditorGrantHandler,
             resolve_auditor_grant_by_secret::ResolveAuditorGrantBySecretHandler,
             resolve_auditor_session_by_digest::ResolveAuditorSessionByDigestHandler,
             resolve_evidence_document_upload_grant_authority::ResolveEvidenceDocumentUploadGrantAuthorityHandler,
             resolve_policy_document_upload_grant_authority::ResolvePolicyDocumentUploadGrantAuthorityHandler,
+            workspace_invitations::{GetWorkspacePeopleHandler, PreviewWorkspaceInvitationHandler},
         },
     },
     authentication::{
@@ -60,6 +67,7 @@ use crate::{
         policy_document_upload_sessions::{self, PolicyDocumentUploadSessionState},
         request_context::attach_request_id,
         version,
+        workspace_invitations::{self, WorkspaceInvitationsState},
         workspaces::{self, WorkspacesState},
     },
     services::{
@@ -77,6 +85,9 @@ use crate::{
         policy_documents::PolicyDocumentService,
         policy_upload_sessions::{PolicyUploadSessionTokenService, POLICY_UPLOAD_SESSION_AUDIENCE},
         upload_sessions::{UploadSessionTokenService, UPLOAD_SESSION_AUDIENCE},
+        workspace_invitation_authority::{
+            WorkspaceInvitationAuthority, WorkspaceInvitationAuthorityError,
+        },
     },
 };
 use axum::{extract::MatchedPath, http::Request, middleware, response::Response, Router};
@@ -97,6 +108,8 @@ pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
 pub enum CreateAppError {
     #[error("authentication initialization error")]
     Authentication(#[from] AuthenticationError),
+    #[error("workspace invitation authority initialization error")]
+    WorkspaceInvitationAuthority(#[from] WorkspaceInvitationAuthorityError),
 }
 
 pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
@@ -247,6 +260,8 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         auditor_identity_provider,
         dependencies.config.auth0.auditor_portal.clone(),
     );
+    let workspace_invitation_authority =
+        WorkspaceInvitationAuthority::from_config(&dependencies.config.workspace_invitations)?;
 
     Ok(Router::new()
         .nest(
@@ -329,6 +344,28 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
             create_owned: CreateOwnedWorkspaceHandler::new(dependencies.postgres.clone()),
             get_for_user: GetWorkspaceForUserHandler::new(dependencies.postgres.clone()),
             remove_member: RemoveWorkspaceMemberHandler::new(dependencies.postgres.clone()),
+            route_auth: UserRouteAuthState {
+                authenticator: dependencies.user_authenticator.clone(),
+            },
+        }))
+        .merge(workspace_invitations::router(WorkspaceInvitationsState {
+            create: CreateWorkspaceInvitationHandler::new(
+                dependencies.postgres.clone(),
+                workspace_invitation_authority.clone(),
+            ),
+            current_link: GetCurrentWorkspaceInvitationLinkHandler::new(
+                dependencies.postgres.clone(),
+                workspace_invitation_authority.clone(),
+            ),
+            preview: PreviewWorkspaceInvitationHandler::new(
+                dependencies.postgres.clone(),
+                workspace_invitation_authority.clone(),
+            ),
+            accept: AcceptWorkspaceInvitationHandler::new(
+                dependencies.postgres.clone(),
+                workspace_invitation_authority,
+            ),
+            people: GetWorkspacePeopleHandler::new(dependencies.postgres.clone()),
             route_auth: UserRouteAuthState {
                 authenticator: dependencies.user_authenticator.clone(),
             },

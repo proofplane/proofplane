@@ -13,6 +13,7 @@ pub mod oauth;
 pub mod policy_documents;
 pub mod policy_upload_sessions;
 pub mod upload_sessions;
+pub mod workspace_invitation_authority;
 
 #[derive(Debug, Error)]
 pub enum Error {

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use http::StatusCode;
 use proofplane::authentication::auth0::{TokenVerifier, VerifiedClaims, VerifyError};
+use proofplane::authentication::VerifiedManagementIdentity;
 use serde_json::Value;
 
 /// Test double for the Auth0 token verifier. The bearer token IS the `auth0_sub`,
@@ -22,6 +23,7 @@ impl TokenVerifier for FakeTokenVerifier {
                 sub: sub.to_owned(),
                 email: None,
                 name: None,
+                verified_management_identity: None,
             });
         }
 
@@ -29,6 +31,9 @@ impl TokenVerifier for FakeTokenVerifier {
             sub: token.to_owned(),
             email: Some(format!("{token}@example.com")),
             name: Some("Integration Human".to_owned()),
+            verified_management_identity: Some(VerifiedManagementIdentity {
+                email: format!("{token}@example.com").to_ascii_lowercase(),
+            }),
         })
     }
 }
