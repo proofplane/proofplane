@@ -297,6 +297,8 @@ where
     let challenge = authentication_challenge(&resource)?;
     let server_factory = move || Ok(server.clone());
     let mut transport_config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
+        .with_json_response(true)
         .with_cancellation_token(cancellation_token.child_token());
     if !allowed_hosts.is_empty() {
         transport_config = transport_config.with_allowed_hosts(allowed_hosts);
