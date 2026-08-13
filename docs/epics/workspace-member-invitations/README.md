@@ -7,6 +7,9 @@ Auth0 authenticates the invited person.
 
 Full rationale, contracts, and decisions live in [spec.md](./spec.md), the
 source of technical depth. Interface behavior lives in [ux.md](./ux.md).
+Human-operated Auth0, Resend, DNS, secret, rotation, rollback, and release
+verification live in the
+[production runbook](../../workspace-invitation-production-runbook.md).
 
 ## Tracking
 

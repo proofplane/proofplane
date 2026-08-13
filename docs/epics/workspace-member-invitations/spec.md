@@ -193,3 +193,8 @@ the inviter and invitee journeys described in `ux.md`.
 
 Before completing implementation, run `make check` in Proofplane and
 `npm run build`, `npm test`, and `npm run test:smoke` in `landing-portal`.
+
+The production prerequisites and production-like smoke evidence are governed by
+the [workspace invitation production runbook](../../workspace-invitation-production-runbook.md).
+They remain a human release gate because they require authorized access to
+Auth0, Resend, DNS, the deployment secret path, and the target environment.
