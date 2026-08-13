@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use proofplane::config::{
     AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-    LogFormat, MailBackendConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+    LogFormat, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
     PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
     ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
@@ -103,8 +103,7 @@ pub fn config(
             }],
         },
         mail: MailConfig {
-            sender: "Proofplane <invitations@proofplane.test>".to_owned(),
-            backend: MailBackendConfig::Local,
+            adapter: MailAdapterConfig::LocalStdout,
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         scanner: ScannerConfig {

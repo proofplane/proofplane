@@ -71,10 +71,9 @@ acceptance that needs verified identity; it must not disable ordinary login.
        - id: "<current-key-id>"
          secret: "<secret-managed PASERK>"
    mail:
-     backend: "resend"
-     sender: "Proofplane <invitations@<sending-subdomain>>"
+     adapter: "resend"
      api_key: "<secret-managed Resend key>"
-     endpoint: "https://api.resend.com/emails"
+     from: "Proofplane <invitations@<sending-subdomain>>"
    ```
 
 6. Start both the API and worker with the rendered configuration. Confirm

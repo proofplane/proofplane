@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
-use url::Url;
+
+const RESEND_EMAILS_ENDPOINT: &str = "https://api.resend.com/emails";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailMessage {
@@ -88,16 +89,14 @@ impl MailAdapter for CapturingMailAdapter {
 #[derive(Debug, Clone)]
 pub struct ResendMailAdapter {
     client: reqwest::Client,
-    endpoint: Url,
     api_key: SecretString,
     sender: String,
 }
 
 impl ResendMailAdapter {
-    pub fn new(endpoint: Url, api_key: SecretString, sender: String) -> Self {
+    pub fn new(api_key: SecretString, sender: String) -> Self {
         Self {
             client: reqwest::Client::new(),
-            endpoint,
             api_key,
             sender,
         }
@@ -118,7 +117,7 @@ impl MailAdapter for ResendMailAdapter {
     async fn send(&self, message: MailMessage) -> Result<(), MailError> {
         let response = self
             .client
-            .post(self.endpoint.clone())
+            .post(RESEND_EMAILS_ENDPOINT)
             .bearer_auth(self.api_key.expose_secret())
             .header("Idempotency-Key", &message.idempotency_key)
             .json(&ResendRequest {

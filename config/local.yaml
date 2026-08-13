@@ -54,8 +54,7 @@ workspace_invitations:
       secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
 
 mail:
-  backend: "local"
-  sender: "Proofplane <invitations@localhost>"
+  adapter: "local_stdout"
 
 object_storage:
   backend: "filesystem"

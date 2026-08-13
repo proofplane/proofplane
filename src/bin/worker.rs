@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    config::{self, MailBackendConfig},
+    config::{self, MailAdapterConfig},
     mail::{LocalMailAdapter, MailAdapter, ResendMailAdapter},
     object_storage, observability, persistence,
     scanner::ClamAvMalwareScanner,
@@ -80,13 +80,11 @@ async fn run() -> Result<(), Error> {
     let metrics = PrometheusBuilder::new().install_recorder()?;
     let workspace_invitation_authority =
         WorkspaceInvitationAuthority::from_config(&config.workspace_invitations)?;
-    let mail: Arc<dyn MailAdapter> = match config.mail.backend.clone() {
-        MailBackendConfig::Local => Arc::new(LocalMailAdapter),
-        MailBackendConfig::Resend { endpoint, api_key } => Arc::new(ResendMailAdapter::new(
-            endpoint,
-            api_key,
-            config.mail.sender.clone(),
-        )),
+    let mail: Arc<dyn MailAdapter> = match config.mail.adapter.clone() {
+        MailAdapterConfig::LocalStdout => Arc::new(LocalMailAdapter),
+        MailAdapterConfig::Resend { api_key, from } => {
+            Arc::new(ResendMailAdapter::new(api_key, from))
+        }
     };
 
     let listener = TcpListener::bind(config.server.worker_bind).await?;

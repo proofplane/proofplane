@@ -139,17 +139,13 @@ pub struct WorkspaceInvitationPasetoKey {
 
 #[derive(Debug, Clone)]
 pub struct MailConfig {
-    pub sender: String,
-    pub backend: MailBackendConfig,
+    pub adapter: MailAdapterConfig,
 }
 
 #[derive(Debug, Clone)]
-pub enum MailBackendConfig {
-    Local,
-    Resend {
-        endpoint: Url,
-        api_key: SecretString,
-    },
+pub enum MailAdapterConfig {
+    LocalStdout,
+    Resend { api_key: SecretString, from: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +364,10 @@ mod tests {
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
+        assert!(matches!(
+            config.mail.adapter,
+            MailAdapterConfig::LocalStdout
+        ));
         assert_eq!(config.mcp.shutdown_grace_seconds, 30);
         assert!(
             config.mcp.allowed_hosts.is_empty(),
@@ -403,6 +403,29 @@ mod tests {
             config.auth0.auditor_portal.token_endpoint.as_str(),
             "https://dev-ctgrkbdrbodz4azi.us.auth0.com/oauth/token"
         );
+    }
+
+    #[test]
+    fn established_resend_mail_config_loads_without_an_endpoint() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let resend = base.replace(
+            "mail:\n  adapter: \"local_stdout\"",
+            "mail:\n  adapter: resend\n  api_key: \"re_configured_secret\"\n  from: \"Proofplane <noreply@notify.proofplane.app>\"",
+        );
+        assert_ne!(base, resend, "mail configuration replacement matched");
+        let path = write_temp_config(&resend);
+
+        let config = load_from_path(&path).expect("established Resend config loads");
+
+        match config.mail.adapter {
+            MailAdapterConfig::Resend { api_key, from } => {
+                assert_eq!(api_key.expose_secret(), "re_configured_secret");
+                assert_eq!(from, "Proofplane <noreply@notify.proofplane.app>");
+            }
+            MailAdapterConfig::LocalStdout => panic!("expected Resend mail adapter"),
+        }
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -537,8 +560,7 @@ workspace_invitations:
     - id: ""
       secret: "not-a-paserk"
 mail:
-  backend: "local"
-  sender: "Proofplane <invitations@localhost>"
+  adapter: "local_stdout"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -669,10 +691,9 @@ health:
     fn resend_api_key_is_redacted_in_debug_output() {
         let secret = SecretString::from("re_unique_resend_secret");
         let config = MailConfig {
-            sender: "Proofplane <invitations@proofplane.test>".to_owned(),
-            backend: MailBackendConfig::Resend {
-                endpoint: Url::parse("https://api.resend.com/emails").unwrap(),
+            adapter: MailAdapterConfig::Resend {
                 api_key: secret.clone(),
+                from: "Proofplane <invitations@proofplane.test>".to_owned(),
             },
         };
         let debug = format!("{config:?}");

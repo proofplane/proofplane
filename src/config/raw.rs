@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::{validate, validation::Validation};
@@ -14,7 +14,7 @@ use super::{
         secret_value, string_url, string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
-    HealthConfig, MailBackendConfig, MailConfig, McpConfig, ObjectStorageConfig,
+    HealthConfig, MailAdapterConfig, MailConfig, McpConfig, ObjectStorageConfig,
     ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
     PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
     PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
@@ -40,53 +40,30 @@ pub(super) struct RawAppConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "backend", rename_all = "snake_case")]
+#[serde(tag = "adapter", rename_all = "snake_case")]
 pub(super) enum RawMailConfig {
-    Local {
-        sender: String,
-    },
-    Resend {
-        sender: String,
-        api_key: SecretString,
-        endpoint: String,
-    },
+    LocalStdout,
+    Resend { api_key: SecretString, from: String },
 }
 
 impl RawMailConfig {
     pub(super) fn validate(self) -> Validation<MailConfig, ConfigFieldError> {
-        let (sender, backend) = match self {
-            Self::Local { sender } => (sender, MailBackendConfig::Local),
-            Self::Resend {
-                sender,
-                api_key,
-                endpoint,
-            } => {
-                let endpoint = match url::Url::parse(&endpoint) {
-                    Ok(endpoint) if endpoint.scheme() == "https" => endpoint,
-                    _ => {
-                        return Validation::invalid(ConfigFieldError::new(
-                            "mail.endpoint",
-                            "must be an absolute HTTPS URL",
-                        ))
-                    }
-                };
-                if api_key.expose_secret().trim().is_empty() {
-                    return Validation::invalid(ConfigFieldError::new(
-                        "mail.api_key",
-                        "must not be blank",
-                    ));
+        match self {
+            Self::LocalStdout => Validation::valid(MailConfig {
+                adapter: MailAdapterConfig::LocalStdout,
+            }),
+            Self::Resend { api_key, from } => {
+                let raw_api_key = api_key;
+                let raw_from = from;
+                validate! {
+                api_key <- secret_value(raw_api_key).at("mail.api_key"),
+                from <- string_value(raw_from).at("mail.from"),
+                => MailConfig {
+                    adapter: MailAdapterConfig::Resend { api_key, from },
+                },
                 }
-                (sender, MailBackendConfig::Resend { endpoint, api_key })
             }
-        };
-        let sender = sender.trim().to_owned();
-        if sender.is_empty() || !sender.contains('@') {
-            return Validation::invalid(ConfigFieldError::new(
-                "mail.sender",
-                "must be a nonblank sender identity containing @",
-            ));
         }
-        Validation::valid(MailConfig { sender, backend })
     }
 }
 
