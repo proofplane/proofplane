@@ -16,7 +16,9 @@ use crate::{
             AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitation,
             CreateWorkspaceInvitationError, CreateWorkspaceInvitationHandler,
             CurrentWorkspaceInvitationLinkError, GetCurrentWorkspaceInvitationLink,
-            GetCurrentWorkspaceInvitationLinkHandler, WorkspaceInvitationMetadata,
+            GetCurrentWorkspaceInvitationLinkHandler, ResendWorkspaceInvitation,
+            ResendWorkspaceInvitationError, ResendWorkspaceInvitationHandler,
+            WorkspaceInvitationMetadata,
         },
         queries::workspace_invitations::{
             GetWorkspacePeople, GetWorkspacePeopleHandler, PreviewWorkspaceInvitation,
@@ -38,6 +40,7 @@ use crate::{
 pub struct WorkspaceInvitationsState<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub create: CreateWorkspaceInvitationHandler,
     pub current_link: GetCurrentWorkspaceInvitationLinkHandler,
+    pub resend: ResendWorkspaceInvitationHandler,
     pub preview: PreviewWorkspaceInvitationHandler,
     pub accept: AcceptWorkspaceInvitationHandler,
     pub people: GetWorkspacePeopleHandler,
@@ -48,6 +51,7 @@ impl<V: TokenVerifier<Claims = VerifiedClaims>> Clone for WorkspaceInvitationsSt
         Self {
             create: self.create.clone(),
             current_link: self.current_link.clone(),
+            resend: self.resend.clone(),
             preview: self.preview.clone(),
             accept: self.accept.clone(),
             people: self.people.clone(),
@@ -63,6 +67,10 @@ pub fn router<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
         .route("/workspace/people", get(get_people::<V>))
         .route("/workspace/invitations", post(create_invitation::<V>))
         .route("/workspace/invitations/{id}/link", post(current_link::<V>))
+        .route(
+            "/workspace/invitations/{id}/resend",
+            post(resend_invitation::<V>),
+        )
         .route(
             "/workspace-invitations/accept",
             post(accept_invitation::<V>),
@@ -117,6 +125,7 @@ async fn create_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
             actor_user_id: user.user_id,
             email: body.email,
             created_at: Utc::now(),
+            request_id: Some(request_id.0),
         })
         .await
         .map_err(InvitationApiError::from)?;
@@ -139,6 +148,45 @@ async fn create_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
     Ok(Json(InvitationWithLinkResponse::new(
         created.invitation,
         created.url,
+    )))
+}
+
+async fn resend_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
+    State(state): State<WorkspaceInvitationsState<V>>,
+    Extension(user): Extension<UserContext>,
+    Extension(request_id): Extension<RequestId>,
+    Path(path): Path<InvitationPath>,
+    Json(body): Json<ResendInvitationRequest>,
+) -> Result<Json<InvitationWithLinkResponse>, InvitationApiError> {
+    let resent = state
+        .resend
+        .handle(ResendWorkspaceInvitation {
+            invitation_id: path.id.into(),
+            actor_user_id: user.user_id,
+            expected_generation: body.expected_generation,
+            sent_at: Utc::now(),
+            request_id: Some(request_id.0),
+        })
+        .await?;
+    AuditEvent::new(
+        "workspace.invitation_resent",
+        AuditOutcome::Success,
+        AuditActor::User {
+            user_id: user.user_id.into(),
+        },
+        AuditClientType::Rest,
+        "resend_workspace_invitation",
+    )
+    .workspace_id(resent.workspace_id.into())
+    .request_id(request_id.0)
+    .object(AuditObject::new(
+        "workspace_invitation",
+        resent.invitation.id.into(),
+    ))
+    .emit();
+    Ok(Json(InvitationWithLinkResponse::new(
+        resent.invitation,
+        resent.url,
     )))
 }
 
@@ -229,6 +277,10 @@ struct CreateInvitationRequest {
     email: String,
 }
 #[derive(Deserialize)]
+struct ResendInvitationRequest {
+    expected_generation: i64,
+}
+#[derive(Deserialize)]
 struct TokenRequest {
     token: String,
 }
@@ -283,7 +335,7 @@ impl InvitationWithLinkResponse {
             role: value.role.as_str(),
             generation: value.generation,
             expires_at: value.expires_at,
-            delivery_state: "not_queued",
+            delivery_state: value.delivery_state,
             url: url.to_string(),
         }
     }
@@ -412,6 +464,19 @@ impl From<CurrentWorkspaceInvitationLinkError> for InvitationApiError {
                 Self::Api(ApiError::from(error))
             }
             CurrentWorkspaceInvitationLinkError::Authority(_) => Self::Api(ApiError::Internal),
+        }
+    }
+}
+impl From<ResendWorkspaceInvitationError> for InvitationApiError {
+    fn from(value: ResendWorkspaceInvitationError) -> Self {
+        match value {
+            ResendWorkspaceInvitationError::Unavailable => Self::Api(ApiError::NotFound),
+            ResendWorkspaceInvitationError::StaleGeneration => Self::Api(ApiError::Conflict {
+                code: "stale_invitation_generation",
+                message: "the invitation generation has changed".to_owned(),
+            }),
+            ResendWorkspaceInvitationError::Repository(error) => Self::Api(ApiError::from(error)),
+            ResendWorkspaceInvitationError::Authority(_) => Self::Api(ApiError::Internal),
         }
     }
 }

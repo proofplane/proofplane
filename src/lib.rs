@@ -6,6 +6,7 @@ pub mod dequeuer;
 pub mod domain;
 pub mod errors;
 pub mod handlers;
+pub mod mail;
 pub mod mcp;
 pub mod messaging;
 pub mod object_storage;

@@ -53,6 +53,10 @@ workspace_invitations:
     - id: "local-workspace-invitation-001"
       secret: "k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"
 
+mail:
+  backend: "local"
+  sender: "Proofplane <invitations@localhost>"
+
 object_storage:
   backend: "filesystem"
   root: ".local/storage"

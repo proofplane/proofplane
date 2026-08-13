@@ -2,8 +2,13 @@ use std::{sync::Arc, time::Duration};
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    config, object_storage, observability, persistence,
+    config::{self, MailBackendConfig},
+    mail::{LocalMailAdapter, MailAdapter, ResendMailAdapter},
+    object_storage, observability, persistence,
     scanner::ClamAvMalwareScanner,
+    services::workspace_invitation_authority::{
+        WorkspaceInvitationAuthority, WorkspaceInvitationAuthorityError,
+    },
     worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
 };
@@ -35,6 +40,9 @@ enum Error {
 
     #[error("object storage initialization error")]
     ObjectStorage(#[from] object_storage::StorageError),
+
+    #[error("workspace invitation authority initialization error")]
+    WorkspaceInvitationAuthority(#[from] WorkspaceInvitationAuthorityError),
 
     #[error("worker server I/O error")]
     Server(#[from] std::io::Error),
@@ -70,6 +78,16 @@ async fn run() -> Result<(), Error> {
         Duration::from_millis(config.scanner.scan_timeout_ms),
     ));
     let metrics = PrometheusBuilder::new().install_recorder()?;
+    let workspace_invitation_authority =
+        WorkspaceInvitationAuthority::from_config(&config.workspace_invitations)?;
+    let mail: Arc<dyn MailAdapter> = match config.mail.backend.clone() {
+        MailBackendConfig::Local => Arc::new(LocalMailAdapter),
+        MailBackendConfig::Resend { endpoint, api_key } => Arc::new(ResendMailAdapter::new(
+            endpoint,
+            api_key,
+            config.mail.sender.clone(),
+        )),
+    };
 
     let listener = TcpListener::bind(config.server.worker_bind).await?;
     info!(
@@ -83,6 +101,8 @@ async fn run() -> Result<(), Error> {
         postgres,
         object_store,
         scanner,
+        mail,
+        workspace_invitation_authority,
         worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,
         live_path: config.health.live_path,

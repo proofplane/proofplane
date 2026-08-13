@@ -47,6 +47,8 @@ pub enum WorkspaceInvitationError {
     Unavailable,
     #[error("workspace invitation was accepted by another user")]
     AcceptedByAnotherUser,
+    #[error("workspace invitation generation is stale")]
+    StaleGeneration,
 }
 
 impl WorkspaceInvitation {
@@ -188,6 +190,81 @@ impl WorkspaceInvitation {
         Ok(InvitationAcceptance::Applied)
     }
 
+    pub fn queue_delivery(
+        &mut self,
+        generation: i64,
+        queued_at: DateTime<Utc>,
+    ) -> Result<(), WorkspaceInvitationError> {
+        if generation != self.generation {
+            return Err(WorkspaceInvitationError::StaleGeneration);
+        }
+        if self.status_at(queued_at) != WorkspaceInvitationStatus::Pending {
+            return Err(WorkspaceInvitationError::Unavailable);
+        }
+        self.queued_generation = Some(generation);
+        self.queued_at = Some(queued_at);
+        self.last_delivery_failure = None;
+        self.delivery_failed_at = None;
+        Ok(())
+    }
+
+    pub fn resend(
+        &mut self,
+        expected_generation: i64,
+        sent_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), WorkspaceInvitationError> {
+        if expected_generation != self.generation {
+            return Err(WorkspaceInvitationError::StaleGeneration);
+        }
+        if self.status_at(sent_at) != WorkspaceInvitationStatus::Pending || expires_at <= sent_at {
+            return Err(WorkspaceInvitationError::Unavailable);
+        }
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(WorkspaceInvitationError::InvalidSnapshot)?;
+        self.expires_at = expires_at;
+        self.queued_generation = Some(self.generation);
+        self.queued_at = Some(sent_at);
+        self.last_delivery_failure = None;
+        self.delivery_failed_at = None;
+        Ok(())
+    }
+
+    pub fn record_delivery_success(
+        &mut self,
+        generation: i64,
+        delivered_at: DateTime<Utc>,
+    ) -> bool {
+        if generation != self.generation
+            || self.status_at(delivered_at) != WorkspaceInvitationStatus::Pending
+        {
+            return false;
+        }
+        self.delivered_generation = Some(generation);
+        self.delivered_at = Some(delivered_at);
+        self.last_delivery_failure = None;
+        self.delivery_failed_at = None;
+        true
+    }
+
+    pub fn record_delivery_failure(
+        &mut self,
+        generation: i64,
+        classification: &'static str,
+        failed_at: DateTime<Utc>,
+    ) -> bool {
+        if generation != self.generation
+            || self.status_at(failed_at) != WorkspaceInvitationStatus::Pending
+        {
+            return false;
+        }
+        self.last_delivery_failure = Some(classification.to_owned());
+        self.delivery_failed_at = Some(failed_at);
+        true
+    }
+
     pub fn id(&self) -> WorkspaceInvitationId {
         self.id
     }
@@ -294,5 +371,48 @@ mod tests {
             invitation.accept(Uuid::new_v4().into(), accepted_at),
             Err(WorkspaceInvitationError::AcceptedByAnotherUser)
         );
+    }
+
+    #[test]
+    fn resend_rotates_generation_expiry_and_delivery_state() {
+        let mut invitation = pending();
+        let first_expiry = invitation.expires_at();
+        invitation
+            .queue_delivery(1, invitation.created_at())
+            .unwrap();
+        assert!(invitation.record_delivery_failure(
+            1,
+            "exhausted",
+            invitation.created_at() + Duration::minutes(1)
+        ));
+
+        let resent_at = invitation.created_at() + Duration::hours(2);
+        invitation
+            .resend(1, resent_at, resent_at + Duration::days(7))
+            .unwrap();
+
+        assert_eq!(invitation.generation(), 2);
+        assert_eq!(invitation.expires_at(), resent_at + Duration::days(7));
+        assert!(invitation.expires_at() > first_expiry);
+        assert_eq!(invitation.queued_generation(), Some(2));
+        assert_eq!(invitation.queued_at(), Some(resent_at));
+        assert_eq!(invitation.last_delivery_failure(), None);
+        assert_eq!(
+            invitation.resend(1, resent_at, resent_at + Duration::days(7)),
+            Err(WorkspaceInvitationError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn delivery_updates_only_the_current_pending_generation() {
+        let mut invitation = pending();
+        invitation
+            .queue_delivery(1, invitation.created_at())
+            .unwrap();
+        assert!(!invitation.record_delivery_success(2, invitation.created_at()));
+        assert!(invitation.record_delivery_success(1, invitation.created_at()));
+        assert_eq!(invitation.delivered_generation(), Some(1));
+        assert!(!invitation.record_delivery_failure(2, "permanent", invitation.created_at()));
+        assert_eq!(invitation.last_delivery_failure(), None);
     }
 }

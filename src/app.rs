@@ -17,7 +17,7 @@ use crate::{
             start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
             workspace_invitations::{
                 AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitationHandler,
-                GetCurrentWorkspaceInvitationLinkHandler,
+                GetCurrentWorkspaceInvitationLinkHandler, ResendWorkspaceInvitationHandler,
             },
         },
         queries::{
@@ -354,6 +354,10 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 workspace_invitation_authority.clone(),
             ),
             current_link: GetCurrentWorkspaceInvitationLinkHandler::new(
+                dependencies.postgres.clone(),
+                workspace_invitation_authority.clone(),
+            ),
+            resend: ResendWorkspaceInvitationHandler::new(
                 dependencies.postgres.clone(),
                 workspace_invitation_authority.clone(),
             ),

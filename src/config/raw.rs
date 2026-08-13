@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::{validate, validation::Validation};
@@ -14,11 +14,11 @@ use super::{
         secret_value, string_url, string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
-    HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
-    WorkspaceInvitationsConfig,
+    HealthConfig, MailBackendConfig, MailConfig, McpConfig, ObjectStorageConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    WorkspaceInvitationPasetoKey, WorkspaceInvitationsConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +29,7 @@ pub(super) struct RawAppConfig {
     pub(super) auth0: RawAuth0Config,
     pub(super) paseto: RawPasetoConfig,
     pub(super) workspace_invitations: RawWorkspaceInvitationsConfig,
+    pub(super) mail: RawMailConfig,
     pub(super) object_storage: RawObjectStorageConfig,
     pub(super) scanner: RawScannerConfig,
     pub(super) uploads: RawUploadsConfig,
@@ -36,6 +37,57 @@ pub(super) struct RawAppConfig {
     pub(super) worker: RawWorkerConfig,
     pub(super) mcp: RawMcpConfig,
     pub(super) health: RawHealthConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub(super) enum RawMailConfig {
+    Local {
+        sender: String,
+    },
+    Resend {
+        sender: String,
+        api_key: SecretString,
+        endpoint: String,
+    },
+}
+
+impl RawMailConfig {
+    pub(super) fn validate(self) -> Validation<MailConfig, ConfigFieldError> {
+        let (sender, backend) = match self {
+            Self::Local { sender } => (sender, MailBackendConfig::Local),
+            Self::Resend {
+                sender,
+                api_key,
+                endpoint,
+            } => {
+                let endpoint = match url::Url::parse(&endpoint) {
+                    Ok(endpoint) if endpoint.scheme() == "https" => endpoint,
+                    _ => {
+                        return Validation::invalid(ConfigFieldError::new(
+                            "mail.endpoint",
+                            "must be an absolute HTTPS URL",
+                        ))
+                    }
+                };
+                if api_key.expose_secret().trim().is_empty() {
+                    return Validation::invalid(ConfigFieldError::new(
+                        "mail.api_key",
+                        "must not be blank",
+                    ));
+                }
+                (sender, MailBackendConfig::Resend { endpoint, api_key })
+            }
+        };
+        let sender = sender.trim().to_owned();
+        if sender.is_empty() || !sender.contains('@') {
+            return Validation::invalid(ConfigFieldError::new(
+                "mail.sender",
+                "must be a nonblank sender identity containing @",
+            ));
+        }
+        Validation::valid(MailConfig { sender, backend })
+    }
 }
 
 #[derive(Debug, Deserialize)]

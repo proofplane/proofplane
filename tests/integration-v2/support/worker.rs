@@ -12,9 +12,11 @@ use axum_test::TestServer;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     config::AppConfig,
+    mail::MailAdapter,
     object_storage::FilesystemObjectStore,
     persistence::Postgres,
     scanner::ClamAvMalwareScanner,
+    services::workspace_invitation_authority::WorkspaceInvitationAuthority,
     worker::{create_worker_app, decode_worker_message, WorkerAppDependencies},
 };
 use tokio::{
@@ -581,6 +583,7 @@ pub fn start_worker(
     config: &AppConfig,
     postgres: &Arc<Postgres>,
     object_store: &Arc<FilesystemObjectStore>,
+    mail: Arc<dyn MailAdapter>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
     let scanner = Arc::new(ClamAvMalwareScanner::new(
@@ -595,6 +598,11 @@ pub fn start_worker(
             postgres: postgres.clone(),
             object_store: object_store.clone(),
             scanner,
+            mail,
+            workspace_invitation_authority: WorkspaceInvitationAuthority::from_config(
+                &config.workspace_invitations,
+            )
+            .expect("workspace invitation authority initializes"),
             worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
             metrics: recorder.handle(),
             live_path: config.health.live_path.clone(),

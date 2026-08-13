@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
+use uuid::Uuid;
 
 use crate::{
     authentication::normalize_email,
@@ -8,7 +9,9 @@ use crate::{
         UserId, WorkspaceId, WorkspaceInvitation, WorkspaceInvitationId, WorkspaceInvitationStatus,
         WorkspaceRole,
     },
-    persistence::{Error as RepositoryError, Postgres},
+    messaging::IntegrationMessage,
+    persistence::{Error as RepositoryError, NewOutboxMessage, Postgres},
+    pubsub::{TopicName, MESSAGE_BUS_TOPIC},
     read_models::{WorkspaceDetails, WorkspaceWithRole},
     services::workspace_invitation_authority::{
         WorkspaceInvitationAuthority, WorkspaceInvitationAuthorityError,
@@ -24,6 +27,7 @@ pub struct WorkspaceInvitationMetadata {
     pub role: WorkspaceRole,
     pub generation: i64,
     pub expires_at: DateTime<Utc>,
+    pub delivery_state: &'static str,
 }
 
 impl From<&WorkspaceInvitation> for WorkspaceInvitationMetadata {
@@ -34,6 +38,15 @@ impl From<&WorkspaceInvitation> for WorkspaceInvitationMetadata {
             role: value.role(),
             generation: value.generation(),
             expires_at: value.expires_at(),
+            delivery_state: if value.last_delivery_failure().is_some() {
+                "failed"
+            } else if value.delivered_generation() == Some(value.generation()) {
+                "delivered"
+            } else if value.queued_generation() == Some(value.generation()) {
+                "queued"
+            } else {
+                "not_queued"
+            },
         }
     }
 }
@@ -50,6 +63,7 @@ pub struct CreateWorkspaceInvitation {
     pub actor_user_id: UserId,
     pub email: String,
     pub created_at: DateTime<Utc>,
+    pub request_id: Option<Uuid>,
 }
 
 #[derive(Clone)]
@@ -109,7 +123,7 @@ impl CreateWorkspaceInvitationHandler {
                         &existing,
                     )));
                 }
-                let invitation = WorkspaceInvitation::create(
+                let mut invitation = WorkspaceInvitation::create(
                     command.invitation_id,
                     workspace_id,
                     command.actor_user_id,
@@ -120,7 +134,19 @@ impl CreateWorkspaceInvitationHandler {
                 .map_err(|_| {
                     RepositoryError::InvariantViolation("new workspace invitation must be valid")
                 })?;
+                invitation
+                    .queue_delivery(invitation.generation(), command.created_at)
+                    .map_err(|_| {
+                        RepositoryError::InvariantViolation("new invitation delivery must queue")
+                    })?;
                 invitations.save(&invitation).await?;
+                append_delivery_command(
+                    unit_of_work,
+                    invitation.id(),
+                    invitation.generation(),
+                    command.request_id,
+                )
+                .await?;
                 Ok(CreateOutcome::Created(invitation))
             })
             .await?;
@@ -141,6 +167,138 @@ impl CreateWorkspaceInvitationHandler {
             workspace_id: invitation.workspace_id(),
         })
     }
+}
+
+async fn append_delivery_command(
+    unit_of_work: &crate::persistence::UnitOfWork<'_>,
+    invitation_id: WorkspaceInvitationId,
+    generation: i64,
+    correlation_id: Option<Uuid>,
+) -> Result<(), RepositoryError> {
+    let message = NewOutboxMessage::new(
+        TopicName::new(MESSAGE_BUS_TOPIC),
+        IntegrationMessage::send_workspace_invitation(
+            invitation_id.into(),
+            generation,
+            correlation_id,
+            None,
+        ),
+    );
+    unit_of_work.append_outbox_message(&message).await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResendWorkspaceInvitation {
+    pub invitation_id: WorkspaceInvitationId,
+    pub actor_user_id: UserId,
+    pub expected_generation: i64,
+    pub sent_at: DateTime<Utc>,
+    pub request_id: Option<Uuid>,
+}
+
+pub struct ResentWorkspaceInvitation {
+    pub invitation: WorkspaceInvitationMetadata,
+    pub url: url::Url,
+    pub workspace_id: WorkspaceId,
+}
+
+#[derive(Clone)]
+pub struct ResendWorkspaceInvitationHandler {
+    repository: Arc<Postgres>,
+    authority: WorkspaceInvitationAuthority,
+}
+
+impl ResendWorkspaceInvitationHandler {
+    pub fn new(repository: Arc<Postgres>, authority: WorkspaceInvitationAuthority) -> Self {
+        Self {
+            repository,
+            authority,
+        }
+    }
+
+    pub async fn handle(
+        &self,
+        command: ResendWorkspaceInvitation,
+    ) -> Result<ResentWorkspaceInvitation, ResendWorkspaceInvitationError> {
+        let outcome = self
+            .repository
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(workspace_id) = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .resolve_id_for_member(command.actor_user_id)
+                    .await?
+                else {
+                    return Ok(ResendOutcome::Unavailable);
+                };
+                let role = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .role_for(workspace_id, command.actor_user_id)
+                    .await?;
+                if !matches!(role, Some(WorkspaceRole::Owner | WorkspaceRole::Admin)) {
+                    return Ok(ResendOutcome::Unavailable);
+                }
+                let invitations = unit_of_work.aggregates().workspace_invitations();
+                let Some(mut invitation) = invitations
+                    .get_for_workspace(command.invitation_id, workspace_id)
+                    .await?
+                else {
+                    return Ok(ResendOutcome::Unavailable);
+                };
+                match invitation.resend(
+                    command.expected_generation,
+                    command.sent_at,
+                    command.sent_at + INVITATION_LIFETIME,
+                ) {
+                    Ok(()) => {}
+                    Err(crate::domain::WorkspaceInvitationError::StaleGeneration) => {
+                        return Ok(ResendOutcome::Stale)
+                    }
+                    Err(_) => return Ok(ResendOutcome::Unavailable),
+                }
+                invitations.save(&invitation).await?;
+                append_delivery_command(
+                    unit_of_work,
+                    invitation.id(),
+                    invitation.generation(),
+                    command.request_id,
+                )
+                .await?;
+                Ok(ResendOutcome::Resent(Box::new(invitation)))
+            })
+            .await?;
+        let invitation = match outcome {
+            ResendOutcome::Resent(invitation) => *invitation,
+            ResendOutcome::Stale => return Err(ResendWorkspaceInvitationError::StaleGeneration),
+            ResendOutcome::Unavailable => return Err(ResendWorkspaceInvitationError::Unavailable),
+        };
+        let link = self.authority.issue(&invitation)?;
+        Ok(ResentWorkspaceInvitation {
+            invitation: WorkspaceInvitationMetadata::from(&invitation),
+            url: link.url,
+            workspace_id: invitation.workspace_id(),
+        })
+    }
+}
+
+enum ResendOutcome {
+    Resent(Box<WorkspaceInvitation>),
+    Stale,
+    Unavailable,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ResendWorkspaceInvitationError {
+    #[error("workspace invitation is unavailable")]
+    Unavailable,
+    #[error("workspace invitation generation is stale")]
+    StaleGeneration,
+    #[error("workspace invitation repository error")]
+    Repository(#[from] RepositoryError),
+    #[error("workspace invitation authority error")]
+    Authority(#[from] WorkspaceInvitationAuthorityError),
 }
 
 enum CreateOutcome {

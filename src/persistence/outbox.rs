@@ -271,6 +271,7 @@ fn legacy_event_type(message: &IntegrationMessage) -> &'static str {
     match message {
         IntegrationMessage::ScanDocument { .. } => LEGACY_DOCUMENT_SCAN_REQUESTED,
         IntegrationMessage::FinalizeDocument { .. } => LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
+        IntegrationMessage::SendWorkspaceInvitation { .. } => "SendWorkspaceInvitation",
     }
 }
 

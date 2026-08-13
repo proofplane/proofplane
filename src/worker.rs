@@ -20,10 +20,12 @@ use uuid::Uuid;
 use crate::{
     handlers::{
         document_finalization::DocumentFinalizationHandler, document_scan::DocumentScanHandler,
+        workspace_invitation_delivery::WorkspaceInvitationDeliveryHandler,
     },
+    mail::MailAdapter,
     messaging::{
         IntegrationMessage, IntegrationMessageDecodeError, LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
-        LEGACY_DOCUMENT_SCAN_REQUESTED,
+        LEGACY_DOCUMENT_SCAN_REQUESTED, SEND_WORKSPACE_INVITATION_TYPE,
     },
     object_storage::FilesystemObjectStore,
     persistence::Postgres,
@@ -33,6 +35,7 @@ use crate::{
         metrics::{self, MetricsState},
     },
     scanner::ClamAvMalwareScanner,
+    services::workspace_invitation_authority::WorkspaceInvitationAuthority,
     validate,
     validation::Validation,
 };
@@ -84,6 +87,8 @@ pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
     pub object_store: Arc<FilesystemObjectStore>,
     pub scanner: Arc<ClamAvMalwareScanner>,
+    pub mail: Arc<dyn MailAdapter>,
+    pub workspace_invitation_authority: WorkspaceInvitationAuthority,
     pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
     pub live_path: String,
@@ -95,6 +100,7 @@ pub struct WorkerAppDependencies {
 pub struct WorkerState {
     document_scan_handler: DocumentScanHandler,
     document_finalization_handler: DocumentFinalizationHandler<FilesystemObjectStore>,
+    workspace_invitation_delivery_handler: WorkspaceInvitationDeliveryHandler,
 }
 
 impl WorkerState {
@@ -102,6 +108,8 @@ impl WorkerState {
         postgres: Arc<Postgres>,
         object_store: Arc<FilesystemObjectStore>,
         scanner: Arc<ClamAvMalwareScanner>,
+        mail: Arc<dyn MailAdapter>,
+        workspace_invitation_authority: WorkspaceInvitationAuthority,
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {
@@ -111,7 +119,16 @@ impl WorkerState {
                 scanner,
                 worker_max_delivery_attempts,
             ),
-            document_finalization_handler: DocumentFinalizationHandler::new(postgres, object_store),
+            document_finalization_handler: DocumentFinalizationHandler::new(
+                postgres.clone(),
+                object_store,
+            ),
+            workspace_invitation_delivery_handler: WorkspaceInvitationDeliveryHandler::new(
+                postgres,
+                workspace_invitation_authority,
+                mail,
+                worker_max_delivery_attempts,
+            ),
         }
     }
 }
@@ -121,6 +138,8 @@ pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
         dependencies.postgres.clone(),
         dependencies.object_store,
         dependencies.scanner,
+        dependencies.mail,
+        dependencies.workspace_invitation_authority,
         dependencies.worker_max_delivery_attempts,
     );
 
@@ -242,6 +261,19 @@ pub async fn dispatch(state: WorkerState, message: WorkerMessage) -> StatusCode 
                 }
             }
         }
+        SEND_WORKSPACE_INVITATION_TYPE => {
+            match state
+                .workspace_invitation_delivery_handler
+                .handle(message)
+                .await
+            {
+                Ok(()) => StatusCode::NO_CONTENT,
+                Err(error) => {
+                    tracing::error!(%error, "retryable worker handler failure");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
         event_type => {
             tracing::warn!(%event_type, "acknowledging unknown worker event type");
             StatusCode::NO_CONTENT
@@ -293,6 +325,7 @@ fn decode_typed_worker_message(
     let event_type = match &integration_message {
         IntegrationMessage::ScanDocument { .. } => DOCUMENT_SCAN_REQUESTED,
         IntegrationMessage::FinalizeDocument { .. } => DOCUMENT_FINALIZATION_REQUESTED,
+        IntegrationMessage::SendWorkspaceInvitation { .. } => SEND_WORKSPACE_INVITATION_TYPE,
     };
     let payload = serde_json::to_value(integration_message.payload())
         .map_err(|_| WorkerMessageDecodeError::PayloadJson)?;

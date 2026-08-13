@@ -32,6 +32,7 @@ use proofplane::{
     },
     config::AppConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
+    mail::{CapturingMailAdapter, MailMessage},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::FilesystemObjectStore,
     persistence::Postgres,
@@ -74,6 +75,7 @@ pub struct TestApp {
     pipeline_controls: PipelineControls,
     clamd_controls: ClamdControls,
     reference_data: Arc<[TestFramework]>,
+    mail: CapturingMailAdapter,
 }
 
 // Holds the failure as well as the success. A stack that is not up would
@@ -116,7 +118,13 @@ impl Harness {
         let clamd_controls = clamd.controls();
         app_config.scanner.clamd_address = clamd.address();
 
-        let worker = start_worker(&app_config, &postgres, &object_store);
+        let mail = CapturingMailAdapter::default();
+        let worker = start_worker(
+            &app_config,
+            &postgres,
+            &object_store,
+            Arc::new(mail.clone()),
+        );
         let pipeline_events = PipelineEvents::new();
         let pipeline_controls = PipelineControls::new();
         let proxy =
@@ -171,6 +179,7 @@ impl Harness {
                 pipeline_controls,
                 clamd_controls,
                 reference_data: reference_data.into(),
+                mail,
             },
         })
     }
@@ -199,6 +208,10 @@ impl TestApp {
 
     pub fn clamd_controls(&self) -> &ClamdControls {
         &self.clamd_controls
+    }
+
+    pub fn mail_messages(&self) -> Vec<MailMessage> {
+        self.mail.messages()
     }
 
     pub(super) fn reference_data(&self) -> &[TestFramework] {

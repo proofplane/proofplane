@@ -23,6 +23,7 @@ pub struct AppConfig {
     pub auth0: Auth0Config,
     pub paseto: PasetoConfig,
     pub workspace_invitations: WorkspaceInvitationsConfig,
+    pub mail: MailConfig,
     pub object_storage: ObjectStorageConfig,
     pub scanner: ScannerConfig,
     pub uploads: UploadsConfig,
@@ -134,6 +135,21 @@ pub struct WorkspaceInvitationsConfig {
 pub struct WorkspaceInvitationPasetoKey {
     pub id: String,
     pub secret: SecretString,
+}
+
+#[derive(Debug, Clone)]
+pub struct MailConfig {
+    pub sender: String,
+    pub backend: MailBackendConfig,
+}
+
+#[derive(Debug, Clone)]
+pub enum MailBackendConfig {
+    Local,
+    Resend {
+        endpoint: Url,
+        api_key: SecretString,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +295,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
         auth0 <- raw.auth0.validate(),
         paseto <- raw.paseto.validate(),
         workspace_invitations <- raw.workspace_invitations.validate(),
+        mail <- raw.mail.validate(),
         object_storage <- raw.object_storage.validate(),
         scanner <- raw.scanner.validate(),
         uploads <- raw.uploads.validate(),
@@ -295,6 +312,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
                 auth0,
                 paseto,
                 workspace_invitations,
+                mail,
                 object_storage,
                 scanner,
                 uploads,
@@ -518,6 +536,9 @@ workspace_invitations:
   keys:
     - id: ""
       secret: "not-a-paserk"
+mail:
+  backend: "local"
+  sender: "Proofplane <invitations@localhost>"
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
@@ -642,6 +663,22 @@ health:
 
         assert!(debug.contains("SecretBox<str>([REDACTED])"));
         assert!(!debug.contains("mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"));
+    }
+
+    #[test]
+    fn resend_api_key_is_redacted_in_debug_output() {
+        let secret = SecretString::from("re_unique_resend_secret");
+        let config = MailConfig {
+            sender: "Proofplane <invitations@proofplane.test>".to_owned(),
+            backend: MailBackendConfig::Resend {
+                endpoint: Url::parse("https://api.resend.com/emails").unwrap(),
+                api_key: secret.clone(),
+            },
+        };
+        let debug = format!("{config:?}");
+
+        assert!(!debug.contains(secret.expose_secret()));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

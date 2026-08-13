@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use proofplane::config::{
     AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-    LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+    LogFormat, MailBackendConfig, MailConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+    PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
     ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig, WorkspaceInvitationPasetoKey,
     WorkspaceInvitationsConfig,
@@ -101,6 +101,10 @@ pub fn config(
                 id: "integration-workspace-invitation-001".to_owned(),
                 secret: SecretString::from("k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"),
             }],
+        },
+        mail: MailConfig {
+            sender: "Proofplane <invitations@proofplane.test>".to_owned(),
+            backend: MailBackendConfig::Local,
         },
         object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
         scanner: ScannerConfig {
