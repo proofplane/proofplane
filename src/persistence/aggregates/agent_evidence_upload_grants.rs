@@ -7,6 +7,7 @@ use crate::domain::{
     AgentEvidenceUploadGrantId, CoverageWindow, DocumentId, Sha256Digest, WorkspaceId,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, WorkspaceUnitOfWork,
@@ -48,20 +49,24 @@ impl AgentEvidenceUploadGrantRepository<'_> {
         upload_id: AgentEvidenceUploadGrantId,
         workspace_id: WorkspaceId,
     ) -> Result<Option<AgentEvidenceUploadGrant>, Error> {
-        let parameters: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
-            [&Uuid::from(upload_id), &Uuid::from(workspace_id)];
+        let upload_uuid = Uuid::from(upload_id);
+        let workspace_uuid = Uuid::from(workspace_id);
+        let parameters: [(
+            &(dyn tokio_postgres::types::ToSql + Sync),
+            tokio_postgres::types::Type,
+        ); 2] = [param(&upload_uuid), param(&workspace_uuid)];
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                let mut client = postgres.get().await?;
-                let transaction = client.transaction().await?;
-                let rows = transaction.query(GET_SQL, &parameters).await?;
-                transaction.commit().await?;
-                rows
+                postgres
+                    .get()
+                    .await?
+                    .query_typed(GET_SQL, &parameters)
+                    .await?
             }
             RepositoryConnection::Transaction(workspace) => {
                 workspace
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &parameters)
+                    .query_typed(GET_FOR_UPDATE_SQL, &parameters)
                     .await?
             }
         };

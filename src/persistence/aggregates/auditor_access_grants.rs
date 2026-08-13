@@ -9,6 +9,7 @@ use crate::{
     },
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, UnitOfWork, WorkspaceUnitOfWork,
@@ -58,16 +59,16 @@ impl AuditorAccessGrantRepository<'_> {
         let workspace_id = Uuid::from(workspace_id);
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                let mut client = postgres.get().await?;
-                let transaction = client.transaction().await?;
-                let rows = transaction.query(GET_SQL, &[&id, &workspace_id]).await?;
-                transaction.commit().await?;
-                rows
+                postgres
+                    .get()
+                    .await?
+                    .query_typed(GET_SQL, &[param(&id), param(&workspace_id)])
+                    .await?
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .query_typed(GET_FOR_UPDATE_SQL, &[param(&id), param(&workspace_id)])
                     .await?
             }
             RepositoryConnection::WorkspaceTransaction(workspace) => {
@@ -76,7 +77,7 @@ impl AuditorAccessGrantRepository<'_> {
                 }
                 workspace
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &[&id, &workspace_id])
+                    .query_typed(GET_FOR_UPDATE_SQL, &[param(&id), param(&workspace_id)])
                     .await?
             }
         };
@@ -180,15 +181,14 @@ impl Postgres {
         &self,
         grant_id: AuditorAccessGrantId,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(
+        let row = self
+            .get()
+            .await?
+            .query_typed_opt(
                 &format!("SELECT {COLUMNS} FROM auditor_access_grants WHERE id = $1"),
-                &[&Uuid::from(grant_id)],
+                &[param(&Uuid::from(grant_id))],
             )
             .await?;
-        transaction.commit().await?;
         let grant = row
             .map(|row| AuditorAccessGrantRecord::try_from_row(&row)?.into_domain())
             .transpose()?;
@@ -199,17 +199,14 @@ impl Postgres {
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<Vec<AuditorAccessGrant>, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let rows = transaction
-            .query(
+        let rows = self.get().await?
+            .query_typed(
                 &format!(
                     "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC"
                 ),
-                &[&Uuid::from(workspace_id)],
+                &[param(&Uuid::from(workspace_id))],
             )
             .await?;
-        transaction.commit().await?;
         rows.into_iter()
             .map(|row| AuditorAccessGrantRecord::try_from_row(&row)?.into_domain())
             .collect()
@@ -221,17 +218,14 @@ impl Postgres {
         digest: AuditorInviteSecretDigest,
     ) -> Result<Option<AuditorAccessGrant>, Error> {
         let digest: &[u8] = digest.as_bytes();
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(
+        let row = self.get().await?
+            .query_typed_opt(
                 &format!(
                     "SELECT {COLUMNS} FROM auditor_access_grants WHERE workspace_id = $1 AND secret_digest = $2"
                 ),
-                &[&Uuid::from(workspace_id), &digest],
+                &[param(&Uuid::from(workspace_id)), param(&digest)],
             )
             .await?;
-        transaction.commit().await?;
         let grant = row
             .map(|row| AuditorAccessGrantRecord::try_from_row(&row)?.into_domain())
             .transpose()?;

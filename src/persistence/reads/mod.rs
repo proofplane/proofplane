@@ -20,6 +20,7 @@ mod policies;
 mod users;
 mod workspaces;
 
+pub(crate) use super::param;
 pub(crate) use agent_connections::AgentConnectionReads;
 pub(crate) use auditor_access_grants::AuditorAccessGrantReads;
 pub(crate) use auditor_auth_transactions::AuditorAuthTransactionReads;

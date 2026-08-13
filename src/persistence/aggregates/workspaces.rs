@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::{UserId, Workspace, WorkspaceId, WorkspaceMembership, WorkspaceRole};
 
+use super::params::param;
 use super::{
     constraints::classify_db_error,
     snapshot::{save_snapshot, snapshot_record},
@@ -28,17 +29,17 @@ impl WorkspaceRepository<'_> {
         let workspace_key = Uuid::from(id).to_string();
         self.unit_of_work
             .transaction
-            .query_one(
+            .query_typed_one(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                &[&workspace_key],
+                &[param(&workspace_key)],
             )
             .await?;
         let Some(row) = self
             .unit_of_work
             .transaction
-            .query_opt(
+            .query_typed_opt(
                 "SELECT id, slug, name, created_at FROM workspaces WHERE id = $1 FOR UPDATE",
-                &[&Uuid::from(id)],
+                &[param(&Uuid::from(id))],
             )
             .await?
         else {
@@ -52,9 +53,9 @@ impl WorkspaceRepository<'_> {
         save_snapshot(&self.unit_of_work.transaction, record.as_snapshot()).await?;
         self.unit_of_work
             .transaction
-            .execute(
+            .execute_typed(
                 "DELETE FROM workspace_memberships WHERE workspace_id = $1",
-                &[&Uuid::from(workspace.id())],
+                &[param(&Uuid::from(workspace.id()))],
             )
             .await?;
 
@@ -63,14 +64,9 @@ impl WorkspaceRepository<'_> {
             let affected = self
                 .unit_of_work
                 .transaction
-                .execute(
+                .execute_typed(
                     "INSERT INTO workspace_memberships (user_id, workspace_id, role, created_at) VALUES ($1, $2, $3, $4)",
-                    &[
-                    &membership.user_id,
-                    &membership.workspace_id,
-                    &membership.role,
-                        &membership.created_at,
-                    ],
+                    &[param(&membership.user_id), param(&membership.workspace_id), param(&membership.role), param(&membership.created_at)],
                 )
                 .await
                 .map_err(classify_db_error)?;
@@ -88,7 +84,7 @@ impl WorkspaceRepository<'_> {
         let rows = self
             .unit_of_work
             .transaction
-            .query(
+            .query_typed(
                 r#"
 SELECT user_id, workspace_id, role, created_at
 FROM workspace_memberships
@@ -96,7 +92,7 @@ WHERE workspace_id = $1
 ORDER BY created_at, user_id
 FOR UPDATE
 "#,
-                &[&workspace.id],
+                &[param(&workspace.id)],
             )
             .await?;
         let memberships = rows

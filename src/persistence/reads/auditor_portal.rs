@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-use super::{ControlReads, ReadExecutor};
+use super::{param, ControlReads, ReadExecutor};
 
 pub(crate) struct AuditorPortalReads<'a, E> {
     executor: &'a E,
@@ -35,7 +35,7 @@ impl<E: ReadExecutor> AuditorPortalReads<'_, E> {
     pub async fn policies(&self) -> Result<Vec<AuditorPortalPolicy>, Error> {
         policies_from_rows(
             self.executor
-                .query(POLICIES_SQL, &[&Uuid::from(self.workspace_id)])
+                .query(POLICIES_SQL, &[param(&Uuid::from(self.workspace_id))])
                 .await?,
         )
     }
@@ -85,7 +85,7 @@ impl<E: ReadExecutor> AuditorPortalReads<'_, E> {
     }
     async fn mappings(&self) -> Result<Vec<Mapping>, Error> {
         self.executor
-            .query(MAPPINGS_SQL, &[&Uuid::from(self.workspace_id)])
+            .query(MAPPINGS_SQL, &[param(&Uuid::from(self.workspace_id))])
             .await?
             .into_iter()
             .map(mapping_from_row)
@@ -101,7 +101,11 @@ impl<E: ReadExecutor> AuditorPortalReads<'_, E> {
             .executor
             .query(
                 SUBMISSIONS_SQL,
-                &[&Uuid::from(self.workspace_id), &start, &end],
+                &[
+                    param(&Uuid::from(self.workspace_id)),
+                    param(&start),
+                    param(&end),
+                ],
             )
             .await?
         {

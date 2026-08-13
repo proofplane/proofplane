@@ -157,13 +157,25 @@ suite proves pooler compatibility on every run; only the suite's own
 neither can run through a transaction pooler. `config/local.yaml` points at 6432
 too, so `make api` and friends exercise the same path.
 
-Because of that pooler, **every statement must run inside a transaction**, even
-a lone read. `tokio_postgres` names the prepared statement it creates for each
-query, and a transaction pooler only keeps one server connection assigned for
-the length of a transaction, so an autocommit statement fails with
-`prepared statement "sN" does not exist`. Use `in_unit_of_work` where one
-exists; outside one, open a transaction on the pooled client rather than calling
-`.query(...)` on it directly.
+Because of that pooler, **never call `query`, `query_one`, `query_opt`, or
+`execute`.** Those name the prepared statement they create, and a transaction
+pooler reassigns the server connection between the `Parse` and the `Bind`, so
+the statement fails with `prepared statement "sN" does not exist`. Use
+`query_typed`, `query_typed_one`, `query_typed_opt`, and `execute_typed`, which
+parse into the unnamed statement and send the whole exchange under one `Sync`.
+
+Those methods want each parameter's Postgres type. Do not write `Type::…` at a
+call site: wrap the value in `persistence::param`, which recovers the type from
+the Rust type through the `PgParam` trait in `src/persistence/params.rs`.
+
+```rust
+.query_typed_opt("SELECT id FROM users WHERE auth0_sub = $1", &[param(&auth0_sub)])
+```
+
+Aggregate saves need nothing extra — `snapshot_record!` derives each column's
+type from the declared field type. Adding a `PgParam` impl means committing to a
+column type, so check `migrations/` first; a Rust type with no impl is a compile
+error, which is the point. Transactions are for atomicity, not for the pooler.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test

@@ -1,26 +1,34 @@
 use async_trait::async_trait;
 use deadpool_postgres::Object;
-use tokio::sync::Mutex;
-use tokio_postgres::{types::ToSql, Row};
+use tokio_postgres::{
+    types::{ToSql, Type},
+    Row,
+};
+
+/// Parameters paired with their Postgres types.
+///
+/// Built with [`crate::persistence::param`]; see `persistence::params` for why
+/// the types travel with the values.
+pub(crate) type Params<'params> = [(&'params (dyn ToSql + Sync + 'params), Type)];
 
 #[async_trait]
 pub(crate) trait ReadExecutor: Send + Sync {
     async fn query(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Vec<Row>, tokio_postgres::Error>;
 
     async fn query_one(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Row, tokio_postgres::Error>;
 
     async fn query_opt(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Option<Row>, tokio_postgres::Error>;
 }
 
@@ -29,7 +37,7 @@ impl<T: ReadExecutor + ?Sized> ReadExecutor for &T {
     async fn query(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Vec<Row>, tokio_postgres::Error> {
         (*self).query(statement, params).await
     }
@@ -37,7 +45,7 @@ impl<T: ReadExecutor + ?Sized> ReadExecutor for &T {
     async fn query_one(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Row, tokio_postgres::Error> {
         (*self).query_one(statement, params).await
     }
@@ -45,7 +53,7 @@ impl<T: ReadExecutor + ?Sized> ReadExecutor for &T {
     async fn query_opt(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Option<Row>, tokio_postgres::Error> {
         (*self).query_opt(statement, params).await
     }
@@ -53,25 +61,17 @@ impl<T: ReadExecutor + ?Sized> ReadExecutor for &T {
 
 /// Reads outside a [`crate::persistence::UnitOfWork`].
 ///
-/// Each statement runs in a transaction of its own. That is not for atomicity —
-/// a lone statement is already atomic — but because `tokio_postgres` prepares a
-/// named statement for every query, and a transaction pooler only keeps one
-/// server connection assigned for the length of a transaction. Left in
-/// autocommit, the `Parse` and the `Bind` land on different backends and the
-/// second fails with `prepared statement "sN" does not exist`.
-///
-/// The `Mutex` is what lets a `&self` trait method reach the `&mut` that
-/// `transaction()` needs; it serializes statements on a handle that already
-/// shared one connection.
+/// Each statement is its own implicit transaction. That is safe through a
+/// transaction pooler because `query_typed` parses into the unnamed statement
+/// and sends the whole exchange under one `Sync`, so nothing depends on the
+/// pooler keeping the same backend across two round trips.
 pub(crate) struct PooledReadExecutor {
-    client: Mutex<Object>,
+    client: Object,
 }
 
 impl PooledReadExecutor {
     pub(crate) fn new(client: Object) -> Self {
-        Self {
-            client: Mutex::new(client),
-        }
+        Self { client }
     }
 }
 
@@ -80,40 +80,25 @@ impl ReadExecutor for PooledReadExecutor {
     async fn query(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Vec<Row>, tokio_postgres::Error> {
-        let mut client = self.client.lock().await;
-        let transaction = client.transaction().await?;
-        let rows = transaction.query(statement, params).await?;
-        transaction.commit().await?;
-
-        Ok(rows)
+        self.client.query_typed(statement, params).await
     }
 
     async fn query_one(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Row, tokio_postgres::Error> {
-        let mut client = self.client.lock().await;
-        let transaction = client.transaction().await?;
-        let row = transaction.query_one(statement, params).await?;
-        transaction.commit().await?;
-
-        Ok(row)
+        self.client.query_typed_one(statement, params).await
     }
 
     async fn query_opt(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Option<Row>, tokio_postgres::Error> {
-        let mut client = self.client.lock().await;
-        let transaction = client.transaction().await?;
-        let row = transaction.query_opt(statement, params).await?;
-        transaction.commit().await?;
-
-        Ok(row)
+        self.client.query_typed_opt(statement, params).await
     }
 }
 
@@ -132,24 +117,24 @@ impl ReadExecutor for TransactionalReadExecutor<'_> {
     async fn query(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Vec<Row>, tokio_postgres::Error> {
-        self.transaction.query(statement, params).await
+        self.transaction.query_typed(statement, params).await
     }
 
     async fn query_one(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Row, tokio_postgres::Error> {
-        self.transaction.query_one(statement, params).await
+        self.transaction.query_typed_one(statement, params).await
     }
 
     async fn query_opt(
         &self,
         statement: &str,
-        params: &[&(dyn ToSql + Sync)],
+        params: &Params<'_>,
     ) -> Result<Option<Row>, tokio_postgres::Error> {
-        self.transaction.query_opt(statement, params).await
+        self.transaction.query_typed_opt(statement, params).await
     }
 }

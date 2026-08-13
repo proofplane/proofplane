@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::{ProvisionUserPayload, User, UserId};
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, UnitOfWork,
@@ -31,10 +32,10 @@ impl Postgres {
         &self,
         payload: &ProvisionUserPayload,
     ) -> Result<User, Error> {
-        let mut client = self.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_one(
+        let row = self
+            .get()
+            .await?
+            .query_typed_one(
                 r#"
 INSERT INTO users (auth0_sub, email, name)
 VALUES ($1, $2, $3)
@@ -44,10 +45,13 @@ SET
     name = COALESCE(EXCLUDED.name, users.name)
 RETURNING id, auth0_sub, email, name, last_login_at, created_at
 "#,
-                &[&payload.auth0_sub, &payload.email, &payload.name],
+                &[
+                    param(&payload.auth0_sub),
+                    param(&payload.email),
+                    param(&payload.name),
+                ],
             )
             .await?;
-        transaction.commit().await?;
 
         UserRecord::try_from_row(&row)?.into_domain()
     }
@@ -65,16 +69,16 @@ impl UserRepository<'_> {
     pub async fn get(&self, id: UserId) -> Result<Option<User>, Error> {
         let rows = match self.connection {
             RepositoryConnection::Postgres(postgres) => {
-                let mut client = postgres.get().await?;
-                let transaction = client.transaction().await?;
-                let rows = transaction.query(GET_BY_ID_SQL, &[&Uuid::from(id)]).await?;
-                transaction.commit().await?;
-                rows
+                postgres
+                    .get()
+                    .await?
+                    .query_typed(GET_BY_ID_SQL, &[param(&Uuid::from(id))])
+                    .await?
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work
                     .transaction
-                    .query(GET_BY_ID_FOR_UPDATE_SQL, &[&Uuid::from(id)])
+                    .query_typed(GET_BY_ID_FOR_UPDATE_SQL, &[param(&Uuid::from(id))])
                     .await?
             }
         };

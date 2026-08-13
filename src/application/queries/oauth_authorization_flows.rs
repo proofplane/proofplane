@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{OAuthAuthorizationRequestId, UserId, WorkspaceId, WorkspacePermission},
-    persistence::{Error, Postgres},
+    persistence::{param, Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -40,15 +40,15 @@ impl ReadOAuthConsentContextHandler {
         &self,
         query: ReadOAuthConsentContext,
     ) -> Result<Option<OAuthConsentContext>, Error> {
-        let mut client = self.repository.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(
+        let row = self
+            .repository
+            .get()
+            .await?
+            .query_typed_opt(
                 CONSENT_CONTEXT_SQL,
-                &[&Uuid::from(query.request_id), &query.now],
+                &[param(&Uuid::from(query.request_id)), param(&query.now)],
             )
             .await?;
-        transaction.commit().await?;
 
         row.map(consent_context_from_row).transpose()
     }
@@ -84,12 +84,12 @@ impl ReadOAuthAuthorizationGrantHandler {
         &self,
         query: ReadOAuthAuthorizationGrant,
     ) -> Result<Option<OAuthAuthorizationGrantView>, Error> {
-        let mut client = self.repository.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(GRANT_VIEW_SQL, &[&Uuid::from(query.request_id)])
+        let row = self
+            .repository
+            .get()
+            .await?
+            .query_typed_opt(GRANT_VIEW_SQL, &[param(&Uuid::from(query.request_id))])
             .await?;
-        transaction.commit().await?;
 
         row.map(grant_view_from_row).transpose()
     }

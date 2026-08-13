@@ -14,6 +14,7 @@ pub mod constraints;
 pub mod error;
 mod migrate;
 mod outbox;
+mod params;
 mod reads;
 mod snapshot;
 #[cfg(test)]
@@ -34,6 +35,7 @@ pub use constraints::ConflictKind;
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use migrate::{migrate, migration_runner};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
+pub(crate) use params::param;
 
 pub struct Postgres {
     pool: Pool,

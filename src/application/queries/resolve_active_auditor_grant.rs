@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrantId, WorkspaceId},
-    persistence::{Error, Postgres},
+    persistence::{param, Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -36,12 +36,12 @@ impl ResolveActiveAuditorGrantHandler {
         &self,
         query: ResolveActiveAuditorGrant,
     ) -> Result<Option<ResolvedActiveAuditorGrant>, Error> {
-        let mut client = self.repository.get().await?;
-        let transaction = client.transaction().await?;
-        let row = transaction
-            .query_opt(SQL, &[&Uuid::from(query.grant_id)])
+        let row = self
+            .repository
+            .get()
+            .await?
+            .query_typed_opt(SQL, &[param(&Uuid::from(query.grant_id))])
             .await?;
-        transaction.commit().await?;
         row.map(|row| {
             Ok(ResolvedActiveAuditorGrant {
                 id: row.try_get::<_, Uuid>("id")?.into(),

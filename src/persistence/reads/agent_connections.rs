@@ -9,7 +9,7 @@ use crate::{
     read_models::{AgentConnectionAuthority, ReusableAgentConnection, UserAgentConnectionSummary},
 };
 
-use super::ReadExecutor;
+use super::{param, ReadExecutor};
 
 pub(crate) struct AgentConnectionReads<'a, E> {
     executor: &'a E,
@@ -32,7 +32,14 @@ impl<E: ReadExecutor> AgentConnectionReads<'_, E> {
             Error::InvariantViolation("invalid requested agent connection permissions")
         })?;
         self.executor
-            .query_opt(REUSABLE_SQL, &[&auth0_subject, &auth0_client_id, &resource])
+            .query_opt(
+                REUSABLE_SQL,
+                &[
+                    param(&auth0_subject),
+                    param(&auth0_client_id),
+                    param(&resource),
+                ],
+            )
             .await?
             .map(|row| {
                 let permissions = permissions(row.try_get("permissions")?)?;
@@ -54,7 +61,7 @@ impl<E: ReadExecutor> AgentConnectionReads<'_, E> {
         id: AgentConnectionId,
     ) -> Result<Option<AgentConnectionAuthority>, Error> {
         self.executor
-            .query_opt(AUTHORITY_SQL, &[&Uuid::from(id)])
+            .query_opt(AUTHORITY_SQL, &[param(&Uuid::from(id))])
             .await?
             .map(|row| {
                 let permissions = permissions(row.try_get("permissions")?)?;
@@ -78,7 +85,7 @@ impl<E: ReadExecutor> AgentConnectionReads<'_, E> {
     ) -> Result<Vec<UserAgentConnectionSummary>, Error> {
         self.executor.query(
             "SELECT c.id, c.client_display_name, c.status, t.consumed_at AS authorized_at, c.last_used_at FROM agent_connections c JOIN agent_authorization_transactions t ON t.agent_connection_id = c.id WHERE c.user_id = $1 AND c.status IN ('authorized', 'active') AND t.consumed_at IS NOT NULL ORDER BY t.consumed_at DESC, c.id DESC",
-            &[&Uuid::from(user_id)],
+            &[param(&Uuid::from(user_id))],
         ).await?.into_iter().map(|row| Ok(UserAgentConnectionSummary { id: row.try_get::<_, Uuid>("id")?.into(), client_name: row.try_get("client_display_name")?, status: row.try_get::<_, String>("status")?.parse().map_err(|_| Error::InvariantViolation("unknown agent connection status"))?, authorized_at: row.try_get("authorized_at")?, last_used_at: row.try_get("last_used_at")? })).collect()
     }
 }

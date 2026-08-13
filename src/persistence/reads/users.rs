@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::{domain::UserId, persistence::Error};
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct UserReads<'a, E> {
     executor: &'a E,
@@ -19,11 +19,14 @@ impl UserReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_one(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                &[&auth0_sub],
+                &[param(&auth0_sub)],
             )
             .await?;
         self.executor
-            .query_opt("SELECT id FROM users WHERE auth0_sub = $1", &[&auth0_sub])
+            .query_opt(
+                "SELECT id FROM users WHERE auth0_sub = $1",
+                &[param(&auth0_sub)],
+            )
             .await?
             .map(|row| row.try_get::<_, Uuid>("id").map(UserId::from))
             .transpose()
@@ -34,7 +37,7 @@ impl UserReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_opt(
                 "SELECT auth0_sub FROM users WHERE id = $1",
-                &[&Uuid::from(id)],
+                &[param(&Uuid::from(id))],
             )
             .await?
             .map(|row| row.try_get("auth0_sub"))

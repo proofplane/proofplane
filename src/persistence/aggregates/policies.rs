@@ -9,6 +9,7 @@ use crate::{
 
 use super::Error;
 
+use super::params::param;
 use super::snapshot::{save_snapshot, snapshot_record};
 
 /// Workspace-scoped complete-snapshot repository for the policy aggregate.
@@ -24,9 +25,9 @@ impl<'a> WorkspaceUnitOfWork<'a> {
 
 impl PolicyRepository<'_> {
     pub async fn get(&self, id: PolicyId) -> Result<Option<Policy>, Error> {
-        let Some(row) = self.workspace.transaction.query_opt("SELECT id, workspace_id, name, description, created_at, updated_at, archived_at FROM policies WHERE id = $1 AND workspace_id = $2 FOR UPDATE", &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)]).await? else { return Ok(None) };
+        let Some(row) = self.workspace.transaction.query_typed_opt("SELECT id, workspace_id, name, description, created_at, updated_at, archived_at FROM policies WHERE id = $1 AND workspace_id = $2 FOR UPDATE", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace.workspace_id))]).await? else { return Ok(None) };
         let record = PolicyRecord::try_from_row(&row)?;
-        let mappings = self.workspace.transaction.query("SELECT control_id, created_at FROM policy_control_mappings WHERE policy_id = $1 ORDER BY control_id", &[&Uuid::from(id)]).await?.into_iter().map(policy_mapping_from_row).collect::<Result<Vec<_>, _>>()?;
+        let mappings = self.workspace.transaction.query_typed("SELECT control_id, created_at FROM policy_control_mappings WHERE policy_id = $1 ORDER BY control_id", &[param(&Uuid::from(id))]).await?.into_iter().map(policy_mapping_from_row).collect::<Result<Vec<_>, _>>()?;
         record.into_domain(mappings).map(Some)
     }
 
@@ -36,9 +37,9 @@ impl PolicyRepository<'_> {
         save_snapshot(self.workspace.transaction, record.as_snapshot()).await?;
         self.workspace
             .transaction
-            .execute(
+            .execute_typed(
                 "DELETE FROM policy_control_mappings WHERE policy_id = $1",
-                &[&Uuid::from(policy.id())],
+                &[param(&Uuid::from(policy.id()))],
             )
             .await?;
         for mapping in policy
@@ -46,7 +47,7 @@ impl PolicyRepository<'_> {
             .iter()
             .map(|mapping| PolicyControlMappingRecord::from_domain(record.id, mapping))
         {
-            self.workspace.transaction.execute("INSERT INTO policy_control_mappings (policy_id, control_id, created_at) VALUES ($1, $2, $3)", &[&mapping.policy_id, &mapping.control_id, &mapping.created_at]).await?;
+            self.workspace.transaction.execute_typed("INSERT INTO policy_control_mappings (policy_id, control_id, created_at) VALUES ($1, $2, $3)", &[param(&mapping.policy_id), param(&mapping.control_id), param(&mapping.created_at)]).await?;
         }
         Ok(())
     }

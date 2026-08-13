@@ -3,6 +3,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, UnitOfWork,
@@ -27,7 +28,7 @@ impl AuditorAuthTransactionRepository<'_> {
     ) -> Result<Option<AuditorAuthTransaction>, Error> {
         self.unit_of_work
             .transaction
-            .query_opt(GET_FOR_UPDATE_SQL, &[&Uuid::from(id)])
+            .query_typed_opt(GET_FOR_UPDATE_SQL, &[param(&Uuid::from(id))])
             .await?
             .map(|row| AuditorAuthTransactionRecord::try_from_row(&row)?.into_domain())
             .transpose()
