@@ -301,6 +301,97 @@ pub enum ResendWorkspaceInvitationError {
     Authority(#[from] WorkspaceInvitationAuthorityError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevokeWorkspaceInvitation {
+    pub invitation_id: WorkspaceInvitationId,
+    pub actor_user_id: UserId,
+    pub expected_generation: i64,
+    pub revoked_at: DateTime<Utc>,
+}
+
+pub struct RevokedWorkspaceInvitation {
+    pub invitation_id: WorkspaceInvitationId,
+    pub workspace_id: WorkspaceId,
+}
+
+#[derive(Clone)]
+pub struct RevokeWorkspaceInvitationHandler {
+    repository: Arc<Postgres>,
+}
+
+impl RevokeWorkspaceInvitationHandler {
+    pub fn new(repository: Arc<Postgres>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn handle(
+        &self,
+        command: RevokeWorkspaceInvitation,
+    ) -> Result<RevokedWorkspaceInvitation, RevokeWorkspaceInvitationError> {
+        let outcome = self
+            .repository
+            .in_unit_of_work(async move |unit_of_work| {
+                let Some(workspace_id) = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .resolve_id_for_member(command.actor_user_id)
+                    .await?
+                else {
+                    return Ok(RevokeOutcome::Unavailable);
+                };
+                let role = unit_of_work
+                    .reads()
+                    .workspaces()
+                    .role_for(workspace_id, command.actor_user_id)
+                    .await?;
+                if !matches!(role, Some(WorkspaceRole::Owner | WorkspaceRole::Admin)) {
+                    return Ok(RevokeOutcome::Unavailable);
+                }
+                let invitations = unit_of_work.aggregates().workspace_invitations();
+                let Some(mut invitation) = invitations
+                    .get_for_workspace(command.invitation_id, workspace_id)
+                    .await?
+                else {
+                    return Ok(RevokeOutcome::Unavailable);
+                };
+                match invitation.revoke(command.expected_generation, command.revoked_at) {
+                    Ok(()) => {}
+                    Err(crate::domain::WorkspaceInvitationError::StaleGeneration) => {
+                        return Ok(RevokeOutcome::StaleGeneration)
+                    }
+                    Err(_) => return Ok(RevokeOutcome::Unavailable),
+                }
+                invitations.save(&invitation).await?;
+                Ok(RevokeOutcome::Revoked(workspace_id))
+            })
+            .await?;
+        match outcome {
+            RevokeOutcome::Revoked(workspace_id) => Ok(RevokedWorkspaceInvitation {
+                invitation_id: command.invitation_id,
+                workspace_id,
+            }),
+            RevokeOutcome::StaleGeneration => Err(RevokeWorkspaceInvitationError::StaleGeneration),
+            RevokeOutcome::Unavailable => Err(RevokeWorkspaceInvitationError::Unavailable),
+        }
+    }
+}
+
+enum RevokeOutcome {
+    Revoked(WorkspaceId),
+    StaleGeneration,
+    Unavailable,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RevokeWorkspaceInvitationError {
+    #[error("workspace invitation is unavailable")]
+    Unavailable,
+    #[error("workspace invitation generation is stale")]
+    StaleGeneration,
+    #[error("workspace invitation repository error")]
+    Repository(#[from] RepositoryError),
+}
+
 enum CreateOutcome {
     Created(WorkspaceInvitation),
     Unavailable,

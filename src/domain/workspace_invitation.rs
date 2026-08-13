@@ -232,6 +232,21 @@ impl WorkspaceInvitation {
         Ok(())
     }
 
+    pub fn revoke(
+        &mut self,
+        expected_generation: i64,
+        revoked_at: DateTime<Utc>,
+    ) -> Result<(), WorkspaceInvitationError> {
+        if expected_generation != self.generation {
+            return Err(WorkspaceInvitationError::StaleGeneration);
+        }
+        if self.status_at(revoked_at) != WorkspaceInvitationStatus::Pending {
+            return Err(WorkspaceInvitationError::Unavailable);
+        }
+        self.revoked_at = Some(revoked_at);
+        Ok(())
+    }
+
     pub fn record_delivery_success(
         &mut self,
         generation: i64,
@@ -414,5 +429,34 @@ mod tests {
         assert_eq!(invitation.delivered_generation(), Some(1));
         assert!(!invitation.record_delivery_failure(2, "permanent", invitation.created_at()));
         assert_eq!(invitation.last_delivery_failure(), None);
+    }
+
+    #[test]
+    fn revocation_is_generation_safe_and_terminal() {
+        let mut invitation = pending();
+        let revoked_at = invitation.created_at() + Duration::hours(1);
+
+        assert_eq!(
+            invitation.revoke(2, revoked_at),
+            Err(WorkspaceInvitationError::StaleGeneration)
+        );
+        assert_eq!(invitation.revoked_at(), None);
+        assert_eq!(invitation.revoke(1, revoked_at), Ok(()));
+        assert_eq!(invitation.revoked_at(), Some(revoked_at));
+        assert_eq!(
+            invitation.revoke(1, revoked_at + Duration::minutes(1)),
+            Err(WorkspaceInvitationError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn expired_invitation_cannot_be_revoked() {
+        let mut invitation = pending();
+
+        assert_eq!(
+            invitation.revoke(1, invitation.expires_at()),
+            Err(WorkspaceInvitationError::Unavailable)
+        );
+        assert_eq!(invitation.revoked_at(), None);
     }
 }

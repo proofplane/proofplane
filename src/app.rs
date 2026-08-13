@@ -18,6 +18,7 @@ use crate::{
             workspace_invitations::{
                 AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitationHandler,
                 GetCurrentWorkspaceInvitationLinkHandler, ResendWorkspaceInvitationHandler,
+                RevokeWorkspaceInvitationHandler,
             },
         },
         queries::{
@@ -361,6 +362,7 @@ pub fn create_app<V: TokenVerifier<Claims = VerifiedClaims> + 'static>(
                 dependencies.postgres.clone(),
                 workspace_invitation_authority.clone(),
             ),
+            revoke: RevokeWorkspaceInvitationHandler::new(dependencies.postgres.clone()),
             preview: PreviewWorkspaceInvitationHandler::new(
                 dependencies.postgres.clone(),
                 workspace_invitation_authority.clone(),
