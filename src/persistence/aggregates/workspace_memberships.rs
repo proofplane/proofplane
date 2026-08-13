@@ -1,9 +1,9 @@
-use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{UserId, WorkspaceId, WorkspaceMembership, WorkspaceRole};
 
+use super::params::param;
 use super::{constraints::classify_db_error, Error, Postgres, UnitOfWork};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,9 +21,9 @@ impl UnitOfWork<'_> {
     ) -> Result<Option<WorkspaceRole>, Error> {
         let rows = self
             .transaction
-            .query(
+            .query_typed(
                 "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 FOR UPDATE",
-                &[&Uuid::from(workspace_id), &Uuid::from(user_id)],
+                &[param(&Uuid::from(workspace_id)), param(&Uuid::from(user_id))],
             )
             .await?;
 
@@ -36,16 +36,16 @@ impl UnitOfWork<'_> {
     ) -> Result<WorkspaceMembership, Error> {
         let row = self
             .transaction
-            .query_one(
+            .query_typed_one(
                 r#"
 INSERT INTO workspace_memberships (user_id, workspace_id, role)
 VALUES ($1, $2, $3)
 RETURNING user_id, workspace_id, role, created_at
 "#,
                 &[
-                    &Uuid::from(membership.user_id),
-                    &Uuid::from(membership.workspace_id),
-                    &membership.role.as_str(),
+                    param(&Uuid::from(membership.user_id)),
+                    param(&Uuid::from(membership.workspace_id)),
+                    param(&membership.role.as_str()),
                 ],
             )
             .await
@@ -61,11 +61,15 @@ impl Postgres {
         workspace_id: WorkspaceId,
         user_id: UserId,
     ) -> Result<Option<WorkspaceRole>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
+        let rows = self
+            .get()
+            .await?
+            .query_typed(
                 "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2",
-                &[&Uuid::from(workspace_id), &Uuid::from(user_id)],
+                &[
+                    param(&Uuid::from(workspace_id)),
+                    param(&Uuid::from(user_id)),
+                ],
             )
             .await?;
 

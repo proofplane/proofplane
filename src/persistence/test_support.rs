@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::{AgentConnectionId, EvidenceId, PolicyId, UserId, WorkspaceId};
 
+use super::params::param;
 use super::{self as persistence, Postgres};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -80,25 +81,29 @@ pub async fn workspace(postgres: &Postgres, name: &str) -> TestWorkspace {
     let agent_connection_id = Uuid::new_v4();
 
     client
-        .execute(
+        .execute_typed(
             "INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3)",
-            &[&workspace_id, &workspace_id.to_string(), &name],
+            &[
+                param(&workspace_id),
+                param(&workspace_id.to_string()),
+                param(&name),
+            ],
         )
         .await
         .expect("workspace row inserts");
     client
-        .execute(
+        .execute_typed(
             "INSERT INTO users (id, auth0_sub, email) VALUES ($1, $2, $3)",
             &[
-                &user_id,
-                &format!("auth0|{user_id}"),
-                &format!("{user_id}@proofplane.test"),
+                param(&user_id),
+                param(&format!("auth0|{user_id}")),
+                param(&format!("{user_id}@proofplane.test")),
             ],
         )
         .await
         .expect("user row inserts");
     client
-        .execute(
+        .execute_typed(
             r#"
 INSERT INTO agent_connections (
     id,
@@ -116,10 +121,10 @@ VALUES ($1, $2, $3, $4, 'test-client', 'Test Agent', 'https://api.proofplane.tes
         'active', now() + interval '1 hour', now())
 "#,
             &[
-                &agent_connection_id,
-                &user_id,
-                &workspace_id,
-                &format!("auth0|{user_id}"),
+                param(&agent_connection_id),
+                param(&user_id),
+                param(&workspace_id),
+                param(&format!("auth0|{user_id}")),
             ],
         )
         .await
@@ -138,9 +143,13 @@ pub async fn policy(postgres: &Postgres, workspace_id: WorkspaceId, name: &str) 
     let policy_id = Uuid::new_v4();
 
     client
-        .execute(
+        .execute_typed(
             "INSERT INTO policies (id, workspace_id, name) VALUES ($1, $2, $3)",
-            &[&policy_id, &Uuid::from(workspace_id), &name],
+            &[
+                param(&policy_id),
+                param(&Uuid::from(workspace_id)),
+                param(&name),
+            ],
         )
         .await
         .expect("policy row inserts");
@@ -164,12 +173,17 @@ pub async fn evidence_with_status(
     let evidence_id = Uuid::new_v4();
 
     client
-        .execute(
+        .execute_typed(
             r#"
 INSERT INTO evidence (id, workspace_id, title, description, collection_instructions, status)
 VALUES ($1, $2, $3, 'Seeded description', 'Seeded instructions', $4)
 "#,
-            &[&evidence_id, &Uuid::from(workspace_id), &title, &status],
+            &[
+                param(&evidence_id),
+                param(&Uuid::from(workspace_id)),
+                param(&title),
+                param(&status),
+            ],
         )
         .await
         .expect("evidence row inserts");

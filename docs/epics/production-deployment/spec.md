@@ -31,7 +31,7 @@ must not be enabled until all are verified:
 | Native GCS | The runtime object-store adapter streams all required operations through GCS using ADC. |
 | Native Pub/Sub | The dequeuer publishes through Google Pub/Sub without requiring `PUBSUB_EMULATOR_HOST` and does not provision topics or subscriptions. |
 | Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. |
-| Transaction pooling | Runtime queries avoid named prepared statements and pass integration tests against Supavisor transaction mode on port 6543. |
+| Transaction pooling | Runtime queries issue unnamed statements and pass integration tests against a transaction pooler. Met locally against PgBouncer in transaction mode; still unverified against Supavisor on 6543. |
 | Dedicated migrations | A `proofplane-migrate` command runs migrations only, uses a separate direct credential, and never seeds data. |
 | Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup. |
 | Compatible migrations | Schema changes follow expand/contract rules, use a short lock timeout, and remain compatible with old and new revisions. |
@@ -174,6 +174,25 @@ Runtime processes use Supavisor transaction mode. The connection string must
 use port 6543 and verified TLS. The database adapter must issue unnamed queries
 or otherwise disable named prepared statements, because transaction mode does
 not support them.
+
+The adapter satisfies the first clause literally. Every parameterized statement
+uses `query_typed`/`execute_typed`, which parse into the **unnamed** statement
+and send `Parse`, `Bind`, `Describe`, and `Execute` under a single `Sync` — one
+round trip, and nothing that depends on the pooler keeping the same backend
+across two. The ordinary `query`/`execute` methods are unusable here because
+`tokio_postgres` names every statement they create, and the pooler reassigns the
+connection between the `Parse` and the `Bind`.
+
+Those methods require the caller to state each parameter's Postgres type.
+`persistence::param` recovers it from the Rust type, so call sites bind values as
+before and a type with no mapping is a compile error rather than a runtime one.
+This works because the schema is unambiguous: one string type, one JSON type,
+one timestamp type, and no enums or domains.
+
+This is verified locally rather than only in production: the compose stack runs
+PgBouncer in transaction mode on 6432 with `max_prepared_statements = 0`, so it
+refuses named prepared statements exactly as Supavisor does, and the whole
+integration-v2 suite runs through it. See `docker/pgbouncer/pgbouncer.ini`.
 
 Initial local pool limits are:
 

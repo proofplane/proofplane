@@ -7,7 +7,7 @@ use crate::{
     application::queries::resolve_active_auditor_grant::ResolvedActiveAuditorGrant,
     authentication::opaque_token::parse_auditor_invite_secret,
     domain::{AuditReviewPeriod, WorkspaceId},
-    persistence::{Error, Postgres},
+    persistence::{param, Error, Postgres},
 };
 
 #[derive(Debug)]
@@ -37,11 +37,11 @@ impl ResolveAuditorGrantBySecretHandler {
             .repository
             .get()
             .await?
-            .query_opt(
+            .query_typed_opt(
                 SQL,
                 &[
-                    &Uuid::from(query.workspace_id),
-                    &digest.as_bytes().as_slice(),
+                    param(&Uuid::from(query.workspace_id)),
+                    param(&digest.as_bytes().as_slice()),
                 ],
             )
             .await?;

@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-use super::{documents::document_from_row, ReadExecutor, TransactionalReadExecutor};
+use super::{documents::document_from_row, param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct PolicyReads<'a, E> {
     executor: &'a E,
@@ -35,14 +35,17 @@ impl<E: ReadExecutor> PolicyReads<'_, E> {
             self.executor
                 .query(
                     DETAIL_SQL,
-                    &[&Uuid::from(id), &Uuid::from(self.workspace_id)],
+                    &[
+                        param(&Uuid::from(id)),
+                        param(&Uuid::from(self.workspace_id)),
+                    ],
                 )
                 .await?,
         )
     }
     pub async fn list_catalog(&self) -> Result<Vec<PolicyCatalogEntry>, Error> {
         self.executor
-            .query(CATALOG_SQL, &[&Uuid::from(self.workspace_id)])
+            .query(CATALOG_SQL, &[param(&Uuid::from(self.workspace_id))])
             .await?
             .into_iter()
             .map(catalog_row)
@@ -87,9 +90,9 @@ impl<E: ReadExecutor> PolicyReads<'_, E> {
                     .query_opt(
                         &sql,
                         &[
-                            &Uuid::from(policy_id),
-                            &Uuid::from(self.workspace_id),
-                            &Uuid::from(id),
+                            param(&Uuid::from(policy_id)),
+                            param(&Uuid::from(self.workspace_id)),
+                            param(&Uuid::from(id)),
                         ],
                     )
                     .await?
@@ -98,7 +101,10 @@ impl<E: ReadExecutor> PolicyReads<'_, E> {
                 self.executor
                     .query_opt(
                         &sql,
-                        &[&Uuid::from(policy_id), &Uuid::from(self.workspace_id)],
+                        &[
+                            param(&Uuid::from(policy_id)),
+                            param(&Uuid::from(self.workspace_id)),
+                        ],
                     )
                     .await?
             }
@@ -119,17 +125,17 @@ impl<E: ReadExecutor> PolicyReads<'_, E> {
 
 impl PolicyReads<'_, TransactionalReadExecutor<'_>> {
     pub async fn is_active(&self, id: PolicyId) -> Result<bool, Error> {
-        Ok(self.executor.query_opt("SELECT id FROM policies WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL FOR KEY SHARE", &[&Uuid::from(id), &Uuid::from(self.workspace_id)]).await?.is_some())
+        Ok(self.executor.query_opt("SELECT id FROM policies WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL FOR KEY SHARE", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace_id))]).await?.is_some())
     }
     pub async fn document_in_progress(&self, id: PolicyId) -> Result<bool, Error> {
-        Ok(self.executor.query_one("SELECT EXISTS (SELECT 1 FROM documents WHERE owner_type = 'policy' AND owner_id = $1 AND workspace_id = $2 AND archived = false AND upload_status IN ('pending', 'finalizing'))", &[&Uuid::from(id), &Uuid::from(self.workspace_id)]).await?.try_get(0)?)
+        Ok(self.executor.query_one("SELECT EXISTS (SELECT 1 FROM documents WHERE owner_type = 'policy' AND owner_id = $1 AND workspace_id = $2 AND archived = false AND upload_status IN ('pending', 'finalizing'))", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace_id))]).await?.try_get(0)?)
     }
     pub async fn lock_document_upload_eligibility(
         &self,
         id: PolicyId,
     ) -> Result<Option<PolicyDocumentUploadEligibility>, Error> {
-        if self.executor.query_opt("SELECT id FROM policies p WHERE p.id = $1 AND p.workspace_id = $2 AND p.archived_at IS NULL FOR UPDATE OF p", &[&Uuid::from(id), &Uuid::from(self.workspace_id)]).await?.is_none() { return Ok(None); }
-        let current: bool = self.executor.query_one("SELECT EXISTS (SELECT 1 FROM documents d WHERE d.owner_type = 'policy' AND d.owner_id = $1 AND d.workspace_id = $2 AND d.archived = false)", &[&Uuid::from(id), &Uuid::from(self.workspace_id)]).await?.try_get(0)?;
+        if self.executor.query_opt("SELECT id FROM policies p WHERE p.id = $1 AND p.workspace_id = $2 AND p.archived_at IS NULL FOR UPDATE OF p", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace_id))]).await?.is_none() { return Ok(None); }
+        let current: bool = self.executor.query_one("SELECT EXISTS (SELECT 1 FROM documents d WHERE d.owner_type = 'policy' AND d.owner_id = $1 AND d.workspace_id = $2 AND d.archived = false)", &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace_id))]).await?.try_get(0)?;
         Ok(Some(if current {
             PolicyDocumentUploadEligibility::CurrentDocument
         } else {
@@ -145,9 +151,9 @@ impl PolicyReads<'_, TransactionalReadExecutor<'_>> {
             .query_opt(
                 MAPPING_SQL,
                 &[
-                    &Uuid::from(policy_id),
-                    &Uuid::from(control_id),
-                    &Uuid::from(self.workspace_id),
+                    param(&Uuid::from(policy_id)),
+                    param(&Uuid::from(control_id)),
+                    param(&Uuid::from(self.workspace_id)),
                 ],
             )
             .await?

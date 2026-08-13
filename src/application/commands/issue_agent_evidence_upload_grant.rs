@@ -267,7 +267,7 @@ FOR EACH ROW EXECUTE FUNCTION fail_machine_grant_save();
             .get()
             .await
             .expect("database connection opens")
-            .query_one("SELECT count(*) FROM agent_evidence_upload_grants", &[])
+            .query_typed_one("SELECT count(*) FROM agent_evidence_upload_grants", &[])
             .await
             .expect("grant count loads")
             .get(0);

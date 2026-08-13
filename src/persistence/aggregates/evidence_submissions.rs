@@ -6,6 +6,7 @@ use crate::{
     persistence::WorkspaceUnitOfWork,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error,
@@ -26,7 +27,7 @@ impl EvidenceSubmissionRepository<'_> {
     pub async fn get(&self, id: EvidenceSubmissionId) -> Result<Option<EvidenceSubmission>, Error> {
         self.workspace
             .transaction
-            .query_opt(
+            .query_typed_opt(
                 r#"SELECT s.id, s.evidence_id, s.submitted_by_agent_connection_id,
  c.user_id AS submitted_by_user_id, s.received_at, s.valid_from, s.valid_until
 FROM evidence_submissions s
@@ -34,7 +35,10 @@ JOIN evidence e ON e.id = s.evidence_id
 JOIN agent_connections c ON c.id = s.submitted_by_agent_connection_id
 WHERE s.id = $1 AND e.workspace_id = $2
 FOR UPDATE OF s"#,
-                &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)],
+                &[
+                    param(&Uuid::from(id)),
+                    param(&Uuid::from(self.workspace.workspace_id)),
+                ],
             )
             .await?
             .map(|row| EvidenceSubmissionRecord::try_from_row(&row)?.into_domain(&row))

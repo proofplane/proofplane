@@ -5,6 +5,7 @@ use crate::domain::{
     Document, DocumentId, DocumentIdentity, DocumentOwner, DocumentUploadStatus, UserId,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, UnitOfWork, WorkspaceUnitOfWork,
@@ -120,10 +121,10 @@ impl DocumentRepository<'_> {
         let identity = document_identity(id, owner);
         self.unit_of_work
             .transaction
-            .query_opt(
+            .query_typed_opt(
                 r#"SELECT id, workspace_id, owner_type, owner_id, created_by_user_id, filename, content_type, content_length, object_key, checksum_sha256, checksum_crc32c, archived, upload_status, created_at
 FROM documents WHERE id = $1 AND owner_type = $2 AND owner_id = $3 FOR UPDATE"#,
-                &[&Uuid::from(id), &owner.owner_type(), &owner.owner_uuid()],
+                &[param(&Uuid::from(id)), param(&owner.owner_type()), param(&owner.owner_uuid())],
             )
             .await?
             .map(|row| DocumentRecord::try_from_row(&row)?.into_domain(identity))
@@ -144,10 +145,10 @@ impl WorkspaceDocumentRepository<'_> {
         owner: DocumentOwner,
     ) -> Result<Option<Document>, Error> {
         let identity = document_identity(id, owner);
-        self.workspace.transaction.query_opt(
+        self.workspace.transaction.query_typed_opt(
             r#"SELECT id, workspace_id, owner_type, owner_id, created_by_user_id, filename, content_type, content_length, object_key, checksum_sha256, checksum_crc32c, archived, upload_status, created_at
 FROM documents WHERE id = $1 AND workspace_id = $2 AND owner_type = $3 AND owner_id = $4 FOR UPDATE"#,
-            &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id), &owner.owner_type(), &owner.owner_uuid()],
+            &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace.workspace_id)), param(&owner.owner_type()), param(&owner.owner_uuid())],
         ).await?.map(|row| DocumentRecord::try_from_row(&row)?.into_domain(identity)).transpose()
     }
 
@@ -179,8 +180,9 @@ async fn save_workspace_document_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use deadpool_postgres::GenericClient;
     use uuid::Uuid;
+
+    use super::param;
 
     use crate::{
         domain::{CreateDocumentPayload, Document, DocumentIdentity, PolicyId},
@@ -247,17 +249,17 @@ mod tests {
 
         let client = postgres.get().await.expect("test database is available");
         let document_count: i64 = client
-            .query_one(
+            .query_typed_one(
                 "SELECT count(*) FROM documents WHERE id = $1",
-                &[&Uuid::from(identity.document_id())],
+                &[param(&Uuid::from(identity.document_id()))],
             )
             .await
             .expect("document count query succeeds")
             .get(0);
         let outbox_count: i64 = client
-            .query_one(
+            .query_typed_one(
                 "SELECT count(*) FROM outbox_messages WHERE subject = $1",
-                &[&identity.document_uuid().to_string()],
+                &[param(&identity.document_uuid().to_string())],
             )
             .await
             .expect("outbox count query succeeds")

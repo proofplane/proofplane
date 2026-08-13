@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use deadpool_postgres::GenericClient;
+use deadpool_postgres::Transaction;
 use serde_json::Value;
 use tokio_postgres::Row;
 use uuid::Uuid;
@@ -12,6 +12,7 @@ use crate::{
     pubsub::TopicName,
 };
 
+use super::params::param;
 use super::{Error, Postgres, UnitOfWork, WorkspaceUnitOfWork};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +67,7 @@ impl UnitOfWork<'_> {
 }
 
 async fn append_outbox_message(
-    client: &impl GenericClient,
+    transaction: &Transaction<'_>,
     message: &NewOutboxMessage,
 ) -> Result<OutboxMessage, Error> {
     let integration_message = &message.message;
@@ -75,8 +76,8 @@ async fn append_outbox_message(
         .map_err(|_| Error::InvariantViolation("integration message payload must serialize"))?;
     let event_type = legacy_event_type(integration_message);
     let aggregate_type = integration_message.payload().aggregate_type();
-    let row = client
-        .query_one(
+    let row = transaction
+        .query_typed_one(
             r#"
 INSERT INTO outbox_messages (
     topic,
@@ -114,19 +115,19 @@ RETURNING
     created_at
 "#,
             &[
-                &message.topic.as_str(),
-                &event_type,
-                &aggregate_type,
-                &metadata.subject,
-                &payload,
-                &metadata.correlation_id,
-                &integration_message.kind().as_str(),
-                &integration_message.message_type(),
-                &integration_message.version(),
-                &metadata.message_id,
-                &metadata.subject,
-                &metadata.correlation_id,
-                &metadata.causation_id,
+                param(&message.topic.as_str()),
+                param(&event_type),
+                param(&aggregate_type),
+                param(&metadata.subject),
+                param(&payload),
+                param(&metadata.correlation_id),
+                param(&integration_message.kind().as_str()),
+                param(&integration_message.message_type()),
+                param(&integration_message.version()),
+                param(&metadata.message_id),
+                param(&metadata.subject),
+                param(&metadata.correlation_id),
+                param(&metadata.causation_id),
             ],
         )
         .await?;
@@ -140,9 +141,10 @@ impl Postgres {
         now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<OutboxMessage>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
+        let rows = self
+            .get()
+            .await?
+            .query_typed(
                 r#"
 SELECT
     id,
@@ -167,7 +169,7 @@ WHERE next_available_at <= $1
 ORDER BY next_available_at, id
 LIMIT $2
 "#,
-                &[&now, &limit],
+                &[param(&now), param(&limit)],
             )
             .await?;
 
@@ -179,9 +181,10 @@ LIMIT $2
         max_attempts: i32,
         limit: i64,
     ) -> Result<Vec<OutboxMessage>, Error> {
-        let client = self.get().await?;
-        let rows = client
-            .query(
+        let rows = self
+            .get()
+            .await?
+            .query_typed(
                 r#"
 SELECT
     id,
@@ -206,7 +209,7 @@ WHERE attempt_count >= $1
 ORDER BY next_available_at, id
 LIMIT $2
 "#,
-                &[&max_attempts, &limit],
+                &[param(&max_attempts), param(&limit)],
             )
             .await?;
 
@@ -214,9 +217,10 @@ LIMIT $2
     }
 
     pub async fn delete_outbox_message(&self, id: i64) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let deleted = client
-            .execute("DELETE FROM outbox_messages WHERE id = $1", &[&id])
+        let deleted = self
+            .get()
+            .await?
+            .execute_typed("DELETE FROM outbox_messages WHERE id = $1", &[param(&id)])
             .await?;
 
         Ok(deleted > 0)
@@ -227,9 +231,10 @@ LIMIT $2
         id: i64,
         next_available_at: DateTime<Utc>,
     ) -> Result<bool, Error> {
-        let client = self.get().await?;
-        let updated = client
-            .execute(
+        let updated = self
+            .get()
+            .await?
+            .execute_typed(
                 r#"
 UPDATE outbox_messages
 SET
@@ -237,7 +242,7 @@ SET
     next_available_at = $2
 WHERE id = $1
 "#,
-                &[&id, &next_available_at],
+                &[param(&id), param(&next_available_at)],
             )
             .await?;
 

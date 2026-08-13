@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrantId, AuditorSessionId, WorkspaceId},
-    persistence::Postgres,
+    persistence::{param, Postgres},
 };
 
 /// A read-only locator for the session cookie. It deliberately returns no digest.
@@ -49,7 +49,7 @@ impl ResolveAuditorSessionByDigestHandler {
             .await
             .map_err(crate::persistence::Error::from)?;
         let row = client
-            .query_opt(SQL, &[&digest])
+            .query_typed_opt(SQL, &[param(&digest)])
             .await
             .map_err(crate::persistence::Error::from)?;
         row.map(

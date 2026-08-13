@@ -7,6 +7,7 @@ use crate::{
     persistence::WorkspaceUnitOfWork,
 };
 
+use super::params::param;
 use super::{
     constraints::classify_db_error,
     snapshot::{save_snapshot, snapshot_record},
@@ -29,14 +30,17 @@ impl ControlRepository<'_> {
         let Some(row) = self
             .workspace
             .transaction
-            .query_opt(
+            .query_typed_opt(
                 r#"
 SELECT id, workspace_id, code, title, description, created_at, updated_at
 FROM controls
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 "#,
-                &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)],
+                &[
+                    param(&Uuid::from(id)),
+                    param(&Uuid::from(self.workspace.workspace_id)),
+                ],
             )
             .await?
         else {
@@ -46,14 +50,14 @@ FOR UPDATE
         let requirement_ids = self
             .workspace
             .transaction
-            .query(
+            .query_typed(
                 r#"
 SELECT framework_requirement_id
 FROM control_framework_requirement_mappings
 WHERE control_id = $1
 ORDER BY framework_requirement_id
 "#,
-                &[&Uuid::from(id)],
+                &[param(&Uuid::from(id))],
             )
             .await?
             .into_iter()
@@ -77,9 +81,9 @@ ORDER BY framework_requirement_id
             })?;
         self.workspace
             .transaction
-            .execute(
+            .execute_typed(
                 "DELETE FROM control_framework_requirement_mappings WHERE control_id = $1",
-                &[&Uuid::from(control.id())],
+                &[param(&Uuid::from(control.id()))],
             )
             .await?;
         let requirement_ids = control
@@ -90,7 +94,7 @@ ORDER BY framework_requirement_id
             .collect::<Vec<_>>();
         self.workspace
             .transaction
-            .execute(
+            .execute_typed(
                 r#"
 INSERT INTO control_framework_requirement_mappings (
     control_id,
@@ -99,7 +103,7 @@ INSERT INTO control_framework_requirement_mappings (
 SELECT $1, requested.framework_requirement_id
 FROM unnest($2::uuid[]) AS requested(framework_requirement_id)
 "#,
-                &[&Uuid::from(control.id()), &requirement_ids],
+                &[param(&Uuid::from(control.id())), param(&requirement_ids)],
             )
             .await?;
         Ok(())

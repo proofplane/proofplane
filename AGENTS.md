@@ -18,8 +18,8 @@ notes live in `docs/`.
 - `make check`: run formatting checks, Clippy with warnings denied, and all
   tests. Run `make up` first: the integration-v2 suite uses the compose stack
   rather than starting services of its own.
-- `make up && make health`: start and verify local Postgres, Pub/Sub, and
-  ClamAV dependencies.
+- `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
+  and ClamAV dependencies.
 - `make seed`: run database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
@@ -148,6 +148,34 @@ integration-v2 suite starts nothing: it uses the Postgres and Pub/Sub emulator
 from the compose stack, so `make up` has to have been run first, and it drops
 and recreates its own `proofplane_integration_v2` database on every run rather
 than touching the `proofplane` database you develop against.
+
+The compose stack also runs PgBouncer in transaction mode on 6432, standing in
+for the Supavisor transaction pooler that production runtime traffic goes
+through. The integration-v2 application under test connects through it, so the
+suite proves pooler compatibility on every run; only the suite's own
+`DROP DATABASE`/`CREATE DATABASE` reaches Postgres directly on 5432, because
+neither can run through a transaction pooler. `config/local.yaml` points at 6432
+too, so `make api` and friends exercise the same path.
+
+Because of that pooler, **never call `query`, `query_one`, `query_opt`, or
+`execute`.** Those name the prepared statement they create, and a transaction
+pooler reassigns the server connection between the `Parse` and the `Bind`, so
+the statement fails with `prepared statement "sN" does not exist`. Use
+`query_typed`, `query_typed_one`, `query_typed_opt`, and `execute_typed`, which
+parse into the unnamed statement and send the whole exchange under one `Sync`.
+
+Those methods want each parameter's Postgres type. Do not write `Type::…` at a
+call site: wrap the value in `persistence::param`, which recovers the type from
+the Rust type through the `PgParam` trait in `src/persistence/params.rs`.
+
+```rust
+.query_typed_opt("SELECT id FROM users WHERE auth0_sub = $1", &[param(&auth0_sub)])
+```
+
+Aggregate saves need nothing extra — `snapshot_record!` derives each column's
+type from the declared field type. Adding a `PgParam` impl means committing to a
+column type, so check `migrations/` first; a Rust type with no impl is a compile
+error, which is the point. Transactions are for atomicity, not for the pooler.
 
 The integration-v2 suite is black-box: no database handle, no in-process
 services, no request helpers on `TestApp`, and setup arranged inline in the test

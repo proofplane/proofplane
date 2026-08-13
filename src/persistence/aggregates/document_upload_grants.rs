@@ -10,6 +10,7 @@ use crate::{
     persistence::{UnitOfWork, WorkspaceUnitOfWork},
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error,
@@ -46,19 +47,23 @@ impl EvidenceDocumentUploadGrantRepository<'_> {
         id: DocumentUploadGrantId,
         workspace_id: WorkspaceId,
     ) -> Result<Option<DomainEvidenceDocumentUploadGrant>, Error> {
-        let parameters: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
-            [&Uuid::from(id), &Uuid::from(workspace_id)];
+        let grant_uuid = Uuid::from(id);
+        let workspace_uuid = Uuid::from(workspace_id);
+        let parameters: [(
+            &(dyn tokio_postgres::types::ToSql + Sync),
+            tokio_postgres::types::Type,
+        ); 2] = [param(&grant_uuid), param(&workspace_uuid)];
         let rows = match self.connection {
             SnapshotConnection::Transaction(unit_of_work) => {
                 unit_of_work
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &parameters)
+                    .query_typed(GET_FOR_UPDATE_SQL, &parameters)
                     .await?
             }
             SnapshotConnection::Workspace(workspace) => {
                 workspace
                     .transaction
-                    .query(GET_FOR_UPDATE_SQL, &parameters)
+                    .query_typed(GET_FOR_UPDATE_SQL, &parameters)
                     .await?
             }
         };

@@ -3,6 +3,7 @@ set -euo pipefail
 
 pubsub_host="${PUBSUB_EMULATOR_HOST:-127.0.0.1:8085}"
 clamd_address="${CLAMD_ADDRESS:-127.0.0.1:3310}"
+pgbouncer_address="${PGBOUNCER_ADDRESS:-127.0.0.1:6432}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is not installed or is not on PATH" >&2
@@ -15,6 +16,16 @@ if ! docker compose ps >/dev/null 2>&1; then
 fi
 
 docker compose exec -T postgres pg_isready -U proofplane -d proofplane >/dev/null
+
+# Checked from the host, not with `docker compose exec`: runtime traffic reaches
+# the pooler over the published port, so that is the path worth proving.
+pgbouncer_host="${pgbouncer_address%:*}"
+pgbouncer_port="${pgbouncer_address##*:}"
+
+if ! bash -c "cat < /dev/null > /dev/tcp/${pgbouncer_host}/${pgbouncer_port}" 2>/dev/null; then
+  echo "PgBouncer is not reachable at ${pgbouncer_address}" >&2
+  exit 1
+fi
 
 host="${pubsub_host%:*}"
 port="${pubsub_host##*:}"

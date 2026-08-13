@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AuditReviewPeriod, AuditorAccessGrantId, WorkspaceId},
-    persistence::{Error, Postgres},
+    persistence::{param, Error, Postgres},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -40,7 +40,7 @@ impl ResolveActiveAuditorGrantHandler {
             .repository
             .get()
             .await?
-            .query_opt(SQL, &[&Uuid::from(query.grant_id)])
+            .query_typed_opt(SQL, &[param(&Uuid::from(query.grant_id))])
             .await?;
         row.map(|row| {
             Ok(ResolvedActiveAuditorGrant {

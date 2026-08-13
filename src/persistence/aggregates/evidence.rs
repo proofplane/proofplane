@@ -10,6 +10,7 @@ use crate::{
     persistence::WorkspaceUnitOfWork,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error,
@@ -28,14 +29,14 @@ impl<'a> WorkspaceUnitOfWork<'a> {
 
 impl EvidenceRepository<'_> {
     pub async fn get(&self, id: EvidenceId) -> Result<Option<Evidence>, Error> {
-        let Some(row) = self.workspace.transaction.query_opt(
+        let Some(row) = self.workspace.transaction.query_typed_opt(
             "SELECT id, workspace_id, title, description, collection_instructions, status, created_at, updated_at FROM evidence WHERE id = $1 AND workspace_id = $2 FOR UPDATE",
-            &[&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)],
+            &[param(&Uuid::from(id)), param(&Uuid::from(self.workspace.workspace_id))],
         ).await? else { return Ok(None); };
         let record = EvidenceRecord::try_from_row(&row)?;
-        let mappings = self.workspace.transaction.query(
+        let mappings = self.workspace.transaction.query_typed(
             "SELECT control_id, rationale, created_at FROM evidence_control_mappings WHERE evidence_id = $1 ORDER BY control_id",
-            &[&Uuid::from(id)],
+            &[param(&Uuid::from(id))],
         ).await?.into_iter().map(mapping_from_row).collect::<Result<Vec<_>, _>>()?;
         record.into_domain(mappings).map(Some)
     }
@@ -46,9 +47,9 @@ impl EvidenceRepository<'_> {
         save_snapshot(self.workspace.transaction, record.as_snapshot()).await?;
         self.workspace
             .transaction
-            .execute(
+            .execute_typed(
                 "DELETE FROM evidence_control_mappings WHERE evidence_id = $1",
-                &[&Uuid::from(evidence.id())],
+                &[param(&Uuid::from(evidence.id()))],
             )
             .await?;
         for mapping in evidence
@@ -56,9 +57,9 @@ impl EvidenceRepository<'_> {
             .iter()
             .map(|mapping| EvidenceControlMappingRecord::from_domain(record.id, mapping))
         {
-            self.workspace.transaction.execute(
+            self.workspace.transaction.execute_typed(
                 "INSERT INTO evidence_control_mappings (evidence_id, control_id, rationale, created_at) VALUES ($1, $2, $3, $4)",
-                &[&mapping.evidence_id, &mapping.control_id, &mapping.rationale, &mapping.created_at],
+                &[param(&mapping.evidence_id), param(&mapping.control_id), param(&mapping.rationale), param(&mapping.created_at)],
             ).await?;
         }
         Ok(())

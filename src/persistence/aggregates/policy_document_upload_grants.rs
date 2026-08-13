@@ -9,6 +9,7 @@ use crate::{
     persistence::WorkspaceUnitOfWork,
 };
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error,
@@ -29,12 +30,16 @@ impl PolicyDocumentUploadGrantRepository<'_> {
         &self,
         id: PolicyDocumentUploadGrantId,
     ) -> Result<Option<DomainPolicyDocumentUploadGrant>, Error> {
-        let parameters: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
-            [&Uuid::from(id), &Uuid::from(self.workspace.workspace_id)];
+        let grant_uuid = Uuid::from(id);
+        let workspace_uuid = Uuid::from(self.workspace.workspace_id);
+        let parameters: [(
+            &(dyn tokio_postgres::types::ToSql + Sync),
+            tokio_postgres::types::Type,
+        ); 2] = [param(&grant_uuid), param(&workspace_uuid)];
         let rows = self
             .workspace
             .transaction
-            .query(GET_FOR_UPDATE_SQL, &parameters)
+            .query_typed(GET_FOR_UPDATE_SQL, &parameters)
             .await?;
         rows.into_iter()
             .next()

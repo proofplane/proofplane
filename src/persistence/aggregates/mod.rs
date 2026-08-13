@@ -18,7 +18,7 @@ mod users;
 mod workspace_memberships;
 mod workspaces;
 
-use super::{constraints, snapshot, Error, Postgres, UnitOfWork, WorkspaceUnitOfWork};
+use super::{constraints, params, snapshot, Error, Postgres, UnitOfWork, WorkspaceUnitOfWork};
 
 pub use agent_connections::AgentConnectionRepository;
 pub use agent_evidence_upload_grants::AgentEvidenceUploadGrantRepository;
