@@ -18,9 +18,11 @@ unusable:
 1. `PROOFPLANE_MIGRATION_DATABASE_URL_FILE` — a path to a file holding the URL.
    This is what production uses: the deployment mounts the migration secret as a
    file and mounts no application configuration at all.
-2. `PROOFPLANE_MIGRATION_DATABASE_URL` — the URL itself, for a one-off run.
+2. `PROOFPLANE_MIGRATION_DATABASE_URL` — the URL itself. This is the local path:
+   `make migrate` sets it to Postgres on 5432. To migrate somewhere else, run
+   `make migrate PROOFPLANE_MIGRATION_DATABASE_URL=…`.
 3. `PROOFPLANE_CONFIG` — an application configuration file, whose
-   `database.url` is used. This is the local path.
+   `database.url` is used.
 
 The command applies migrations and nothing else. It never writes seed or demo
 data, and production never runs `seed`.
@@ -64,13 +66,12 @@ advisory lock of its own, so without that bound a migration meeting a
 conflicting session would queue behind it — and every statement arriving after
 it would queue too. A migration that cannot take its lock fails the job instead.
 
-That bound is a session setting, so it holds on a direct connection — which is
-what production uses. Locally `config/local.yaml` points at PgBouncer in
-transaction mode, which hands each transaction whichever server connection is
-free, so the setting neither reaches the migration's own transactions nor
-disappears afterwards: it stays on whichever pooled connection ran it until the
-stack restarts. Harmless in development, and the reason `make down && make up`
-is the way to be sure it is gone.
+That bound is a session setting, so it holds only on a direct connection. A
+transaction pooler gives each transaction whichever server connection is free,
+so the setting would not reach the migration's own transactions. Production
+connects the migration job to the database's direct endpoint for that reason.
+`make migrate` connects to Postgres on 5432 rather than to PgBouncer on 6432, so
+the local run matches.
 
 That bounds how long a migration *waits* for a lock, not how long it holds one.
 Write DDL that takes its locks briefly:

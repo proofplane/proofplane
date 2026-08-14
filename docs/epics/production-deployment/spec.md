@@ -219,8 +219,8 @@ falling through to a lower one:
 | Order | Source | Used by |
 | --- | --- | --- |
 | 1 | `PROOFPLANE_MIGRATION_DATABASE_URL_FILE`, a path to a file holding the URL | production, the only variable the job sets |
-| 2 | `PROOFPLANE_MIGRATION_DATABASE_URL`, the URL itself | one-off runs |
-| 3 | `PROOFPLANE_CONFIG`, whose `database.url` is used | local development |
+| 2 | `PROOFPLANE_MIGRATION_DATABASE_URL`, the URL itself | `make migrate` and one-off runs |
+| 3 | `PROOFPLANE_CONFIG`, whose `database.url` is used | a run that must match an application configuration |
 
 No application configuration is mounted for the job, so nothing else about the
 command may depend on it. The command sets a five-second `lock_timeout` on its

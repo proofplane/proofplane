@@ -23,7 +23,9 @@ notes live in `docs/`.
 - `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
   and ClamAV dependencies.
 - `make migrate`: apply database migrations and nothing else. This is the
-  command production runs; it writes no data.
+  command production runs; it writes no data. It connects to Postgres on 5432
+  directly, not through PgBouncer, because its `lock_timeout` is a session
+  setting.
 - `make seed`: apply database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
