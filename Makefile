@@ -16,8 +16,8 @@ help:
 		'  make health            Check local dependency readiness' \
 		'  make reset-local       Destroy and recreate local dependency state' \
 		'  make docker-clean      Remove leftover test containers and dangling volumes' \
-		'  make migrate           Run migrations' \
-		'  make seed              Run seed binary' \
+		'  make migrate           Apply migrations, without seeding' \
+		'  make seed              Apply migrations and seed local data' \
 		'  make api               Run API binary' \
 		'  make worker            Run worker binary' \
 		'  make dequeuer          Run outbox dequeuer binary' \
@@ -69,7 +69,7 @@ docker-clean:
 	@docker volume prune --force
 
 migrate:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
+	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin migrate
 
 seed:
 	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin seed

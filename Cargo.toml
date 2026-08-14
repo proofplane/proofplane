@@ -25,6 +25,10 @@ name = "mcp"
 path = "src/bin/mcp.rs"
 
 [[bin]]
+name = "migrate"
+path = "src/bin/migrate.rs"
+
+[[bin]]
 name = "seed"
 path = "src/bin/seed.rs"
 

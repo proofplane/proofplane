@@ -57,7 +57,7 @@ async fn run() -> Result<(), Error> {
     let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
-    persistence::migrate(&mut client).await?;
+    persistence::apply_migrations(&mut client).await?;
     debug!("done running migrations");
     // Close the client connection so that it doesn't add an extra connection outside
     // the number of connections we want as specified in the configuration.

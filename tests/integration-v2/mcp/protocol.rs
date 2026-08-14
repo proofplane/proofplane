@@ -1,8 +1,5 @@
 use http::header;
-use proofplane::{
-    domain::WorkspacePermission,
-    mcp::{ENDPOINT, SESSION_ID_HEADER},
-};
+use proofplane::{domain::WorkspacePermission, mcp::ENDPOINT};
 use rmcp::model::ErrorCode;
 use serde_json::{json, Value};
 

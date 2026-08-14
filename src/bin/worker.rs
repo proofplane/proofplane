@@ -56,7 +56,7 @@ async fn run() -> Result<(), Error> {
     let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
-    persistence::migrate(&mut client).await?;
+    persistence::apply_migrations(&mut client).await?;
     debug!("done running migrations");
     drop(client);
 

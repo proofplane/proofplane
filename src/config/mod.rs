@@ -13,6 +13,10 @@ use raw::RawAppConfig;
 mod helpers;
 mod raw;
 
+/// Shared with the migration command, which validates a database URL that never
+/// passes through an application configuration file.
+pub use helpers::postgres_connection_string;
+
 pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 
 #[derive(Debug, Clone)]

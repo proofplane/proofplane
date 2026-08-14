@@ -33,7 +33,9 @@ pub use aggregates::{
 pub use connection::{conn, conn_pool, PoolBounds, PoolRuntime};
 pub use constraints::ConflictKind;
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
-pub use migrate::{migrate, migration_runner};
+pub use migrate::{
+    apply_migrations, migration_runner, set_migration_lock_timeout, MIGRATION_LOCK_TIMEOUT,
+};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
 pub(crate) use params::param;
 

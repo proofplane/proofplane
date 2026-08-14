@@ -22,7 +22,7 @@ pub(super) fn secret_value(value: SecretString) -> Result<SecretString, String> 
     }
 }
 
-pub(super) fn postgres_connection_string(value: SecretString) -> Result<SecretString, String> {
+pub fn postgres_connection_string(value: SecretString) -> Result<SecretString, String> {
     let value = secret_value(value)?;
 
     value
