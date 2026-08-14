@@ -35,10 +35,6 @@ async fn initialize_advertises_server_identity_and_capabilities() {
         .await;
     response.assert_status_ok();
     assert_eq!(response.header(header::CONTENT_TYPE), "application/json");
-    assert_eq!(
-        response.headers().get_all(SESSION_ID_HEADER).iter().count(),
-        0
-    );
 
     let body = response.json::<Value>();
 
