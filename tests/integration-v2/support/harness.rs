@@ -100,9 +100,18 @@ impl Harness {
             url::Url::parse("https://api.proofplane.test/").expect("public API base URL parses"),
         );
 
-        let pool = persistence::conn_pool(&database_url, 8)
-            .await
-            .expect("application Postgres pool opens");
+        // The suite hosts every runtime in one process, so it takes the API
+        // bound. Deriving it from the same config the app reads keeps this from
+        // drifting into a number nothing else agrees with.
+        let pool = persistence::conn_pool(
+            &database_url,
+            persistence::PoolBounds::from_config(
+                &app_config.database.pool,
+                persistence::PoolRuntime::Api,
+            ),
+        )
+        .await
+        .expect("application Postgres pool opens");
         let postgres = Arc::new(Postgres::new(pool));
         let reference_data = reference_data::seed(&postgres).await;
 

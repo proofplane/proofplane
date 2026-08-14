@@ -13,17 +13,17 @@ use super::{
         postgres_connection_string, public_api_base_url as validate_public_api_base_url,
         secret_value, string_url, string_value, ConfigValidationExt,
     },
-    Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, GcsObjectStorageConfig,
-    HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, UploadsConfig, WorkerConfig,
+    Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
+    DatabasePoolConfig, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawAppConfig {
     pub(super) server: RawServerConfig,
-    pub(super) postgres: SecretString,
+    pub(super) database: RawDatabaseConfig,
     pub(super) pubsub: RawPubSubConfig,
     pub(super) auth0: RawAuth0Config,
     pub(super) paseto: RawPasetoConfig,
@@ -62,10 +62,53 @@ impl RawScannerConfig {
 
 impl RawAppConfig {}
 
-pub(super) fn validate_postgres_connection_string(
-    value: SecretString,
-) -> Validation<SecretString, ConfigFieldError> {
-    postgres_connection_string(value).at("postgres")
+#[derive(Debug, Deserialize)]
+pub(super) struct RawDatabaseConfig {
+    url: SecretString,
+    pool: RawDatabasePoolConfig,
+}
+
+impl RawDatabaseConfig {
+    pub(super) fn validate(self) -> Validation<DatabaseConfig, ConfigFieldError> {
+        validate! {
+            url <- postgres_connection_string(self.url).at("database.url"),
+            pool <- self.pool.validate(),
+            => DatabaseConfig { url, pool },
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RawDatabasePoolConfig {
+    api: usize,
+    mcp: usize,
+    worker: usize,
+    dequeuer: usize,
+    acquire_timeout_ms: u64,
+    idle_timeout_ms: u64,
+}
+
+impl RawDatabasePoolConfig {
+    pub(super) fn validate(self) -> Validation<DatabasePoolConfig, ConfigFieldError> {
+        validate! {
+            api <- nonzero_usize(self.api).at("database.pool.api"),
+            mcp <- nonzero_usize(self.mcp).at("database.pool.mcp"),
+            worker <- nonzero_usize(self.worker).at("database.pool.worker"),
+            dequeuer <- nonzero_usize(self.dequeuer).at("database.pool.dequeuer"),
+            acquire_timeout_ms <- nonzero_u64(self.acquire_timeout_ms)
+                .at("database.pool.acquire_timeout_ms"),
+            idle_timeout_ms <- nonzero_u64(self.idle_timeout_ms)
+                .at("database.pool.idle_timeout_ms"),
+            => DatabasePoolConfig {
+                api,
+                mcp,
+                worker,
+                dequeuer,
+                acquire_timeout_ms,
+                idle_timeout_ms,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

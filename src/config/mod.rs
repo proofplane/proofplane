@@ -18,7 +18,7 @@ pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
-    pub postgres: SecretString,
+    pub database: DatabaseConfig,
     pub pubsub: PubSubConfig,
     pub auth0: Auth0Config,
     pub paseto: PasetoConfig,
@@ -37,6 +37,24 @@ pub struct ServerConfig {
     pub worker_bind: SocketAddr,
     pub mcp_bind: SocketAddr,
     pub public_api_base_url: Url,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    pub url: SecretString,
+    pub pool: DatabasePoolConfig,
+}
+
+/// Pool bounds for every runtime, because production mounts one shared
+/// configuration document for all four of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatabasePoolConfig {
+    pub api: usize,
+    pub mcp: usize,
+    pub worker: usize,
+    pub dequeuer: usize,
+    pub acquire_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,7 +278,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Result<AppConfig, ConfigError> 
 fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldError> {
     validate! {
         server <- raw.server.validate(),
-        postgres <- raw::validate_postgres_connection_string(raw.postgres),
+        database <- raw.database.validate(),
         pubsub <- raw.pubsub.validate(),
         auth0 <- raw.auth0.validate(),
         paseto <- raw.paseto.validate(),
@@ -275,7 +293,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             let auth0 = auth0.resolve(&server.public_api_base_url);
             AppConfig {
                 server,
-                postgres,
+                database,
                 pubsub,
                 auth0,
                 paseto,
@@ -331,6 +349,15 @@ mod tests {
             ObjectStorageConfig::Filesystem { .. }
         ));
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
+        // Pinned against the deployment spec's initial pool sizes. At the Cloud
+        // Run instance maximums these cap steady state well under Supavisor's
+        // 200-client limit, so a drift here is a production capacity change.
+        assert_eq!(config.database.pool.api, 10);
+        assert_eq!(config.database.pool.mcp, 10);
+        assert_eq!(config.database.pool.worker, 6);
+        assert_eq!(config.database.pool.dequeuer, 2);
+        assert_eq!(config.database.pool.acquire_timeout_ms, 5_000);
+        assert_eq!(config.database.pool.idle_timeout_ms, 300_000);
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
@@ -422,7 +449,7 @@ mod tests {
             r#"
 environment: ""
 server: {}
-postgres: {}
+database: {}
 pubsub: {}
 object_storage: {}
 scanner: {}
@@ -449,7 +476,15 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://example.com/api"
-postgres: ""
+database:
+  url: ""
+  pool:
+    api: 0
+    mcp: 0
+    worker: 0
+    dequeuer: 0
+    acquire_timeout_ms: 0
+    idle_timeout_ms: 0
 pubsub:
   project_id: "proofplane-local"
   subscriptions:
@@ -525,7 +560,15 @@ health:
 
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"server.public_api_base_url"));
-                assert!(paths.contains(&"postgres"));
+                // Every bad database field is reported in one pass rather than
+                // the validator stopping at the first.
+                assert!(paths.contains(&"database.url"));
+                assert!(paths.contains(&"database.pool.api"));
+                assert!(paths.contains(&"database.pool.mcp"));
+                assert!(paths.contains(&"database.pool.worker"));
+                assert!(paths.contains(&"database.pool.dequeuer"));
+                assert!(paths.contains(&"database.pool.acquire_timeout_ms"));
+                assert!(paths.contains(&"database.pool.idle_timeout_ms"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
                 assert!(paths.contains(&"auth0.issuer"));

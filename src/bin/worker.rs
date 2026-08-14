@@ -12,8 +12,6 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
-const POSTGRES_POOL_SIZE: usize = 20;
-
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
@@ -54,14 +52,21 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
     drop(client);
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        persistence::PoolBounds::from_config(
+            &config.database.pool,
+            persistence::PoolRuntime::Worker,
+        ),
+    )
+    .await?;
     let postgres = Arc::new(persistence::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let scanner = Arc::new(ClamAvMalwareScanner::new(

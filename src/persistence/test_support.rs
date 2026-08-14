@@ -16,6 +16,11 @@ use super::params::param;
 use super::{self as persistence, Postgres};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Small pool, generous timeouts: these tests care about persistence behavior,
+/// not about pool bounds. Tests that do care build their own pool from
+/// [`TestDatabase::url`].
+const TEST_POOL_BOUNDS: persistence::PoolBounds =
+    persistence::PoolBounds::new(4, Duration::from_secs(5), Duration::from_secs(300));
 /// Must track the Postgres image in `docker-compose.yml`, so these tests cover
 /// the same major version the application runs against.
 const POSTGRES_IMAGE_TAG: &str = "17-alpine";
@@ -26,6 +31,9 @@ const POSTGRES_IMAGE_TAG: &str = "17-alpine";
 /// the container when the test's binding goes out of scope.
 pub struct TestDatabase {
     pub postgres: Postgres,
+    /// The container's connection string, for tests that need a pool of their
+    /// own rather than the shared one above.
+    pub url: String,
     // Held so the container outlives the test; removed on drop.
     _container: ContainerAsync<postgres::Postgres>,
 }
@@ -56,12 +64,13 @@ pub async fn database() -> TestDatabase {
         .expect("migrations apply to the test database");
     drop(client);
 
-    let pool = persistence::conn_pool(&url, 4)
+    let pool = persistence::conn_pool(&url, TEST_POOL_BOUNDS)
         .await
         .expect("test database pool opens");
 
     TestDatabase {
         postgres: Postgres::new(pool),
+        url,
         _container: container,
     }
 }

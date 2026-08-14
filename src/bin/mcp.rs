@@ -60,12 +60,19 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
+    // Released before the pool opens, so this connection does not sit outside
+    // the configured bound for the life of the process.
+    drop(client);
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        persistence::PoolBounds::from_config(&config.database.pool, persistence::PoolRuntime::Mcp),
+    )
+    .await?;
     let postgres = Arc::new(persistence::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
