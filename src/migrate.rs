@@ -1,9 +1,4 @@
 //! The migration command.
-//!
-//! Applies schema migrations and nothing else. Production runs it as a Cloud
-//! Run job ahead of every serving workload, under a database credential none of
-//! them holds, with no application configuration mounted at all — so the
-//! database URL has to come from somewhere the runtimes never look.
 
 use std::{
     env,
@@ -21,19 +16,13 @@ use crate::{
     persistence,
 };
 
-/// Names a file holding the database URL. This is the production contract: the
-/// deployment mounts the migration secret as a file and sets this to its path.
+/// Need this because we don't want to just set the database connection string
+/// as an environment variable since that would leak it to anybody who could
+/// see the running process's information wherever it's run (Cloud Run, etc.).
 pub const DATABASE_URL_FILE: &str = "PROOFPLANE_MIGRATION_DATABASE_URL_FILE";
 
-/// Holds the database URL itself, for a one-off run against a database no
-/// mounted file and no configuration file names.
 pub const DATABASE_URL: &str = "PROOFPLANE_MIGRATION_DATABASE_URL";
 
-/// Where the command may find its database URL, in precedence order.
-///
-/// Taken as a value rather than read from the environment inside [`resolve`],
-/// so precedence is provable without mutating variables the rest of the test
-/// process shares.
 #[derive(Debug, Default)]
 struct CredentialSources {
     url_file: Option<PathBuf>,
@@ -46,9 +35,6 @@ impl CredentialSources {
         Self::from_variables(|name| env::var_os(name))
     }
 
-    /// Takes the lookup rather than reading the environment itself, so a test
-    /// can prove each variable name reaches the field it names. Deployment sets
-    /// exactly one of these, and getting the name wrong is silent otherwise.
     fn from_variables(lookup: impl Fn(&str) -> Option<OsString>) -> Self {
         Self {
             url_file: lookup(DATABASE_URL_FILE).map(PathBuf::from),
@@ -107,7 +93,7 @@ pub async fn run() -> Result<Report, Error> {
     apply(&resolve(CredentialSources::from_env())?).await
 }
 
-/// One connection, bounded on locks before a single migration runs.
+/// This only uses one postgres connection with a lock timeout set.
 async fn apply(url: &SecretString) -> Result<Report, Error> {
     let mut client = persistence::conn(url.expose_secret()).await?;
 
@@ -122,8 +108,7 @@ async fn apply(url: &SecretString) -> Result<Report, Error> {
 /// usable credential.
 ///
 /// A source that is set but broken fails here rather than falling through to
-/// the next one: silently migrating the database a lower-precedence source
-/// names is the outcome worth ruling out.
+/// the next one.
 fn resolve(sources: CredentialSources) -> Result<SecretString, CredentialError> {
     if let Some(path) = sources.url_file {
         return from_file(&path);
@@ -420,9 +405,6 @@ mod tests {
             )
         );
     }
-
-    // What the command does once it has a credential. Its own container, so the
-    // connection is direct and the lock timeout reaches the server.
 
     /// refinery's own bookkeeping table. Every run reads it, so holding it is
     /// how one session blocks another's migration.

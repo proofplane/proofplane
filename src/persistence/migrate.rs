@@ -19,12 +19,6 @@ pub fn migration_runner() -> Runner {
 }
 
 /// Bounds how long anything on `client` waits for a lock.
-///
-/// Session scope, so the transactions refinery opens on the same client inherit
-/// it. That also means it only reaches the server on a direct connection, which
-/// is what the migration command uses: a transaction pooler releases the server
-/// connection when this statement ends and hands the next transaction a
-/// different one.
 pub async fn set_migration_lock_timeout(client: &Client) -> Result<(), tokio_postgres::Error> {
     client
         .batch_execute(&format!(
@@ -35,10 +29,6 @@ pub async fn set_migration_lock_timeout(client: &Client) -> Result<(), tokio_pos
 }
 
 /// Applies every pending migration and reports what it applied.
-///
-/// Unbounded on locks. The migration command pairs this with
-/// [`set_migration_lock_timeout`]; the seed command and the test harnesses run
-/// against databases nothing else is holding.
 pub async fn apply_migrations(client: &mut Client) -> Result<Report, Error> {
     let report = migration_runner().run_async(client).await?;
 
