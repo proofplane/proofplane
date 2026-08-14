@@ -4,15 +4,13 @@ use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
-    persistence::{self, Postgres},
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     pubsub::{self, ensure_worker_subscription, GoogleCloudPublisher},
     VERSION,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use tracing::{debug, error, info};
-
-const POSTGRES_POOL_SIZE: usize = 2;
 
 #[tokio::main]
 async fn main() {
@@ -56,14 +54,18 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
     drop(client);
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Dequeuer),
+    )
+    .await?;
     let postgres = Postgres::new(pool);
     if env::var_os(pubsub::PUBSUB_EMULATOR_HOST).is_none() {
         // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set

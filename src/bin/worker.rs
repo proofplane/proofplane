@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    config, object_storage, observability, persistence,
+    config, object_storage, observability,
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     scanner::ClamAvMalwareScanner,
     worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
@@ -11,8 +12,6 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
-
-const POSTGRES_POOL_SIZE: usize = 20;
 
 #[tokio::main]
 async fn main() {
@@ -54,15 +53,19 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
     drop(client);
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
-    let postgres = Arc::new(persistence::Postgres::new(pool));
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Worker),
+    )
+    .await?;
+    let postgres = Arc::new(Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let scanner = Arc::new(ClamAvMalwareScanner::new(
         config.scanner.clamd_address,

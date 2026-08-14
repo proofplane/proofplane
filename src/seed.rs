@@ -17,7 +17,7 @@ use crate::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     observability,
-    persistence::{self, param, NewWorkspaceMembership, Postgres},
+    persistence::{self, param, NewWorkspaceMembership, PoolBounds, PoolRuntime, Postgres},
 };
 use thiserror::Error;
 use tracing::debug;
@@ -73,13 +73,17 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let config = load_from_env().map_err(|error| Error::Config(Box::new(error)))?;
     observability::init_cli_tracing(&config.observability)?;
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), 4).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Utility),
+    )
+    .await?;
     let postgres = Postgres::new(pool);
 
     seed_local_data(&postgres, &config.object_storage).await
@@ -261,21 +265,19 @@ async fn seed_evidence(
                 )
                 .into_result()
                 .map_err(|_| {
-                    crate::persistence::Error::InvariantViolation(
-                        "seed evidence definition must be valid",
-                    )
+                    persistence::Error::InvariantViolation("seed evidence definition must be valid")
                 })?;
                 let evidence_repository = workspace.aggregates().evidence();
                 if let Some(existing_id) = existing_id {
                     let mut aggregate = evidence_repository.get(existing_id).await?.ok_or(
-                        crate::persistence::Error::InvariantViolation(
+                        persistence::Error::InvariantViolation(
                             "listed seed evidence must be readable as an aggregate",
                         ),
                     )?;
                     aggregate
                         .replace(definition, seed.status, Utc::now())
                         .map_err(|_| {
-                            crate::persistence::Error::InvariantViolation(
+                            persistence::Error::InvariantViolation(
                                 "seed evidence replacement must be valid",
                             )
                         })?;

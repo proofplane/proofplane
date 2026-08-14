@@ -54,14 +54,20 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
 
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
+    // Close the client connection so that it doesn't add an extra connection outside
+    // the number of connections we want as specified in the configuration.
+    drop(client);
 
-    // TODO: move the Postgres pool size into configuration.
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), 200).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        persistence::PoolBounds::from_config(&config.database.pool, persistence::PoolRuntime::Api),
+    )
+    .await?;
     let postgres = Arc::new(persistence::Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
 

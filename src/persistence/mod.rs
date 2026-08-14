@@ -30,7 +30,7 @@ pub use aggregates::{
     PolicyDocumentUploadGrantRepository, UserRepository, WorkspaceDocumentRepository,
     WorkspaceRepository,
 };
-pub use connection::{conn, conn_pool};
+pub use connection::{conn, conn_pool, PoolBounds, PoolRuntime};
 pub use constraints::ConflictKind;
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
 pub use migrate::{migrate, migration_runner};

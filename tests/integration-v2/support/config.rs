@@ -1,11 +1,12 @@
 use std::str::FromStr;
 
 use proofplane::config::{
-    AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, HealthConfig,
-    LogFormat, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
-    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
-    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
-    ScannerConfig, ServerConfig, UploadsConfig, WorkerConfig,
+    AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
+    DatabasePoolConfig, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
+    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
+    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
+    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
+    WorkerConfig,
 };
 use secrecy::SecretString;
 use uuid::Uuid;
@@ -25,7 +26,17 @@ pub fn config(
             mcp_bind: socket_addr("127.0.0.1:0"),
             public_api_base_url,
         },
-        postgres: SecretString::from(database_url),
+        database: DatabaseConfig {
+            url: SecretString::from(database_url),
+            pool: DatabasePoolConfig {
+                api: 8,
+                mcp: 8,
+                worker: 8,
+                dequeuer: 8,
+                acquire_timeout_ms: 5_000,
+                idle_timeout_ms: 300_000,
+            },
+        },
         pubsub: PubSubConfig {
             project_id: "integration-test".to_owned(),
             subscriptions: PubSubSubscriptionsConfig {
