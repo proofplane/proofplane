@@ -8,6 +8,7 @@ pub mod errors;
 pub mod handlers;
 pub mod mcp;
 pub mod messaging;
+pub mod migrate;
 pub mod object_storage;
 pub mod observability;
 pub mod persistence;

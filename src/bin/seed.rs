@@ -6,7 +6,7 @@ async fn main() {
     let summary = match seed::run().await {
         Ok(summary) => summary,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{:#}", anyhow::Error::from(error));
             std::process::exit(1);
         }
     };

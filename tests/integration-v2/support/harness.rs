@@ -90,7 +90,7 @@ impl Harness {
         let mut database = persistence::conn(&database_url)
             .await
             .expect("fixture database connection opens");
-        persistence::migrate(&mut database)
+        persistence::apply_migrations(&mut database)
             .await
             .expect("database migrations run");
 

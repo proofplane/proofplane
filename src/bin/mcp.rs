@@ -24,7 +24,7 @@ use tracing::{debug, error, info};
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        error!(%error, "MCP server failed");
+        error!("MCP server failed: {:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 }
@@ -51,19 +51,19 @@ async fn run() -> Result<(), Error> {
     let config = match config::load_from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{:#}", anyhow::Error::from(error));
             std::process::exit(1);
         }
     };
 
     if let Err(error) = observability::init_tracing(&config.observability) {
-        eprintln!("{error}");
+        eprintln!("{:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 
     let mut client = persistence::conn(config.database.url.expose_secret()).await?;
     debug!("running migrations");
-    persistence::migrate(&mut client).await?;
+    persistence::apply_migrations(&mut client).await?;
     debug!("done running migrations");
     // Close the client connection so that it doesn't add an extra connection outside
     // the number of connections we want as specified in the configuration.

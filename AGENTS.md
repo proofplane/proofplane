@@ -7,9 +7,11 @@ by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
 persistence in `persistence/`, types in `domain/` and `read_models/`, and external
 adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
-and `seed`).
+`migrate`, and `seed`).
 
-Database migrations belong in `migrations/`. API fixtures and project design
+Database migrations belong in `migrations/`; read
+[`migrations/README.md`](./migrations/README.md) before adding one, because
+schema changes must expand before they contract. API fixtures and project design
 notes live in `docs/`.
 
 ## Build, Test, and Development Commands
@@ -20,7 +22,11 @@ notes live in `docs/`.
   rather than starting services of its own.
 - `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
   and ClamAV dependencies.
-- `make seed`: run database migrations and seed local data.
+- `make migrate`: apply database migrations and nothing else. This is the
+  command production runs; it writes no data. It connects to Postgres on 5432
+  directly, not through PgBouncer, because its `lock_timeout` is a session
+  setting.
+- `make seed`: apply database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
   setup.

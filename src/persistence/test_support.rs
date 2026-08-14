@@ -59,7 +59,7 @@ pub async fn database() -> TestDatabase {
     let mut client = persistence::conn(&url)
         .await
         .expect("test database connection opens");
-    persistence::migrate(&mut client)
+    persistence::apply_migrations(&mut client)
         .await
         .expect("migrations apply to the test database");
     drop(client);

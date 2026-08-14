@@ -13,6 +13,10 @@ use raw::RawAppConfig;
 mod helpers;
 mod raw;
 
+/// Shared with the migration command, which validates a database URL that never
+/// passes through an application configuration file.
+pub use helpers::postgres_connection_string;
+
 pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 
 #[derive(Debug, Clone)]
@@ -223,13 +227,13 @@ impl ConfigFieldError {
 pub enum ConfigError {
     #[error("environment variable {0} is required")]
     MissingEnv(&'static str),
-    #[error("failed to read config file {path}: {source}")]
+    #[error("failed to read config file {path}")]
     Read {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("failed to load config file {path}: {source}")]
+    #[error("failed to load config file {path}")]
     Load {
         path: PathBuf,
         #[source]

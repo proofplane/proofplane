@@ -31,7 +31,8 @@ make seed
 checks that those services are reachable and creates the local filesystem
 storage directory when needed. `make seed` runs the database migrations and
 writes demo data (an owner user, a workspace, frameworks, controls, and an
-evidence).
+evidence). To apply migrations without any demo data — the same command
+production runs — use `make migrate`.
 
 The local Docker services listen on:
 
@@ -257,7 +258,9 @@ cargo test --test integration-v2 mcp::evidence
 
 ## Repository Notes
 
-- Application schema migrations live in `migrations/`.
+- Application schema migrations live in `migrations/`; see
+  [`migrations/README.md`](migrations/README.md) for the naming convention and
+  the expand-then-contract rule every schema change follows.
 - Application code lives under `src/`, grouped by route, service, repository,
   domain, and external adapter responsibility.
 - Epic specs live in [`docs/epics/`](docs/epics/); tickets are

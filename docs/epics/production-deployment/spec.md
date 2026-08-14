@@ -212,6 +212,24 @@ finite timeout. It uses a distinct database role and Supabase's direct endpoint
 with certificate and hostname verification. Default Cloud Run internet egress
 supports the endpoint's public IPv6 path without VPC egress.
 
+The `migrate` command resolves that credential from the first source that is
+set, and fails naming that source when it is set but unusable rather than
+falling through to a lower one:
+
+| Order | Source | Used by |
+| --- | --- | --- |
+| 1 | `PROOFPLANE_MIGRATION_DATABASE_URL_FILE`, a path to a file holding the URL | production, the only variable the job sets |
+| 2 | `PROOFPLANE_MIGRATION_DATABASE_URL`, the URL itself | `make migrate` and one-off runs |
+| 3 | `PROOFPLANE_CONFIG`, whose `database.url` is used | a run that must match an application configuration |
+
+No application configuration is mounted for the job, so nothing else about the
+command may depend on it. The command sets a five-second `lock_timeout` on its
+connection before running: refinery takes no advisory lock of its own, so an
+unbounded run that meets a conflicting session would queue behind it and hold
+the apply open until the job's 900-second timeout. The expand-then-contract
+rules migrations follow are recorded in
+[`migrations/README.md`](../../../migrations/README.md).
+
 Set the beta `run_execution_token` field from a short, valid suffix derived from the immutable
 release digest. Every serving workload and initial delivery resource depends on
 the migration job. `terraform apply` therefore waits for successful migration

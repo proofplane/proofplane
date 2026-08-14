@@ -2,6 +2,12 @@
 
 PROOFPLANE_CONFIG ?= .local/config.yaml
 
+# The migrate command's `lock_timeout` is a session setting, which a transaction
+# pooler does not carry into the migration's own transactions. Production
+# migrates through the database's direct endpoint, so this points at Postgres on
+# 5432 rather than at PgBouncer on 6432.
+PROOFPLANE_MIGRATION_DATABASE_URL ?= postgres://proofplane:proofplane@127.0.0.1:5432/proofplane
+
 help:
 	@printf '%s\n' \
 		'Targets:' \
@@ -16,8 +22,8 @@ help:
 		'  make health            Check local dependency readiness' \
 		'  make reset-local       Destroy and recreate local dependency state' \
 		'  make docker-clean      Remove leftover test containers and dangling volumes' \
-		'  make migrate           Run migrations' \
-		'  make seed              Run seed binary' \
+		'  make migrate           Apply migrations, without seeding' \
+		'  make seed              Apply migrations and seed local data' \
 		'  make api               Run API binary' \
 		'  make worker            Run worker binary' \
 		'  make dequeuer          Run outbox dequeuer binary' \
@@ -69,7 +75,7 @@ docker-clean:
 	@docker volume prune --force
 
 migrate:
-	PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin seed
+	@PROOFPLANE_MIGRATION_DATABASE_URL=$(PROOFPLANE_MIGRATION_DATABASE_URL) cargo run --quiet --bin migrate
 
 seed:
 	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin seed
