@@ -227,13 +227,13 @@ impl ConfigFieldError {
 pub enum ConfigError {
     #[error("environment variable {0} is required")]
     MissingEnv(&'static str),
-    #[error("failed to read config file {path}: {source}")]
+    #[error("failed to read config file {path}")]
     Read {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("failed to load config file {path}: {source}")]
+    #[error("failed to load config file {path}")]
     Load {
         path: PathBuf,
         #[source]

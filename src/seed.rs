@@ -27,7 +27,7 @@ pub enum Error {
     #[error("postgres connection error")]
     DatabaseConnection(#[from] persistence::connection::Error),
 
-    #[error("configuration error: {0}")]
+    #[error("configuration error")]
     Config(#[source] Box<ConfigError>),
 
     #[error("observability initialization error")]
@@ -842,12 +842,14 @@ fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 mod tests {
     use super::{ConfigError, Error};
 
+    /// The cause belongs to the source chain, not to the wrapper's own message,
+    /// so the command prints it once.
     #[test]
-    fn configuration_error_includes_its_cause() {
+    fn a_printed_configuration_error_states_its_cause_once() {
         let error = Error::Config(Box::new(ConfigError::MissingEnv("PROOFPLANE_CONFIG")));
 
         assert_eq!(
-            error.to_string(),
+            format!("{:#}", anyhow::Error::new(error)),
             "configuration error: environment variable PROOFPLANE_CONFIG is required"
         );
     }

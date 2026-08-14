@@ -24,7 +24,7 @@ use tracing::{debug, error, info};
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        error!(%error, "MCP server failed");
+        error!("MCP server failed: {:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 }
@@ -51,13 +51,13 @@ async fn run() -> Result<(), Error> {
     let config = match config::load_from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{:#}", anyhow::Error::from(error));
             std::process::exit(1);
         }
     };
 
     if let Err(error) = observability::init_tracing(&config.observability) {
-        eprintln!("{error}");
+        eprintln!("{:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 

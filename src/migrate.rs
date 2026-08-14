@@ -169,10 +169,7 @@ mod tests {
         apply, resolve, CredentialError, CredentialSources, Report, DATABASE_URL,
         DATABASE_URL_FILE, PROOFPLANE_CONFIG,
     };
-    use crate::{
-        errors::full_message,
-        persistence::{self, test_support},
-    };
+    use crate::persistence::{self, test_support};
 
     /// Deliberately all-different, so a resolver that reads the wrong source
     /// cannot coincidentally return the right URL.
@@ -393,6 +390,31 @@ mod tests {
         );
     }
 
+    /// The chain an operator reads is the command's only output, and the
+    /// configuration path is its deepest. Each layer states its own part and
+    /// leaves the cause to the layer below, so a chain printer repeats nothing.
+    #[test]
+    fn a_printed_chain_states_each_cause_once() {
+        let missing: PathBuf = env::temp_dir().join("proofplane-migrate-test-unprintable.yaml");
+        let _ = fs::remove_file(&missing);
+
+        let unreadable = fs::read_to_string(&missing).expect_err("the file is missing");
+        let error = resolve(CredentialSources {
+            config_path: Some(missing.clone()),
+            ..Default::default()
+        })
+        .expect_err("the credential is rejected");
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::new(error)),
+            format!(
+                "{PROOFPLANE_CONFIG} names {path}, which did not load: \
+                 failed to read config file {path}: {unreadable}",
+                path = missing.display()
+            )
+        );
+    }
+
     #[test]
     fn no_source_at_all_names_every_variable_it_would_have_used() {
         let message = rejection(CredentialSources::default());
@@ -533,7 +555,7 @@ mod tests {
         .expect("the blocked run gives up instead of waiting for the lock")
         .expect_err("a blocked run cannot migrate");
 
-        let reason = full_message(&error);
+        let reason = format!("{:#}", anyhow::Error::new(error));
         assert!(
             reason.contains("canceling statement due to lock timeout"),
             "expected the lock timeout to be the reason, got: {reason}"

@@ -9,7 +9,7 @@ use crate::config::DatabasePoolConfig;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("postgres error: {0}")]
+    #[error("postgres error")]
     TokioPostgres(#[from] tokio_postgres::Error),
 
     #[error("failed to build postgres pool")]
