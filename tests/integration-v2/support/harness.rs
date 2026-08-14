@@ -100,9 +100,6 @@ impl Harness {
             url::Url::parse("https://api.proofplane.test/").expect("public API base URL parses"),
         );
 
-        // The suite hosts every runtime in one process, so it takes the API
-        // bound. Deriving it from the same config the app reads keeps this from
-        // drifting into a number nothing else agrees with.
         let pool = persistence::conn_pool(
             &database_url,
             persistence::PoolBounds::from_config(

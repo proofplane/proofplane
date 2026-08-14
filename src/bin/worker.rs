@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
-    config, object_storage, observability, persistence,
+    config, object_storage, observability,
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     scanner::ClamAvMalwareScanner,
     worker::{create_worker_app, WorkerAppDependencies},
     VERSION,
@@ -61,13 +62,10 @@ async fn run() -> Result<(), Error> {
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
-        persistence::PoolBounds::from_config(
-            &config.database.pool,
-            persistence::PoolRuntime::Worker,
-        ),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Worker),
     )
     .await?;
-    let postgres = Arc::new(persistence::Postgres::new(pool));
+    let postgres = Arc::new(Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let scanner = Arc::new(ClamAvMalwareScanner::new(
         config.scanner.clamd_address,

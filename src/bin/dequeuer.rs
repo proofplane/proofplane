@@ -4,7 +4,7 @@ use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
-    persistence::{self, Postgres},
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     pubsub::{self, ensure_worker_subscription, GoogleCloudPublisher},
     VERSION,
 };
@@ -63,10 +63,7 @@ async fn run() -> Result<(), Error> {
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
-        persistence::PoolBounds::from_config(
-            &config.database.pool,
-            persistence::PoolRuntime::Dequeuer,
-        ),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Dequeuer),
     )
     .await?;
     let postgres = Postgres::new(pool);

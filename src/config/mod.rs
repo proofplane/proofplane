@@ -45,8 +45,6 @@ pub struct DatabaseConfig {
     pub pool: DatabasePoolConfig,
 }
 
-/// Pool bounds for every runtime, because production mounts one shared
-/// configuration document for all four of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DatabasePoolConfig {
     pub api: usize,
@@ -349,9 +347,6 @@ mod tests {
             ObjectStorageConfig::Filesystem { .. }
         ));
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
-        // Pinned against the deployment spec's initial pool sizes. At the Cloud
-        // Run instance maximums these cap steady state well under Supavisor's
-        // 200-client limit, so a drift here is a production capacity change.
         assert_eq!(config.database.pool.api, 10);
         assert_eq!(config.database.pool.mcp, 10);
         assert_eq!(config.database.pool.worker, 6);

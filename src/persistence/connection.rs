@@ -31,10 +31,6 @@ pub async fn conn(conn_str: &str) -> Result<Client, Error> {
     Ok(client)
 }
 
-/// Which runtime's pool size to take from the shared database configuration.
-///
-/// Production mounts one configuration document for every process, so the
-/// process itself says which bound is its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolRuntime {
     Api,
@@ -50,10 +46,6 @@ pub enum PoolRuntime {
 /// one-shot command has no steady-state footprint to plan for.
 const UTILITY_POOL_SIZE: usize = 4;
 
-/// How large a pool may grow and how long callers and connections may linger.
-///
-/// Every runtime reaches Postgres through a transaction pooler with a finite
-/// client limit, so these are capacity decisions rather than tuning knobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PoolBounds {
     max_size: usize,
@@ -70,7 +62,6 @@ impl PoolBounds {
         }
     }
 
-    /// One runtime's bounds, read from the configuration every process shares.
     pub fn from_config(config: &DatabasePoolConfig, runtime: PoolRuntime) -> Self {
         let max_size = match runtime {
             PoolRuntime::Api => config.api,
@@ -94,28 +85,19 @@ pub async fn conn_pool(conn_str: &str, bounds: PoolBounds) -> Result<Pool, Error
 
     Pool::builder(mgr)
         .max_size(bounds.max_size)
-        // The bound applies to each phase, not to their sum: a caller that
-        // waits for a slot and then opens a connection can spend up to twice
-        // this before giving up. Recycling is bounded too, so no phase of
-        // `get()` can block forever — today's `Fast` method only checks whether
-        // the connection is closed, but a future `Verified` one would issue a
-        // real round trip.
+        // Apply the timeout bound to each phase to be more forgiving.
         .timeouts(Timeouts {
             wait: Some(bounds.acquire_timeout),
             create: Some(bounds.acquire_timeout),
             recycle: Some(bounds.acquire_timeout),
         })
         // deadpool has no idle reaper of its own. Rejecting a stale connection
-        // here drops it and creates a fresh one instead; the error never
-        // reaches the caller.
-        //
-        // `last_used` is the time since the connection was last handed out,
-        // because deadpool records no timestamp for when one is returned. That
-        // makes this a conservative approximation of idle time: a connection
-        // held for a long time is replaced on its next checkout even though it
-        // never sat idle. Discarding early is safe; keeping a dead connection
-        // is not.
+        // here drops it and creates a fresh one instead.
         .pre_recycle(Hook::sync_fn(move |_, metrics| {
+            // This is using the `last_used` time, which is the time that the
+            // connection was returned to the pool. So what we're checking here is
+            // that if the connection has been sitting idle in the pool too long,
+            // we want a fresh one.
             if metrics.last_used() > bounds.idle_timeout {
                 return Err(HookError::message("connection exceeded the idle timeout"));
             }

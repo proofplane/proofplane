@@ -11,7 +11,8 @@ use proofplane::{
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage, observability, persistence,
+    object_storage, observability,
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     services::{client_resolver::ClientResolver, oauth::OAuthService},
 };
 use secrecy::ExposeSecret;
@@ -64,16 +65,16 @@ async fn run() -> Result<(), Error> {
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
-    // Released before the pool opens, so this connection does not sit outside
-    // the configured bound for the life of the process.
+    // Close the client connection so that it doesn't add an extra connection outside
+    // the number of connections we want as specified in the configuration.
     drop(client);
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
-        persistence::PoolBounds::from_config(&config.database.pool, persistence::PoolRuntime::Mcp),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Mcp),
     )
     .await?;
-    let postgres = Arc::new(persistence::Postgres::new(pool));
+    let postgres = Arc::new(Postgres::new(pool));
     let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),

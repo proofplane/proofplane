@@ -59,8 +59,8 @@ async fn run() -> Result<(), Error> {
     debug!("running migrations");
     persistence::migrate(&mut client).await?;
     debug!("done running migrations");
-    // Released before the pool opens, so this connection does not sit outside
-    // the configured bound for the life of the process.
+    // Close the client connection so that it doesn't add an extra connection outside
+    // the number of connections we want as specified in the configuration.
     drop(client);
 
     let pool = persistence::conn_pool(

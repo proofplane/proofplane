@@ -17,7 +17,7 @@ use crate::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     observability,
-    persistence::{self, param, NewWorkspaceMembership, Postgres},
+    persistence::{self, param, NewWorkspaceMembership, PoolBounds, PoolRuntime, Postgres},
 };
 use thiserror::Error;
 use tracing::debug;
@@ -81,10 +81,7 @@ pub async fn run() -> Result<SeedSummary, Error> {
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
-        persistence::PoolBounds::from_config(
-            &config.database.pool,
-            persistence::PoolRuntime::Utility,
-        ),
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Utility),
     )
     .await?;
     let postgres = Postgres::new(pool);
@@ -268,21 +265,19 @@ async fn seed_evidence(
                 )
                 .into_result()
                 .map_err(|_| {
-                    crate::persistence::Error::InvariantViolation(
-                        "seed evidence definition must be valid",
-                    )
+                    persistence::Error::InvariantViolation("seed evidence definition must be valid")
                 })?;
                 let evidence_repository = workspace.aggregates().evidence();
                 if let Some(existing_id) = existing_id {
                     let mut aggregate = evidence_repository.get(existing_id).await?.ok_or(
-                        crate::persistence::Error::InvariantViolation(
+                        persistence::Error::InvariantViolation(
                             "listed seed evidence must be readable as an aggregate",
                         ),
                     )?;
                     aggregate
                         .replace(definition, seed.status, Utc::now())
                         .map_err(|_| {
-                            crate::persistence::Error::InvariantViolation(
+                            persistence::Error::InvariantViolation(
                                 "seed evidence replacement must be valid",
                             )
                         })?;

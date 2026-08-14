@@ -7,13 +7,7 @@ server:
   public_api_base_url: "http://127.0.0.1:3000"
 
 database:
-  # Port 6432 is the local PgBouncer, standing in for the Supavisor transaction
-  # pooler production runtime traffic goes through. Postgres itself is on 5432.
   url: "postgres://proofplane:proofplane@127.0.0.1:6432/proofplane"
-  # Sizes come from the production deployment spec. They are deliberately small:
-  # every runtime connects through a transaction pooler with a 200-client limit,
-  # and these cap steady state at 68 across all workloads at their Cloud Run
-  # instance maximums.
   pool:
     api: 10
     mcp: 10
