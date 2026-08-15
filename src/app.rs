@@ -17,8 +17,7 @@ use crate::{
             start_auditor_auth_transaction::StartAuditorAuthTransactionHandler,
             workspace_invitations::{
                 AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitationHandler,
-                GetCurrentWorkspaceInvitationLinkHandler, ResendWorkspaceInvitationHandler,
-                RevokeWorkspaceInvitationHandler,
+                ResendWorkspaceInvitationHandler, RevokeWorkspaceInvitationHandler,
             },
         },
         queries::{
@@ -33,7 +32,10 @@ use crate::{
             resolve_auditor_session_by_digest::ResolveAuditorSessionByDigestHandler,
             resolve_evidence_document_upload_grant_authority::ResolveEvidenceDocumentUploadGrantAuthorityHandler,
             resolve_policy_document_upload_grant_authority::ResolvePolicyDocumentUploadGrantAuthorityHandler,
-            workspace_invitations::{GetWorkspacePeopleHandler, PreviewWorkspaceInvitationHandler},
+            workspace_invitations::{
+                GetCurrentWorkspaceInvitationLinkHandler, GetWorkspacePeopleHandler,
+                PreviewWorkspaceInvitationHandler,
+            },
         },
     },
     authentication::{

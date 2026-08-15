@@ -34,5 +34,6 @@ pub use policy::{
 };
 pub use workspace::{WorkspaceDetails, WorkspaceWithRole};
 pub use workspace_people::{
-    PendingWorkspaceInvitation, WorkspaceInvitationPreviewSource, WorkspacePeople, WorkspacePerson,
+    CurrentWorkspaceInvitation, PendingWorkspaceInvitation, WorkspaceInvitationMetadata,
+    WorkspaceInvitationPreviewSource, WorkspacePeople, WorkspacePerson,
 };

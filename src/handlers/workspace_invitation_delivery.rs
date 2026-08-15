@@ -3,7 +3,10 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::{
-    domain::{WorkspaceInvitation, WorkspaceInvitationStatus},
+    domain::{
+        InvitationDeliveryUpdate, WorkspaceInvitation, WorkspaceInvitationDeliveryFailure,
+        WorkspaceInvitationStatus,
+    },
     mail::{MailAdapter, MailFailureClass, MailMessage},
     messaging::WorkspaceInvitationDeliveryWork,
     persistence::Postgres,
@@ -74,7 +77,7 @@ impl WorkspaceInvitationDeliveryHandler {
                 else {
                     return Ok(DeliveryOutcome::Acknowledged);
                 };
-                let link = self.authority.issue(&invitation).map_err(|_| {
+                let link = self.authority.issue((&invitation).into()).map_err(|_| {
                     crate::persistence::Error::InvariantViolation(
                         "current invitation authority must issue",
                     )
@@ -91,29 +94,41 @@ impl WorkspaceInvitationDeliveryHandler {
                 );
                 match self.mail.send(mail).await {
                     Ok(()) => {
-                        invitation.record_delivery_success(payload.generation, Utc::now());
-                        repository.save(&invitation).await?;
-                        Ok(DeliveryOutcome::Delivered)
+                        match invitation.record_delivery_success(payload.generation, Utc::now()) {
+                            InvitationDeliveryUpdate::Applied => {
+                                repository.save(&invitation).await?;
+                                Ok(DeliveryOutcome::Delivered)
+                            }
+                            InvitationDeliveryUpdate::Ignored => Ok(DeliveryOutcome::Acknowledged),
+                        }
                     }
                     Err(error) => {
                         let failure = if final_delivery {
-                            "exhausted"
+                            WorkspaceInvitationDeliveryFailure::Exhausted
                         } else if error.class == MailFailureClass::Permanent {
-                            "permanent"
+                            WorkspaceInvitationDeliveryFailure::Permanent
                         } else {
-                            "retryable"
+                            WorkspaceInvitationDeliveryFailure::Retryable
                         };
-                        invitation.record_delivery_failure(payload.generation, failure, Utc::now());
-                        repository.save(&invitation).await?;
-                        if error.class == MailFailureClass::Retryable && !final_delivery {
-                            Ok(DeliveryOutcome::Retry {
-                                status_class: error.status_class,
-                            })
-                        } else {
-                            Ok(DeliveryOutcome::Failed {
-                                class: error.class,
-                                status_class: error.status_class,
-                            })
+                        match invitation.record_delivery_failure(
+                            payload.generation,
+                            failure,
+                            Utc::now(),
+                        ) {
+                            InvitationDeliveryUpdate::Applied => {
+                                repository.save(&invitation).await?;
+                                if error.class == MailFailureClass::Retryable && !final_delivery {
+                                    Ok(DeliveryOutcome::Retry {
+                                        status_class: error.status_class,
+                                    })
+                                } else {
+                                    Ok(DeliveryOutcome::Failed {
+                                        class: error.class,
+                                        status_class: error.status_class,
+                                    })
+                                }
+                            }
+                            InvitationDeliveryUpdate::Ignored => Ok(DeliveryOutcome::Acknowledged),
                         }
                     }
                 }
@@ -199,4 +214,106 @@ fn escape_html(value: &str) -> String {
 
 fn retryable(error: impl ToString) -> RetryableWorkerError {
     RetryableWorkerError(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+    use secrecy::SecretString;
+    use url::Url;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::{
+        config::{WorkspaceInvitationPasetoKey, WorkspaceInvitationsConfig},
+        domain::{WorkspaceInvitationDeliveryFailure, WorkspaceInvitationId},
+        mail::{CapturingMailAdapter, MailError},
+        persistence::test_support,
+    };
+
+    #[tokio::test]
+    async fn final_retryable_attempt_records_exhaustion_and_acknowledges() {
+        let database = test_support::database().await;
+        let fixture = test_support::workspace(&database.postgres, "Exhausted Delivery").await;
+        let postgres = Arc::new(database.postgres);
+        let invitation_id = WorkspaceInvitationId::from(Uuid::new_v4());
+        let now = Utc::now();
+        let mut invitation = WorkspaceInvitation::create(
+            invitation_id,
+            fixture.workspace_id,
+            fixture.user_id,
+            "exhausted@example.com".to_owned(),
+            now,
+            now + Duration::days(7),
+        )
+        .unwrap();
+        invitation.queue_delivery(1, now).unwrap();
+        postgres
+            .in_unit_of_work(async |unit_of_work| {
+                unit_of_work
+                    .aggregates()
+                    .workspace_invitations()
+                    .save(&invitation)
+                    .await
+            })
+            .await
+            .unwrap();
+
+        let authority = WorkspaceInvitationAuthority::from_config(&WorkspaceInvitationsConfig {
+            landing_portal_base_url: Url::parse("https://app.proofplane.test").unwrap(),
+            active_key_id: "test-key".to_owned(),
+            keys: vec![WorkspaceInvitationPasetoKey {
+                id: "test-key".to_owned(),
+                secret: SecretString::from("k4.local.mKj2EzeLOuNBNlHNX6oLl76yopCc1K9YvWQVIo1xYEs"),
+            }],
+        })
+        .unwrap();
+        let mail = CapturingMailAdapter::default();
+        mail.fail_next_for(
+            "exhausted@example.com",
+            MailError {
+                class: MailFailureClass::Retryable,
+                status_class: "5xx",
+            },
+        );
+        let handler = WorkspaceInvitationDeliveryHandler::new(
+            postgres.clone(),
+            authority,
+            Arc::new(mail.clone()),
+            5,
+        );
+        let result = handler
+            .handle(WorkerMessage {
+                message_id: Uuid::new_v4().to_string(),
+                event_type: crate::messaging::SEND_WORKSPACE_INVITATION_TYPE.to_owned(),
+                aggregate_type: "workspace_invitation".to_owned(),
+                aggregate_id: Uuid::from(invitation_id).to_string(),
+                request_id: None,
+                payload: serde_json::to_value(WorkspaceInvitationDeliveryWork {
+                    invitation_id: invitation_id.into(),
+                    generation: 1,
+                })
+                .unwrap(),
+                delivery_attempt: Some(5),
+            })
+            .await;
+        assert!(result.is_ok());
+        assert!(mail.messages().is_empty());
+
+        let loaded = postgres
+            .in_unit_of_work(async |unit_of_work| {
+                unit_of_work
+                    .aggregates()
+                    .workspace_invitations()
+                    .get(invitation_id)
+                    .await
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            loaded.last_delivery_failure(),
+            Some(WorkspaceInvitationDeliveryFailure::Exhausted)
+        );
+    }
 }

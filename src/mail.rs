@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use reqwest::StatusCode;
@@ -31,7 +34,7 @@ impl MailFailureClass {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("mail provider request failed ({class:?}, status class: {status_class})")]
 pub struct MailError {
     pub class: MailFailureClass,
@@ -58,30 +61,51 @@ impl MailAdapter for LocalMailAdapter {
     }
 }
 
+#[derive(Debug, Default)]
+struct CapturingMailState {
+    messages: Vec<MailMessage>,
+    failures: HashMap<String, VecDeque<MailError>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CapturingMailAdapter {
-    messages: Arc<Mutex<Vec<MailMessage>>>,
+    state: Arc<Mutex<CapturingMailState>>,
 }
 
 impl CapturingMailAdapter {
     pub fn messages(&self) -> Vec<MailMessage> {
-        self.messages
+        self.state
             .lock()
-            .map(|messages| messages.clone())
+            .map(|state| state.messages.clone())
             .unwrap_or_default()
+    }
+
+    pub fn fail_next_for(&self, recipient: impl Into<String>, error: MailError) {
+        if let Ok(mut state) = self.state.lock() {
+            state
+                .failures
+                .entry(recipient.into())
+                .or_default()
+                .push_back(error);
+        }
     }
 }
 
 #[async_trait]
 impl MailAdapter for CapturingMailAdapter {
     async fn send(&self, message: MailMessage) -> Result<(), MailError> {
-        self.messages
-            .lock()
-            .map_err(|_| MailError {
-                class: MailFailureClass::Retryable,
-                status_class: "local",
-            })?
-            .push(message);
+        let mut state = self.state.lock().map_err(|_| MailError {
+            class: MailFailureClass::Retryable,
+            status_class: "local",
+        })?;
+        let planned_failure = state
+            .failures
+            .get_mut(&message.to)
+            .and_then(VecDeque::pop_front);
+        if let Some(error) = planned_failure {
+            return Err(error);
+        }
+        state.messages.push(message);
         Ok(())
     }
 }

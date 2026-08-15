@@ -3,7 +3,8 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use crate::domain::{
-    UserId, WorkspaceId, WorkspaceInvitation, WorkspaceInvitationId, WorkspaceRole,
+    UserId, WorkspaceId, WorkspaceInvitation, WorkspaceInvitationDeliveryFailure,
+    WorkspaceInvitationId, WorkspaceRole,
 };
 
 use super::{
@@ -45,26 +46,6 @@ impl WorkspaceInvitationRepository<'_> {
         self.unit_of_work.transaction.query_opt(
             &format!("SELECT {COLUMNS} FROM workspace_invitations WHERE id = $1 AND workspace_id = $2 FOR UPDATE"),
             &[&Uuid::from(id), &Uuid::from(workspace_id)],
-        ).await?.map(|row| WorkspaceInvitationRecord::try_from_row(&row)?.into_domain()).transpose()
-    }
-
-    pub async fn find_pending_for_email(
-        &self,
-        workspace_id: WorkspaceId,
-        email: &str,
-        now: DateTime<Utc>,
-    ) -> Result<Option<WorkspaceInvitation>, Error> {
-        let invitation_key = format!("{}:{email}", Uuid::from(workspace_id));
-        self.unit_of_work
-            .transaction
-            .query_one(
-                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                &[&invitation_key],
-            )
-            .await?;
-        self.unit_of_work.transaction.query_opt(
-            &format!("SELECT {COLUMNS} FROM workspace_invitations WHERE workspace_id = $1 AND invited_email = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $3 ORDER BY created_at DESC LIMIT 1 FOR UPDATE"),
-            &[&Uuid::from(workspace_id), &email, &now],
         ).await?.map(|row| WorkspaceInvitationRecord::try_from_row(&row)?.into_domain()).transpose()
     }
 
@@ -210,7 +191,9 @@ impl WorkspaceInvitationRecord {
             queued_at: value.queued_at(),
             delivered_generation: value.delivered_generation(),
             delivered_at: value.delivered_at(),
-            last_delivery_failure: value.last_delivery_failure().map(str::to_owned),
+            last_delivery_failure: value
+                .last_delivery_failure()
+                .map(|failure| failure.as_str().to_owned()),
             delivery_failed_at: value.delivery_failed_at(),
         }
     }
@@ -220,6 +203,11 @@ impl WorkspaceInvitationRecord {
             .role
             .parse::<WorkspaceRole>()
             .map_err(|_| Error::InvariantViolation("unknown invitation role"))?;
+        let last_delivery_failure = self
+            .last_delivery_failure
+            .map(|failure| failure.parse::<WorkspaceInvitationDeliveryFailure>())
+            .transpose()
+            .map_err(|_| Error::InvariantViolation("unknown invitation delivery failure"))?;
         WorkspaceInvitation::rehydrate(
             self.id.into(),
             self.workspace_id.into(),
@@ -236,7 +224,7 @@ impl WorkspaceInvitationRecord {
             self.queued_at,
             self.delivered_generation,
             self.delivered_at,
-            self.last_delivery_failure,
+            last_delivery_failure,
             self.delivery_failed_at,
         )
         .map_err(|_| Error::InvariantViolation("persisted workspace invitation is inconsistent"))

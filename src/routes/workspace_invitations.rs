@@ -15,23 +15,27 @@ use crate::{
             AcceptWorkspaceInvitation, AcceptWorkspaceInvitationError,
             AcceptWorkspaceInvitationHandler, CreateWorkspaceInvitation,
             CreateWorkspaceInvitationError, CreateWorkspaceInvitationHandler,
-            CurrentWorkspaceInvitationLinkError, GetCurrentWorkspaceInvitationLink,
-            GetCurrentWorkspaceInvitationLinkHandler, ResendWorkspaceInvitation,
-            ResendWorkspaceInvitationError, ResendWorkspaceInvitationHandler,
-            RevokeWorkspaceInvitation, RevokeWorkspaceInvitationError,
-            RevokeWorkspaceInvitationHandler, WorkspaceInvitationMetadata,
+            ResendWorkspaceInvitation, ResendWorkspaceInvitationError,
+            ResendWorkspaceInvitationHandler, RevokeWorkspaceInvitation,
+            RevokeWorkspaceInvitationError, RevokeWorkspaceInvitationHandler,
         },
         queries::workspace_invitations::{
-            GetWorkspacePeople, GetWorkspacePeopleHandler, PreviewWorkspaceInvitation,
-            PreviewWorkspaceInvitationError, PreviewWorkspaceInvitationHandler,
+            CurrentWorkspaceInvitationLinkError, GetCurrentWorkspaceInvitationLink,
+            GetCurrentWorkspaceInvitationLinkHandler, GetWorkspacePeople,
+            GetWorkspacePeopleHandler, PreviewWorkspaceInvitation, PreviewWorkspaceInvitationError,
+            PreviewWorkspaceInvitationHandler,
         },
+        ExecutionMetadata,
     },
     authentication::{
         auth0::{TokenVerifier, VerifiedClaims},
         UserContext,
     },
+    domain::InvitationAcceptance,
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
-    read_models::{PendingWorkspaceInvitation, WorkspacePeople, WorkspacePerson},
+    read_models::{
+        PendingWorkspaceInvitation, WorkspaceInvitationMetadata, WorkspacePeople, WorkspacePerson,
+    },
     routes::{
         authentication::authenticate_user, error::ApiError, me::UserRouteAuthState,
         request_context::RequestId, workspaces::WorkspaceWithRoleResponse,
@@ -127,13 +131,15 @@ async fn create_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
 ) -> Result<Json<InvitationWithLinkResponse>, InvitationApiError> {
     let created = state
         .create
-        .handle(CreateWorkspaceInvitation {
-            invitation_id: Uuid::new_v4().into(),
-            actor_user_id: user.user_id,
-            email: body.email,
-            created_at: Utc::now(),
-            request_id: Some(request_id.0),
-        })
+        .handle(
+            CreateWorkspaceInvitation {
+                invitation_id: Uuid::new_v4().into(),
+                actor_user_id: user.user_id,
+                email: body.email,
+                created_at: Utc::now(),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
         .await
         .map_err(InvitationApiError::from)?;
     AuditEvent::new(
@@ -167,13 +173,15 @@ async fn resend_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
 ) -> Result<Json<InvitationWithLinkResponse>, InvitationApiError> {
     let resent = state
         .resend
-        .handle(ResendWorkspaceInvitation {
-            invitation_id: path.id.into(),
-            actor_user_id: user.user_id,
-            expected_generation: body.expected_generation,
-            sent_at: Utc::now(),
-            request_id: Some(request_id.0),
-        })
+        .handle(
+            ResendWorkspaceInvitation {
+                invitation_id: path.id.into(),
+                actor_user_id: user.user_id,
+                expected_generation: body.expected_generation,
+                sent_at: Utc::now(),
+            },
+            ExecutionMetadata::for_request(request_id.0),
+        )
         .await?;
     AuditEvent::new(
         "workspace.invitation_resent",
@@ -298,22 +306,24 @@ async fn accept_invitation<V: TokenVerifier<Claims = VerifiedClaims>>(
         .await
         .map_err(InvitationApiError::from)?;
     let workspace_id = accepted.workspace.workspace.id;
-    AuditEvent::new(
-        "workspace.invitation_accepted",
-        AuditOutcome::Success,
-        AuditActor::User {
-            user_id: user.user_id.into(),
-        },
-        AuditClientType::Rest,
-        "accept_workspace_invitation",
-    )
-    .workspace_id(workspace_id.into())
-    .request_id(request_id.0)
-    .object(AuditObject::new(
-        "workspace_invitation",
-        accepted.invitation_id.into(),
-    ))
-    .emit();
+    if accepted.acceptance == InvitationAcceptance::Applied {
+        AuditEvent::new(
+            "workspace.invitation_accepted",
+            AuditOutcome::Success,
+            AuditActor::User {
+                user_id: user.user_id.into(),
+            },
+            AuditClientType::Rest,
+            "accept_workspace_invitation",
+        )
+        .workspace_id(workspace_id.into())
+        .request_id(request_id.0)
+        .object(AuditObject::new(
+            "workspace_invitation",
+            accepted.invitation_id.into(),
+        ))
+        .emit();
+    }
     Ok(Json(accepted.workspace.into()))
 }
 
@@ -390,7 +400,7 @@ impl InvitationWithLinkResponse {
             role: value.role.as_str(),
             generation: value.generation,
             expires_at: value.expires_at,
-            delivery_state: value.delivery_state,
+            delivery_state: value.delivery_state.as_str(),
             url: url.to_string(),
         }
     }
@@ -462,22 +472,13 @@ impl From<WorkspacePerson> for PersonResponse {
 }
 impl From<PendingWorkspaceInvitation> for PendingInvitationResponse {
     fn from(value: PendingWorkspaceInvitation) -> Self {
-        let delivery_state = if value.last_delivery_failure.is_some() {
-            "failed"
-        } else if value.delivered_generation == Some(value.generation) {
-            "delivered"
-        } else if value.queued_generation == Some(value.generation) {
-            "queued"
-        } else {
-            "not_queued"
-        };
         Self {
             id: value.id.into(),
             invited_email: value.invited_email,
             role: value.role.as_str(),
             generation: value.generation,
             expires_at: value.expires_at,
-            delivery_state,
+            delivery_state: value.delivery_state.as_str(),
             queued_at: value.queued_at,
             delivered_at: value.delivered_at,
             delivery_failed_at: value.delivery_failed_at,

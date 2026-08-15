@@ -75,14 +75,19 @@ async fn copyable_invitation_previews_accepts_and_replays_without_leaking_author
     let accepted: Value = accepted.json();
     assert_eq!(accepted["role"], "admin");
 
-    let replay = app
-        .app_server()
-        .post("/workspace-invitations/accept")
-        .add_header(AUTHORIZATION_HEADER, format!("Bearer {invitee}"))
-        .json(&json!({ "token": token }))
+    let (replay, replay_logs) = app
+        .capture_audit_logs(async |request_id| {
+            app.app_server()
+                .post("/workspace-invitations/accept")
+                .add_header(AUTHORIZATION_HEADER, format!("Bearer {invitee}"))
+                .add_header(REQUEST_ID_HEADER, request_id.to_string())
+                .json(&json!({ "token": token }))
+                .await
+        })
         .await;
     replay.assert_status_ok();
     assert_eq!(replay.json::<Value>(), accepted);
+    assert!(replay_logs.is_empty());
 
     let people = app
         .app_server()

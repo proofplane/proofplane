@@ -21,7 +21,7 @@ pub struct WorkspaceInvitation {
     queued_at: Option<DateTime<Utc>>,
     delivered_generation: Option<i64>,
     delivered_at: Option<DateTime<Utc>>,
-    last_delivery_failure: Option<String>,
+    last_delivery_failure: Option<WorkspaceInvitationDeliveryFailure>,
     delivery_failed_at: Option<DateTime<Utc>>,
 }
 
@@ -37,6 +37,78 @@ pub enum WorkspaceInvitationStatus {
 pub enum InvitationAcceptance {
     Applied,
     Replay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceInvitationDeliveryFailure {
+    Retryable,
+    Permanent,
+    Exhausted,
+}
+
+impl WorkspaceInvitationDeliveryFailure {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::Permanent => "permanent",
+            Self::Exhausted => "exhausted",
+        }
+    }
+}
+
+impl std::str::FromStr for WorkspaceInvitationDeliveryFailure {
+    type Err = WorkspaceInvitationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "retryable" => Ok(Self::Retryable),
+            "permanent" => Ok(Self::Permanent),
+            "exhausted" => Ok(Self::Exhausted),
+            _ => Err(WorkspaceInvitationError::InvalidSnapshot),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceInvitationDeliveryState {
+    NotQueued,
+    Queued,
+    Delivered,
+    Failed,
+}
+
+impl WorkspaceInvitationDeliveryState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotQueued => "not_queued",
+            Self::Queued => "queued",
+            Self::Delivered => "delivered",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_snapshot(
+        generation: i64,
+        queued_generation: Option<i64>,
+        delivered_generation: Option<i64>,
+        last_delivery_failure: Option<WorkspaceInvitationDeliveryFailure>,
+    ) -> Self {
+        if last_delivery_failure.is_some() {
+            Self::Failed
+        } else if delivered_generation == Some(generation) {
+            Self::Delivered
+        } else if queued_generation == Some(generation) {
+            Self::Queued
+        } else {
+            Self::NotQueued
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvitationDeliveryUpdate {
+    Applied,
+    Ignored,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -104,7 +176,7 @@ impl WorkspaceInvitation {
         queued_at: Option<DateTime<Utc>>,
         delivered_generation: Option<i64>,
         delivered_at: Option<DateTime<Utc>>,
-        last_delivery_failure: Option<String>,
+        last_delivery_failure: Option<WorkspaceInvitationDeliveryFailure>,
         delivery_failed_at: Option<DateTime<Utc>>,
     ) -> Result<Self, WorkspaceInvitationError> {
         let terminal_valid = matches!(
@@ -251,33 +323,33 @@ impl WorkspaceInvitation {
         &mut self,
         generation: i64,
         delivered_at: DateTime<Utc>,
-    ) -> bool {
+    ) -> InvitationDeliveryUpdate {
         if generation != self.generation
             || self.status_at(delivered_at) != WorkspaceInvitationStatus::Pending
         {
-            return false;
+            return InvitationDeliveryUpdate::Ignored;
         }
         self.delivered_generation = Some(generation);
         self.delivered_at = Some(delivered_at);
         self.last_delivery_failure = None;
         self.delivery_failed_at = None;
-        true
+        InvitationDeliveryUpdate::Applied
     }
 
     pub fn record_delivery_failure(
         &mut self,
         generation: i64,
-        classification: &'static str,
+        classification: WorkspaceInvitationDeliveryFailure,
         failed_at: DateTime<Utc>,
-    ) -> bool {
+    ) -> InvitationDeliveryUpdate {
         if generation != self.generation
             || self.status_at(failed_at) != WorkspaceInvitationStatus::Pending
         {
-            return false;
+            return InvitationDeliveryUpdate::Ignored;
         }
-        self.last_delivery_failure = Some(classification.to_owned());
+        self.last_delivery_failure = Some(classification);
         self.delivery_failed_at = Some(failed_at);
-        true
+        InvitationDeliveryUpdate::Applied
     }
 
     pub fn id(&self) -> WorkspaceInvitationId {
@@ -325,8 +397,16 @@ impl WorkspaceInvitation {
     pub fn delivered_at(&self) -> Option<DateTime<Utc>> {
         self.delivered_at
     }
-    pub fn last_delivery_failure(&self) -> Option<&str> {
-        self.last_delivery_failure.as_deref()
+    pub fn last_delivery_failure(&self) -> Option<WorkspaceInvitationDeliveryFailure> {
+        self.last_delivery_failure
+    }
+    pub fn delivery_state(&self) -> WorkspaceInvitationDeliveryState {
+        WorkspaceInvitationDeliveryState::from_snapshot(
+            self.generation,
+            self.queued_generation,
+            self.delivered_generation,
+            self.last_delivery_failure,
+        )
     }
     pub fn delivery_failed_at(&self) -> Option<DateTime<Utc>> {
         self.delivery_failed_at
@@ -395,11 +475,14 @@ mod tests {
         invitation
             .queue_delivery(1, invitation.created_at())
             .unwrap();
-        assert!(invitation.record_delivery_failure(
-            1,
-            "exhausted",
-            invitation.created_at() + Duration::minutes(1)
-        ));
+        assert_eq!(
+            invitation.record_delivery_failure(
+                1,
+                WorkspaceInvitationDeliveryFailure::Exhausted,
+                invitation.created_at() + Duration::minutes(1)
+            ),
+            InvitationDeliveryUpdate::Applied
+        );
 
         let resent_at = invitation.created_at() + Duration::hours(2);
         invitation
@@ -424,11 +507,49 @@ mod tests {
         invitation
             .queue_delivery(1, invitation.created_at())
             .unwrap();
-        assert!(!invitation.record_delivery_success(2, invitation.created_at()));
-        assert!(invitation.record_delivery_success(1, invitation.created_at()));
+        assert_eq!(
+            invitation.record_delivery_success(2, invitation.created_at()),
+            InvitationDeliveryUpdate::Ignored
+        );
+        assert_eq!(
+            invitation.record_delivery_success(1, invitation.created_at()),
+            InvitationDeliveryUpdate::Applied
+        );
         assert_eq!(invitation.delivered_generation(), Some(1));
-        assert!(!invitation.record_delivery_failure(2, "permanent", invitation.created_at()));
+        assert_eq!(
+            invitation.record_delivery_failure(
+                2,
+                WorkspaceInvitationDeliveryFailure::Permanent,
+                invitation.created_at()
+            ),
+            InvitationDeliveryUpdate::Ignored
+        );
         assert_eq!(invitation.last_delivery_failure(), None);
+    }
+
+    #[test]
+    fn delivery_update_crossing_expiry_is_ignored() {
+        let mut invitation = pending();
+        invitation
+            .queue_delivery(1, invitation.created_at())
+            .unwrap();
+
+        assert_eq!(
+            invitation.record_delivery_success(1, invitation.expires_at()),
+            InvitationDeliveryUpdate::Ignored
+        );
+        assert_eq!(
+            invitation.record_delivery_failure(
+                1,
+                WorkspaceInvitationDeliveryFailure::Retryable,
+                invitation.expires_at()
+            ),
+            InvitationDeliveryUpdate::Ignored
+        );
+        assert_eq!(
+            invitation.delivery_state(),
+            WorkspaceInvitationDeliveryState::Queued
+        );
     }
 
     #[test]
