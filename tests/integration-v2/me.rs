@@ -153,6 +153,35 @@ async fn me_preserves_existing_profile_when_later_claims_are_absent() {
 }
 
 #[tokio::test]
+async fn me_populates_existing_profile_when_later_claims_are_available() {
+    let app = harness::app().await;
+    let sub = "auth0|me-profile-refreshed";
+
+    let first = app
+        .app_server()
+        .get("/me")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer noprofile:{sub}"))
+        .await;
+    first.assert_status_ok();
+    let first_body = first.json::<Value>();
+    let user_id = first_body["id"].clone();
+    assert_eq!(first_body["email"], Value::Null);
+    assert_eq!(first_body["name"], Value::Null);
+
+    let second = app
+        .app_server()
+        .get("/me")
+        .add_header(AUTHORIZATION_HEADER, format!("Bearer {sub}"))
+        .await;
+    second.assert_status_ok();
+    let second_body = second.json::<Value>();
+
+    assert_eq!(second_body["id"], user_id);
+    assert_eq!(second_body["email"], format!("{sub}@example.com"));
+    assert_eq!(second_body["name"], "Integration Human");
+}
+
+#[tokio::test]
 async fn me_rejects_missing_or_invalid_bearer_tokens() {
     let app = harness::app().await;
 
