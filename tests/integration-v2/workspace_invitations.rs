@@ -395,6 +395,25 @@ async fn people_lists_members_and_removal_preserves_boundaries_and_revokes_agent
         assert!(member["email"].is_string());
         assert!(member["joined_at"].is_string());
     }
+    let member_profiles = people["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|member| {
+            (
+                member["email"].as_str().unwrap(),
+                member["display_name"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(member_profiles.contains(&(
+        "auth0|people-removal-owner@example.com",
+        "Integration Human"
+    )));
+    assert!(member_profiles.contains(&(
+        "auth0|people-removal-invitee@example.com",
+        "Integration Human"
+    )));
     assert_eq!(people["pending_invitations"].as_array().unwrap().len(), 1);
     assert_eq!(
         people["pending_invitations"][0]["invited_email"],

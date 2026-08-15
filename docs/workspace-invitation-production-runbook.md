@@ -28,7 +28,7 @@ values, email addresses, tokens, URLs containing tokens, or provider bodies.
 ## Auth0 Claims Action
 
 1. In the management-plane Auth0 tenant, add a post-login Action that sets the
-   two access-token claims documented in
+   three access-token claims documented in
    [Auth0 management identity claims](./auth0-management-identity.md). Apply it
    only to the existing management-plane login flow; do not alter the auditor
    or MCP clients, their audiences, or Auth0 Organizations.
@@ -36,7 +36,8 @@ values, email addresses, tokens, URLs containing tokens, or provider bodies.
 3. Authenticate a test user whose mailbox is verified. Decode a short-lived
    Proofplane API access token locally and confirm its existing issuer,
    audience, subject, and permissions are unchanged and that it contains:
-   `https://proofplane.com/email` as the expected string and
+   `https://proofplane.com/email` and `https://proofplane.com/name` as the
+   expected strings and
    `https://proofplane.com/email_verified` as boolean `true`.
 4. Repeat with an unverified test identity and confirm Proofplane does not
    treat it as verified invitation authority. Do not retain either token.

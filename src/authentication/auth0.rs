@@ -203,6 +203,12 @@ struct UserExtraClaims {
     management_email: Option<serde_json::Value>,
     #[serde(
         default,
+        rename = "https://proofplane.com/name",
+        skip_serializing_if = "Option::is_none"
+    )]
+    management_name: Option<serde_json::Value>,
+    #[serde(
+        default,
         rename = "https://proofplane.com/email_verified",
         skip_serializing_if = "Option::is_none"
     )]
@@ -220,16 +226,33 @@ impl ClaimsPolicy for UserPolicy {
         claims: &Claims<Self::ExtraClaims>,
         sub: String,
     ) -> Result<Self::Output, VerifyError> {
+        let email = profile_claim(
+            claims.extra.management_email.as_ref(),
+            claims.extra.email.as_deref(),
+        );
+        let name = profile_claim(
+            claims.extra.management_name.as_ref(),
+            claims.extra.name.as_deref(),
+        );
         Ok(VerifiedClaims {
             sub,
-            email: claims.extra.email.clone(),
-            name: claims.extra.name.clone(),
+            email,
+            name,
             verified_management_identity: VerifiedManagementIdentity::from_auth0_claims(
                 claims.extra.management_email.as_ref(),
                 claims.extra.management_email_verified.as_ref(),
             ),
         })
     }
+}
+
+fn profile_claim(namespaced: Option<&serde_json::Value>, standard: Option<&str>) -> Option<String> {
+    namespaced
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| standard.map(str::to_owned))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -850,6 +873,7 @@ mod tests {
             email: Some("human@example.com".to_owned()),
             name: Some("Human Example".to_owned()),
             management_email: None,
+            management_name: None,
             management_email_verified: None,
         };
         let verified = verifier
@@ -873,6 +897,52 @@ mod tests {
             .expect("token verifies");
         assert_eq!(verified.email, None);
         assert_eq!(verified.name, None);
+        assert_eq!(verified.verified_management_identity, None);
+    }
+
+    #[tokio::test]
+    async fn user_policy_prefers_namespaced_profile_claims() {
+        let (verifier, signing_key) = user_fixture();
+        let mut claims = user_claims(ISSUER, API_AUDIENCE, "auth0|namespaced-profile");
+        claims.claims_mut().extra = UserExtraClaims {
+            email: Some("ordinary@example.com".to_owned()),
+            name: Some("Ordinary Name".to_owned()),
+            management_email: Some(serde_json::Value::String(
+                " namespaced@example.com ".to_owned(),
+            )),
+            management_name: Some(serde_json::Value::String(" Namespaced Name ".to_owned())),
+            management_email_verified: Some(serde_json::Value::Bool(false)),
+        };
+
+        let verified = verifier
+            .verify(&sign_with(&signing_key, claims))
+            .await
+            .expect("token verifies");
+
+        assert_eq!(verified.email.as_deref(), Some("namespaced@example.com"));
+        assert_eq!(verified.name.as_deref(), Some("Namespaced Name"));
+        assert_eq!(verified.verified_management_identity, None);
+    }
+
+    #[tokio::test]
+    async fn malformed_namespaced_profile_claims_fall_back_to_standard_claims() {
+        let (verifier, signing_key) = user_fixture();
+        let mut claims = user_claims(ISSUER, API_AUDIENCE, "auth0|fallback-profile");
+        claims.claims_mut().extra = UserExtraClaims {
+            email: Some("ordinary@example.com".to_owned()),
+            name: Some("Ordinary Name".to_owned()),
+            management_email: Some(serde_json::Value::Number(42.into())),
+            management_name: Some(serde_json::Value::String(" ".to_owned())),
+            management_email_verified: Some(serde_json::Value::Bool(true)),
+        };
+
+        let verified = verifier
+            .verify(&sign_with(&signing_key, claims))
+            .await
+            .expect("token verifies");
+
+        assert_eq!(verified.email.as_deref(), Some("ordinary@example.com"));
+        assert_eq!(verified.name.as_deref(), Some("Ordinary Name"));
         assert_eq!(verified.verified_management_identity, None);
     }
 
