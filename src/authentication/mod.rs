@@ -86,8 +86,7 @@ pub enum VerifiedManagementIdentityError {
 /// Normalizes the mailbox format accepted wherever Proofplane uses email authority.
 pub fn normalize_email(value: &str) -> Option<String> {
     let email = value.trim().to_ascii_lowercase();
-    let (local, domain) = email.split_once('@')?;
-    (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(email)
+    email_address::EmailAddress::is_valid(&email).then_some(email)
 }
 
 pub struct UserAuthenticator<V: TokenVerifier<Claims = VerifiedClaims>> {
@@ -197,6 +196,18 @@ mod tests {
             ),
             (
                 Some(Value::String("member".to_owned())),
+                Some(Value::Bool(true)),
+            ),
+            (
+                Some(Value::String("member @example.com".to_owned())),
+                Some(Value::Bool(true)),
+            ),
+            (
+                Some(Value::String("member@ example.com".to_owned())),
+                Some(Value::Bool(true)),
+            ),
+            (
+                Some(Value::String("member@@example.com".to_owned())),
                 Some(Value::Bool(true)),
             ),
             (

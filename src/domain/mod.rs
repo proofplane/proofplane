@@ -98,6 +98,7 @@ pub use workspace::{
     WorkspaceMemberError, WorkspaceMembership, WorkspaceRole,
 };
 pub use workspace_invitation::{
-    InvitationAcceptance, WorkspaceInvitation, WorkspaceInvitationError, WorkspaceInvitationId,
-    WorkspaceInvitationStatus,
+    InvitationAcceptance, InvitationDeliveryUpdate, WorkspaceInvitation,
+    WorkspaceInvitationDeliveryFailure, WorkspaceInvitationDeliveryState, WorkspaceInvitationError,
+    WorkspaceInvitationId, WorkspaceInvitationStatus,
 };

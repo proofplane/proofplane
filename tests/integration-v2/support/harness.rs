@@ -32,7 +32,7 @@ use proofplane::{
     },
     config::AppConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
-    mail::{CapturingMailAdapter, MailMessage},
+    mail::{CapturingMailAdapter, MailError, MailMessage},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::FilesystemObjectStore,
     persistence::Postgres,
@@ -212,6 +212,10 @@ impl TestApp {
 
     pub fn mail_messages(&self) -> Vec<MailMessage> {
         self.mail.messages()
+    }
+
+    pub fn fail_next_mail_for(&self, recipient: impl Into<String>, error: MailError) {
+        self.mail.fail_next_for(recipient, error);
     }
 
     pub(super) fn reference_data(&self) -> &[TestFramework] {

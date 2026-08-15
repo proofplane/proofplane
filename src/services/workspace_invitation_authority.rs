@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::{config::WorkspaceInvitationsConfig, domain::WorkspaceInvitation};
+use crate::{
+    config::WorkspaceInvitationsConfig,
+    domain::{WorkspaceInvitation, WorkspaceInvitationId},
+};
 
 const PURPOSE: &str = "workspace-invitation";
 const IMPLICIT_ASSERTION: &[u8] = b"proofplane:workspace-invitation:v1";
@@ -34,6 +37,23 @@ pub struct VerifiedWorkspaceInvitationAuthority {
 
 pub struct IssuedWorkspaceInvitationLink {
     pub url: Url,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceInvitationAuthoritySource {
+    pub invitation_id: WorkspaceInvitationId,
+    pub generation: i64,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<&WorkspaceInvitation> for WorkspaceInvitationAuthoritySource {
+    fn from(invitation: &WorkspaceInvitation) -> Self {
+        Self {
+            invitation_id: invitation.id(),
+            generation: invitation.generation(),
+            expires_at: invitation.expires_at(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
@@ -91,25 +111,25 @@ impl WorkspaceInvitationAuthority {
 
     pub fn issue(
         &self,
-        invitation: &WorkspaceInvitation,
+        source: WorkspaceInvitationAuthoritySource,
     ) -> Result<IssuedWorkspaceInvitationLink, WorkspaceInvitationAuthorityError> {
-        self.issue_at(invitation, Utc::now())
+        self.issue_at(source, Utc::now())
     }
 
     fn issue_at(
         &self,
-        invitation: &WorkspaceInvitation,
+        source: WorkspaceInvitationAuthoritySource,
         issued_at: DateTime<Utc>,
     ) -> Result<IssuedWorkspaceInvitationLink, WorkspaceInvitationAuthorityError> {
-        if issued_at >= invitation.expires_at() {
+        if issued_at >= source.expires_at {
             return Err(WorkspaceInvitationAuthorityError::Unavailable);
         }
         let claims = Claims {
-            invitation_id: Uuid::from(invitation.id()).to_string(),
-            generation: invitation.generation(),
+            invitation_id: Uuid::from(source.invitation_id).to_string(),
+            generation: source.generation,
             purpose: PURPOSE.to_owned(),
             iat: timestamp(issued_at),
-            exp: timestamp(invitation.expires_at()),
+            exp: timestamp(source.expires_at),
         };
         let payload =
             serde_json::to_vec(&claims).map_err(|_| WorkspaceInvitationAuthorityError::Issue)?;
@@ -228,7 +248,7 @@ mod tests {
         .unwrap();
         let service = service();
         let link = service
-            .issue_at(&invitation, now + Duration::seconds(1))
+            .issue_at((&invitation).into(), now + Duration::seconds(1))
             .unwrap();
         assert_eq!(link.url.path(), "/join");
         assert!(link.url.query().is_none());

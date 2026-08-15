@@ -2378,6 +2378,7 @@ dependencies = [
  "crc32c",
  "crc32fast",
  "deadpool-postgres",
+ "email_address",
  "futures-core",
  "futures-util",
  "gcloud-auth",
