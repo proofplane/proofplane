@@ -48,6 +48,8 @@ Apply the saved plan once. Terraform executes and waits for
 After a successful apply:
 
 - Confirm the migration execution succeeded once for the selected digest.
+- Confirm every runtime passed its read-only schema-history check before it
+  accepted work.
 - Confirm API and MCP revisions use that digest, have min instances zero, and
   reject direct internet access to their default URLs.
 - Confirm the dequeuer worker pool has exactly one instance.
@@ -80,9 +82,12 @@ later, separately verified change.
 - **Migration fails:** Terraform stops before dependent revisions update.
   Inspect job logs, correct the forward migration, publish a new digest if code
   changed, and re-plan. Never seed production.
-- **Migration succeeds but smoke checks fail:** restore the previous application
-  digest and apply. Expand migrations remain in place and must be compatible
-  with the prior revision.
+- **Migration succeeds but smoke checks fail:** do not restore the previous
+  application digest. Once a newer history entry exists, an older image rejects
+  it on startup even when the migration is additive. Keep already-running old
+  revisions available while diagnosing when possible, then publish and apply a
+  corrected binary that embeds the exact applied history. Do not reverse an
+  expand migration automatically.
 - **ClamAV update fails:** the updater must leave the last-good pointer intact.
   After two failures, investigate CDN access, image version, validation logs,
   and bucket IAM. Workers fail closed after 24 hours of staleness.
@@ -95,4 +100,3 @@ later, separately verified change.
 - **Secret rotation:** add a new secret version outside Terraform, update its
   numeric version input, review the new revisions, and apply. Disable old
   versions only after rollback no longer depends on them.
-

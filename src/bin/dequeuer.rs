@@ -10,7 +10,7 @@ use proofplane::{
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
@@ -25,8 +25,11 @@ enum Error {
     #[error("postgres connection error")]
     DatabaseConnection(#[from] persistence::connection::Error),
 
-    #[error("database migration error")]
-    Migrations(#[from] refinery::Error),
+    #[error("database pool error")]
+    DatabasePool(#[from] deadpool_postgres::PoolError),
+
+    #[error("database schema revision error")]
+    SchemaRevision(#[from] persistence::SchemaRevisionError),
 
     #[error("outbox dequeuer error")]
     Dequeuer(#[from] dequeuer::OutboxDequeuerError),
@@ -54,18 +57,14 @@ async fn run() -> Result<(), Error> {
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
-
-    debug!("running migrations");
-    persistence::apply_migrations(&mut client).await?;
-    debug!("done running migrations");
-    drop(client);
-
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
         PoolBounds::from_config(&config.database.pool, PoolRuntime::Dequeuer),
     )
     .await?;
+    let client = pool.get().await?;
+    persistence::check_schema_revision(&client).await?;
+    drop(client);
     let postgres = Postgres::new(pool);
     if env::var_os(pubsub::PUBSUB_EMULATOR_HOST).is_none() {
         // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set
