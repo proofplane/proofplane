@@ -29,7 +29,8 @@ notes live in `docs/`.
 - `make seed`: apply database migrations and seed local data.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
-  setup.
+  setup, and run `make migrate` or `make seed` first; runtimes only validate
+  schema history and never apply migrations.
 - `cargo test --test integration-v2 evidence_document_uploads`: run a focused
   integration-v2 test module.
 

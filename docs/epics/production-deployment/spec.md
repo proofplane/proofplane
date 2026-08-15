@@ -33,7 +33,7 @@ must not be enabled until all are verified:
 | Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. |
 | Transaction pooling | Runtime queries issue unnamed statements and pass integration tests against a transaction pooler. Met locally against PgBouncer in transaction mode; still unverified against Supavisor on 6543. |
 | Dedicated migrations | A `proofplane-migrate` command runs migrations only, uses a separate direct credential, and never seeds data. |
-| Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup. |
+| Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup and accept work only when database history exactly matches the migrations embedded in the binary. |
 | Compatible migrations | Schema changes follow expand/contract rules, use a short lock timeout, and remain compatible with old and new revisions. |
 | Stateless MCP | `rmcp` streamable HTTP uses `stateful_mode = false` and direct JSON responses; no in-memory session affinity is required. |
 | Bounded pools | Pool sizes, acquisition timeouts, and idle timeouts are configurable. Initial sizes are API 10, MCP 10, worker 6, and dequeuer 2. |
@@ -211,6 +211,16 @@ The migration job has one task, one connection, no automatic retries, and a
 finite timeout. It uses a distinct database role and Supabase's direct endpoint
 with certificate and hostname verification. Default Cloud Run internet egress
 supports the endpoint's public IPv6 path without VPC egress.
+
+Every runtime performs one read-only schema-history check through its configured
+bounded pool before it opens a listener, creates a subscription, or begins
+polling. The ordered version, name, and checksum entries in
+`refinery_schema_history` must exactly match the migrations embedded in the
+binary. An exact incomplete prefix, including a database with no history table,
+is rejected as behind and directs the operator to the `migrate` command. Any
+extra or divergent entry is rejected as unknown and requires a binary built
+with that exact migration history. The check never creates or changes the
+history table.
 
 The `migrate` command resolves that credential from the first source that is
 set, and fails naming that source when it is set but unusable rather than
@@ -416,8 +426,10 @@ The operator workflow is:
    workloads update.
 6. Verify job execution, revision health, Pub/Sub push authentication, public
    TLS endpoints, version output, and a non-destructive end-to-end message.
-7. On application failure, reapply the previous application digest. Do not
-   attempt to reverse an expand migration automatically.
+7. On application failure after migration, roll forward with a corrected binary
+   that embeds the applied schema history. An older image cannot restart once a
+   newer migration is present, even when that migration is additive. Do not
+   reverse an expand migration automatically.
 
 Terraform does not use `local-exec` for builds, migrations, smoke checks, or
 DNS registrar changes.
@@ -448,3 +460,7 @@ DNS registrar changes.
 - 2026-08-06 (ticket 010): `infra/gcp/production/Makefile` added as the
   dependency-tracked entry point for `terraform init` and `terraform plan`.
   Apply is deliberately not wrapped.
+- 2026-08-14 (#157): Serving runtimes now perform an exact, read-only migration
+  history check and never apply migrations. Because older images reject newer
+  histories on restart, post-migration recovery rolls forward with a
+  schema-matching binary.

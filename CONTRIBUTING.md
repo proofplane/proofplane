@@ -95,6 +95,11 @@ tracked in the
 
 ## Running Processes
 
+Runtime processes never apply migrations. After `make up`, and whenever the
+embedded migration set changes, run `make migrate` or `make seed` before
+starting a process. A process refuses to start when the database history is
+behind or does not exactly match the migrations embedded in its binary.
+
 Start a process with the Make target for that binary (they read
 `$PROOFPLANE_CONFIG`, defaulting to `.local/config.yaml`):
 
