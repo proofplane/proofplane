@@ -30,6 +30,7 @@ yet.
 
 1. Start from a clean intended checkout and run the repository's full checks.
 2. Build the Linux production image and smoke every packaged command locally.
+   See [Release Images](#release-images).
 3. Push Proofplane and the pinned mirrored ClamAV images to the regional
    repository. Resolve and record immutable `@sha256` references.
 4. Review Artifact Analysis findings. Scanning is advisory at launch, but known
@@ -39,6 +40,81 @@ yet.
 6. Reject a plan that contains mutable tags, unexpected replacement/deletion,
    public worker access, runtime Pub/Sub administration, seed execution, or an
    unpinned secret version.
+
+## Release Images
+
+One image carries every production command. Each Cloud Run resource selects a
+command by absolute path, so the image ships `api`, `mcp`, `worker`, `dequeuer`,
+and `migrate` under `/usr/local/bin/`. It does not ship `seed`.
+
+| Command | Result |
+| --- | --- |
+| `make image` | Builds the `linux/amd64` image and records its reference in `.local/image-ref`. |
+| `make image-smoke` | Runs every packaged command and checks the platform, the runtime user, and the certificate bundle. |
+| `make image-push` | Runs the smoke checks, pushes to Artifact Registry, and prints the `@sha256` reference. |
+| `make clamav-mirror` | Copies the pinned ClamAV image into the same repository and prints its `@sha256` reference. |
+
+`make image-push` and `make clamav-mirror` need `PROOFPLANE_PROJECT_ID`. Both
+print one immutable reference on stdout. Copy that reference into
+`terraform.tfvars`. Terraform rejects a mutable tag.
+
+`make image` refuses a worktree that has uncommitted changes. The digest is the
+only record of what a release contains, so an image built from uncommitted work
+cannot be reproduced later.
+
+The first build is slow. It compiles Rust under emulation. Later builds reuse
+the cargo cache mounts.
+
+The mirrored ClamAV image is a pinned base, not a deployable sidecar. Both
+`clamav_image_digest` and `clamav_updater_image_digest` need derived images that
+[#121](https://github.com/proofplane/proofplane/issues/121) owns.
+
+### Image Retention
+
+`infra/gcp/production/artifacts.tf` owns retention, and its cleanup policies are
+live rather than a dry run. Two policies apply:
+
+- `keep-recent-releases` keeps the 20 most recent versions.
+- `delete-untagged-after-30-days` deletes an untagged version after 30 days.
+
+The delete policy matches only untagged versions, so a tag is what protects a
+digest an operator may still need. `make image-push` and `make clamav-mirror`
+both push a tag for that reason. Never push a release image without one.
+
+A deleted digest cannot be redeployed, and a release cannot be reached without
+it. This matters more after #157: a runtime accepts work only when its own
+embedded migration history matches the database, so recovery needs an image
+built against the history in question.
+
+No policy deletes a tagged version today, so tagged releases accumulate. The
+spec asks to "retain a bounded number of old release images", which the current
+policies do not achieve for tagged images.
+[#118](https://github.com/proofplane/proofplane/issues/118) owns
+`artifacts.tf`, and a bounded policy belongs there. Until then, delete old
+release tags by hand when the repository grows.
+
+### Rollback Digests
+
+Record two digests after every release: the digest now deployed, and the digest
+deployed before it. `terraform output deployed_application_digest` reports the
+first one.
+
+A digest rollback is safe only when the target image embeds the same migration
+history the database now holds. That is true when the release you undo applied
+no migration. Set `app_image_digest` to the previous digest, plan, and apply.
+
+Do not roll the digest back when the release did apply a migration. Every
+runtime checks its own embedded history against the database before it accepts
+work, so the older image rejects the newer history and refuses to start. Roll
+forward instead, with a corrected binary that embeds the applied history. See
+[Failure And Rollback](#failure-and-rollback).
+
+Cloud Run derives the migration execution token from the first 12 characters of
+the digest. See `infra/gcp/production/locals.tf`. The token is the suffix of the
+execution name, so a previous digest names an execution that already exists.
+Expect a digest rollback to start no new migration execution. Confirm this
+during the first rehearsed rollback, which
+[#124](https://github.com/proofplane/proofplane/issues/124) owns.
 
 ## Apply And Verify
 

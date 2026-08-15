@@ -123,6 +123,35 @@ overrides the command instead of building a process-specific image. Mirror a
 pinned official ClamAV image into the same regional repository so production
 does not depend on Docker Hub availability or mutable tags.
 
+The root `Dockerfile` builds that image in two stages:
+
+| Property | Value | Reason |
+| --- | --- | --- |
+| Platform | `linux/amd64`, pinned in the `FROM` lines | Cloud Run accepts nothing else, and the operator workstation is usually arm64. |
+| Builder | `rust:1.95-bookworm` plus `cmake` | The image already carries `pkg-config` and `libssl-dev` for `openssl-sys`. `aws-lc-sys` builds through `cmake`, which it does not carry. |
+| Runtime | `debian:bookworm-slim` plus `ca-certificates` and `libssl3` | `openssl-sys` links dynamically, so a `scratch` or static-distroless runtime is not available. `reqwest` verifies TLS through the platform certificate store. |
+| User | UID 10001 | Nothing writes to the filesystem. Configuration arrives as a read-only secret mount, and evidence goes to object storage. |
+| Commands | `/usr/local/bin/{api,mcp,worker,dequeuer,migrate}` | `run.tf` selects each command by absolute path and supplies no arguments. |
+| Default command | None | Every Cloud Run resource sets its command. A default could only hide a missing override. |
+
+The image does not contain `seed`. Leaving the command out is the surest way to
+honor the gate that rejects seed execution in production.
+
+`scripts/smoke-image.sh` validates a built image before a push. It checks the
+platform, the declared and observed user, the certificate bundle, and the
+absence of `seed`. It then runs each of the five commands with an empty
+environment and a read-only root filesystem, and requires each one to exit 1
+with its own documented credential message. That is what proves a command
+executes: the ELF loads, the dynamic `libssl` link resolves, and `main` runs.
+The read-only filesystem proves the other claim in the table above, that no
+command needs to write anything to start.
+
+`run.tf` consumes two ClamAV digests rather than one. `clamav_image_digest` is
+the worker sidecar and `clamav_updater_image_digest` is the update job. Neither
+is stock upstream: the sidecar copies the last-good snapshot from GCS and
+disables `freshclam`, and the updater needs its own entrypoint. The mirror is
+the pinned base that both derived images start from.
+
 Enable Artifact Analysis automatic scanning. Findings are advisory initially;
 no severity threshold blocks a local deployment until an exception workflow
 exists. Retain a bounded number of old release images through repository
@@ -464,3 +493,20 @@ DNS registrar changes.
   history check and never apply migrations. Because older images reject newer
   histories on restart, post-migration recovery rolls forward with a
   schema-matching binary.
+- 2026-08-14 (#117): The release image now exists, and this spec previously
+  described none of its properties. Base images, platform, runtime user,
+  packaged commands, and the exclusion of `seed` are now recorded above. The
+  build runs emulated for `linux/amd64` rather than cross-compiled, because
+  `openssl-sys` links dynamically and `aws-lc-sys` builds through `cmake`. Those
+  two together make a multiarch cross toolchain the more fragile path. Cargo
+  cache mounts confine the cost to the first build. This section also said to
+  mirror "a pinned official ClamAV image". `run.tf` in fact consumes two ClamAV
+  digests, and #117 mirrors only the pinned base that both derived images in
+  #121 start from.
+- 2026-08-14 (#117): Image retention remains partly unmet. The cleanup policies
+  in `artifacts.tf` delete an untagged version after 30 days and keep the 20
+  most recent versions. No policy deletes a tagged version, so tagged releases
+  accumulate rather than stay bounded. `artifacts.tf` belongs to #118, which
+  owns the correction. Retention matters more after #157: a runtime accepts work
+  only when its own embedded history matches the database, so an image and the
+  schema it was built against are now a pair.

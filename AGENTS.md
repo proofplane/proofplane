@@ -33,6 +33,12 @@ notes live in `docs/`.
   schema history and never apply migrations.
 - `cargo test --test integration-v2 evidence_document_uploads`: run a focused
   integration-v2 test module.
+- `make image && make image-smoke`: build the production release image and
+  validate it. The image is `linux/amd64` and packages `api`, `mcp`, `worker`,
+  `dequeuer`, and `migrate`, but never `seed`. `make image-push` and
+  `make clamav-mirror` publish to Artifact Registry and need
+  `PROOFPLANE_PROJECT_ID`. See
+  [`docs/runbooks/production-deployment.md`](./docs/runbooks/production-deployment.md).
 
 ## Architecture: Snapshot CQRS
 

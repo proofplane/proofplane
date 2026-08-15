@@ -1,0 +1,14 @@
+# Exclude everything, then re-include the crate itself. An allowlist keeps
+# target/ out of the build context. It also guarantees that fixtures/ never
+# reaches the image: fixtures/ holds an EICAR test string, which container
+# image scanners report as malware.
+*
+
+!Cargo.toml
+!Cargo.lock
+!src
+!migrations
+
+# The migrations directory is a build input, because embed_migrations! reads it
+# when the crate compiles. Its prose is not.
+migrations/README.md
