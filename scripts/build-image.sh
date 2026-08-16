@@ -8,8 +8,8 @@ set -euo pipefail
 # Prints the built image reference on stdout, so a caller can pass it to the
 # smoke and push steps.
 
-# Fixed, because infra/gcp/production/terraform.tfvars.example names exactly one
-# image path for the release.
+# Fixed, because infra/gcp/production/03-release/terraform.tfvars.example names
+# exactly one image path for the release.
 image_name="proofplane"
 platform="linux/amd64"
 

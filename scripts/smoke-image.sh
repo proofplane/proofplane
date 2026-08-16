@@ -14,7 +14,8 @@ if [[ -z "${image}" ]]; then
   exit 2
 fi
 
-# The five commands infra/gcp/production/run.tf overrides, and nothing else.
+# The five commands infra/gcp/production/03-release/run.tf overrides, and
+# nothing else.
 readonly commands=(api mcp worker dequeuer migrate)
 
 # Cloud Run runs linux/amd64. The operator's workstation is usually arm64.

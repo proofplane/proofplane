@@ -5,8 +5,9 @@ set -euo pipefail
 # repository, so a release depends on neither Docker Hub availability nor a
 # mutable tag. Prints the mirrored @sha256 reference on stdout.
 #
-# This mirror is not deployable on its own. infra/gcp/production/run.tf consumes
-# two ClamAV images, and neither is stock upstream: the worker sidecar has to
+# This mirror is not deployable on its own.
+# infra/gcp/production/03-release/run.tf consumes two ClamAV images, and
+# neither is stock upstream: the worker sidecar has to
 # copy the last-good definition snapshot out of GCS and run with freshclam
 # disabled, and the update job needs an image of its own. Both derived images
 # belong to #121. This script provides the pinned base they start from.
@@ -20,8 +21,8 @@ source_digest="sha256:1d261f9c83ef2bbeef3915c7792f125e5707500fde0019d53547461747
 
 project_id="${PROOFPLANE_PROJECT_ID:-}"
 
-# Fixed, because infra/gcp/production/variables.tf validates the region to
-# us-central1 alone, and terraform.tfvars.example names one mirror path.
+# Fixed, because infra/gcp/production/01-artifacts/variables.tf validates the
+# region to us-central1 alone and names the repository this mirrors into.
 region="us-central1"
 repository="proofplane"
 mirror_name="clamav"

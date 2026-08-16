@@ -1,9 +1,20 @@
+# Shared rules for every phase root under this directory. Each root includes
+# this file after setting TF_STATE_PREFIX and PLAN, so those two assignments win
+# over the `?=` defaults below. Every path here is relative to the including
+# root, because make evaluates them in that root's directory.
 .PHONY: help init plan replan clean
 
 TF ?= terraform
 TF_STATE_BUCKET ?=
-TF_STATE_PREFIX ?= proofplane/production
-PLAN ?= production.tfplan
+
+# No defaults for these two. A wrong-but-plausible prefix would initialize a
+# root against another phase's state, so an unset value has to stop the run.
+ifeq ($(strip $(TF_STATE_PREFIX)),)
+$(error TF_STATE_PREFIX must be set by the including root Makefile)
+endif
+ifeq ($(strip $(PLAN)),)
+$(error PLAN must be set by the including root Makefile)
+endif
 
 TF_FILES := $(wildcard *.tf)
 INIT_STAMP := .terraform/terraform.tfstate

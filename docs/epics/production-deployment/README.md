@@ -24,7 +24,10 @@ The epic issue carries the ticket index, status, and sequencing. See
 workflow.
 
 **All Terraform in `infra/gcp/production/` is written but has never been
-applied.** Tickets labeled `doing` have partially completed task lists; their
+applied.** It is three ordered roots — `01-artifacts`, `02-foundation`, and
+`03-release` — described in
+[`infra/gcp/production/README.md`](../../../infra/gcp/production/README.md).
+Tickets labeled `doing` have partially completed task lists; their
 acceptance criteria describe applied infrastructure and remain unverified. The
 first apply is blocked on
 [#115](https://github.com/proofplane/proofplane/issues/115) and

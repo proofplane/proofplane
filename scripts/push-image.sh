@@ -2,14 +2,15 @@
 set -euo pipefail
 
 # Pushes a locally built release image to Artifact Registry and prints the
-# immutable reference Terraform requires. infra/gcp/production/variables.tf
-# validates ^[^[:space:]]+@sha256:[0-9a-f]{64}$, so a tag is not deployable and
-# this script's stdout is the value an operator copies into terraform.tfvars.
+# immutable reference Terraform requires.
+# infra/gcp/production/03-release/variables.tf validates
+# ^[^[:space:]]+@sha256:[0-9a-f]{64}$, so a tag is not deployable and this
+# script's stdout is the value an operator copies into terraform.tfvars.
 
 project_id="${PROOFPLANE_PROJECT_ID:-}"
 
-# Fixed, because infra/gcp/production/variables.tf validates the region to
-# us-central1 alone, and terraform.tfvars.example names one image path.
+# Fixed, because infra/gcp/production/01-artifacts/variables.tf validates the
+# region to us-central1 alone and names the repository this pushes into.
 region="us-central1"
 repository="proofplane"
 image_name="proofplane"
@@ -64,9 +65,9 @@ fi
 
 remote="${region}-docker.pkg.dev/${project_id}/${repository}/${image_name}"
 
-# The tag is not decoration. infra/gcp/production/artifacts.tf runs a live
-# cleanup policy that deletes untagged versions older than 30 days, so a
-# digest-only push can expire out from under a rollback.
+# The tag is not decoration. infra/gcp/production/01-artifacts/artifacts.tf
+# runs a live cleanup policy that deletes untagged versions older than 30 days,
+# so a digest-only push can expire out from under a rollback.
 echo "pushing ${remote}:${tag}" >&2
 
 docker tag "${local_image}" "${remote}:${tag}"
