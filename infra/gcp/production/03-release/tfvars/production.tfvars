@@ -1,5 +1,5 @@
 project_id   = "proofplane-production"
-state_bucket = "YOUR_STATE_BUCKET"
+state_bucket = "proofplane-production-terraform-state"
 
 # Every value below is required. Push the images and create the secret payload
 # versions first. This root creates nothing until all of them are pinned.

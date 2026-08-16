@@ -15,19 +15,13 @@ variable "region" {
 }
 
 # terraform_remote_state cannot read the partial backend config, so this root
-# names the foundation state a second time. Both values must match what
-# 02-foundation was initialized with, or this root reads a prefix that holds no
-# state. The apex is not repeated here: it arrives as a foundation output, so a
+# names the state bucket a second time. It is the same bucket every phase is
+# initialized against. The prefix is not a variable: see foundation.tf. The
+# apex is not repeated either, because it arrives as a foundation output, so a
 # record can never name a different apex than the zone that holds it.
 variable "state_bucket" {
   description = "State bucket holding the 02-foundation state this root reads."
   type        = string
-}
-
-variable "foundation_state_prefix" {
-  description = "Prefix 02-foundation was initialized with. Change it only together with that root's TF_STATE_PREFIX."
-  type        = string
-  default     = "proofplane/production/foundation"
 }
 
 variable "app_image_digest" {

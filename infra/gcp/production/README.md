@@ -13,9 +13,13 @@ half-disabled state.
 
 | Order | Root | Creates | State prefix |
 | --- | --- | --- | --- |
-| 1 | [`01-artifacts/`](./01-artifacts) | Artifact Registry, and the four services that must be enabled before any other root runs | `proofplane/production/artifacts` |
-| 2 | [`02-foundation/`](./02-foundation) | APIs, service accounts, secret containers, buckets, topics, the DNS zone, the notification channel, and the budget | `proofplane/production/foundation` |
-| 3 | [`03-release/`](./03-release) | Cloud Run workloads, the migration job, Pub/Sub subscriptions, the load balancer, certificates, records, and alert policies | `proofplane/production/release` |
+| 1 | [`01-artifacts/`](./01-artifacts) | Artifact Registry, and the four services that must be enabled before any other root runs | `01-artifacts` |
+| 2 | [`02-foundation/`](./02-foundation) | APIs, service accounts, secret containers, buckets, topics, the DNS zone, the notification channel, and the budget | `02-foundation` |
+| 3 | [`03-release/`](./03-release) | Cloud Run workloads, the migration job, Pub/Sub subscriptions, the load balancer, certificates, records, and alert policies | `03-release` |
+
+Each prefix is declared in that root's own `backend.tf`, so it travels with the
+configuration and no command-line argument can point a root at another phase's
+state. Only the bucket is supplied at `terraform init`.
 
 The order is not a preference. Three things force it:
 
@@ -39,10 +43,10 @@ the service enablement above. `03-release` reads `02-foundation` through
 
 ## Initialize
 
-Create the state bucket manually first — no Terraform root manages it; see
-[Terraform State](../../../docs/epics/production-deployment/spec.md#terraform-state)
-for its required settings. Every root shares that one bucket under a distinct
-prefix. Initialize each root once:
+Create the state bucket manually first — no Terraform root manages it.
+Every root shares that one bucket under a distinct prefix.
+
+Initialize each root once:
 
 ```sh
 cd 01-artifacts && make init TF_STATE_BUCKET=YOUR_STATE_BUCKET
@@ -50,23 +54,41 @@ cd ../02-foundation && make init TF_STATE_BUCKET=YOUR_STATE_BUCKET
 cd ../03-release && make init TF_STATE_BUCKET=YOUR_STATE_BUCKET
 ```
 
-Terraform caches the backend settings, so later inits in that root need no
-arguments. Copy `terraform.tfvars.example` to `terraform.tfvars` in each root
-and fill it in.
+Terraform caches the bucket, so later inits in that root need no arguments.
 
-`03-release` names the foundation state a second time, through `state_bucket`
-and `foundation_state_prefix`, because `terraform_remote_state` cannot read the
-partial backend config. Both must match what `02-foundation` was initialized
-with. If you override `TF_STATE_PREFIX` for `02-foundation`, set
-`foundation_state_prefix` to the same value, or `03-release` reads a prefix that
-holds no state.
+`03-release` names the state bucket a second time, through `state_bucket`,
+because `terraform_remote_state` cannot read the partial backend config. Its
+prefix is a literal in
+[`03-release/foundation.tf`](./03-release/foundation.tf) and must match
+`02-foundation/backend.tf`.
+
+## Inputs
+
+Each root keeps its variables under `tfvars/`, one file per environment, and
+these files are committed. They hold the project, bucket names, image digests,
+and numeric secret versions. No secret payload ever appears in them, or
+anywhere else in Terraform configuration or state.
+
+```text
+01-artifacts/tfvars/production.tfvars
+02-foundation/tfvars/production.tfvars
+03-release/tfvars/production.tfvars
+```
+
+`make` selects one with `ENV`, which defaults to `production`. A second
+environment adds its own file rather than editing that one:
+
+```sh
+make plan            # plans with tfvars/production.tfvars
+make plan ENV=stage  # plans with tfvars/stage.tfvars
+```
 
 ### Make targets
 
 Every root includes [`terraform-root.mk`](./terraform-root.mk) and sets only its
-own state prefix and default plan name. The rules track local files, so `init`
-re-runs when the backend or provider inputs change, and a saved plan is rebuilt
-when a `.tf` file or `terraform.tfvars` is newer:
+own default plan name. The rules track local files, so `init` re-runs when the
+backend or provider inputs change, and a saved plan is rebuilt when a `.tf` file
+or the selected `tfvars` file is newer:
 
 ```sh
 make init TF_STATE_BUCKET=YOUR_STATE_BUCKET   # first init in this root only
@@ -79,6 +101,11 @@ Make cannot see cloud state, so a saved plan can be stale even when no local
 file changed. Use `make replan` before every apply. There is no `apply` target;
 run `terraform apply` explicitly against the plan you reviewed. `terraform
 import` is also unwrapped.
+
+Terraform auto-loads `terraform.tfvars`, but not a file under `tfvars/`. A saved
+plan already carries its values, so `terraform apply <plan>` needs nothing. Any
+other unwrapped command that evaluates variables — `import`, `destroy`,
+`console` — needs `-var-file tfvars/production.tfvars`.
 
 ## Apply order
 
@@ -108,7 +135,8 @@ the first plan instead of allowing Terraform to create a second zone:
 
 ```sh
 cd 02-foundation
-terraform import google_dns_managed_zone.primary \
+terraform import -var-file tfvars/production.tfvars \
+  google_dns_managed_zone.primary \
   projects/YOUR_PROJECT/managedZones/proofplane-app
 make replan
 terraform apply foundation.tfplan
@@ -129,7 +157,8 @@ gcloud secrets versions add proofplane-production-migration-database-url \
 ```
 
 Secret Manager grants access at secret-container scope. Each Cloud Run revision
-mounts the numeric version selected in `terraform.tfvars`; never use `latest`.
+mounts the numeric version selected in `03-release/tfvars/production.tfvars`.
+Never use `latest`.
 
 ### 5. Release
 

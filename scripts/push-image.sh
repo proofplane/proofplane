@@ -5,7 +5,8 @@ set -euo pipefail
 # immutable reference Terraform requires.
 # infra/gcp/production/03-release/variables.tf validates
 # ^[^[:space:]]+@sha256:[0-9a-f]{64}$, so a tag is not deployable and this
-# script's stdout is the value an operator copies into terraform.tfvars.
+# script's stdout is the value an operator copies into
+# 03-release/tfvars/production.tfvars.
 
 project_id="${PROOFPLANE_PROJECT_ID:-}"
 

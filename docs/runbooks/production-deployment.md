@@ -83,7 +83,7 @@ and `migrate` under `/usr/local/bin/`. It does not ship `seed`.
 
 `make image-push` and `make clamav-mirror` need `PROOFPLANE_PROJECT_ID`. Both
 print one immutable reference on stdout. Copy that reference into
-`terraform.tfvars`. Terraform rejects a mutable tag.
+`03-release/tfvars/production.tfvars`. Terraform rejects a mutable tag.
 
 `make image` refuses a worktree that has uncommitted changes. The digest is the
 only record of what a release contains, so an image built from uncommitted work

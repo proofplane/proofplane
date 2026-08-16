@@ -97,28 +97,37 @@ The operator creates the bucket with:
 `us-east1` is used as the region because it's the nearest region to the
 operators and that's where the state is going to be read from.
 
-Production Terraform is three roots that apply in order, and each declares a
-partial `gcs` backend. They share the one bucket under distinct prefixes,
-supplied at `terraform init`:
+Production Terraform is three roots that apply in order. They share the one
+bucket under a prefix named for the root:
 
 | Root | Prefix |
 | --- | --- |
-| `infra/gcp/production/01-artifacts` | `proofplane/production/artifacts` |
-| `infra/gcp/production/02-foundation` | `proofplane/production/foundation` |
-| `infra/gcp/production/03-release` | `proofplane/production/release` |
+| `infra/gcp/production/01-artifacts` | `01-artifacts` |
+| `infra/gcp/production/02-foundation` | `02-foundation` |
+| `infra/gcp/production/03-release` | `03-release` |
+
+Each root declares its own prefix in its `backend.tf` and leaves only the bucket
+partial, so the prefix travels with the configuration and no command-line
+argument can point one root at another root's state:
 
 ```sh
 make init TF_STATE_BUCKET=YOUR_STATE_BUCKET   # in each root, once
 ```
 
-Terraform caches the backend configuration in `.terraform/terraform.tfstate`,
-so later inits need no arguments. Because the bucket is not a Terraform
-resource, its protection is whatever the operator configured at creation;
-`prevent_destroy` does not apply to it.
+Terraform caches the bucket in `.terraform/terraform.tfstate`, so later inits
+need no arguments. Because the bucket is not a Terraform resource, its
+protection is whatever the operator configured at creation. `prevent_destroy`
+does not apply to it.
 
 `03-release` reads `02-foundation` through `terraform_remote_state`, so it also
 takes the bucket name as an ordinary variable. That data source cannot read the
 partial backend configuration.
+
+Each root keeps its input variables in a committed `tfvars/<environment>.tfvars`
+file rather than an operator-local `terraform.tfvars`. Those files hold the
+project, bucket names, image digests, and numeric secret versions, all of which
+are reviewable configuration. Secret payloads stay out of them, as they stay out
+of every other part of Terraform.
 
 Secrets and secret-version payloads never appear in Terraform configuration or
 state.
@@ -542,5 +551,7 @@ DNS registrar changes.
   `01-artifacts` publishes no output the others read, but it enables
   `cloudresourcemanager` and `serviceusage`, which every later root needs, so
   the order still binds. `infra/gcp/production/Makefile` became
-  `terraform-root.mk`, which each root includes after setting its own state
-  prefix and plan name. Nothing had been applied, so no state was moved.
+  `terraform-root.mk`, which each root includes after setting its own plan name.
+  Each root declares its state prefix in its own `backend.tf`, and keeps its
+  input variables in a committed `tfvars/<environment>.tfvars` file. Nothing had
+  been applied, so no state was moved.

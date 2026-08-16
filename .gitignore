@@ -12,6 +12,10 @@ target/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+# Per-environment inputs for the production roots are reviewed configuration,
+# not operator secrets: project, bucket names, image digests, and numeric secret
+# versions. Secret payloads still never enter Terraform.
+!**/tfvars/*.tfvars
 *.tfplan
 crash.log
 crash.*.log

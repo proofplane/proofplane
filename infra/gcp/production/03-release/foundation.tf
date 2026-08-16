@@ -8,7 +8,10 @@ data "terraform_remote_state" "foundation" {
 
   config = {
     bucket = var.state_bucket
-    prefix = var.foundation_state_prefix
+    # Must match the prefix in 02-foundation/backend.tf. It is a literal in
+    # both places for the same reason: a phase's prefix is a fixed property of
+    # the layout, so nothing at plan time should be able to change one of them.
+    prefix = "02-foundation"
   }
 }
 
