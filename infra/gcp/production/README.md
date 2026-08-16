@@ -41,6 +41,23 @@ the service enablement above. `03-release` reads `02-foundation` through
 `terraform_remote_state`. See
 [`03-release/foundation.tf`](./03-release/foundation.tf) for the values it takes.
 
+## Credentials
+
+The Google provider reads Application Default Credentials. Set them once per
+workstation:
+
+```sh
+gcloud auth application-default login
+```
+
+This is a different credential from `gcloud auth login`. The `gcloud` command
+uses the latter, Terraform uses the former, and having one does not give you the
+other. A plan that fails on "could not find default credentials" needs this
+command, not a `gcloud` login.
+
+Pushing images needs its own setup. See
+[Release Images](../../../docs/runbooks/production-deployment.md#release-images).
+
 ## Initialize
 
 Create the state bucket manually first — no Terraform root manages it.

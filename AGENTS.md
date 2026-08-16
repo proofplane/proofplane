@@ -37,7 +37,9 @@ notes live in `docs/`.
   validate it. The image is `linux/amd64` and packages `api`, `mcp`, `worker`,
   `dequeuer`, and `migrate`, but never `seed`. `make image-push` and
   `make clamav-mirror` publish to Artifact Registry and need
-  `PROOFPLANE_PROJECT_ID`. See
+  `PROOFPLANE_PROJECT_ID`, a configured Docker credential helper, and a current
+  `gcloud auth login`. Terraform needs a separate
+  `gcloud auth application-default login`. See
   [`docs/runbooks/production-deployment.md`](./docs/runbooks/production-deployment.md).
 
 ## Architecture: Snapshot CQRS

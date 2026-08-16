@@ -12,25 +12,35 @@ needs, so the order is not a suggestion.
 
 1. Confirm the pre-created GCP project is attached to the intended billing
    account and the local identity can administer the planned resources.
-2. Create the protected GCS state bucket manually (no Terraform root owns it;
+2. Authenticate. Three separate things need credentials, and one login does not
+   satisfy the others:
+
+   ```sh
+   gcloud auth login                        # the gcloud command itself
+   gcloud auth application-default login    # Terraform's Google provider
+   gcloud auth configure-docker us-central1-docker.pkg.dev   # image pushes
+   ```
+
+   See [Credentials](#credentials) for what each one covers.
+3. Create the protected GCS state bucket manually (no Terraform root owns it;
    see the [spec](../epics/production-deployment/spec.md#terraform-state)), then
    initialize each of the three phase roots in `infra/gcp/production/` with
    `make init TF_STATE_BUCKET=YOUR_STATE_BUCKET`. They share the bucket under
    distinct prefixes.
-3. Apply `01-artifacts`. It creates the Artifact Registry repository, and it
+4. Apply `01-artifacts`. It creates the Artifact Registry repository, and it
    enables the services every later root needs, so nothing else proceeds without
    it.
-4. Build, smoke, and push the release and ClamAV images. See
+5. Build, smoke, and push the release and ClamAV images. See
    [Release Images](#release-images).
-5. Apply `02-foundation`. It creates the service accounts, secret containers,
+6. Apply `02-foundation`. It creates the service accounts, secret containers,
    buckets, topics, DNS zone, notification channel, and budget. Import the
    manually created `proofplane.app` Cloud DNS zone first, so Terraform adopts
    it rather than creating a second zone, and confirm its nameservers match the
    intended registrar delegation.
-6. Upload the complete production YAML and migration database URL as separate
-   Secret Manager versions, into the containers step 5 created. Record numeric
+7. Upload the complete production YAML and migration database URL as separate
+   Secret Manager versions, into the containers step 6 created. Record numeric
    versions, not aliases.
-7. Apply `03-release`, following [Build And Plan](#build-and-plan).
+8. Apply `03-release`, following [Build And Plan](#build-and-plan).
 
 Confirm the following before the release apply. None of them depend on the
 phase order:
@@ -43,6 +53,27 @@ phase order:
 - Verify runtime traffic uses the Supavisor transaction pooler on port 6543 and
   migrations use the separate direct verified-TLS credential.
 - Confirm the latest validated ClamAV snapshot is less than 24 hours old.
+
+## Credentials
+
+Three separate credentials are in play. Having one does not give you another, so
+a failure in one tool rarely means the login you last ran was wrong.
+
+| Command | Grants | Used by |
+| --- | --- | --- |
+| `gcloud auth login` | User credentials for the `gcloud` command | `gcloud` itself, and the Docker credential helper below |
+| `gcloud auth application-default login` | Application Default Credentials | Terraform's Google provider, in every phase root |
+| `gcloud auth configure-docker us-central1-docker.pkg.dev` | A credential-helper entry in `~/.docker/config.json` | `docker push` to Artifact Registry |
+
+The third one configures rather than authenticates. It tells Docker to call
+`gcloud` for a token whenever it talks to `us-central1-docker.pkg.dev`, so it
+only works while `gcloud auth login` is current. Run it once per workstation.
+The host must match the region the push scripts use, which is fixed at
+`us-central1`.
+
+Terraform ignores `gcloud auth login` entirely. A plan that fails on "could not
+find default credentials" needs `gcloud auth application-default login`, even
+though `gcloud` commands are working.
 
 ## Build And Plan
 
@@ -84,6 +115,19 @@ and `migrate` under `/usr/local/bin/`. It does not ship `seed`.
 `make image-push` and `make clamav-mirror` need `PROOFPLANE_PROJECT_ID`. Both
 print one immutable reference on stdout. Copy that reference into
 `03-release/tfvars/production.tfvars`. Terraform rejects a mutable tag.
+
+Both also need Docker to be able to authenticate against Artifact Registry:
+
+```sh
+gcloud auth configure-docker us-central1-docker.pkg.dev   # once per workstation
+gcloud auth login                                         # must be current
+```
+
+The first command registers a credential helper for that host. It stores no
+token of its own: every push makes Docker call `gcloud` for one, so the push
+fails once the `gcloud` login goes stale, however recently the helper was
+configured. `01-artifacts` must already be applied, because the push needs the
+repository to exist. See [Credentials](#credentials).
 
 `make image` refuses a worktree that has uncommitted changes. The digest is the
 only record of what a release contains, so an image built from uncommitted work
