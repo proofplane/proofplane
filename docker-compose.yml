@@ -41,7 +41,7 @@ services:
   pubsub:
     image: ghcr.io/jeffijoe/deltio:latest
     ports:
-      - "8085:8085"
+      - "8086:8085"
     # deltio pushes via push subscriptions to a worker running on the host
     # (i.e., a CI job runner). This means the deltio container needs a DNS
     # name where it can reach the worker. On Mac, this is redundant because

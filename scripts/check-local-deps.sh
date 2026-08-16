@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-pubsub_host="${PUBSUB_EMULATOR_HOST:-127.0.0.1:8085}"
+pubsub_host="${PUBSUB_EMULATOR_HOST:-127.0.0.1:8086}"
 clamd_address="${CLAMD_ADDRESS:-127.0.0.1:3310}"
 pgbouncer_address="${PGBOUNCER_ADDRESS:-127.0.0.1:6432}"
 

@@ -37,7 +37,7 @@ production runs — use `make migrate`.
 The local Docker services listen on:
 
 - Postgres: `127.0.0.1:5432`
-- Pub/Sub emulator: `127.0.0.1:8085`
+- Pub/Sub emulator: `127.0.0.1:8086`
 - ClamAV clamd: `127.0.0.1:3310`
 
 If you have an old local database from a previous schema, reset it:
