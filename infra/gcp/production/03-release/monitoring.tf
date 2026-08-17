@@ -1,62 +1,4 @@
-resource "google_monitoring_notification_channel" "operator_email" {
-  project      = var.project_id
-  display_name = "Proofplane production operator"
-  type         = "email"
-  enabled      = true
-  force_delete = false
-
-  labels = {
-    email_address = var.alert_email
-  }
-
-  user_labels = local.labels
-
-  depends_on = [google_project_service.required]
-}
-
-resource "google_billing_budget" "production" {
-  billing_account = var.billing_account
-  display_name    = "Proofplane production monthly budget"
-
-  budget_filter {
-    projects               = ["projects/${data.google_project.current.number}"]
-    credit_types_treatment = "INCLUDE_ALL_CREDITS"
-  }
-
-  amount {
-    specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.budget_amount)
-    }
-  }
-
-  threshold_rules {
-    threshold_percent = 0.5
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  threshold_rules {
-    threshold_percent = 0.8
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  threshold_rules {
-    threshold_percent = 1.0
-    spend_basis       = "CURRENT_SPEND"
-  }
-
-  all_updates_rule {
-    monitoring_notification_channels = [google_monitoring_notification_channel.operator_email.name]
-    disable_default_iam_recipients   = false
-    enable_project_level_recipients  = true
-  }
-
-  depends_on = [google_project_service.required]
-}
-
 resource "google_monitoring_alert_policy" "service_5xx" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane Cloud Run 5xx responses"
   combiner     = "OR"
@@ -82,13 +24,11 @@ resource "google_monitoring_alert_policy" "service_5xx" {
     auto_close = "1800s"
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "unhealthy_startup_probe" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane Cloud Run startup probe failures"
   combiner     = "OR"
@@ -114,13 +54,11 @@ resource "google_monitoring_alert_policy" "unhealthy_startup_probe" {
     auto_close = "1800s"
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "migration_failure" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane migration job failed"
   combiner     = "OR"
@@ -142,13 +80,11 @@ resource "google_monitoring_alert_policy" "migration_failure" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "clamav_update_failures" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane ClamAV updater failed twice"
   combiner     = "OR"
@@ -170,13 +106,11 @@ resource "google_monitoring_alert_policy" "clamav_update_failures" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "pubsub_backlog" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane worker Pub/Sub backlog age"
   combiner     = "OR"
@@ -198,13 +132,11 @@ resource "google_monitoring_alert_policy" "pubsub_backlog" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "dead_letter" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane dead-letter message observed"
   combiner     = "OR"
@@ -226,13 +158,11 @@ resource "google_monitoring_alert_policy" "dead_letter" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "dequeuer_instance_count" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane dequeuer worker pool has no instance"
   combiner     = "OR"
@@ -256,13 +186,11 @@ resource "google_monitoring_alert_policy" "dequeuer_instance_count" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "service_cpu" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane Cloud Run CPU above 80 percent"
   combiner     = "OR"
@@ -300,13 +228,11 @@ resource "google_monitoring_alert_policy" "service_cpu" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_monitoring_alert_policy" "service_memory" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane Cloud Run memory above 80 percent"
   combiner     = "OR"
@@ -344,13 +270,11 @@ resource "google_monitoring_alert_policy" "service_memory" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }
 
 resource "google_logging_metric" "clamav_stale_snapshot" {
-  count = local.cloud_run_resource_count
-
   project     = var.project_id
   name        = "proofplane_clamav_stale_snapshot"
   description = "Worker refused startup because the last-good ClamAV snapshot was stale."
@@ -364,8 +288,6 @@ resource "google_logging_metric" "clamav_stale_snapshot" {
 }
 
 resource "google_monitoring_alert_policy" "clamav_stale_snapshot" {
-  count = local.cloud_run_resource_count
-
   project      = var.project_id
   display_name = "Proofplane ClamAV definitions are stale"
   combiner     = "OR"
@@ -375,7 +297,7 @@ resource "google_monitoring_alert_policy" "clamav_stale_snapshot" {
     display_name = "A worker rejected a stale last-good snapshot"
 
     condition_threshold {
-      filter          = "resource.type = \"cloud_run_revision\" AND metric.type = \"logging.googleapis.com/user/${google_logging_metric.clamav_stale_snapshot[0].name}\""
+      filter          = "resource.type = \"cloud_run_revision\" AND metric.type = \"logging.googleapis.com/user/${google_logging_metric.clamav_stale_snapshot.name}\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
@@ -387,6 +309,6 @@ resource "google_monitoring_alert_policy" "clamav_stale_snapshot" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.name]
+  notification_channels = [local.notification_channel]
   user_labels           = local.labels
 }

@@ -1,6 +1,6 @@
 locals {
-  api_hostname = "api.${var.domain}"
-  mcp_hostname = "mcp.${var.domain}"
+  api_hostname = "api.${local.domain}"
+  mcp_hostname = "mcp.${local.domain}"
 
   labels = merge({
     application = "proofplane"
@@ -20,11 +20,10 @@ locals {
   runtime_config_file       = "${local.runtime_config_mount_path}/config.yaml"
   migration_secret_path     = "/var/run/secrets/proofplane-migrate"
 
-  application_topic         = "proof.message_bus"
-  dead_letter_topic         = "proof.message_bus.dead_letter"
-  worker_subscription       = "proofplane-worker"
-  dead_letter_subscription  = "proofplane-worker-dead-letter-inspection"
-  migration_execution_token = var.app_image_digest == null ? null : substr(replace(split("@sha256:", var.app_image_digest)[1], "_", "-"), 0, 12)
-  cloud_run_resource_count  = var.release_enabled ? 1 : 0
-}
+  worker_subscription      = "proofplane-worker"
+  dead_letter_subscription = "proofplane-worker-dead-letter-inspection"
 
+  # The execution name ends with this token, so a digest that already migrated
+  # names an execution that already exists and starts no new one.
+  migration_execution_token = substr(replace(split("@sha256:", var.app_image_digest)[1], "_", "-"), 0, 12)
+}

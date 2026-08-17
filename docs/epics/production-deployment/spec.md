@@ -81,7 +81,7 @@ ownership where a resource supports them.
 
 ## Terraform State
 
-State goes in a bucket the operator creates manually, before the production
+State goes in a bucket the operator creates manually, before any production
 root is initialized. No Terraform root manages that bucket _(revised during
 ticket 003 — see [Revisions](#revisions))_.
 
@@ -97,17 +97,37 @@ The operator creates the bucket with:
 `us-east1` is used as the region because it's the nearest region to the
 operators and that's where the state is going to be read from.
 
-The production root declares a partial `gcs` backend. The bucket name and the
-`proofplane/production` prefix are supplied at `terraform init`:
+Production Terraform is three roots that apply in order. They share the one
+bucket under a prefix named for the root:
+
+| Root | Prefix |
+| --- | --- |
+| `infra/gcp/production/01-artifacts` | `01-artifacts` |
+| `infra/gcp/production/02-foundation` | `02-foundation` |
+| `infra/gcp/production/03-release` | `03-release` |
+
+Each root declares its own prefix in its `backend.tf` and leaves only the bucket
+partial, so the prefix travels with the configuration and no command-line
+argument can point one root at another root's state:
 
 ```sh
-make init TF_STATE_BUCKET=YOUR_STATE_BUCKET   # in infra/gcp/production
+make init TF_STATE_BUCKET=YOUR_STATE_BUCKET   # in each root, once
 ```
 
-Terraform caches the backend configuration in `.terraform/terraform.tfstate`,
-so later inits need no arguments. Because the bucket is not a Terraform
-resource, its protection is whatever the operator configured at creation;
-`prevent_destroy` does not apply to it.
+Terraform caches the bucket in `.terraform/terraform.tfstate`, so later inits
+need no arguments. Because the bucket is not a Terraform resource, its
+protection is whatever the operator configured at creation. `prevent_destroy`
+does not apply to it.
+
+`03-release` reads `02-foundation` through `terraform_remote_state`, so it also
+takes the bucket name as an ordinary variable. That data source cannot read the
+partial backend configuration.
+
+Each root keeps its input variables in a committed `tfvars/<environment>.tfvars`
+file rather than an operator-local `terraform.tfvars`. Those files hold the
+project, bucket names, image digests, and numeric secret versions, all of which
+are reviewable configuration. Secret payloads stay out of them, as they stay out
+of every other part of Terraform.
 
 Secrets and secret-version payloads never appear in Terraform configuration or
 state.
@@ -118,10 +138,44 @@ Create one regional Docker repository. A local build produces a Linux image,
 pushes a content-addressed artifact, resolves its `sha256` digest, and supplies
 that digest to Terraform. Never deploy mutable tags.
 
+The repository is its own Terraform root, `01-artifacts`, and applies before
+every other one. A digest cannot exist until an image is pushed, and an image
+cannot be pushed until the repository exists, so the repository cannot share a
+root with anything that consumes a digest.
+
 The Proofplane image contains all production commands. Each Cloud Run resource
 overrides the command instead of building a process-specific image. Mirror a
 pinned official ClamAV image into the same regional repository so production
 does not depend on Docker Hub availability or mutable tags.
+
+The root `Dockerfile` builds that image in two stages:
+
+| Property | Value | Reason |
+| --- | --- | --- |
+| Platform | `linux/amd64`, pinned in the `FROM` lines | Cloud Run accepts nothing else, and the operator workstation is usually arm64. |
+| Builder | `rust:1.95-bookworm` plus `cmake` | The image already carries `pkg-config` and `libssl-dev` for `openssl-sys`. `aws-lc-sys` builds through `cmake`, which it does not carry. |
+| Runtime | `debian:bookworm-slim` plus `ca-certificates` and `libssl3` | `openssl-sys` links dynamically, so a `scratch` or static-distroless runtime is not available. `reqwest` verifies TLS through the platform certificate store. |
+| User | UID 10001 | Nothing writes to the filesystem. Configuration arrives as a read-only secret mount, and evidence goes to object storage. |
+| Commands | `/usr/local/bin/{api,mcp,worker,dequeuer,migrate}` | `run.tf` selects each command by absolute path and supplies no arguments. |
+| Default command | None | Every Cloud Run resource sets its command. A default could only hide a missing override. |
+
+The image does not contain `seed`. Leaving the command out is the surest way to
+honor the gate that rejects seed execution in production.
+
+`scripts/smoke-image.sh` validates a built image before a push. It checks the
+platform, the declared and observed user, the certificate bundle, and the
+absence of `seed`. It then runs each of the five commands with an empty
+environment and a read-only root filesystem, and requires each one to exit 1
+with its own documented credential message. That is what proves a command
+executes: the ELF loads, the dynamic `libssl` link resolves, and `main` runs.
+The read-only filesystem proves the other claim in the table above, that no
+command needs to write anything to start.
+
+`run.tf` consumes two ClamAV digests rather than one. `clamav_image_digest` is
+the worker sidecar and `clamav_updater_image_digest` is the update job. Neither
+is stock upstream: the sidecar copies the last-good snapshot from GCS and
+disables `freshclam`, and the updater needs its own entrypoint. The mirror is
+the pinned base that both derived images start from.
 
 Enable Artifact Analysis automatic scanning. Findings are advisory initially;
 no severity threshold blocks a local deployment until an exception workflow
@@ -410,23 +464,28 @@ new image vulnerability scans.
 
 ## Local Release Workflow
 
-`infra/gcp/production/Makefile` wraps the two routine Terraform commands.
-`make init` initializes the backend, and `make plan` writes a saved plan,
-each re-running only when its local inputs change. There is no `apply` target:
-applies stay an explicit operator action against a reviewed plan.
+`infra/gcp/production/terraform-root.mk` wraps the two routine Terraform
+commands, and every phase root includes it, setting only its own state prefix
+and default plan name. `make init` initializes the backend, and `make plan`
+writes a saved plan, each re-running only when its local inputs change. There is
+no `apply` target: applies stay an explicit operator action against a reviewed
+plan.
 
 The operator workflow is:
 
 1. Verify local tooling, GCP identity/project, Terraform backend access,
    Supabase backup status, pinned configuration versions, and clean inputs.
-2. Build the Linux release image and run local image smoke checks.
-3. Push the release and any newly pinned ClamAV image to Artifact Registry.
-4. Resolve immutable digests and review `terraform plan`.
-5. Run one `terraform apply`. The migration execution completes before serving
-   workloads update.
-6. Verify job execution, revision health, Pub/Sub push authentication, public
+2. Apply `01-artifacts` so the regional repository exists.
+3. Build the Linux release image and run local image smoke checks.
+4. Push the release and any newly pinned ClamAV image to Artifact Registry.
+5. Apply `02-foundation`, then create any secret payload version outside
+   Terraform.
+6. Resolve immutable digests and review the `03-release` plan.
+7. Run one `terraform apply` in `03-release`. The migration execution completes
+   before serving workloads update.
+8. Verify job execution, revision health, Pub/Sub push authentication, public
    TLS endpoints, version output, and a non-destructive end-to-end message.
-7. On application failure after migration, roll forward with a corrected binary
+9. On application failure after migration, roll forward with a corrected binary
    that embeds the applied schema history. An older image cannot restart once a
    newer migration is present, even when that migration is additive. Do not
    reverse an expand migration automatically.
@@ -464,3 +523,35 @@ DNS registrar changes.
   history check and never apply migrations. Because older images reject newer
   histories on restart, post-migration recovery rolls forward with a
   schema-matching binary.
+- 2026-08-14 (#117): The release image now exists, and this spec previously
+  described none of its properties. Base images, platform, runtime user,
+  packaged commands, and the exclusion of `seed` are now recorded above. The
+  build runs emulated for `linux/amd64` rather than cross-compiled, because
+  `openssl-sys` links dynamically and `aws-lc-sys` builds through `cmake`. Those
+  two together make a multiarch cross toolchain the more fragile path. Cargo
+  cache mounts confine the cost to the first build. This section also said to
+  mirror "a pinned official ClamAV image". `run.tf` in fact consumes two ClamAV
+  digests, and #117 mirrors only the pinned base that both derived images in
+  #121 start from.
+- 2026-08-14 (#117): Image retention remains partly unmet. The cleanup policies
+  in `artifacts.tf` delete an untagged version after 30 days and keep the 20
+  most recent versions. No policy deletes a tagged version, so tagged releases
+  accumulate rather than stay bounded. `artifacts.tf` belongs to #118, which
+  owns the correction. Retention matters more after #157: a runtime accepts work
+  only when its own embedded history matches the database, so an image and the
+  schema it was built against are now a pair.
+- 2026-08-15: The single production root became three ordered roots:
+  `01-artifacts`, `02-foundation`, and `03-release`. The registry had to leave
+  the root that consumes image digests, because an image cannot be pushed to a
+  repository that the same apply creates. Splitting the release out as well
+  removed `release_enabled`, the boolean that switched roughly 30 resources
+  between `count = 0` and `count = 1` so that one root could hold two
+  half-configurations. Each root is now a complete configuration for its stage.
+  `03-release` reads `02-foundation` through `terraform_remote_state`.
+  `01-artifacts` publishes no output the others read, but it enables
+  `cloudresourcemanager` and `serviceusage`, which every later root needs, so
+  the order still binds. `infra/gcp/production/Makefile` became
+  `terraform-root.mk`, which each root includes after setting its own plan name.
+  Each root declares its state prefix in its own `backend.tf`, and keeps its
+  input variables in a committed `tfvars/<environment>.tfvars` file. Nothing had
+  been applied, so no state was moved.

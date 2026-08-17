@@ -7,42 +7,192 @@ yet.
 
 ## First-Time Preflight
 
-- Confirm the pre-created GCP project is attached to the intended billing
-  account and the local identity can administer the planned resources.
-- Create the protected GCS state bucket manually (no Terraform root owns it;
-  see the [spec](../epics/production-deployment/spec.md#terraform-state)), then
-  initialize the production root with
-  `make init TF_STATE_BUCKET=YOUR_STATE_BUCKET`.
-- Import the manually created `proofplane.app` Cloud DNS zone and confirm its
-  nameservers match the intended registrar delegation.
+These steps run once, in this order. Several of them create a thing a later step
+needs, so the order is not a suggestion.
+
+1. Confirm the pre-created GCP project is attached to the intended billing
+   account and the local identity can administer the planned resources.
+2. Authenticate. Three separate things need credentials, and one login does not
+   satisfy the others:
+
+   ```sh
+   gcloud auth login                        # the gcloud command itself
+   gcloud auth application-default login    # Terraform's Google provider
+   gcloud auth configure-docker us-central1-docker.pkg.dev   # image pushes
+   ```
+
+   See [Credentials](#credentials) for what each one covers.
+3. Create the protected GCS state bucket manually (no Terraform root owns it;
+   see the [spec](../epics/production-deployment/spec.md#terraform-state)), then
+   initialize each of the three phase roots in `infra/gcp/production/` with
+   `make init TF_STATE_BUCKET=YOUR_STATE_BUCKET`. They share the bucket under
+   distinct prefixes.
+4. Apply `01-artifacts`. It creates the Artifact Registry repository, and it
+   enables the services every later root needs, so nothing else proceeds without
+   it.
+5. Build, smoke, and push the release and ClamAV images. See
+   [Release Images](#release-images).
+6. Apply `02-foundation`. It creates the service accounts, secret containers,
+   buckets, topics, DNS zone, notification channel, and budget. Import the
+   manually created `proofplane.app` Cloud DNS zone first, so Terraform adopts
+   it rather than creating a second zone, and confirm its nameservers match the
+   intended registrar delegation.
+7. Upload the complete production YAML and migration database URL as separate
+   Secret Manager versions, into the containers step 6 created. Record numeric
+   versions, not aliases.
+8. Apply `03-release`, following [Build And Plan](#build-and-plan).
+
+Confirm the following before the release apply. None of them depend on the
+phase order:
+
 - Export every Route 53 record, reproduce it in Cloud DNS, reduce TTLs before
   cutover, and query the Cloud DNS nameservers directly before changing the
   registrar.
 - Confirm Supabase SSL enforcement and daily backups are active. The accepted
-  launch database RPO is approximately 24 hours; PITR is deferred.
+  launch database RPO is approximately 24 hours. PITR is deferred.
 - Verify runtime traffic uses the Supavisor transaction pooler on port 6543 and
   migrations use the separate direct verified-TLS credential.
-- Upload the complete production YAML and migration database URL as separate
-  Secret Manager versions. Record numeric versions, not aliases.
 - Confirm the latest validated ClamAV snapshot is less than 24 hours old.
+
+## Credentials
+
+Three separate credentials are in play. Having one does not give you another, so
+a failure in one tool rarely means the login you last ran was wrong.
+
+| Command | Grants | Used by |
+| --- | --- | --- |
+| `gcloud auth login` | User credentials for the `gcloud` command | `gcloud` itself, and the Docker credential helper below |
+| `gcloud auth application-default login` | Application Default Credentials | Terraform's Google provider, in every phase root |
+| `gcloud auth configure-docker us-central1-docker.pkg.dev` | A credential-helper entry in `~/.docker/config.json` | `docker push` to Artifact Registry |
+
+The third one configures rather than authenticates. It tells Docker to call
+`gcloud` for a token whenever it talks to `us-central1-docker.pkg.dev`, so it
+only works while `gcloud auth login` is current. Run it once per workstation.
+The host must match the region the push scripts use, which is fixed at
+`us-central1`.
+
+Terraform ignores `gcloud auth login` entirely. A plan that fails on "could not
+find default credentials" needs `gcloud auth application-default login`, even
+though `gcloud` commands are working.
 
 ## Build And Plan
 
+Terraform applies in three phases, and the image push sits between the first and
+the last. See
+[`infra/gcp/production/README.md`](../../infra/gcp/production/README.md) for the
+full order and why it is fixed.
+
 1. Start from a clean intended checkout and run the repository's full checks.
-2. Build the Linux production image and smoke every packaged command locally.
-3. Push Proofplane and the pinned mirrored ClamAV images to the regional
+2. Confirm `01-artifacts` is applied, so the regional repository exists.
+3. Build the Linux production image and smoke every packaged command locally.
+   See [Release Images](#release-images).
+4. Push Proofplane and the pinned mirrored ClamAV images to the regional
    repository. Resolve and record immutable `@sha256` references.
-4. Review Artifact Analysis findings. Scanning is advisory at launch, but known
+5. Review Artifact Analysis findings. Scanning is advisory at launch, but known
    critical findings require an explicit operator decision before proceeding.
-5. Update only digest and numeric secret-version inputs. Run `make replan`
-   (or `terraform plan -out …`) and save the reviewed plan.
-6. Reject a plan that contains mutable tags, unexpected replacement/deletion,
+6. Apply `02-foundation` if its inputs changed, then create or rotate any secret
+   payload version the release needs. On a first deployment this apply is not
+   optional; see [First-Time Preflight](#first-time-preflight).
+7. In `03-release`, update only digest and numeric secret-version inputs. Run
+   `make replan` (or `terraform plan -out …`) and save the reviewed plan.
+8. Reject a plan that contains mutable tags, unexpected replacement/deletion,
    public worker access, runtime Pub/Sub administration, seed execution, or an
    unpinned secret version.
 
+## Release Images
+
+One image carries every production command. Each Cloud Run resource selects a
+command by absolute path, so the image ships `api`, `mcp`, `worker`, `dequeuer`,
+and `migrate` under `/usr/local/bin/`. It does not ship `seed`.
+
+| Command | Result |
+| --- | --- |
+| `make image` | Builds the `linux/amd64` image and records its reference in `.local/image-ref`. |
+| `make image-smoke` | Runs every packaged command and checks the platform, the runtime user, and the certificate bundle. |
+| `make image-push` | Runs the smoke checks, pushes to Artifact Registry, and prints the `@sha256` reference. |
+| `make clamav-mirror` | Copies the pinned ClamAV image into the same repository and prints its `@sha256` reference. |
+
+`make image-push` and `make clamav-mirror` need `PROOFPLANE_PROJECT_ID`. Both
+print one immutable reference on stdout. Copy that reference into
+`03-release/tfvars/production.tfvars`. Terraform rejects a mutable tag.
+
+Both also need Docker to be able to authenticate against Artifact Registry:
+
+```sh
+gcloud auth configure-docker us-central1-docker.pkg.dev   # once per workstation
+gcloud auth login                                         # must be current
+```
+
+The first command registers a credential helper for that host. It stores no
+token of its own: every push makes Docker call `gcloud` for one, so the push
+fails once the `gcloud` login goes stale, however recently the helper was
+configured. `01-artifacts` must already be applied, because the push needs the
+repository to exist. See [Credentials](#credentials).
+
+`make image` refuses a worktree that has uncommitted changes. The digest is the
+only record of what a release contains, so an image built from uncommitted work
+cannot be reproduced later.
+
+The first build is slow. It compiles Rust under emulation. Later builds reuse
+the cargo cache mounts.
+
+The mirrored ClamAV image is a pinned base, not a deployable sidecar. Both
+`clamav_image_digest` and `clamav_updater_image_digest` need derived images that
+[#121](https://github.com/proofplane/proofplane/issues/121) owns.
+
+### Image Retention
+
+`infra/gcp/production/01-artifacts/artifacts.tf` owns retention, and its cleanup
+policies are live rather than a dry run. Two policies apply:
+
+- `keep-recent-releases` keeps the 20 most recent versions.
+- `delete-untagged-after-30-days` deletes an untagged version after 30 days.
+
+The delete policy matches only untagged versions, so a tag is what protects a
+digest an operator may still need. `make image-push` and `make clamav-mirror`
+both push a tag for that reason. Never push a release image without one.
+
+A deleted digest cannot be redeployed, and a release cannot be reached without
+it. This matters more after #157: a runtime accepts work only when its own
+embedded migration history matches the database, so recovery needs an image
+built against the history in question.
+
+No policy deletes a tagged version today, so tagged releases accumulate. The
+spec asks to "retain a bounded number of old release images", which the current
+policies do not achieve for tagged images.
+[#118](https://github.com/proofplane/proofplane/issues/118) owns
+`artifacts.tf`, and a bounded policy belongs there. Until then, delete old
+release tags by hand when the repository grows.
+
+`01-artifacts` owns nothing that serves traffic, so a retention change plans and
+applies without touching a running workload.
+
+### Rollback Digests
+
+Record two digests after every release: the digest now deployed, and the digest
+deployed before it. `terraform output deployed_application_digest` reports the
+first one.
+
+A digest rollback is safe only when the target image embeds the same migration
+history the database now holds. That is true when the release you undo applied
+no migration. Set `app_image_digest` to the previous digest, plan, and apply.
+
+Do not roll the digest back when the release did apply a migration. Every
+runtime checks its own embedded history against the database before it accepts
+work, so the older image rejects the newer history and refuses to start. Roll
+forward instead, with a corrected binary that embeds the applied history. See
+[Failure And Rollback](#failure-and-rollback).
+
+Cloud Run derives the migration execution token from the first 12 characters of
+the digest. See `infra/gcp/production/03-release/locals.tf`. The token is the
+suffix of the execution name, so a previous digest names an execution that
+already exists. Expect a digest rollback to start no new migration execution.
+Confirm this during the first rehearsed rollback, which
+[#124](https://github.com/proofplane/proofplane/issues/124) owns.
+
 ## Apply And Verify
 
-Apply the saved plan once. Terraform executes and waits for
+Apply the `03-release` plan once. Terraform executes and waits for
 `proofplane-migrate` before updating serving workloads.
 
 After a successful apply:

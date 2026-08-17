@@ -10,7 +10,7 @@ const POSTGRES_ADMIN_URL: &str = "postgres://proofplane:proofplane@127.0.0.1:543
 /// production runtime traffic goes through.
 const PGBOUNCER_ADDRESS: &str = "127.0.0.1:6432";
 const SUITE_DATABASE: &str = "proofplane_integration_v2";
-pub const PUBSUB_EMULATOR_ADDRESS: &str = "127.0.0.1:8085";
+pub const PUBSUB_EMULATOR_ADDRESS: &str = "127.0.0.1:8086";
 
 /// Nothing listening means the stack is down, and waiting will not change that.
 /// The allowance is only for the moment between `docker compose up` returning

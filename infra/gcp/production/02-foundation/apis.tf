@@ -1,12 +1,12 @@
 locals {
+  # 01-artifacts owns artifactregistry, containerscanning, cloudresourcemanager,
+  # and serviceusage. It applies first, so those are already enabled here. Two
+  # roots must never declare the same google_project_service.
   required_services = toset([
-    "artifactregistry.googleapis.com",
     "billingbudgets.googleapis.com",
     "certificatemanager.googleapis.com",
-    "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
     "compute.googleapis.com",
-    "containerscanning.googleapis.com",
     "dns.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -15,7 +15,6 @@ locals {
     "pubsub.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
-    "serviceusage.googleapis.com",
     "storage.googleapis.com",
   ])
 }

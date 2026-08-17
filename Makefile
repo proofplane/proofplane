@@ -1,6 +1,11 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local docker-clean migrate seed api worker dequeuer mcp
+.PHONY: help fmt fmt-check lint test check build up down health reset-local docker-clean migrate seed api worker dequeuer mcp image image-smoke image-push clamav-mirror
 
 PROOFPLANE_CONFIG ?= .local/config.yaml
+
+# Where `make image` records the reference it built, so the smoke and push steps
+# operate on that exact image rather than re-deriving a tag. `.local/` is already
+# ignored, and the file is disposable.
+IMAGE_REF_FILE ?= .local/image-ref
 
 # The migrate command's `lock_timeout` is a session setting, which a transaction
 # pooler does not carry into the migration's own transactions. Production
@@ -27,7 +32,11 @@ help:
 		'  make api               Run API binary' \
 		'  make worker            Run worker binary' \
 		'  make dequeuer          Run outbox dequeuer binary' \
-		'  make mcp               Run MCP binary'
+		'  make mcp               Run MCP binary' \
+		'  make image             Build the linux/amd64 production release image' \
+		'  make image-smoke       Validate every command in the release image' \
+		'  make image-push        Push the release image and print its digest' \
+		'  make clamav-mirror     Mirror the pinned ClamAV image into Artifact Registry'
 
 fmt:
 	cargo fmt
@@ -87,7 +96,28 @@ worker:
 	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin worker
 
 dequeuer:
-	RUST_LOG='info,proofplane=debug' PUBSUB_EMULATOR_HOST=127.0.0.1:8085 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
+	RUST_LOG='info,proofplane=debug' PUBSUB_EMULATOR_HOST=127.0.0.1:8086 PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin dequeuer
 
 mcp:
 	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp
+
+# Release image targets. These build and publish from a workstation because
+# there is no CI and Terraform builds nothing. See
+# docs/runbooks/production-deployment.md.
+image:
+	@mkdir -p $(dir $(IMAGE_REF_FILE))
+	@bash scripts/build-image.sh > $(IMAGE_REF_FILE).tmp
+	@mv $(IMAGE_REF_FILE).tmp $(IMAGE_REF_FILE)
+	@cat $(IMAGE_REF_FILE)
+
+# Rebuilds first, so the checks never run against a stale reference from an
+# earlier build. A rebuild costs seconds once the cargo cache mounts are warm.
+image-smoke: image
+	@bash scripts/smoke-image.sh "$$(cat $(IMAGE_REF_FILE))"
+
+# Depends on the smoke checks so an unvalidated image cannot reach the registry.
+image-push: image-smoke
+	@bash scripts/push-image.sh "$$(cat $(IMAGE_REF_FILE))"
+
+clamav-mirror:
+	@bash scripts/mirror-clamav.sh

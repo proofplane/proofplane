@@ -1,7 +1,5 @@
 resource "google_cloud_run_v2_job" "migration" {
-  provider = google-beta
-  count    = local.cloud_run_resource_count
-
+  provider            = google-beta
   project             = var.project_id
   name                = local.service_names.migrate
   location            = var.region
@@ -14,7 +12,7 @@ resource "google_cloud_run_v2_job" "migration" {
     parallelism = 1
 
     template {
-      service_account = google_service_account.workload["migration"].email
+      service_account = local.service_account_emails["migration"]
       max_retries     = 0
       timeout         = "900s"
 
@@ -45,7 +43,7 @@ resource "google_cloud_run_v2_job" "migration" {
         name = "migration-database"
 
         secret {
-          secret = google_secret_manager_secret.migration_database_url.secret_id
+          secret = local.migration_database_url_secret_name
 
           items {
             version = var.migration_database_secret_version
@@ -56,15 +54,10 @@ resource "google_cloud_run_v2_job" "migration" {
       }
     }
   }
-
-  depends_on = [
-    google_project_service.required,
-    google_secret_manager_secret_iam_member.migration_database_url,
-  ]
 }
 
 resource "google_cloud_run_v2_service" "public" {
-  for_each = var.release_enabled ? {
+  for_each = {
     api = {
       name = local.service_names.api
       port = 3000
@@ -73,7 +66,7 @@ resource "google_cloud_run_v2_service" "public" {
       name = local.service_names.mcp
       port = 3002
     }
-  } : {}
+  }
 
   project              = var.project_id
   name                 = each.value.name
@@ -85,7 +78,7 @@ resource "google_cloud_run_v2_service" "public" {
   labels               = merge(local.labels, { component = each.key })
 
   template {
-    service_account                  = google_service_account.workload[each.key].email
+    service_account                  = local.service_account_emails[each.key]
     execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
     timeout                          = "300s"
     max_instance_request_concurrency = 20
@@ -140,7 +133,7 @@ resource "google_cloud_run_v2_service" "public" {
       name = "runtime-config"
 
       secret {
-        secret = google_secret_manager_secret.runtime_config.secret_id
+        secret = local.runtime_config_secret_name
 
         items {
           version = var.runtime_config_secret_version
@@ -153,14 +146,11 @@ resource "google_cloud_run_v2_service" "public" {
 
   depends_on = [
     google_cloud_run_v2_job.migration,
-    google_secret_manager_secret_iam_member.runtime_config,
   ]
 }
 
 resource "google_cloud_run_v2_service" "worker" {
-  provider = google-beta
-  count    = local.cloud_run_resource_count
-
+  provider             = google-beta
   project              = var.project_id
   name                 = local.service_names.worker
   location             = var.region
@@ -170,7 +160,7 @@ resource "google_cloud_run_v2_service" "worker" {
   labels               = merge(local.labels, { component = "worker" })
 
   template {
-    service_account                  = google_service_account.workload["worker"].email
+    service_account                  = local.service_account_emails["worker"]
     execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
     timeout                          = "600s"
     max_instance_request_concurrency = 4
@@ -228,7 +218,7 @@ resource "google_cloud_run_v2_service" "worker" {
 
       env {
         name  = "CLAMAV_DEFINITIONS_BUCKET"
-        value = google_storage_bucket.clamav_definitions.name
+        value = local.clamav_definitions_bucket
       }
 
       env {
@@ -266,7 +256,7 @@ resource "google_cloud_run_v2_service" "worker" {
       name = "runtime-config"
 
       secret {
-        secret = google_secret_manager_secret.runtime_config.secret_id
+        secret = local.runtime_config_secret_name
 
         items {
           version = var.runtime_config_secret_version
@@ -279,26 +269,20 @@ resource "google_cloud_run_v2_service" "worker" {
 
   depends_on = [
     google_cloud_run_v2_job.migration,
-    google_secret_manager_secret_iam_member.runtime_config,
-    google_storage_bucket_iam_member.clamav_worker_reader,
   ]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "worker_push_invoker" {
   provider = google-beta
-  count    = local.cloud_run_resource_count
-
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.worker[0].name
+  name     = google_cloud_run_v2_service.worker.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.workload["pubsub_push"].email}"
+  member   = "serviceAccount:${local.service_account_emails["pubsub_push"]}"
 }
 
 resource "google_cloud_run_v2_worker_pool" "dequeuer" {
-  provider = google-beta
-  count    = local.cloud_run_resource_count
-
+  provider            = google-beta
   project             = var.project_id
   name                = local.service_names.dequeuer
   location            = var.region
@@ -311,7 +295,7 @@ resource "google_cloud_run_v2_worker_pool" "dequeuer" {
   }
 
   template {
-    service_account = google_service_account.workload["dequeuer"].email
+    service_account = local.service_account_emails["dequeuer"]
 
     containers {
       name    = "dequeuer"
@@ -340,7 +324,7 @@ resource "google_cloud_run_v2_worker_pool" "dequeuer" {
       name = "runtime-config"
 
       secret {
-        secret = google_secret_manager_secret.runtime_config.secret_id
+        secret = local.runtime_config_secret_name
 
         items {
           version = var.runtime_config_secret_version
@@ -353,15 +337,11 @@ resource "google_cloud_run_v2_worker_pool" "dequeuer" {
 
   depends_on = [
     google_cloud_run_v2_job.migration,
-    google_pubsub_topic_iam_member.dequeuer_publisher,
-    google_secret_manager_secret_iam_member.runtime_config,
   ]
 }
 
 resource "google_cloud_run_v2_job" "clamav_update" {
-  provider = google-beta
-  count    = local.cloud_run_resource_count
-
+  provider            = google-beta
   project             = var.project_id
   name                = "proofplane-clamav-update"
   location            = var.region
@@ -373,7 +353,7 @@ resource "google_cloud_run_v2_job" "clamav_update" {
     parallelism = 1
 
     template {
-      service_account = google_service_account.workload["clamav_updater"].email
+      service_account = local.service_account_emails["clamav_updater"]
       max_retries     = 0
       timeout         = "1800s"
 
@@ -383,7 +363,7 @@ resource "google_cloud_run_v2_job" "clamav_update" {
 
         env {
           name  = "CLAMAV_DEFINITIONS_BUCKET"
-          value = google_storage_bucket.clamav_definitions.name
+          value = local.clamav_definitions_bucket
         }
 
         resources {
@@ -395,27 +375,18 @@ resource "google_cloud_run_v2_job" "clamav_update" {
       }
     }
   }
-
-  depends_on = [
-    google_project_service.required,
-    google_storage_bucket_iam_member.clamav_updater_writer,
-  ]
 }
 
 resource "google_cloud_run_v2_job_iam_member" "clamav_scheduler_invoker" {
   provider = google-beta
-  count    = local.cloud_run_resource_count
-
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_job.clamav_update[0].name
+  name     = google_cloud_run_v2_job.clamav_update.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.workload["clamav_scheduler"].email}"
+  member   = "serviceAccount:${local.service_account_emails["clamav_scheduler"]}"
 }
 
 resource "google_cloud_scheduler_job" "clamav_update" {
-  count = local.cloud_run_resource_count
-
   project          = var.project_id
   region           = var.region
   name             = "proofplane-clamav-update"
@@ -433,7 +404,7 @@ resource "google_cloud_scheduler_job" "clamav_update" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.clamav_update[0].name}:run"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.clamav_update.name}:run"
     body        = base64encode("{}")
 
     headers = {
@@ -441,7 +412,7 @@ resource "google_cloud_scheduler_job" "clamav_update" {
     }
 
     oauth_token {
-      service_account_email = google_service_account.workload["clamav_scheduler"].email
+      service_account_email = local.service_account_emails["clamav_scheduler"]
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
   }
