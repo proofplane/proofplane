@@ -233,15 +233,14 @@ later, separately verified change.
   Inspect job logs, correct the forward migration, publish a new digest if code
   changed, and re-plan. Never seed production.
 - **Migration succeeds but smoke checks fail:** check what the deploy applied.
-  When every migration in it is labeled `expand_`, restore the previous
+  When no migration in it is marked `breaking_`, restore the previous
   application digest. The previous image starts against the expanded schema,
-  logs a warning that the database is ahead of it, and serves. When any
-  migration is labeled `contract_`, the previous image refuses to start and
-  names the blocking migration. Roll forward instead: publish and apply a
-  corrected binary that embeds the applied history. Do not reverse an expand
-  migration automatically, and do not rely on already-running old revisions
-  while diagnosing, because API and MCP run at min instances zero and their
-  next cold start runs the check.
+  logs a warning that the database is ahead of it, and serves. When one is
+  marked `breaking_`, the previous image refuses to start and names the blocking
+  migration. Roll forward instead: publish and apply a corrected binary that
+  embeds the applied history. Do not reverse an expand migration automatically,
+  and do not rely on already-running old revisions while diagnosing, because API
+  and MCP run at min instances zero and their next cold start runs the check.
 - **ClamAV update fails:** the updater must leave the last-good pointer intact.
   After two failures, investigate CDN access, image version, validation logs,
   and bucket IAM. Workers fail closed after 24 hours of staleness.

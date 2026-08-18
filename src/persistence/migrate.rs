@@ -8,14 +8,20 @@ use tracing::{debug, warn};
 
 embed_migrations!("./migrations");
 
-/// Marks a migration that an earlier release may keep running against.
+/// Marks a migration that no earlier release may run against.
 ///
-/// A binary cannot read the SQL of a migration applied after it was built, because the
-/// embedded set is fixed at compile time. All it ever sees of a later migration is the
-/// name recorded in `refinery_schema_history`. So the release that writes a migration
-/// declares the answer in that name, and every migration carries either this prefix or
-/// `contract_`. See the expand-then-contract rules in `migrations/README.md`.
-const EXPAND_PREFIX: &str = "expand_";
+/// A binary embeds its migrations at compile time, so it can never read the SQL of a
+/// migration written after it was built. All it sees of a later migration is the name
+/// recorded in `refinery_schema_history`. The release that writes a destructive migration
+/// therefore declares that fact in the name, and every unmarked migration is taken to be
+/// additive.
+///
+/// That default is deliberate. Additive migrations are the common case, so a prefix on
+/// every file would become ceremony rather than a decision, and a mark that appears on
+/// everything stops being read. The cost is that a forgotten mark permits a rollback that
+/// is not safe, which makes the mark a review responsibility. See
+/// `migrations/README.md`.
+const BREAKING_PREFIX: &str = "breaking_";
 
 /// How long a migration waits for a lock before giving up.
 ///
@@ -42,9 +48,9 @@ pub enum SchemaRevisionError {
     },
 
     #[error(
-        "database schema is ahead of this binary: {blocking} at position {position} is not an \
-         expand migration, so this binary must not run against this database. Deploy a binary \
-         that embeds that migration."
+        "database schema is ahead of this binary: {blocking} at position {position} is a \
+         breaking migration, so this binary must not run against this database. Deploy a \
+         binary that embeds that migration."
     )]
     Ahead { position: usize, blocking: String },
 
@@ -102,16 +108,12 @@ fn embedded_schema_history() -> Vec<SchemaRevision> {
         .collect()
 }
 
-/// Whether an earlier release may keep running against `revision`.
-///
-/// An unlabeled name is not provably additive, so it blocks like a contract does. That
-/// keeps a forgotten label a cost to availability rather than to correctness: it refuses
-/// a rollback that would have been safe, instead of allowing one that is not.
-fn is_expand(revision: &SchemaRevision) -> bool {
+/// Whether `revision` refuses every release older than itself.
+fn is_breaking(revision: &SchemaRevision) -> bool {
     revision
         .name
         .as_deref()
-        .is_some_and(|name| name.starts_with(EXPAND_PREFIX))
+        .is_some_and(|name| name.starts_with(BREAKING_PREFIX))
 }
 
 /// Decides whether this binary may serve a database that has migrations it does not embed.
@@ -124,7 +126,7 @@ fn ahead(observed: &[SchemaRevision], embedded: usize) -> Result<(), SchemaRevis
     if let Some((offset, blocking)) = tail
         .iter()
         .enumerate()
-        .find(|(_, revision)| !is_expand(revision))
+        .find(|(_, revision)| is_breaking(revision))
     {
         return Err(SchemaRevisionError::Ahead {
             position: embedded + offset + 1,
@@ -135,8 +137,8 @@ fn ahead(observed: &[SchemaRevision], embedded: usize) -> Result<(), SchemaRevis
     warn!(
         embedded,
         applied = observed.len(),
-        "database schema is ahead of this binary by {} expand migration(s), which is expected \
-         only after a rollback",
+        "database schema is ahead of this binary by {} migration(s), which is expected only \
+         after a rollback",
         tail.len()
     );
 
@@ -157,10 +159,10 @@ fn behind(applied: usize, expected: &[SchemaRevision]) -> SchemaRevisionError {
 /// Verifies that this binary can serve the database's migration history.
 ///
 /// The history must match the migrations embedded in this binary, and may then run ahead
-/// of them by expand migrations only. That tail is the rollback case: expand-then-contract
-/// requires an expand migration to keep the previous release working, so restoring that
-/// release stays a supported recovery. A tail holding anything else is refused, because
-/// the older binary cannot know what it would be reading.
+/// of them by additive migrations. That tail is the rollback case: expand-then-contract
+/// requires the expanding release to keep the previous one working, so restoring that
+/// release stays a supported recovery. A tail holding a migration marked `breaking_` is
+/// refused, because the older binary cannot survive it.
 ///
 /// A database that is behind, or that diverges at any shared position, is always refused.
 ///
@@ -361,14 +363,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ahead_by_expand_migrations_only_is_compatible() {
+    async fn ahead_by_unmarked_migrations_is_compatible() {
         let database = test_support::database().await;
         let client = persistence::conn(&database.url)
             .await
             .expect("database connection opens");
         let version = next_version();
-        record_revision(&client, version, "expand_add_control_owner").await;
-        record_revision(&client, version + 1, "expand_add_control_owner_index").await;
+        record_revision(&client, version, "add_control_owner").await;
+        record_revision(&client, version + 1, "add_control_owner_index").await;
 
         let logs = SharedWriter::default();
         let subscriber = tracing_subscriber::fmt()
@@ -384,67 +386,49 @@ mod tests {
         drop(guard);
         let logged = logs.contents();
         assert!(
-            logged.contains("WARN") && logged.contains("ahead of this binary by 2 expand"),
+            logged.contains("WARN") && logged.contains("ahead of this binary by 2 migration"),
             "an operator sees the rollback state in the logs: {logged}"
         );
     }
 
     #[tokio::test]
-    async fn ahead_by_a_contract_migration_is_refused() {
+    async fn ahead_by_a_breaking_migration_is_refused() {
         let database = test_support::database().await;
         let client = persistence::conn(&database.url)
             .await
             .expect("database connection opens");
         let version = next_version();
-        record_revision(&client, version, "contract_drop_control_owner").await;
+        record_revision(&client, version, "breaking_drop_control_owner").await;
 
         let error = check_schema_revision(&client)
             .await
-            .expect_err("a contract migration refuses an earlier release");
+            .expect_err("a breaking migration refuses an earlier release");
         let message = error.to_string();
 
         assert!(matches!(&error, SchemaRevisionError::Ahead { .. }));
-        assert!(message.contains(&format!("V{version}__contract_drop_control_owner")));
-        assert!(message.contains("not an expand migration"));
+        assert!(message.contains(&format!("V{version}__breaking_drop_control_owner")));
+        assert!(message.contains("is a breaking migration"));
     }
 
     #[tokio::test]
-    async fn ahead_by_an_unlabeled_migration_is_refused() {
+    async fn a_breaking_migration_behind_an_unmarked_one_still_refuses() {
         let database = test_support::database().await;
         let client = persistence::conn(&database.url)
             .await
             .expect("database connection opens");
         let version = next_version();
-        record_revision(&client, version, "future_revision").await;
+        record_revision(&client, version, "add_control_owner").await;
+        record_revision(&client, version + 1, "breaking_drop_control_owner").await;
 
         let error = check_schema_revision(&client)
             .await
-            .expect_err("an unlabeled migration is not provably additive");
-        let message = error.to_string();
-
-        assert!(matches!(&error, SchemaRevisionError::Ahead { .. }));
-        assert!(message.contains(&format!("V{version}__future_revision")));
-    }
-
-    #[tokio::test]
-    async fn a_contract_migration_behind_an_expand_still_refuses() {
-        let database = test_support::database().await;
-        let client = persistence::conn(&database.url)
-            .await
-            .expect("database connection opens");
-        let version = next_version();
-        record_revision(&client, version, "expand_add_control_owner").await;
-        record_revision(&client, version + 1, "contract_drop_control_owner").await;
-
-        let error = check_schema_revision(&client)
-            .await
-            .expect_err("a contract anywhere in the tail refuses an earlier release");
+            .expect_err("a breaking migration anywhere in the tail refuses an earlier release");
         let message = error.to_string();
 
         assert!(matches!(&error, SchemaRevisionError::Ahead { .. }));
         assert!(
-            message.contains(&format!("V{}__contract_drop_control_owner", version + 1)),
-            "the message names the contract migration, not the expand before it: {message}"
+            message.contains(&format!("V{}__breaking_drop_control_owner", version + 1)),
+            "the message names the breaking migration, not the one before it: {message}"
         );
     }
 
