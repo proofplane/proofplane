@@ -232,12 +232,15 @@ later, separately verified change.
 - **Migration fails:** Terraform stops before dependent revisions update.
   Inspect job logs, correct the forward migration, publish a new digest if code
   changed, and re-plan. Never seed production.
-- **Migration succeeds but smoke checks fail:** do not restore the previous
-  application digest. Once a newer history entry exists, an older image rejects
-  it on startup even when the migration is additive. Keep already-running old
-  revisions available while diagnosing when possible, then publish and apply a
-  corrected binary that embeds the exact applied history. Do not reverse an
-  expand migration automatically.
+- **Migration succeeds but smoke checks fail:** check what the deploy applied.
+  When no migration in it is marked `breaking_`, restore the previous
+  application digest. The previous image starts against the expanded schema,
+  logs a warning that the database is ahead of it, and serves. When one is
+  marked `breaking_`, the previous image refuses to start and names the blocking
+  migration. Roll forward instead: publish and apply a corrected binary that
+  embeds the applied history. Do not reverse an expand migration automatically,
+  and do not rely on already-running old revisions while diagnosing, because API
+  and MCP run at min instances zero and their next cold start runs the check.
 - **ClamAV update fails:** the updater must leave the last-good pointer intact.
   After two failures, investigate CDN access, image version, validation logs,
   and bucket IAM. Workers fail closed after 24 hours of staleness.

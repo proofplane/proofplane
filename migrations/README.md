@@ -34,6 +34,20 @@ convention: `V002__add_control_owner.sql`. refinery records each applied
 migration in `refinery_schema_history` with a checksum, so an already-applied
 file must never be edited — correct it with a new migration instead.
 
+A migration that no earlier release may run against carries one extra mark,
+`breaking_`, directly after the number:
+
+```
+V004__breaking_drop_legacy_owner.sql
+```
+
+Every unmarked migration is taken to be additive. The mark is load-bearing and
+is the whole reason a rollback can be judged safe, so read
+[Rollback](#rollback) before you add or omit it.
+`V001__breaking_initial_schema.sql` carries it because the mark states rollback
+safety rather than DDL shape: no binary predates the initial schema, so none may
+run behind it.
+
 ## Expand, then contract
 
 A release must be compatible with the revision it replaces. Cloud Run updates
@@ -49,7 +63,7 @@ So every schema change is split:
 - **Contract** — destructive steps, in a **later** release, only after every
   revision that depended on the old shape has drained. Dropping a column,
   dropping a table, tightening a constraint to `NOT NULL`, and renaming all
-  belong here.
+  belong here. Mark every one of these `breaking_`. See [Rollback](#rollback).
 
 A rename is an expand and a contract, never a single `ALTER … RENAME`: add the
 new column, write both, backfill, switch reads, then drop the old one in a later
@@ -57,6 +71,49 @@ release. Rolling an application regression back does not reverse an expand
 migration, and must not need to.
 
 Exceptions require an announced maintenance window.
+
+## Rollback
+
+Runtime processes check the schema history at startup
+(`persistence::check_schema_revision`) and refuse to serve a database they
+cannot read correctly. The check accepts a database that runs *ahead* of the
+binary, as long as no migration in that gap is marked `breaking_`. That is what
+makes restoring the previous release a supported recovery after a failed deploy.
+
+The mark has to carry this because a binary cannot judge it at runtime.
+Migrations are embedded at compile time, so a binary built before `V011` never
+sees its SQL — only the version, name, and checksum recorded in the history
+table. The release that writes the migration is the only place that knows
+whether an earlier release survives it, so it declares the answer in the name.
+
+The rules the check applies:
+
+- The database is behind the binary — refuse. New code may read a column that
+  does not exist yet. Run `make migrate`.
+- The database matches the binary — serve.
+- The database is ahead, and nothing in the gap is marked `breaking_` — serve,
+  and log a warning. This is the rollback state.
+- The database is ahead by any `breaking_` migration — refuse, naming it.
+- The history diverges at a shared position — refuse. That is corruption or a
+  forked history.
+
+### Why the default is permissive
+
+An unmarked migration is assumed to be additive rather than refused. Most
+migrations are additive, so a mark on every file would be ceremony rather than a
+decision, and a mark that appears on everything stops being read. Keeping it
+rare keeps each use of it deliberate.
+
+That choice has a cost, and it runs the opposite way to the usual instinct.
+**A forgotten `breaking_` mark permits a rollback that is not safe.** The old
+release starts, reads a column that no longer exists, and fails in traffic
+rather than at startup.
+
+So the mark is a review responsibility. When a migration drops a column, drops a
+table, tightens a constraint, or renames anything, the reviewer's job is to
+check that `breaking_` is present. Nothing else enforces it: no mechanism can
+read a migration's SQL from a binary built before it, which is the reason the
+mark exists at all.
 
 ## Locks
 

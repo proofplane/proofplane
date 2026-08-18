@@ -118,8 +118,9 @@ reads do not claim a lock that would be released immediately.
 ## Migration and compatibility
 
 The application is not deployed, so schema work through the typed-outbox
-foundation is consolidated into `V001__initial_schema.sql`. Existing public
-schemas and status codes remain stable while internal callers move to handlers.
+foundation is consolidated into `V001__breaking_initial_schema.sql`. Existing
+public schemas and status codes remain stable while internal callers move to
+handlers.
 Workers retain legacy-envelope decoding for compatibility fixtures and any
 externally replayed version-zero messages, but no database rolling-upgrade or
 backfill path is required before the first deployment.

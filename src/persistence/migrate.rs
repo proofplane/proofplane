@@ -4,9 +4,12 @@ use refinery::{embed_migrations, Error, Report, Runner};
 use thiserror::Error as ThisError;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::Client;
-use tracing::debug;
+use tracing::{debug, warn};
 
 embed_migrations!("./migrations");
+
+/// The mark for a migration that makes it impossible to roll back.
+const BREAKING_PREFIX: &str = "breaking_";
 
 /// How long a migration waits for a lock before giving up.
 ///
@@ -31,6 +34,13 @@ pub enum SchemaRevisionError {
         expected: usize,
         next: String,
     },
+
+    #[error(
+        "database schema is ahead of this binary: {blocking} at position {position} is a \
+         breaking migration, so this binary must not run against this database. Deploy a \
+         binary that embeds that migration."
+    )]
+    Ahead { position: usize, blocking: String },
 
     #[error(
         "database schema history does not match this binary at position {position}: \
@@ -86,6 +96,43 @@ fn embedded_schema_history() -> Vec<SchemaRevision> {
         .collect()
 }
 
+/// Whether `revision` refuses every release older than itself.
+fn is_breaking(revision: &SchemaRevision) -> bool {
+    revision
+        .name
+        .as_deref()
+        .is_some_and(|name| name.starts_with(BREAKING_PREFIX))
+}
+
+/// Decides whether this binary may serve a database that has migrations it does not embed.
+///
+/// `embedded` is how many migrations this binary carries, and therefore where the
+/// database's extra tail begins.
+fn ahead(observed: &[SchemaRevision], embedded: usize) -> Result<(), SchemaRevisionError> {
+    let tail = &observed[embedded..];
+
+    if let Some((offset, blocking)) = tail
+        .iter()
+        .enumerate()
+        .find(|(_, revision)| is_breaking(revision))
+    {
+        return Err(SchemaRevisionError::Ahead {
+            position: embedded + offset + 1,
+            blocking: blocking.to_string(),
+        });
+    }
+
+    warn!(
+        embedded,
+        applied = observed.len(),
+        "database schema is ahead of this binary by {} migration(s), which is expected only \
+         after a rollback",
+        tail.len()
+    );
+
+    Ok(())
+}
+
 fn behind(applied: usize, expected: &[SchemaRevision]) -> SchemaRevisionError {
     SchemaRevisionError::Behind {
         applied,
@@ -97,7 +144,12 @@ fn behind(applied: usize, expected: &[SchemaRevision]) -> SchemaRevisionError {
     }
 }
 
-/// Verifies that the database has exactly the migration history embedded in this binary.
+/// Verifies that this binary can serve the database's migration history.
+///
+/// The history must match the migrations embedded in this binary, and may then run ahead
+/// of them by additive migrations.
+///
+/// A database that is behind, or that diverges at any shared position, is always refused.
 ///
 /// This is deliberately read-only. Runtime processes use it at startup and leave all
 /// schema changes to the dedicated `migrate` command.
@@ -127,6 +179,10 @@ ORDER BY version ASC
 
     if observed.len() < expected.len() && observed == expected[..observed.len()] {
         return Err(behind(observed.len(), &expected));
+    }
+
+    if observed.len() > expected.len() && expected == observed[..expected.len()] {
+        return ahead(&observed, expected.len());
     }
 
     let mismatch = observed
@@ -169,11 +225,73 @@ pub async fn apply_migrations(client: &mut Client) -> Result<Report, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{self, Write},
+        sync::{Arc, Mutex},
+    };
+
     use secrecy::{ExposeSecret, SecretString};
+    use tracing_subscriber::fmt::MakeWriter;
     use uuid::Uuid;
 
-    use super::{check_schema_revision, embedded_schema_history, SchemaRevisionError};
+    use super::{check_schema_revision, embedded_schema_history, Client, SchemaRevisionError};
     use crate::persistence::{self, param, test_support};
+
+    /// The version directly after the last migration this binary embeds.
+    fn next_version() -> i32 {
+        embedded_schema_history()
+            .last()
+            .and_then(|revision| revision.version.as_deref())
+            .expect("at least one migration is embedded")
+            .parse::<i32>()
+            .expect("embedded migration version is an integer")
+            + 1
+    }
+
+    /// Captures what a subscriber writes, so a test can read the log a runtime emits.
+    #[derive(Clone, Default)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedWriter {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().expect("log buffer is not poisoned").clone())
+                .expect("captured logs are UTF-8")
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer is not poisoned")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Records a migration this binary does not embed, standing in for a later release.
+    async fn record_revision(client: &Client, version: i32, name: &str) {
+        client
+            .execute_typed(
+                "INSERT INTO refinery_schema_history (version, name, applied_on, checksum) \
+                 VALUES ($1, $2, 'future', $3)",
+                &[param(&version), param(&name), param(&"123456789")],
+            )
+            .await
+            .expect("history row inserts");
+    }
 
     async fn empty_database(fixture: &test_support::TestDatabase) -> SecretString {
         let name = format!("schema_revision_{}", Uuid::new_v4().simple());
@@ -230,42 +348,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extra_future_revision_is_unknown_with_expected_and_observed_context() {
+    async fn ahead_by_unmarked_migrations_is_compatible() {
         let database = test_support::database().await;
         let client = persistence::conn(&database.url)
             .await
             .expect("database connection opens");
-        let future_version = embedded_schema_history()
-            .last()
-            .and_then(|revision| revision.version.as_deref())
-            .expect("at least one migration is embedded")
-            .parse::<i32>()
-            .expect("embedded migration version is an integer")
-            + 1;
-        let future_name = "future_revision";
-        let future_checksum = "123456789";
-        client
-            .execute_typed(
-                "INSERT INTO refinery_schema_history (version, name, applied_on, checksum) \
-                 VALUES ($1, $2, 'future', $3)",
-                &[
-                    param(&future_version),
-                    param(&future_name),
-                    param(&future_checksum),
-                ],
-            )
+        let version = next_version();
+        record_revision(&client, version, "add_control_owner").await;
+        record_revision(&client, version + 1, "add_control_owner_index").await;
+
+        let logs = SharedWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+
+        check_schema_revision(&client)
             .await
-            .expect("future history row inserts");
+            .expect("an earlier release keeps serving a schema expanded past it");
+
+        drop(guard);
+        let logged = logs.contents();
+        assert!(
+            logged.contains("WARN") && logged.contains("ahead of this binary by 2 migration"),
+            "an operator sees the rollback state in the logs: {logged}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ahead_by_a_breaking_migration_is_refused() {
+        let database = test_support::database().await;
+        let client = persistence::conn(&database.url)
+            .await
+            .expect("database connection opens");
+        let version = next_version();
+        record_revision(&client, version, "breaking_drop_control_owner").await;
 
         let error = check_schema_revision(&client)
             .await
-            .expect_err("a future revision is unknown");
+            .expect_err("a breaking migration refuses an earlier release");
         let message = error.to_string();
 
-        assert!(matches!(&error, SchemaRevisionError::Unknown { .. }));
-        assert!(message.contains("expected <end of embedded history>"));
-        assert!(message.contains(&format!("observed V{future_version}__future_revision")));
-        assert!(message.contains("exactly match the database"));
+        assert!(matches!(&error, SchemaRevisionError::Ahead { .. }));
+        assert!(message.contains(&format!("V{version}__breaking_drop_control_owner")));
+        assert!(message.contains("is a breaking migration"));
+    }
+
+    #[tokio::test]
+    async fn a_breaking_migration_behind_an_unmarked_one_still_refuses() {
+        let database = test_support::database().await;
+        let client = persistence::conn(&database.url)
+            .await
+            .expect("database connection opens");
+        let version = next_version();
+        record_revision(&client, version, "add_control_owner").await;
+        record_revision(&client, version + 1, "breaking_drop_control_owner").await;
+
+        let error = check_schema_revision(&client)
+            .await
+            .expect_err("a breaking migration anywhere in the tail refuses an earlier release");
+        let message = error.to_string();
+
+        assert!(matches!(&error, SchemaRevisionError::Ahead { .. }));
+        assert!(
+            message.contains(&format!("V{}__breaking_drop_control_owner", version + 1)),
+            "the message names the breaking migration, not the one before it: {message}"
+        );
     }
 
     #[tokio::test]
