@@ -33,7 +33,7 @@ must not be enabled until all are verified:
 | Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. |
 | Transaction pooling | Runtime queries issue unnamed statements and pass integration tests against a transaction pooler. Met locally against PgBouncer in transaction mode; still unverified against Supavisor on 6543. |
 | Dedicated migrations | A `proofplane-migrate` command runs migrations only, uses a separate direct credential, and never seeds data. |
-| Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup and accept work only when database history exactly matches the migrations embedded in the binary. |
+| Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup and accept work only when database history matches the migrations embedded in the binary, or runs ahead of it by `expand_` migrations alone. |
 | Compatible migrations | Schema changes follow expand/contract rules, use a short lock timeout, and remain compatible with old and new revisions. |
 | Stateless MCP | `rmcp` streamable HTTP uses `stateful_mode = false` and direct JSON responses; no in-memory session affinity is required. |
 | Bounded pools | Pool sizes, acquisition timeouts, and idle timeouts are configurable. Initial sizes are API 10, MCP 10, worker 6, and dequeuer 2. |
@@ -270,11 +270,19 @@ Every runtime performs one read-only schema-history check through its configured
 bounded pool before it opens a listener, creates a subscription, or begins
 polling. The ordered version, name, and checksum entries in
 `refinery_schema_history` must exactly match the migrations embedded in the
-binary. An exact incomplete prefix, including a database with no history table,
-is rejected as behind and directs the operator to the `migrate` command. Any
-extra or divergent entry is rejected as unknown and requires a binary built
-with that exact migration history. The check never creates or changes the
-history table.
+binary, or must extend it by `expand_` migrations alone. An exact incomplete
+prefix, including a database with no history table, is rejected as behind and
+directs the operator to the `migrate` command. Extra entries beyond the embedded
+set are accepted only when every one of them is labeled `expand_`, which is the
+rollback state and is logged as a warning. An extra `contract_` or unlabeled
+entry is rejected as ahead and names the blocking migration. A divergent entry
+at a shared position is rejected as unknown and requires a binary built with
+that exact migration history. The check never creates or changes the history
+table.
+
+Each migration declares in its own name whether an earlier release survives it,
+because a binary embeds its migrations at compile time and can never read the
+SQL of a migration written after it was built.
 
 The `migrate` command resolves that credential from the first source that is
 set, and fails naming that source when it is set but unusable rather than
@@ -301,7 +309,11 @@ completion before updating them. A migration failure fails the apply.
 
 Migrations are expand-only in the release that introduces application usage.
 Destructive contract steps occur only after old revisions have drained, in a
-later release. Exceptions require an announced maintenance window.
+later release. Exceptions require an announced maintenance window. Every
+migration file states which of the two it is in its name, `expand_` or
+`contract_`, because the startup check reads that label to decide whether an
+earlier release may keep serving. See
+[`migrations/README.md`](../../../migrations/README.md).
 
 ## Storage
 
@@ -485,10 +497,11 @@ The operator workflow is:
    before serving workloads update.
 8. Verify job execution, revision health, Pub/Sub push authentication, public
    TLS endpoints, version output, and a non-destructive end-to-end message.
-9. On application failure after migration, roll forward with a corrected binary
-   that embeds the applied schema history. An older image cannot restart once a
-   newer migration is present, even when that migration is additive. Do not
-   reverse an expand migration automatically.
+9. On application failure after migration, restore the previous application
+   digest when every migration the deploy applied is labeled `expand_`. When any
+   is labeled `contract_`, the older image refuses to start, so roll forward
+   with a corrected binary that embeds the applied schema history instead. Do
+   not reverse an expand migration automatically.
 
 Terraform does not use `local-exec` for builds, migrations, smoke checks, or
 DNS registrar changes.
@@ -555,3 +568,21 @@ DNS registrar changes.
   Each root declares its state prefix in its own `backend.tf`, and keeps its
   input variables in a committed `tfvars/<environment>.tfvars` file. Nothing had
   been applied, so no state was moved.
+- 2026-08-17: Rollback after a migration is supported again, reversing the
+  roll-forward-only recovery #157 introduced. The exact-match check contradicted
+  the expand-then-contract rule it sits next to: that rule exists to buy N-1
+  compatibility against a forward schema, and the check then refused to use it.
+  The stated mitigation did not hold either, because API and MCP run at min
+  instances zero, so an old revision kept for diagnosis fails the check on its
+  next cold start. The prescribed recovery was in practice the previous release
+  commit with the new migration cherry-picked onto it, an untested artifact
+  built during an outage. The check could not simply be loosened, because a
+  binary embeds its migrations at compile time and sees only the version, name,
+  and checksum of anything applied later, so it cannot tell a safe expand from a
+  fatal contract. Each migration now declares its own class in its name, which
+  is the one field that already crosses the version boundary. An unlabeled name
+  is refused, so a forgotten label costs a safe rollback rather than permitting
+  an unsafe one. `V001__initial_schema.sql` was renamed to
+  `V001__contract_initial_schema.sql` so the convention has no exception;
+  nothing was deployed, so no database needed migrating. There is no CI, so the
+  labels are held by migration review.
