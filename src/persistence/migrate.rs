@@ -8,19 +8,7 @@ use tracing::{debug, warn};
 
 embed_migrations!("./migrations");
 
-/// Marks a migration that no earlier release may run against.
-///
-/// A binary embeds its migrations at compile time, so it can never read the SQL of a
-/// migration written after it was built. All it sees of a later migration is the name
-/// recorded in `refinery_schema_history`. The release that writes a destructive migration
-/// therefore declares that fact in the name, and every unmarked migration is taken to be
-/// additive.
-///
-/// That default is deliberate. Additive migrations are the common case, so a prefix on
-/// every file would become ceremony rather than a decision, and a mark that appears on
-/// everything stops being read. The cost is that a forgotten mark permits a rollback that
-/// is not safe, which makes the mark a review responsibility. See
-/// `migrations/README.md`.
+/// The mark for a migration that makes it impossible to roll back.
 const BREAKING_PREFIX: &str = "breaking_";
 
 /// How long a migration waits for a lock before giving up.
@@ -159,10 +147,7 @@ fn behind(applied: usize, expected: &[SchemaRevision]) -> SchemaRevisionError {
 /// Verifies that this binary can serve the database's migration history.
 ///
 /// The history must match the migrations embedded in this binary, and may then run ahead
-/// of them by additive migrations. That tail is the rollback case: expand-then-contract
-/// requires the expanding release to keep the previous one working, so restoring that
-/// release stays a supported recovery. A tail holding a migration marked `breaking_` is
-/// refused, because the older binary cannot survive it.
+/// of them by additive migrations.
 ///
 /// A database that is behind, or that diverges at any shared position, is always refused.
 ///
