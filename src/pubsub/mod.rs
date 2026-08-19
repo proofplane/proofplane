@@ -1,16 +1,12 @@
+use std::env;
+
 use async_trait::async_trait;
-use google_cloud_gax::grpc::{Code, Status};
-use google_cloud_gax::retry::RetrySetting;
-use google_cloud_googleapis::pubsub::v1::{
-    DeadLetterPolicy, PubsubMessage, PushConfig, Subscription as InternalSubscription,
-    UpdateSubscriptionRequest,
-};
+use google_cloud_gax::grpc::Status;
+use google_cloud_googleapis::pubsub::v1::PubsubMessage;
 use google_cloud_pubsub::client::{Client, ClientConfig};
-use google_cloud_pubsub::subscription::SubscriptionConfig;
-use prost_types::FieldMask;
 use thiserror::Error;
 
-use crate::config::PubSubSubscriptionsConfig;
+pub mod emulator;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopicName(String);
@@ -53,8 +49,16 @@ impl OutboundMessage {
 pub enum PubSubError {
     #[error("publish failed: {0}")]
     Publish(String),
+    #[error("google application default credentials are not available: {0}")]
+    Credentials(String),
+    #[error("pubsub client connection failed: {0}")]
+    Connection(String),
     #[error("resource provisioning failed: {0}")]
     Provision(String),
+    #[error(
+        "emulator provisioning needs the environment variable PUBSUB_EMULATOR_HOST; Terraform owns the production topics and subscriptions"
+    )]
+    EmulatorRequired,
 }
 
 #[async_trait]
@@ -70,11 +74,64 @@ pub const PUBSUB_EMULATOR_HOST: &str = "PUBSUB_EMULATOR_HOST";
 pub const MESSAGE_BUS_TOPIC: &str = "proof.message_bus";
 pub const WORKER_DEAD_LETTER_TOPIC: &str = "proof.message_bus.dead_letter";
 
-pub fn application_topics() -> [TopicName; 2] {
-    [
-        TopicName::new(MESSAGE_BUS_TOPIC),
-        TopicName::new(WORKER_DEAD_LETTER_TOPIC),
-    ]
+/// How a Pub/Sub client authenticates, following the SDK convention: the
+/// emulator variable selects the emulator, and its absence selects Google
+/// application default credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientMode {
+    Emulator { host: String },
+    ApplicationDefaultCredentials,
+}
+
+impl ClientMode {
+    pub fn from_env() -> Self {
+        Self::from_emulator_host(env::var(PUBSUB_EMULATOR_HOST).ok())
+    }
+
+    fn from_emulator_host(host: Option<String>) -> Self {
+        match host {
+            Some(host) if !host.is_empty() => Self::Emulator { host },
+            _ => Self::ApplicationDefaultCredentials,
+        }
+    }
+
+    /// A stable label for startup logs. It names the mode and never a secret.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Emulator { .. } => "emulator",
+            Self::ApplicationDefaultCredentials => "application-default-credentials",
+        }
+    }
+
+    /// The emulator address, for a startup log field. Credential mode has none.
+    pub fn emulator_host(&self) -> Option<&str> {
+        match self {
+            Self::Emulator { host } => Some(host),
+            Self::ApplicationDefaultCredentials => None,
+        }
+    }
+}
+
+/// Opens a client in the requested mode. Credential mode must load application
+/// default credentials here: the SDK default installs a no-op token source, and
+/// every call it makes to Google Pub/Sub would then be unauthenticated.
+async fn connect(project_id: &str, mode: &ClientMode) -> Result<Client, PubSubError> {
+    let config = ClientConfig {
+        project_id: Some(project_id.to_owned()),
+        ..Default::default()
+    };
+
+    let config = match mode {
+        ClientMode::Emulator { .. } => config,
+        ClientMode::ApplicationDefaultCredentials => config
+            .with_auth()
+            .await
+            .map_err(|error| PubSubError::Credentials(error.to_string()))?,
+    };
+
+    Client::new(config)
+        .await
+        .map_err(|error| PubSubError::Connection(error.to_string()))
 }
 
 #[derive(Debug, Clone)]
@@ -83,20 +140,14 @@ pub struct GoogleCloudPublisher {
 }
 
 impl GoogleCloudPublisher {
-    pub async fn new(project_id: impl Into<String>) -> Result<Self, PubSubError> {
-        let config = ClientConfig {
-            project_id: Some(project_id.into()),
-            ..Default::default()
-        };
-        let client = Client::new(config)
-            .await
-            .map_err(|error| PubSubError::Publish(error.to_string()))?;
-
-        for topic in application_topics() {
-            ensure_client_topic(&client, &topic).await?;
-        }
-
-        Ok(Self { client })
+    /// Opens a client that publishes and nothing else. It reads no topic and
+    /// creates none: Terraform owns the production topics and grants the
+    /// dequeuer `pubsub.topics.publish` alone, and the local emulator is
+    /// provisioned by [`emulator::provision`].
+    pub async fn new(project_id: &str, mode: &ClientMode) -> Result<Self, PubSubError> {
+        Ok(Self {
+            client: connect(project_id, mode).await?,
+        })
     }
 }
 
@@ -121,140 +172,17 @@ impl Publisher for GoogleCloudPublisher {
     }
 }
 
-pub async fn ensure_topic(project_id: &str, topic: &TopicName) -> Result<(), PubSubError> {
-    let config = ClientConfig {
-        project_id: Some(project_id.to_owned()),
-        ..Default::default()
-    };
-    let client = Client::new(config)
-        .await
-        .map_err(|error| PubSubError::Publish(error.to_string()))?;
-
-    ensure_client_topic(&client, topic).await
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkerSubscriptionConfig {
-    pub subscription_id: String,
-    pub topic_id: String,
-    pub push_endpoint: String,
-    pub dead_letter_topic_path: String,
-    pub max_delivery_attempts: i32,
-}
-
-impl WorkerSubscriptionConfig {
-    pub fn from_config(project_id: &str, subscriptions: &PubSubSubscriptionsConfig) -> Self {
-        Self {
-            subscription_id: subscriptions.worker.clone(),
-            topic_id: MESSAGE_BUS_TOPIC.to_owned(),
-            push_endpoint: subscriptions.worker_push_endpoint.to_string(),
-            dead_letter_topic_path: topic_path(
-                project_id,
-                &TopicName::new(WORKER_DEAD_LETTER_TOPIC),
-            ),
-            max_delivery_attempts: i32::from(subscriptions.worker_max_delivery_attempts),
-        }
-    }
-}
-
-pub async fn ensure_worker_subscription(
-    project_id: &str,
-    subscriptions: &PubSubSubscriptionsConfig,
-) -> Result<(), PubSubError> {
-    let client_config = ClientConfig {
-        project_id: Some(project_id.to_owned()),
-        ..Default::default()
-    };
-    let client = Client::new(client_config)
-        .await
-        .map_err(|error| PubSubError::Provision(error.to_string()))?;
-
-    for topic in application_topics() {
-        ensure_client_topic(&client, &topic).await?;
-    }
-
-    ensure_client_worker_subscription(
-        &client,
-        &WorkerSubscriptionConfig::from_config(project_id, subscriptions),
-    )
-    .await
-}
-
-pub async fn ensure_client_worker_subscription(
-    client: &Client,
-    config: &WorkerSubscriptionConfig,
-) -> Result<(), PubSubError> {
-    let subscription = client.subscription(&config.subscription_id);
-    let desired = subscription_config(config);
-
-    if !subscription
-        .exists(Some(RetrySetting::default()))
-        .await
-        .map_err(sdk_provision_error)?
-    {
-        client
-            .create_subscription(&config.subscription_id, &config.topic_id, desired, None)
-            .await
-            .map_err(sdk_provision_error)?;
-        return Ok(());
-    }
-
-    let (_, current) = subscription
-        .config(Some(RetrySetting::default()))
-        .await
-        .map_err(sdk_provision_error)?;
-    if subscription_matches(&current, config) {
-        return Ok(());
-    }
-
-    let request = UpdateSubscriptionRequest {
-        subscription: Some(InternalSubscription {
-            name: subscription.fully_qualified_name().to_owned(),
-            push_config: Some(push_config(config)),
-            dead_letter_policy: Some(dead_letter_policy(config)),
-            ..Default::default()
-        }),
-        update_mask: Some(FieldMask {
-            paths: vec!["push_config".to_owned(), "dead_letter_policy".to_owned()],
-        }),
-    };
-
-    if let Err(error) = subscription
-        .get_client()
-        .update_subscription(request, Some(RetrySetting::default()))
-        .await
-    {
-        if error.code() == Code::Unimplemented {
-            subscription
-                .delete(None)
-                .await
-                .map_err(sdk_provision_error)?;
-            client
-                .create_subscription(&config.subscription_id, &config.topic_id, desired, None)
-                .await
-                .map_err(sdk_provision_error)?;
-
-            return Ok(());
-        }
-
-        return Err(sdk_provision_error(error));
-    }
-
-    Ok(())
-}
-
-async fn ensure_client_topic(client: &Client, topic: &TopicName) -> Result<(), PubSubError> {
-    let topic = client.topic(topic.as_str());
-
-    if topic.exists(None).await.map_err(sdk_publish_error)? {
-        return Ok(());
-    }
-
-    topic.create(None, None).await.map_err(sdk_publish_error)
-}
-
 pub fn topic_path(project_id: &str, topic: &TopicName) -> String {
     format!("projects/{}/topics/{}", project_id, topic.as_str())
+}
+
+/// Refuses any mode but the emulator. Terraform owns the production topics and
+/// subscriptions, so provisioning may run against the emulator and nowhere else.
+fn require_emulator(mode: &ClientMode) -> Result<(), PubSubError> {
+    match mode {
+        ClientMode::Emulator { .. } => Ok(()),
+        ClientMode::ApplicationDefaultCredentials => Err(PubSubError::EmulatorRequired),
+    }
 }
 
 fn to_google_message(message: OutboundMessage) -> PubsubMessage {
@@ -270,39 +198,6 @@ fn sdk_publish_error(error: Status) -> PubSubError {
 
 fn sdk_provision_error(error: Status) -> PubSubError {
     PubSubError::Provision(error.to_string())
-}
-
-fn subscription_config(config: &WorkerSubscriptionConfig) -> SubscriptionConfig {
-    SubscriptionConfig {
-        push_config: Some(push_config(config)),
-        dead_letter_policy: Some(dead_letter_policy(config)),
-        ..Default::default()
-    }
-}
-
-fn push_config(config: &WorkerSubscriptionConfig) -> PushConfig {
-    PushConfig {
-        push_endpoint: config.push_endpoint.clone(),
-        ..Default::default()
-    }
-}
-
-fn dead_letter_policy(config: &WorkerSubscriptionConfig) -> DeadLetterPolicy {
-    DeadLetterPolicy {
-        dead_letter_topic: config.dead_letter_topic_path.clone(),
-        max_delivery_attempts: config.max_delivery_attempts,
-    }
-}
-
-fn subscription_matches(current: &SubscriptionConfig, desired: &WorkerSubscriptionConfig) -> bool {
-    current
-        .push_config
-        .as_ref()
-        .is_some_and(|push| push.push_endpoint == desired.push_endpoint)
-        && current.dead_letter_policy.as_ref().is_some_and(|policy| {
-            policy.dead_letter_topic == desired.dead_letter_topic_path
-                && policy.max_delivery_attempts == desired.max_delivery_attempts
-        })
 }
 
 #[cfg(test)]
@@ -386,9 +281,8 @@ mod tests {
     use google_cloud_gax::grpc::Status;
 
     use super::{
-        application_topics, sdk_publish_error, subscription_config, to_google_message, topic_path,
-        MessageId, OutboundMessage, WorkerSubscriptionConfig, MESSAGE_BUS_TOPIC,
-        WORKER_DEAD_LETTER_TOPIC,
+        require_emulator, sdk_publish_error, to_google_message, topic_path, ClientMode, MessageId,
+        OutboundMessage, MESSAGE_BUS_TOPIC,
     };
     use super::{PubSubError, TopicName};
 
@@ -397,17 +291,6 @@ mod tests {
         let topic = TopicName::new("events");
 
         assert_eq!(topic.as_str(), "events");
-    }
-
-    #[test]
-    fn application_topic_registry_contains_message_bus() {
-        assert_eq!(
-            application_topics(),
-            [
-                TopicName::new(MESSAGE_BUS_TOPIC),
-                TopicName::new(WORKER_DEAD_LETTER_TOPIC)
-            ]
-        );
     }
 
     #[test]
@@ -450,29 +333,51 @@ mod tests {
     }
 
     #[test]
-    fn builds_worker_subscription_config_with_push_and_dead_letter_policy() {
-        let config = WorkerSubscriptionConfig {
-            subscription_id: "proofplane-worker".to_owned(),
-            topic_id: MESSAGE_BUS_TOPIC.to_owned(),
-            push_endpoint: "http://host.docker.internal:3001/pubsub/messages".to_owned(),
-            dead_letter_topic_path: topic_path(
-                "proofplane-local",
-                &TopicName::new(WORKER_DEAD_LETTER_TOPIC),
-            ),
-            max_delivery_attempts: 7,
+    fn emulator_host_selects_emulator_mode() {
+        let mode = ClientMode::from_emulator_host(Some("127.0.0.1:8086".to_owned()));
+
+        assert_eq!(
+            mode,
+            ClientMode::Emulator {
+                host: "127.0.0.1:8086".to_owned()
+            }
+        );
+        assert_eq!(mode.as_str(), "emulator");
+        assert_eq!(mode.emulator_host(), Some("127.0.0.1:8086"));
+    }
+
+    #[test]
+    fn absent_emulator_host_selects_application_default_credentials() {
+        let mode = ClientMode::from_emulator_host(None);
+
+        assert_eq!(mode, ClientMode::ApplicationDefaultCredentials);
+        assert_eq!(mode.as_str(), "application-default-credentials");
+        assert_eq!(mode.emulator_host(), None);
+    }
+
+    #[test]
+    fn empty_emulator_host_selects_application_default_credentials() {
+        assert_eq!(
+            ClientMode::from_emulator_host(Some(String::new())),
+            ClientMode::ApplicationDefaultCredentials
+        );
+    }
+
+    #[test]
+    fn provisioning_accepts_emulator_mode() {
+        let mode = ClientMode::Emulator {
+            host: "127.0.0.1:8086".to_owned(),
         };
 
-        let sdk_config = subscription_config(&config);
+        assert!(require_emulator(&mode).is_ok());
+    }
 
-        assert_eq!(
-            sdk_config.push_config.expect("push config").push_endpoint,
-            "http://host.docker.internal:3001/pubsub/messages"
-        );
-        let dead_letter_policy = sdk_config.dead_letter_policy.expect("dead-letter policy");
-        assert_eq!(
-            dead_letter_policy.dead_letter_topic,
-            "projects/proofplane-local/topics/proof.message_bus.dead_letter"
-        );
-        assert_eq!(dead_letter_policy.max_delivery_attempts, 7);
+    #[test]
+    fn provisioning_refuses_credential_mode() {
+        let error = require_emulator(&ClientMode::ApplicationDefaultCredentials)
+            .expect_err("credential mode may not provision");
+
+        assert!(matches!(error, PubSubError::EmulatorRequired));
+        assert!(error.to_string().contains("PUBSUB_EMULATOR_HOST"));
     }
 }

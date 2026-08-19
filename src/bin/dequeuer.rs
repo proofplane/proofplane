@@ -1,11 +1,11 @@
-use std::{env, time::Duration as StdDuration};
+use std::time::Duration as StdDuration;
 
 use proofplane::{
     config,
     dequeuer::{self, OutboxDequeuer, OutboxDequeuerConfig},
     observability,
     persistence::{self, PoolBounds, PoolRuntime, Postgres},
-    pubsub::{self, ensure_worker_subscription, GoogleCloudPublisher},
+    pubsub::{self, ClientMode, GoogleCloudPublisher},
     VERSION,
 };
 use secrecy::ExposeSecret;
@@ -36,11 +36,6 @@ enum Error {
 
     #[error("pubsub error")]
     PubSub(#[from] pubsub::PubSubError),
-
-    #[error(
-        "environment variable PUBSUB_EMULATOR_HOST is required for dequeuer Pub/Sub publishing"
-    )]
-    MissingPubSubEmulatorHost,
 }
 
 async fn run() -> Result<(), Error> {
@@ -66,14 +61,24 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Postgres::new(pool);
-    if env::var_os(pubsub::PUBSUB_EMULATOR_HOST).is_none() {
-        // TODO: when we support GCP pubsub, we should log a warning when the emulator variable is set
-        return Err(Error::MissingPubSubEmulatorHost);
-    }
 
-    ensure_worker_subscription(&config.pubsub.project_id, &config.pubsub.subscriptions).await?;
+    // Logged before the client opens, so a credential or permission failure
+    // arrives under the mode that produced it.
+    let mode = ClientMode::from_env();
+    info!(
+        binary = "dequeuer",
+        version = VERSION,
+        pubsub_mode = mode.as_str(),
+        pubsub_project_id = %config.pubsub.project_id,
+        pubsub_emulator_host = mode.emulator_host().unwrap_or("none"),
+        "pubsub client mode selected"
+    );
 
-    let publisher = GoogleCloudPublisher::new(config.pubsub.project_id).await?;
+    // The publisher opens before the first outbox poll, so a missing credential
+    // stops the process with no row claimed. A denied publish cannot be seen
+    // here: the dequeuer holds `pubsub.topics.publish` and no read permission,
+    // so it appears on the first row as a retried publish failure.
+    let publisher = GoogleCloudPublisher::new(&config.pubsub.project_id, &mode).await?;
     let dequeuer_config = OutboxDequeuerConfig {
         max_attempts: config.worker.retry_attempts.into(),
         poll_interval: StdDuration::from_secs(1),

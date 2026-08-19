@@ -32,6 +32,12 @@ path = "src/bin/migrate.rs"
 name = "seed"
 path = "src/bin/seed.rs"
 
+# Local development only. The Dockerfile builds the five production commands
+# by name, so this one cannot reach the release image.
+[[bin]]
+name = "pubsub-init"
+path = "src/bin/pubsub_init.rs"
+
 [dependencies]
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["multipart"] }

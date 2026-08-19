@@ -7,7 +7,8 @@ by responsibility: HTTP endpoints in `routes/`, orchestration in `services/`,
 persistence in `persistence/`, types in `domain/` and `read_models/`, and external
 adapters in `authentication/`, `object_storage/`, `pubsub/`, and `scanner/`.
 Executable entry points are in `src/bin/` (`api`, `worker`, `dequeuer`, `mcp`,
-`migrate`, and `seed`).
+`migrate`, `seed`, and `pubsub-init`). The last two are local development
+commands and never ship in the release image.
 
 Database migrations belong in `migrations/`; read
 [`migrations/README.md`](./migrations/README.md) before adding one, because
@@ -21,7 +22,9 @@ notes live in `docs/`.
   tests. Run `make up` first: the integration-v2 suite uses the compose stack
   rather than starting services of its own.
 - `make up && make health`: start and verify local Postgres, PgBouncer, Pub/Sub,
-  and ClamAV dependencies.
+  and ClamAV dependencies. `make up` also runs `make pubsub-init`, which creates
+  the emulator topics and the worker push subscription. The emulator keeps no
+  state between runs, and no runtime process provisions Pub/Sub resources.
 - `make migrate`: apply database migrations and nothing else. This is the
   command production runs; it writes no data. It connects to Postgres on 5432
   directly, not through PgBouncer, because its `lock_timeout` is a session
@@ -30,15 +33,17 @@ notes live in `docs/`.
 - `make api`, `make worker`, `make dequeuer`, or `make mcp`: run a specific
   process using `.local/config.yaml`. Copy `config/local.yaml` there for a fresh
   setup, and run `make migrate` or `make seed` first; runtimes only validate
-  schema history and never apply migrations.
+  schema history and never apply migrations. The dequeuer publishes only. It
+  reads `PUBSUB_EMULATOR_HOST` to choose between the emulator and Google
+  application default credentials, and it creates no topic or subscription.
 - `cargo test --test integration-v2 evidence_document_uploads`: run a focused
   integration-v2 test module.
 - `make image && make image-smoke`: build the production release image and
   validate it. The image is `linux/amd64` and packages `api`, `mcp`, `worker`,
-  `dequeuer`, and `migrate`, but never `seed`. `make image-push` and
-  `make clamav-mirror` publish to Artifact Registry and need
-  `PROOFPLANE_PROJECT_ID`, a configured Docker credential helper, and a current
-  `gcloud auth login`. Terraform needs a separate
+  `dequeuer`, and `migrate`, but never `seed` or `pubsub-init`.
+  `make image-push` and `make clamav-mirror` publish to Artifact Registry and
+  need `PROOFPLANE_PROJECT_ID`, a configured Docker credential helper, and a
+  current `gcloud auth login`. Terraform needs a separate
   `gcloud auth application-default login`. See
   [`docs/runbooks/production-deployment.md`](./docs/runbooks/production-deployment.md).
 

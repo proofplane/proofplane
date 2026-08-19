@@ -35,7 +35,7 @@ use proofplane::{
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::FilesystemObjectStore,
     persistence::Postgres,
-    pubsub::{ensure_worker_subscription, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
+    pubsub::{emulator, ClientMode, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
     routes::authentication::AUTHORIZATION_HEADER,
     services::{
         agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
@@ -129,22 +129,25 @@ impl Harness {
             PushProxy::start(&worker, pipeline_events.clone(), pipeline_controls.clone()).await;
         app_config.pubsub.subscriptions.worker_push_endpoint = proxy.container_endpoint();
 
+        // Set before anything builds a Pub/Sub client: this variable selects the
+        // client mode and the endpoint the SDK connects to.
         std::env::set_var(PUBSUB_EMULATOR_HOST, local_stack::PUBSUB_EMULATOR_ADDRESS);
         reset_worker_subscription(
             &app_config.pubsub.project_id,
             &app_config.pubsub.subscriptions.worker,
         )
         .await;
-        ensure_worker_subscription(
+        emulator::provision(
             &app_config.pubsub.project_id,
             &app_config.pubsub.subscriptions,
         )
         .await
         .expect("worker Pub/Sub subscription provisions");
 
-        let publisher = GoogleCloudPublisher::new(app_config.pubsub.project_id.clone())
-            .await
-            .expect("Pub/Sub publisher initializes");
+        let publisher =
+            GoogleCloudPublisher::new(&app_config.pubsub.project_id, &ClientMode::from_env())
+                .await
+                .expect("Pub/Sub publisher initializes");
         let dequeuer_postgres = postgres.clone();
         let dequeuer = tokio::spawn(async move {
             let dequeuer_config = OutboxDequeuerConfig {
