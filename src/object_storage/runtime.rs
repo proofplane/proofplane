@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
+use std::path::Path;
 
-use crate::config::ObjectStorageConfig;
+use crate::config::{GcsObjectStorageConfig, ObjectStorageConfig};
 
 use super::{
     FilesystemObjectStore, GcsObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream,
@@ -22,16 +23,29 @@ pub enum RuntimeObjectStore {
 
 impl RuntimeObjectStore {
     pub async fn from_config(config: &ObjectStorageConfig) -> Result<Self, StorageError> {
-        match config {
-            ObjectStorageConfig::Filesystem { root } => {
+        match configured_backend(config) {
+            ConfiguredBackend::Filesystem(root) => {
                 FilesystemObjectStore::new(root).await.map(Self::Filesystem)
             }
-            ObjectStorageConfig::Gcs(config) => {
+            ConfiguredBackend::Gcs(config) => {
                 GcsObjectStore::new(&config.bucket, &config.object_key_prefix)
                     .await
                     .map(Self::Gcs)
             }
         }
+    }
+}
+
+#[derive(Debug)]
+enum ConfiguredBackend<'a> {
+    Filesystem(&'a Path),
+    Gcs(&'a GcsObjectStorageConfig),
+}
+
+fn configured_backend(config: &ObjectStorageConfig) -> ConfiguredBackend<'_> {
+    match config {
+        ObjectStorageConfig::Filesystem { root } => ConfiguredBackend::Filesystem(root),
+        ObjectStorageConfig::Gcs(config) => ConfiguredBackend::Gcs(config),
     }
 }
 
@@ -104,6 +118,20 @@ mod tests {
         };
         assert_eq!(filesystem.root(), root);
         assert!(root.try_exists().unwrap());
+    }
+
+    #[test]
+    fn gcs_configuration_selects_the_gcs_backend_before_client_initialization() {
+        let config = ObjectStorageConfig::Gcs(crate::config::GcsObjectStorageConfig {
+            bucket: "contract-bucket".to_owned(),
+            object_key_prefix: "contract/run".to_owned(),
+        });
+
+        let ConfiguredBackend::Gcs(selected) = configured_backend(&config) else {
+            panic!("GCS configuration selected a different backend");
+        };
+        assert_eq!(selected.bucket, "contract-bucket");
+        assert_eq!(selected.object_key_prefix, "contract/run");
     }
 
     fn temp_dir(name: &str) -> PathBuf {

@@ -16,7 +16,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::domain::WorkspaceId;
+use crate::{domain::WorkspaceId, validation::is_canonical_relative_path};
 
 mod gcs;
 mod runtime;
@@ -128,20 +128,65 @@ pub struct ObjectStream {
     pub chunks: ObjectByteStream,
 }
 
+#[derive(Default)]
+pub(super) struct ObjectDigest {
+    sha256: Sha256,
+    content_length: u64,
+}
+
+impl ObjectDigest {
+    pub(super) fn update(&mut self, chunk: &Bytes) -> Result<(), StorageError> {
+        self.content_length = self
+            .content_length
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| StorageError::StreamRead {
+                message: "object stream is too large".to_owned(),
+                payload_too_large: true,
+            })?;
+        self.sha256.update(chunk);
+        Ok(())
+    }
+
+    pub(super) fn finish(&self) -> (u64, String) {
+        (
+            self.content_length,
+            hex::encode(self.sha256.clone().finalize()),
+        )
+    }
+}
+
 #[derive(Debug, Error)]
-#[error("sanitized GCS provider failure ({category}, HTTP status {http_status:?})")]
+#[error(
+    "sanitized GCS provider failure ({category}, HTTP status {http_status:?}, RPC status {rpc_status:?})"
+)]
 pub struct SanitizedProviderError {
     category: &'static str,
     http_status: Option<u16>,
+    rpc_status: Option<String>,
+    #[source]
+    cause: SanitizedProviderCause,
 }
 
 impl SanitizedProviderError {
-    fn new(category: &'static str, http_status: Option<u16>) -> Self {
+    fn new(
+        category: &'static str,
+        http_status: Option<u16>,
+        rpc_status: Option<String>,
+        cause: &'static str,
+    ) -> Self {
         Self {
             category,
             http_status,
+            rpc_status,
+            cause: SanitizedProviderCause { kind: cause },
         }
     }
+}
+
+#[derive(Debug, Error)]
+#[error("sanitized provider cause ({kind})")]
+struct SanitizedProviderCause {
+    kind: &'static str,
 }
 
 #[derive(Debug, Error)]
@@ -351,26 +396,11 @@ impl ObjectStore for FilesystemObjectStore {
 }
 
 fn validated_path(value: &str) -> Result<Vec<String>, StorageError> {
-    if value.is_empty() || value.starts_with('/') || value.ends_with('/') {
+    if !is_canonical_relative_path(value) {
         return Err(StorageError::InvalidKey);
     }
 
-    value
-        .split('/')
-        .map(validated_segment)
-        .collect::<Result<Vec<_>, _>>()
-}
-
-fn validated_segment(segment: &str) -> Result<String, StorageError> {
-    let has_invalid_char = segment
-        .chars()
-        .any(|character| character == '\\' || character == '\0');
-
-    if segment.is_empty() || segment == "." || segment == ".." || has_invalid_char {
-        return Err(StorageError::InvalidKey);
-    }
-
-    Ok(segment.to_owned())
+    Ok(value.split('/').map(str::to_owned).collect())
 }
 
 async fn create_parent_dir(path: &Path) -> Result<(), StorageError> {
@@ -395,8 +425,7 @@ async fn write_object_stream(
             path: path.to_path_buf(),
             source,
         })?;
-    let mut sha256 = Sha256::new();
-    let mut content_length = 0_u64;
+    let mut digest = ObjectDigest::default();
     let mut chunks = pin!(chunks);
 
     while let Some(chunk) = chunks.next().await {
@@ -407,13 +436,7 @@ async fn write_object_stream(
                 path: path.to_path_buf(),
                 source,
             })?;
-        sha256.update(&chunk);
-        content_length = content_length
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| StorageError::StreamRead {
-                message: "object stream is too large".to_owned(),
-                payload_too_large: true,
-            })?;
+        digest.update(&chunk)?;
     }
 
     file.flush()
@@ -423,7 +446,7 @@ async fn write_object_stream(
             source,
         })?;
 
-    Ok((content_length, hex::encode(sha256.finalize())))
+    Ok(digest.finish())
 }
 
 fn object_chunks<R>(reader: R, path: PathBuf) -> ObjectByteStream

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,12 +11,11 @@ use google_cloud_storage::{
     streaming_source::StreamingSource,
 };
 use google_cloud_wkt::FieldMask;
-use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, Mutex};
 
 use super::{
-    ObjectByteStream, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream, PutObjectRequest,
-    SanitizedProviderError, StorageError,
+    ObjectByteStream, ObjectDigest, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream,
+    PutObjectRequest, SanitizedProviderError, StorageError,
 };
 
 const SHA256_METADATA_KEY: &str = "proofplane-sha256";
@@ -67,16 +66,22 @@ impl GcsObjectStore {
         prefixed_name(&self.object_key_prefix, key)
     }
 
-    async fn delete_physical_object(&self, name: &str) -> Result<(), StorageError> {
-        match self
+    async fn delete_physical_object(
+        &self,
+        name: &str,
+        generation: Option<i64>,
+    ) -> Result<(), StorageError> {
+        let mut request = self
             .clients
             .control
             .delete_object()
             .set_bucket(self.bucket_resource())
-            .set_object(name)
-            .send()
-            .await
-        {
+            .set_object(name);
+        if let Some(generation) = generation {
+            request = request.set_if_generation_match(generation);
+        }
+
+        match request.send().await {
             Ok(()) => Ok(()),
             Err(error) => match classify_provider_error(error) {
                 StorageError::NotFound => Ok(()),
@@ -85,8 +90,8 @@ impl GcsObjectStore {
         }
     }
 
-    async fn cleanup_failed_write(&self, name: &str) {
-        if let Err(error) = self.delete_physical_object(name).await {
+    async fn cleanup_failed_write(&self, name: &str, generation: i64) {
+        if let Err(error) = self.delete_physical_object(name, Some(generation)).await {
             crate::observability::record_cleanup_failure(
                 &error,
                 "gcs_object_storage_partial_write",
@@ -106,7 +111,7 @@ impl ObjectStore for GcsObjectStore {
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let physical_name = self.physical_name(&request.key);
-        let digest = Arc::new(Mutex::new(UploadDigest::default()));
+        let digest = Arc::new(Mutex::new(ObjectDigest::default()));
         let (sender, receiver) = mpsc::channel(1);
         let source = UploadSource {
             receiver: Mutex::new(receiver),
@@ -118,20 +123,17 @@ impl ObjectStore for GcsObjectStore {
             .write_object(self.bucket_resource(), physical_name.clone(), source)
             .set_content_type(request.content_type)
             .send_buffered();
-        let forward = forward_chunks(request.chunks, sender);
-        let (uploaded, ()) = tokio::join!(upload, forward);
-
-        let uploaded = match uploaded {
+        let uploaded = match upload_or_provider_failure(upload, request.chunks, sender).await {
             Ok(object) => object,
             Err(error) => {
-                self.cleanup_failed_write(&physical_name).await;
                 return Err(classify_provider_error(error));
             }
         };
 
         let (content_length, sha256) = digest.lock().await.finish();
         if uploaded.size < 0 || uploaded.size as u64 != content_length {
-            self.cleanup_failed_write(&physical_name).await;
+            self.cleanup_failed_write(&physical_name, uploaded.generation)
+                .await;
             return Err(StorageError::Integrity);
         }
 
@@ -149,19 +151,22 @@ impl ObjectStore for GcsObjectStore {
             .send()
             .await
         {
-            self.cleanup_failed_write(&physical_name).await;
+            self.cleanup_failed_write(&physical_name, uploaded.generation)
+                .await;
             return Err(classify_provider_error(error));
         }
 
         let metadata = match self.head_object(&request.key).await {
             Ok(metadata) => metadata,
             Err(error) => {
-                self.cleanup_failed_write(&physical_name).await;
+                self.cleanup_failed_write(&physical_name, uploaded.generation)
+                    .await;
                 return Err(error);
             }
         };
         if metadata.content_length != content_length || metadata.sha256 != sha256 {
-            self.cleanup_failed_write(&physical_name).await;
+            self.cleanup_failed_write(&physical_name, uploaded.generation)
+                .await;
             return Err(StorageError::Integrity);
         }
 
@@ -220,7 +225,7 @@ impl ObjectStore for GcsObjectStore {
         let bucket = self.bucket_resource();
         let mut rewrite_token = None;
 
-        loop {
+        let destination_object = loop {
             let mut request = self
                 .clients
                 .control
@@ -234,21 +239,30 @@ impl ObjectStore for GcsObjectStore {
             }
             let response = request.send().await.map_err(classify_provider_error)?;
             if response.done {
-                break;
+                break response.resource.ok_or(StorageError::Integrity)?;
             }
             if response.rewrite_token.is_empty() {
-                self.cleanup_failed_write(&destination_name).await;
                 return Err(StorageError::Integrity);
             }
             rewrite_token = Some(response.rewrite_token);
-        }
+        };
 
-        let destination_metadata = self.head_object(destination).await?;
+        let destination_generation = destination_object.generation;
+        let destination_metadata =
+            match map_object_metadata(destination, &destination_name, &destination_object) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    self.cleanup_failed_write(&destination_name, destination_generation)
+                        .await;
+                    return Err(error);
+                }
+            };
         if destination_metadata.content_type != source_metadata.content_type
             || destination_metadata.content_length != source_metadata.content_length
             || destination_metadata.sha256 != source_metadata.sha256
         {
-            self.cleanup_failed_write(&destination_name).await;
+            self.cleanup_failed_write(&destination_name, destination_generation)
+                .await;
             return Err(StorageError::Integrity);
         }
 
@@ -256,38 +270,33 @@ impl ObjectStore for GcsObjectStore {
     }
 
     async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError> {
-        self.delete_physical_object(&self.physical_name(key)).await
-    }
-}
-
-#[derive(Default)]
-struct UploadDigest {
-    sha256: Sha256,
-    content_length: u64,
-}
-
-impl UploadDigest {
-    fn update(&mut self, chunk: &Bytes) -> Result<(), StorageError> {
-        self.content_length = self
-            .content_length
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| StorageError::StreamRead {
-                message: "object stream is too large".to_owned(),
-                payload_too_large: true,
-            })?;
-        self.sha256.update(chunk);
-        Ok(())
-    }
-
-    fn finish(&mut self) -> (u64, String) {
-        let sha256 = hex::encode(self.sha256.finalize_reset());
-        (self.content_length, sha256)
+        self.delete_physical_object(&self.physical_name(key), None)
+            .await
     }
 }
 
 struct UploadSource {
     receiver: Mutex<mpsc::Receiver<Result<Bytes, StorageError>>>,
-    digest: Arc<Mutex<UploadDigest>>,
+    digest: Arc<Mutex<ObjectDigest>>,
+}
+
+async fn upload_or_provider_failure<F, S, T, E>(
+    upload: F,
+    chunks: S,
+    sender: mpsc::Sender<Result<Bytes, StorageError>>,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>>,
+    S: Stream<Item = Result<Bytes, StorageError>>,
+{
+    let forward = forward_chunks(chunks, sender);
+    tokio::pin!(upload);
+    tokio::pin!(forward);
+
+    tokio::select! {
+        result = &mut upload => result,
+        () = &mut forward => upload.await,
+    }
 }
 
 impl StreamingSource for UploadSource {
@@ -320,7 +329,12 @@ where
 
 fn client_initialization_error() -> StorageError {
     StorageError::Authentication {
-        source: SanitizedProviderError::new("client initialization", None),
+        source: SanitizedProviderError::new(
+            "client initialization",
+            None,
+            None,
+            "ADC initialization",
+        ),
     }
 }
 
@@ -359,6 +373,7 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
 
     let http_status = error.http_status_code();
     let status_name = error.status().map(|status| status.code.name());
+    let sanitized = |category| sanitized_provider_error(category, &error);
 
     if matches!(http_status, Some(404)) || status_name == Some("NOT_FOUND") {
         StorageError::NotFound
@@ -367,7 +382,7 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
         || matches!(status_name, Some("UNAUTHENTICATED" | "PERMISSION_DENIED"))
     {
         StorageError::Authentication {
-            source: SanitizedProviderError::new("authentication", http_status),
+            source: sanitized("authentication"),
         }
     } else if error.is_timeout()
         || error.is_exhausted()
@@ -380,13 +395,43 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
         )
     {
         StorageError::Unavailable {
-            source: SanitizedProviderError::new("unavailable", http_status),
+            source: sanitized("unavailable"),
         }
     } else {
         StorageError::Provider {
-            source: SanitizedProviderError::new("provider", http_status),
+            source: sanitized("provider"),
         }
     }
+}
+
+fn sanitized_provider_error(
+    category: &'static str,
+    error: &google_cloud_storage::Error,
+) -> SanitizedProviderError {
+    let cause = if error.is_authentication() {
+        "authentication"
+    } else if error.is_timeout() {
+        "timeout"
+    } else if error.is_exhausted() {
+        "retry exhaustion"
+    } else if error.is_connect() {
+        "connection"
+    } else if error.is_io() {
+        "I/O"
+    } else if error.status().is_some() {
+        "RPC status"
+    } else if error.http_status_code().is_some() {
+        "HTTP response"
+    } else {
+        "provider"
+    };
+
+    SanitizedProviderError::new(
+        category,
+        error.http_status_code(),
+        error.status().map(|status| status.code.name().to_owned()),
+        cause,
+    )
 }
 
 fn stream_error_in_chain(error: &(dyn std::error::Error + 'static)) -> Option<StorageError> {
@@ -426,6 +471,8 @@ fn has_checksum_mismatch(error: &(dyn std::error::Error + 'static)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{error::Error as _, future};
+
     use bytes::Bytes;
     use futures_util::stream;
     use google_cloud_storage::model::Object;
@@ -494,6 +541,11 @@ mod tests {
         assert!(matches!(classified, StorageError::Authentication { .. }));
         assert!(!classified.to_string().contains("ya29.secret-token"));
         assert!(!format!("{classified:?}").contains("ya29.secret-token"));
+        let provider = classified.source().unwrap();
+        assert_eq!(
+            provider.source().unwrap().to_string(),
+            "sanitized provider cause (HTTP response)"
+        );
 
         for (status, expected) in [
             (404, "not_found"),
@@ -519,8 +571,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_failure_does_not_wait_for_a_pending_input_stream() {
+        let (sender, _receiver) = mpsc::channel(1);
+        let upload = future::ready(Err::<(), _>("provider rejected upload"));
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            upload_or_provider_failure(upload, stream::pending(), sender),
+        )
+        .await
+        .expect("provider failure should cancel input forwarding");
+
+        assert_eq!(result, Err("provider rejected upload"));
+    }
+
+    #[tokio::test]
     async fn upload_source_hashes_chunks_and_preserves_stream_failures() {
-        let digest = Arc::new(Mutex::new(UploadDigest::default()));
+        let digest = Arc::new(Mutex::new(ObjectDigest::default()));
         let (sender, receiver) = mpsc::channel(1);
         let mut source = UploadSource {
             receiver: Mutex::new(receiver),

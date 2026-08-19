@@ -6,7 +6,7 @@ use pasetors::{keys::SymmetricKey, version4::V4};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
-use crate::validation::Validation;
+use crate::validation::{is_canonical_relative_path, Validation};
 
 use super::{ConfigFieldError, LogFormat};
 
@@ -74,16 +74,8 @@ pub(super) fn string_url(value: String) -> Result<Url, String> {
 
 pub(super) fn object_key_prefix(value: String) -> Result<String, String> {
     let value = trim_required(value)?;
-    let is_canonical = !value.starts_with('/')
-        && !value.ends_with('/')
-        && value.split('/').all(|segment| {
-            !segment.is_empty()
-                && segment != "."
-                && segment != ".."
-                && !segment.contains(['\\', '\0'])
-        });
 
-    if is_canonical {
+    if is_canonical_relative_path(&value) {
         Ok(value)
     } else {
         Err("must be a canonical relative object-key prefix".to_owned())
