@@ -13,7 +13,7 @@ use crate::{
         AgentConnectionId, Document, DocumentId, DocumentOwner, DocumentUploadStatus,
         EvidenceSubmissionId, PolicyId, UserId, WorkspaceId,
     },
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream},
+    object_storage::{ObjectKey, ObjectMetadata, ObjectStore, ObjectStream, RuntimeObjectStore},
     persistence::Postgres,
     read_models::DocumentDownloadCandidate,
 };
@@ -101,7 +101,7 @@ pub struct WorkspaceDownloadAuditContext {
 #[derive(Clone)]
 pub struct DocumentDownloadService {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    object_store: Arc<RuntimeObjectStore>,
     public_api_base_url: Url,
     grant_encryptor: DownloadGrantEncryptor,
     grant_decryptor: DownloadGrantDecryptor,
@@ -110,7 +110,7 @@ pub struct DocumentDownloadService {
 impl DocumentDownloadService {
     pub fn new(
         repository: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        object_store: Arc<RuntimeObjectStore>,
         public_api_base_url: Url,
         grant_encryptor: DownloadGrantEncryptor,
         grant_decryptor: DownloadGrantDecryptor,

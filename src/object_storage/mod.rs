@@ -16,7 +16,11 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::{config::ObjectStorageConfig, domain::WorkspaceId};
+use crate::domain::WorkspaceId;
+
+mod runtime;
+
+pub use runtime::RuntimeObjectStore;
 
 #[async_trait]
 pub trait ObjectStore {
@@ -145,8 +149,8 @@ pub enum StorageError {
         payload_too_large: bool,
     },
 
-    #[error("object storage backend is not supported")]
-    UnsupportedBackend,
+    #[error("object storage backend {backend} is not supported")]
+    UnsupportedBackend { backend: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -155,13 +159,6 @@ pub struct FilesystemObjectStore {
 }
 
 impl FilesystemObjectStore {
-    pub async fn from_config(config: &ObjectStorageConfig) -> Result<Self, StorageError> {
-        match config {
-            ObjectStorageConfig::Filesystem { root } => Self::new(root).await,
-            ObjectStorageConfig::Gcs(_) => Err(StorageError::UnsupportedBackend),
-        }
-    }
-
     pub async fn new(root: impl AsRef<Path>) -> Result<Self, StorageError> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)
@@ -309,12 +306,6 @@ impl ObjectStore for FilesystemObjectStore {
     }
 }
 
-pub async fn from_config(
-    config: &ObjectStorageConfig,
-) -> Result<FilesystemObjectStore, StorageError> {
-    FilesystemObjectStore::from_config(config).await
-}
-
 fn validated_path(value: &str) -> Result<Vec<String>, StorageError> {
     if value.is_empty() || value.starts_with('/') || value.ends_with('/') {
         return Err(StorageError::InvalidKey);
@@ -435,7 +426,6 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{GcsCredentialsMode, GcsObjectStorageConfig};
     use bytes::Bytes;
     use futures_util::stream;
     use std::{
@@ -445,7 +435,6 @@ mod tests {
         task::{Context, Poll},
     };
     use tokio::io::{AsyncRead, ReadBuf};
-    use url::Url;
     use uuid::Uuid;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -614,10 +603,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_config_upload_head_get_delete_through_trait() {
+    async fn filesystem_upload_head_get_delete_through_trait() {
         let root = temp_dir("trait");
-        let config = ObjectStorageConfig::Filesystem { root: root.clone() };
-        let store = FilesystemObjectStore::from_config(&config).await.unwrap();
+        let store = FilesystemObjectStore::new(&root).await.unwrap();
         let store_ref: &FilesystemObjectStore = &store;
         let key = test_key("artifact.bin");
 
@@ -657,21 +645,6 @@ mod tests {
         assert!(matches!(
             ObjectStore::get_object(store_ref, &key).await,
             Err(StorageError::NotFound)
-        ));
-    }
-
-    #[tokio::test]
-    async fn unsupported_gcs_config_returns_clear_error() {
-        let config = ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-            bucket: "bucket".to_owned(),
-            endpoint_override: Some(Url::parse("http://localhost:4443").unwrap()),
-            credentials_mode: GcsCredentialsMode::Anonymous,
-            object_key_prefix: "proofplane".to_owned(),
-        });
-
-        assert!(matches!(
-            FilesystemObjectStore::from_config(&config).await,
-            Err(StorageError::UnsupportedBackend)
         ));
     }
 

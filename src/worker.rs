@@ -25,7 +25,7 @@ use crate::{
         IntegrationMessage, IntegrationMessageDecodeError, LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
         LEGACY_DOCUMENT_SCAN_REQUESTED,
     },
-    object_storage::FilesystemObjectStore,
+    object_storage::RuntimeObjectStore,
     persistence::Postgres,
     routes::{
         error::not_found,
@@ -82,7 +82,7 @@ pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<FilesystemObjectStore>,
+    pub object_store: Arc<RuntimeObjectStore>,
     pub scanner: Arc<ClamAvMalwareScanner>,
     pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
@@ -94,13 +94,13 @@ pub struct WorkerAppDependencies {
 #[derive(Clone)]
 pub struct WorkerState {
     document_scan_handler: DocumentScanHandler,
-    document_finalization_handler: DocumentFinalizationHandler<FilesystemObjectStore>,
+    document_finalization_handler: DocumentFinalizationHandler,
 }
 
 impl WorkerState {
     pub fn new(
         postgres: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        object_store: Arc<RuntimeObjectStore>,
         scanner: Arc<ClamAvMalwareScanner>,
         worker_max_delivery_attempts: u16,
     ) -> Self {

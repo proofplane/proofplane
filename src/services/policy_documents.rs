@@ -17,7 +17,7 @@ use crate::{
         AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, PolicyId, WorkspaceId,
     },
-    object_storage::{FilesystemObjectStore, StorageError},
+    object_storage::{RuntimeObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
 };
@@ -32,7 +32,7 @@ use super::{
 #[derive(Clone)]
 pub struct PolicyDocumentService {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    object_store: Arc<RuntimeObjectStore>,
     create_document: CreatePolicyDocumentHandler,
     archive_document: ArchiveDocumentHandler,
 }
@@ -49,7 +49,7 @@ pub struct UploadPolicyDocumentPayload {
 }
 
 impl PolicyDocumentService {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
+    pub fn new(repository: Arc<Postgres>, object_store: Arc<RuntimeObjectStore>) -> Self {
         Self {
             create_document: CreatePolicyDocumentHandler::new(repository.clone()),
             archive_document: ArchiveDocumentHandler::new(repository.clone()),

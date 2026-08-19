@@ -5,7 +5,9 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     app::{create_app, AppDependencies, CreateAppError},
     authentication::{auth0::Auth0TokenVerifier, UserAuthenticator},
-    config, object_storage, observability, persistence,
+    config,
+    object_storage::{self, RuntimeObjectStore},
+    observability, persistence,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -66,7 +68,7 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Arc::new(persistence::Postgres::new(pool));
-    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let object_store = Arc::new(RuntimeObjectStore::from_config(&config.object_storage).await?);
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
