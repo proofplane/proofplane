@@ -18,8 +18,10 @@ use tokio::{
 
 use crate::domain::WorkspaceId;
 
+mod gcs;
 mod runtime;
 
+pub use gcs::GcsObjectStore;
 pub use runtime::RuntimeObjectStore;
 
 #[async_trait]
@@ -83,6 +85,10 @@ impl ObjectKey {
     fn segments(&self) -> impl Iterator<Item = &str> {
         self.0.split('/')
     }
+
+    fn has_same_workspace(&self, other: &Self) -> bool {
+        self.segments().nth(1) == other.segments().nth(1)
+    }
 }
 
 impl fmt::Display for ObjectKey {
@@ -123,6 +129,22 @@ pub struct ObjectStream {
 }
 
 #[derive(Debug, Error)]
+#[error("sanitized GCS provider failure ({category}, HTTP status {http_status:?})")]
+pub struct SanitizedProviderError {
+    category: &'static str,
+    http_status: Option<u16>,
+}
+
+impl SanitizedProviderError {
+    fn new(category: &'static str, http_status: Option<u16>) -> Self {
+        Self {
+            category,
+            http_status,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
 pub enum StorageError {
     #[error("invalid object key")]
     InvalidKey,
@@ -149,8 +171,26 @@ pub enum StorageError {
         payload_too_large: bool,
     },
 
-    #[error("object storage backend {backend} is not supported")]
-    UnsupportedBackend { backend: &'static str },
+    #[error("object storage integrity check failed")]
+    Integrity,
+
+    #[error("object storage authentication or permission error")]
+    Authentication {
+        #[source]
+        source: SanitizedProviderError,
+    },
+
+    #[error("object storage is temporarily unavailable")]
+    Unavailable {
+        #[source]
+        source: SanitizedProviderError,
+    },
+
+    #[error("object storage provider error")]
+    Provider {
+        #[source]
+        source: SanitizedProviderError,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +330,10 @@ impl ObjectStore for FilesystemObjectStore {
         source: &ObjectKey,
         destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError> {
+        if !source.has_same_workspace(destination) {
+            return Err(StorageError::InvalidKey);
+        }
+
         let ObjectStream { metadata, chunks } = self.get_object(source).await?;
 
         self.put_object(PutObjectRequest {
@@ -426,10 +470,12 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{GcsObjectStorageConfig, ObjectStorageConfig};
     use bytes::Bytes;
-    use futures_util::stream;
+    use futures_util::{stream, FutureExt};
     use std::{
         fs as std_fs,
+        panic::AssertUnwindSafe,
         pin::Pin,
         sync::atomic::{AtomicU64, Ordering},
         task::{Context, Poll},
@@ -438,6 +484,154 @@ mod tests {
     use uuid::Uuid;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn filesystem_satisfies_the_shared_object_store_contract() {
+        let store = FilesystemObjectStore::new(temp_dir("contract-primary"))
+            .await
+            .unwrap();
+        let isolated = FilesystemObjectStore::new(temp_dir("contract-isolated"))
+            .await
+            .unwrap();
+
+        run_object_store_contract(&store, &isolated).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PROOFPLANE_GCS_TEST_BUCKET and application default credentials"]
+    async fn gcs_satisfies_the_shared_object_store_contract() {
+        let bucket = std::env::var("PROOFPLANE_GCS_TEST_BUCKET")
+            .expect("PROOFPLANE_GCS_TEST_BUCKET names a disposable test bucket");
+        let run = Uuid::new_v4();
+        let store =
+            RuntimeObjectStore::from_config(&ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
+                bucket: bucket.clone(),
+                object_key_prefix: format!("proofplane-contract/{run}/primary"),
+            }))
+            .await
+            .expect("ADC constructs the primary GCS object store");
+        let isolated =
+            RuntimeObjectStore::from_config(&ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
+                bucket,
+                object_key_prefix: format!("proofplane-contract/{run}/isolated"),
+            }))
+            .await
+            .expect("ADC constructs the isolated GCS object store");
+
+        let result = AssertUnwindSafe(run_object_store_contract(&store, &isolated))
+            .catch_unwind()
+            .await;
+        cleanup_contract_objects(&store).await;
+        cleanup_contract_objects(&isolated).await;
+
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    async fn run_object_store_contract<S>(store: &S, isolated: &S)
+    where
+        S: ObjectStore,
+    {
+        let (source, destination, cross_workspace_destination) = contract_keys();
+        let written = store
+            .put_object(PutObjectRequest {
+                key: source.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: chunks(["hello ", "object ", "storage"]),
+            })
+            .await
+            .expect("multi-chunk upload succeeds");
+
+        assert_eq!(written.key, source);
+        assert_eq!(written.content_type, "text/plain");
+        assert_eq!(written.content_length, 20);
+        assert_eq!(
+            written.sha256,
+            "f5cc4171a2e81eaba9b21e188e0d087d2dd3a190512fcc37b356c6da77adad93"
+        );
+        assert_eq!(
+            store.head_object(&source).await.expect("head succeeds"),
+            written
+        );
+        let object = store.get_object(&source).await.expect("get succeeds");
+        assert_eq!(object.metadata, written);
+        assert_eq!(object_bytes(object).await, b"hello object storage");
+        assert!(matches!(
+            isolated.head_object(&source).await,
+            Err(StorageError::NotFound)
+        ));
+
+        let copied = store
+            .copy_object(&source, &destination)
+            .await
+            .expect("server-side copy succeeds");
+        assert_eq!(copied.key, destination);
+        assert_eq!(copied.content_type, written.content_type);
+        assert_eq!(copied.content_length, written.content_length);
+        assert_eq!(copied.sha256, written.sha256);
+        assert_eq!(
+            object_bytes(store.get_object(&destination).await.expect("copy reads")).await,
+            b"hello object storage"
+        );
+
+        assert!(matches!(
+            store
+                .copy_object(&source, &cross_workspace_destination)
+                .await,
+            Err(StorageError::InvalidKey)
+        ));
+        for invalid in [
+            "",
+            "not-workspaces/00000000-0000-4000-8000-000000000001/evidence/a",
+            "workspaces/not-a-uuid/evidence/a",
+            "workspaces/00000000-0000-4000-8000-000000000001/evidence/../a",
+        ] {
+            assert!(matches!(
+                ObjectKey::parse(invalid),
+                Err(StorageError::InvalidKey)
+            ));
+        }
+
+        store.delete_object(&source).await.expect("delete succeeds");
+        store
+            .delete_object(&source)
+            .await
+            .expect("delete is idempotent");
+        store
+            .delete_object(&destination)
+            .await
+            .expect("copied object deletes");
+        assert!(matches!(
+            store.head_object(&source).await,
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    async fn cleanup_contract_objects(store: &RuntimeObjectStore) {
+        let (source, destination, cross_workspace_destination) = contract_keys();
+        for key in [source, destination, cross_workspace_destination] {
+            if let Err(error) = store.delete_object(&key).await {
+                crate::observability::record_cleanup_failure(
+                    &error,
+                    "gcs_object_store_contract",
+                    None,
+                );
+            }
+        }
+    }
+
+    fn contract_keys() -> (ObjectKey, ObjectKey, ObjectKey) {
+        let workspace =
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
+        let other_workspace =
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap());
+        (
+            ObjectKey::new(workspace, "contract/quarantine", "artifact.txt").unwrap(),
+            ObjectKey::new(workspace, "contract/final", "artifact.txt").unwrap(),
+            ObjectKey::new(other_workspace, "contract/final", "artifact.txt").unwrap(),
+        )
+    }
 
     #[test]
     fn object_keys_include_workspace_id_and_stable_prefixes() {
@@ -572,6 +766,30 @@ mod tests {
             object_bytes(store.get_object(&copied.key).await.unwrap()).await,
             b"hello"
         );
+    }
+
+    #[tokio::test]
+    async fn copy_rejects_cross_workspace_keys_before_reading_the_source() {
+        let store = FilesystemObjectStore::new(temp_dir("cross-workspace"))
+            .await
+            .unwrap();
+        let source = ObjectKey::new(
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()),
+            "quarantine",
+            "artifact.txt",
+        )
+        .unwrap();
+        let destination = ObjectKey::new(
+            WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap()),
+            "documents",
+            "artifact.txt",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.copy_object(&source, &destination).await,
+            Err(StorageError::InvalidKey)
+        ));
     }
 
     #[tokio::test]

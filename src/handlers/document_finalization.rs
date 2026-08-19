@@ -65,10 +65,29 @@ impl DocumentFinalizationHandler {
         tracing::debug!("finalizing document");
 
         let final_key = final_document_object_key(&work).map_err(retryable)?;
-        self.object_store
+        let copied = self
+            .object_store
             .copy_object(&payload.object_key, &final_key)
             .await
             .map_err(retryable)?;
+
+        if copied.key != final_key
+            || copied.content_type != work.content_type
+            || copied.content_length != work.content_length as u64
+            || copied.sha256 != work.checksum_sha256
+        {
+            self.object_store
+                .delete_object(&final_key)
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to delete document object after finalization integrity mismatch"
+                    );
+                })
+                .ok();
+            return Err(retryable(crate::object_storage::StorageError::Integrity));
+        }
 
         tracing::debug!("object copied");
 
@@ -226,9 +245,117 @@ fn retryable(error: impl ToString) -> RetryableWorkerError {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{DocumentUploadStatus, WorkspaceId};
+    use bytes::Bytes;
+    use futures_util::stream;
+
+    use crate::{
+        config::ObjectStorageConfig,
+        domain::{DocumentUploadStatus, WorkspaceId},
+        object_storage::{PutObjectRequest, StorageError},
+        persistence::{param, test_support},
+    };
 
     use super::*;
+
+    #[tokio::test]
+    async fn mismatched_copied_metadata_leaves_the_document_finalizing() {
+        let database = test_support::database().await;
+        let postgres = Arc::new(database.postgres);
+        let workspace = test_support::workspace(&postgres, "Finalization owner").await;
+        let policy_id =
+            test_support::policy(&postgres, workspace.workspace_id, "Access policy").await;
+        let document_id = DocumentId::from(Uuid::new_v4());
+        let identity = DocumentIdentity::Policy {
+            policy_id,
+            document_id,
+        };
+        let quarantine_key = ObjectKey::new(
+            workspace.workspace_id,
+            format!("quarantine/policies/{policy_id}/documents/{document_id}"),
+            "manual.txt",
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "proofplane-finalization-integrity-{}",
+            Uuid::new_v4()
+        ));
+        let object_store = Arc::new(
+            RuntimeObjectStore::from_config(&ObjectStorageConfig::Filesystem { root })
+                .await
+                .unwrap(),
+        );
+        object_store
+            .put_object(PutObjectRequest {
+                key: quarantine_key.clone(),
+                content_type: "text/plain".to_owned(),
+                chunks: stream::once(async { Ok(Bytes::from_static(b"wrong")) }),
+            })
+            .await
+            .unwrap();
+
+        let client = postgres.get().await.unwrap();
+        client
+            .execute_typed(
+                r#"
+INSERT INTO documents (
+    id, workspace_id, owner_type, owner_id, created_by_user_id, filename,
+    content_type, content_length, object_key, checksum_sha256, checksum_crc32c,
+    upload_status
+)
+VALUES ($1, $2, 'policy', $3, $4, 'manual.txt', 'text/plain', 6, $5, $6, 'ignored',
+        'finalizing')
+"#,
+                &[
+                    param(&Uuid::from(document_id)),
+                    param(&Uuid::from(workspace.workspace_id)),
+                    param(&Uuid::from(policy_id)),
+                    param(&Uuid::from(workspace.user_id)),
+                    param(&quarantine_key.as_str()),
+                    param(&"f1b2f12c3f2c85eab7c8b2f87a735d66e4ebdc7a8e03c8bd421bd66c835033cd"),
+                ],
+            )
+            .await
+            .unwrap();
+        drop(client);
+
+        let message = WorkerMessage {
+            message_id: Uuid::new_v4().to_string(),
+            event_type: "document.finalization_requested".to_owned(),
+            aggregate_type: "policy_document".to_owned(),
+            aggregate_id: Uuid::from(document_id).to_string(),
+            request_id: None,
+            payload: serde_json::json!({
+                "policy_id": Uuid::from(policy_id).to_string(),
+                "object_key": quarantine_key.as_str(),
+            }),
+            delivery_attempt: Some(1),
+        };
+
+        let result = DocumentFinalizationHandler::new(postgres.clone(), object_store.clone())
+            .handle_finalization_requested(message)
+            .await;
+
+        assert!(result.is_err(), "metadata mismatch remains retryable");
+        assert!(postgres
+            .reads()
+            .await
+            .unwrap()
+            .documents()
+            .load_finalizing_upload_work(identity, quarantine_key.as_str())
+            .await
+            .unwrap()
+            .is_some());
+        let final_key = ObjectKey::new(
+            workspace.workspace_id,
+            format!("policies/{policy_id}/documents/{document_id}"),
+            "manual.txt",
+        )
+        .unwrap();
+        assert!(matches!(
+            object_store.head_object(&final_key).await,
+            Err(StorageError::NotFound)
+        ));
+    }
 
     #[test]
     fn finalization_payload_parses_valid_message_and_rejects_invalid_message() {

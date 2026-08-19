@@ -151,8 +151,6 @@ pub enum ObjectStorageConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcsObjectStorageConfig {
     pub bucket: String,
-    pub endpoint_override: Option<Url>,
-    pub credentials_mode: GcsCredentialsMode,
     pub object_key_prefix: String,
 }
 
@@ -166,12 +164,6 @@ pub struct ScannerConfig {
     pub clamd_address: SocketAddr,
     pub connection_timeout_ms: u64,
     pub scan_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GcsCredentialsMode {
-    ApplicationDefault,
-    Anonymous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,6 +402,58 @@ mod tests {
     }
 
     #[test]
+    fn gcs_configuration_uses_bucket_and_canonical_object_key_prefix_only() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let gcs = base.replace(
+            "object_storage:\n  backend: \"filesystem\"\n  root: \".local/storage\"",
+            "object_storage:\n  backend: \"gcs\"\n  bucket: \"proofplane-test\"\n  object_key_prefix: \"environments/test\"",
+        );
+        assert_ne!(base, gcs, "object storage replacement anchor matched");
+
+        let path = write_temp_config(&gcs);
+        let config = load_from_path(&path).expect("GCS config loads");
+
+        assert_eq!(
+            config.object_storage,
+            ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
+                bucket: "proofplane-test".to_owned(),
+                object_key_prefix: "environments/test".to_owned(),
+            })
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn gcs_object_key_prefix_must_be_a_canonical_relative_path() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+
+        for prefix in [
+            "/proofplane",
+            "proofplane/",
+            "proofplane//test",
+            "proofplane/../test",
+        ] {
+            let gcs = base.replace(
+                "object_storage:\n  backend: \"filesystem\"\n  root: \".local/storage\"",
+                &format!(
+                    "object_storage:\n  backend: \"gcs\"\n  bucket: \"proofplane-test\"\n  object_key_prefix: \"{prefix}\""
+                ),
+            );
+            let path = write_temp_config(&gcs);
+            let error = load_from_path(&path).expect_err("non-canonical prefix is rejected");
+
+            assert!(matches!(
+                error,
+                ConfigError::Validation(ref errors)
+                    if errors.iter().any(|error| error.path == "object_storage.object_key_prefix")
+            ));
+
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn missing_env_var_returns_error() {
         let _lock = ENV_LOCK.lock().expect("env lock is available");
         let previous = env::var(PROOFPLANE_CONFIG).ok();
@@ -522,9 +566,7 @@ paseto:
 object_storage:
   backend: "gcs"
   bucket: "proofplane"
-  endpoint_override: "not-a-url"
-  credentials_mode: "unknown"
-  object_key_prefix: "evidence"
+  object_key_prefix: "../evidence"
 scanner:
   clamd_address: "not-a-socket"
   connection_timeout_ms: 0
@@ -589,8 +631,7 @@ health:
                 assert!(paths.contains(&"paseto.mcp_oauth.active_key_id"));
                 assert!(paths.contains(&"paseto.mcp_oauth.keys[0].id"));
                 assert!(paths.contains(&"paseto.mcp_oauth.keys[0].secret"));
-                assert!(paths.contains(&"object_storage.endpoint_override"));
-                assert!(paths.contains(&"object_storage.credentials_mode"));
+                assert!(paths.contains(&"object_storage.object_key_prefix"));
                 assert!(paths.contains(&"scanner.clamd_address"));
                 assert!(paths.contains(&"scanner.connection_timeout_ms"));
                 assert!(paths.contains(&"scanner.scan_timeout_ms"));

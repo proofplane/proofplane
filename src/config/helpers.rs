@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::validation::Validation;
 
-use super::{ConfigFieldError, GcsCredentialsMode, LogFormat};
+use super::{ConfigFieldError, LogFormat};
 
 pub(super) fn string_value(value: String) -> Result<String, String> {
     trim_required(value)
@@ -68,18 +68,26 @@ pub(super) fn socket_addr(value: String) -> Result<SocketAddr, String> {
         .map_err(|_| "must be a socket address".into())
 }
 
-pub(super) fn optional_url(value: Option<String>) -> Result<Option<Url>, String> {
-    match value {
-        Some(value) if value.trim().is_empty() => Err("must not be empty when set".into()),
-        Some(value) => Url::parse(value.trim())
-            .map(Some)
-            .map_err(|_| "must be a valid URL".into()),
-        None => Ok(None),
-    }
-}
-
 pub(super) fn string_url(value: String) -> Result<Url, String> {
     Url::parse(trim_required(value)?.as_str()).map_err(|_| "must be a valid URL".into())
+}
+
+pub(super) fn object_key_prefix(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+    let is_canonical = !value.starts_with('/')
+        && !value.ends_with('/')
+        && value.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && !segment.contains(['\\', '\0'])
+        });
+
+    if is_canonical {
+        Ok(value)
+    } else {
+        Err("must be a canonical relative object-key prefix".to_owned())
+    }
 }
 
 pub(super) fn public_api_base_url(value: String) -> Result<Url, String> {
@@ -119,14 +127,6 @@ pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {
         "json" => Ok(LogFormat::Json),
         "pretty" => Ok(LogFormat::Pretty),
         _ => Err("must be `json` or `pretty`".into()),
-    }
-}
-
-pub(super) fn gcs_credentials_mode(value: String) -> Result<GcsCredentialsMode, String> {
-    match trim_required(value)?.as_str() {
-        "application_default" => Ok(GcsCredentialsMode::ApplicationDefault),
-        "anonymous" => Ok(GcsCredentialsMode::Anonymous),
-        _ => Err("must be `application_default` or `anonymous`".into()),
     }
 }
 

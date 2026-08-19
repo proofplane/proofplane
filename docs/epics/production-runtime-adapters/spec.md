@@ -29,7 +29,11 @@ emulator. The configured prefix is prepended outside the logical
 workspace-scoped `ObjectKey` and is never persisted in document rows.
 
 Uploads and reads stream. Copy may use GCS server-side copy/rewrite, but must
-verify destination metadata before finalization marks an document uploaded.
+verify destination metadata before finalization marks a document uploaded. GCS
+uploads record the calculated SHA-256 digest as `proofplane-sha256` custom
+metadata. Finalization compares the copied key, content type, length, and digest
+with the persisted document metadata and removes a mismatched destination before
+returning the work for retry.
 
 ## Pub/Sub Runtime
 
@@ -64,15 +68,21 @@ or application default credentials.
 ## Verification
 
 Local integration-v2 tests use `FilesystemObjectStore` and require no cloud
-credentials. CI has a dedicated GCS integration-v2 configuration with a real
-test bucket and application default credentials. The same object-store contract
-suite runs against filesystem locally and real GCS in CI, including upload,
-head, read, copy, delete, prefix isolation, checksums, and cleanup.
+credentials. The shared object-store contract runs against filesystem storage
+unconditionally. A real-GCS variant is ignored by default and can be run by an
+operator who supplies application default credentials and a disposable bucket:
 
-GCS tests create unique per-run prefixes and delete their objects even after
-failures. The CI identity is restricted to the test bucket. Unit tests may still
-cover parsing and deterministic error mapping, but fakes do not substitute for
-the real GCS integration-v2 suite.
+```bash
+PROOFPLANE_GCS_TEST_BUCKET=<disposable-bucket> cargo test object_storage::tests::gcs_satisfies_the_shared_object_store_contract -- --ignored --exact
+```
+
+The GCS contract creates unique per-run prefixes and deletes every known object
+after success, assertion failure, or task panic. Provisioning the bucket and its
+test identity is environment-owned; this epic adds no CI workflow or identity.
+The contract covers upload, head, streamed read, server-side copy, idempotent
+delete, prefix isolation, logical keys, checksums, invalid keys, and
+cross-workspace rejection. Unit tests additionally cover configuration,
+deterministic error mapping, metadata mapping, and streaming failures.
 
 Pub/Sub emulator integration-v2 tests remain because Pub/Sub local behavior is
 a separate decision. A credential-free construction test proves the dequeuer no
@@ -81,6 +91,9 @@ verifies the configured Pub/Sub mode without a separate deployment smoke test.
 
 ## Revisions
 
+- 2026-08-19: Made real-GCS verification an explicit, configuration-driven
+  contract command. Removed CI workflow and test-identity provisioning from the
+  epic while retaining filesystem-backed integration-v2 coverage.
 - 2026-08-05: Moved production topic, subscription, delivery, and IAM ownership
   from dequeuer startup to Terraform. The runtime now publishes only; local
   emulator test setup may still provision disposable resources.
