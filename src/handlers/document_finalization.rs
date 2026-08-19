@@ -11,42 +11,28 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    object_storage::{ObjectKey, ObjectStore},
+    object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{Postgres, TypedDocumentUploadWork},
     worker::{RetryableWorkerError, WorkerMessage},
 };
 
-pub struct DocumentFinalizationHandler<S> {
+#[derive(Clone)]
+pub struct DocumentFinalizationHandler {
     repository: Arc<Postgres>,
-    object_store: Arc<S>,
+    object_store: Arc<RuntimeObjectStore>,
     command_handler: FinalizeDocumentCommandHandler,
 }
 
-impl<S> Clone for DocumentFinalizationHandler<S> {
-    fn clone(&self) -> Self {
-        Self {
-            repository: self.repository.clone(),
-            object_store: self.object_store.clone(),
-            command_handler: self.command_handler.clone(),
-        }
-    }
-}
-
-impl<S> DocumentFinalizationHandler<S> {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<S>) -> Self {
+impl DocumentFinalizationHandler {
+    pub fn new(repository: Arc<Postgres>, object_store: Arc<RuntimeObjectStore>) -> Self {
         Self {
             command_handler: FinalizeDocumentCommandHandler::new(repository.clone()),
             repository,
             object_store,
         }
     }
-}
 
-impl<S> DocumentFinalizationHandler<S>
-where
-    S: ObjectStore + Send + Sync,
-{
     pub async fn handle_finalization_requested(
         &self,
         message: WorkerMessage,

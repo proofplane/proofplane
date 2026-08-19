@@ -10,9 +10,7 @@ use futures_util::StreamExt;
 
 use crate::{
     domain::{DocumentOwner, EvidenceSubmissionId, WorkspaceId},
-    object_storage::{
-        FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
-    },
+    object_storage::{ObjectKey, ObjectStore, PutObjectRequest, RuntimeObjectStore, StorageError},
 };
 
 use super::Error;
@@ -37,7 +35,7 @@ pub(crate) struct BoundedStagingRequest {
 }
 
 pub(crate) async fn stage_document<S>(
-    object_store: &FilesystemObjectStore,
+    object_store: &RuntimeObjectStore,
     workspace_id: WorkspaceId,
     owner: DocumentOwner,
     upload_id: uuid::Uuid,
@@ -82,7 +80,7 @@ where
 }
 
 pub(crate) async fn stage_evidence_document<S>(
-    object_store: &FilesystemObjectStore,
+    object_store: &RuntimeObjectStore,
     workspace_id: WorkspaceId,
     evidence_submission_id: EvidenceSubmissionId,
     filename: String,
@@ -110,7 +108,7 @@ where
 }
 
 pub(crate) async fn stage_bounded_document<S>(
-    object_store: &FilesystemObjectStore,
+    object_store: &RuntimeObjectStore,
     request: BoundedStagingRequest,
     chunks: S,
 ) -> Result<StagedDocument, Error>
@@ -175,7 +173,7 @@ fn stream_too_large() -> StorageError {
 }
 
 pub(crate) async fn delete_staged_document(
-    object_store: &FilesystemObjectStore,
+    object_store: &RuntimeObjectStore,
     object_key: &str,
 ) -> Result<(), Error> {
     object_store
@@ -195,17 +193,16 @@ mod tests {
 
     use super::stage_evidence_document;
     use crate::{
+        config::ObjectStorageConfig,
         domain::{EvidenceSubmissionId, WorkspaceId},
-        object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore},
+        object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore},
         services::Error,
     };
 
     #[tokio::test]
     async fn evidence_stream_stages_bytes_and_computes_all_metadata() {
         let root = temp_dir("metadata");
-        let store = FilesystemObjectStore::new(&root)
-            .await
-            .expect("object store initializes");
+        let store = object_store(&root).await;
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
         let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
 
@@ -258,9 +255,7 @@ mod tests {
     #[tokio::test]
     async fn evidence_stream_rejects_bytes_over_limit_and_removes_partial_object() {
         let root = temp_dir("over-limit");
-        let store = FilesystemObjectStore::new(&root)
-            .await
-            .expect("object store initializes");
+        let store = object_store(&root).await;
 
         let result = stage_evidence_document(
             &store,
@@ -295,9 +290,7 @@ mod tests {
     #[tokio::test]
     async fn evidence_stream_failure_removes_partial_object() {
         let root = temp_dir("stream-failure");
-        let store = FilesystemObjectStore::new(&root)
-            .await
-            .expect("object store initializes");
+        let store = object_store(&root).await;
 
         let result = stage_evidence_document(
             &store,
@@ -330,6 +323,14 @@ mod tests {
         tokio::fs::remove_dir_all(root)
             .await
             .expect("test storage cleans up");
+    }
+
+    async fn object_store(root: &std::path::Path) -> RuntimeObjectStore {
+        RuntimeObjectStore::from_config(&ObjectStorageConfig::Filesystem {
+            root: root.to_path_buf(),
+        })
+        .await
+        .expect("object store initializes")
     }
 
     fn temp_dir(name: &str) -> PathBuf {

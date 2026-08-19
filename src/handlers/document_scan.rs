@@ -13,7 +13,7 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    object_storage::{FilesystemObjectStore, ObjectKey, ObjectStore, StorageError},
+    object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{Postgres, TypedDocumentUploadWork},
     scanner::{ClamAvMalwareScanner, MalwareScanError, MalwareScanOutcome, MalwareScanResult},
@@ -24,7 +24,7 @@ const MISSING_OBJECT_FAILURE_REASON: &str = "quarantined object was not found";
 
 pub struct DocumentScanHandler {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    object_store: Arc<RuntimeObjectStore>,
     scanner: Arc<ClamAvMalwareScanner>,
     max_delivery_attempts: u16,
     command_handler: ScanDocumentCommandHandler,
@@ -45,7 +45,7 @@ impl Clone for DocumentScanHandler {
 impl DocumentScanHandler {
     pub fn new(
         repository: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        object_store: Arc<RuntimeObjectStore>,
         scanner: Arc<ClamAvMalwareScanner>,
         max_delivery_attempts: u16,
     ) -> Self {

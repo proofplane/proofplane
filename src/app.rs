@@ -43,7 +43,7 @@ use crate::{
         Error as AuthenticationError, UserAuthenticator,
     },
     config::AppConfig,
-    object_storage::FilesystemObjectStore,
+    object_storage::RuntimeObjectStore,
     persistence::Postgres,
     routes::{
         agent_connections::{self, AgentConnectionsState},
@@ -87,7 +87,7 @@ use tracing::Span;
 pub struct AppDependencies<V: TokenVerifier<Claims = VerifiedClaims>> {
     pub config: AppConfig,
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<FilesystemObjectStore>,
+    pub object_store: Arc<RuntimeObjectStore>,
     pub metrics: PrometheusHandle,
     pub user_authenticator: UserAuthenticator<V>,
     pub auditor_identity_provider: Option<SharedAuditorIdentityProvider>,

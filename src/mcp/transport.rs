@@ -61,7 +61,7 @@ use crate::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
     config::HealthConfig,
     domain::WorkspacePermission,
-    object_storage::FilesystemObjectStore,
+    object_storage::RuntimeObjectStore,
     persistence::Postgres,
     routes::{
         health::{self, ReadyState},
@@ -87,7 +87,7 @@ pub enum McpAppError {
 
 pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<FilesystemObjectStore>,
+    pub object_store: Arc<RuntimeObjectStore>,
     pub metrics: PrometheusHandle,
     pub oauth_verifier: Arc<V>,
     pub authorization_server: Url,

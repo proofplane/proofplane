@@ -11,7 +11,8 @@ use proofplane::{
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage, observability,
+    object_storage::{self, RuntimeObjectStore},
+    observability,
     persistence::{self, PoolBounds, PoolRuntime, Postgres},
     services::{client_resolver::ClientResolver, oauth::OAuthService},
 };
@@ -72,7 +73,7 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Arc::new(Postgres::new(pool));
-    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let object_store = Arc::new(RuntimeObjectStore::from_config(&config.object_storage).await?);
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
         "proofplane-document-download",

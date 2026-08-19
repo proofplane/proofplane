@@ -12,7 +12,7 @@ use axum_test::TestServer;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     config::AppConfig,
-    object_storage::FilesystemObjectStore,
+    object_storage::RuntimeObjectStore,
     persistence::Postgres,
     scanner::ClamAvMalwareScanner,
     worker::{create_worker_app, decode_worker_message, WorkerAppDependencies},
@@ -580,7 +580,7 @@ async fn forward_message(State(state): State<ProxyState>, body: Bytes) -> Status
 pub fn start_worker(
     config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<FilesystemObjectStore>,
+    object_store: &Arc<RuntimeObjectStore>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
     let scanner = Arc::new(ClamAvMalwareScanner::new(

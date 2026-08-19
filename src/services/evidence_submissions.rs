@@ -14,7 +14,7 @@ use crate::{
         AgentEvidenceUploadGrant, CoverageWindow, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, EvidenceId, EvidenceSubmissionId, WorkspaceId,
     },
-    object_storage::{FilesystemObjectStore, StorageError},
+    object_storage::{RuntimeObjectStore, StorageError},
     persistence::{ArchiveDocumentResult, Postgres},
     read_models::EvidenceSubmissionDetail,
     services::Error,
@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 pub struct EvidenceSubmissionService {
     repository: Arc<Postgres>,
-    object_store: Arc<FilesystemObjectStore>,
+    object_store: Arc<RuntimeObjectStore>,
     create_document: CreateEvidenceSubmissionDocumentHandler,
     archive_document: ArchiveDocumentHandler,
 }
@@ -63,7 +63,7 @@ pub struct StagedEvidenceDocument {
 }
 
 impl EvidenceSubmissionService {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<FilesystemObjectStore>) -> Self {
+    pub fn new(repository: Arc<Postgres>, object_store: Arc<RuntimeObjectStore>) -> Self {
         Self {
             create_document: CreateEvidenceSubmissionDocumentHandler::new(repository.clone()),
             archive_document: ArchiveDocumentHandler::new(repository.clone()),

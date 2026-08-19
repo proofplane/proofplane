@@ -18,7 +18,7 @@ use crate::{
         AgentPolicyDocumentUploadGrantError as DomainGrantError, AgentPolicyDocumentUploadGrantId,
         CreateDocumentPayload, Document, DocumentId, DocumentOwner, PolicyId, WorkspaceId,
     },
-    object_storage::{FilesystemObjectStore, StorageError},
+    object_storage::{RuntimeObjectStore, StorageError},
     observability::{
         agent_policy_document_uploads::{
             record_attempt, record_received_bytes, AgentPolicyDocumentUploadAttemptResult,
@@ -76,7 +76,7 @@ impl AgentPolicyDocumentUploadOutcome {
 impl AgentPolicyDocumentUploadService {
     pub fn new(
         repository: Arc<Postgres>,
-        object_store: Arc<FilesystemObjectStore>,
+        object_store: Arc<RuntimeObjectStore>,
         credential_verifier: AgentPolicyDocumentUploadCredentialVerifier,
         max_document_bytes: usize,
     ) -> Self {

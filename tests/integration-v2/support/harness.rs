@@ -33,7 +33,7 @@ use proofplane::{
     config::AppConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
-    object_storage::FilesystemObjectStore,
+    object_storage::RuntimeObjectStore,
     persistence::Postgres,
     pubsub::{ensure_worker_subscription, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
     routes::authentication::AUTHORIZATION_HEADER,
@@ -58,7 +58,7 @@ struct Harness {
     // The servers also retain these dependencies. Keeping them here makes the
     // suite runtime's ownership of all runtime-bound resources explicit.
     _postgres: Arc<Postgres>,
-    _object_store: Arc<FilesystemObjectStore>,
+    _object_store: Arc<RuntimeObjectStore>,
     _worker: Arc<TestServer>,
     _proxy: PushProxy,
     _dequeuer: tokio::task::JoinHandle<()>,
@@ -113,9 +113,9 @@ impl Harness {
         let reference_data = reference_data::seed(&postgres).await;
 
         let object_store = Arc::new(
-            proofplane::object_storage::from_config(&app_config.object_storage)
+            RuntimeObjectStore::from_config(&app_config.object_storage)
                 .await
-                .expect("filesystem object store initializes"),
+                .expect("configured object store initializes"),
         );
         let auditor_identity_provider = Arc::new(FakeAuditorIdentityProvider::default());
         let clamd = FakeClamd::start().await;
@@ -256,7 +256,7 @@ impl TestApp {
 fn build_app_server(
     app_config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<FilesystemObjectStore>,
+    object_store: &Arc<RuntimeObjectStore>,
     auditor_identity_provider: &Arc<FakeAuditorIdentityProvider>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
@@ -277,7 +277,7 @@ fn build_app_server(
 fn build_mcp_server(
     app_config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<FilesystemObjectStore>,
+    object_store: &Arc<RuntimeObjectStore>,
 ) -> TestServer {
     let issuer = app_config.server.public_api_base_url.clone();
     let resource = app_config.mcp.resource.clone();
