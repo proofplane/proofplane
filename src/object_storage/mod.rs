@@ -155,38 +155,70 @@ impl ObjectDigest {
     }
 }
 
-#[derive(Debug, Error)]
-#[error(
-    "sanitized GCS provider failure ({category}, HTTP status {http_status:?}, RPC status {rpc_status:?})"
-)]
-pub struct SanitizedProviderError {
-    category: &'static str,
+#[derive(Debug)]
+pub struct ProviderFailure {
+    kind: ProviderFailureKind,
     http_status: Option<u16>,
     rpc_status: Option<String>,
-    #[source]
-    cause: SanitizedProviderCause,
 }
 
-impl SanitizedProviderError {
+impl fmt::Display for ProviderFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "provider failure ({kind}", kind = self.kind)?;
+        if let Some(status) = self.http_status {
+            write!(formatter, ", HTTP status {status}")?;
+        }
+        if let Some(status) = &self.rpc_status {
+            write!(formatter, ", RPC status {status}")?;
+        }
+        formatter.write_str(")")
+    }
+}
+
+impl std::error::Error for ProviderFailure {}
+
+impl ProviderFailure {
     fn new(
-        category: &'static str,
+        kind: ProviderFailureKind,
         http_status: Option<u16>,
         rpc_status: Option<String>,
-        cause: &'static str,
     ) -> Self {
         Self {
-            category,
+            kind,
             http_status,
             rpc_status,
-            cause: SanitizedProviderCause { kind: cause },
         }
     }
 }
 
-#[derive(Debug, Error)]
-#[error("sanitized provider cause ({kind})")]
-struct SanitizedProviderCause {
-    kind: &'static str,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderFailureKind {
+    AdcInitialization,
+    Authentication,
+    Timeout,
+    RetryExhaustion,
+    Connection,
+    Io,
+    RpcStatus,
+    HttpResponse,
+    Provider,
+}
+
+impl fmt::Display for ProviderFailureKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self {
+            Self::AdcInitialization => "ADC initialization",
+            Self::Authentication => "authentication",
+            Self::Timeout => "timeout",
+            Self::RetryExhaustion => "retry exhaustion",
+            Self::Connection => "connection",
+            Self::Io => "I/O",
+            Self::RpcStatus => "RPC status",
+            Self::HttpResponse => "HTTP response",
+            Self::Provider => "provider",
+        };
+        formatter.write_str(description)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -222,19 +254,19 @@ pub enum StorageError {
     #[error("object storage authentication or permission error")]
     Authentication {
         #[source]
-        source: SanitizedProviderError,
+        source: ProviderFailure,
     },
 
     #[error("object storage is temporarily unavailable")]
     Unavailable {
         #[source]
-        source: SanitizedProviderError,
+        source: ProviderFailure,
     },
 
     #[error("object storage provider error")]
     Provider {
         #[source]
-        source: SanitizedProviderError,
+        source: ProviderFailure,
     },
 }
 

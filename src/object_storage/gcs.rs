@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::{
     ObjectByteStream, ObjectDigest, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream,
-    PutObjectRequest, SanitizedProviderError, StorageError,
+    ProviderFailure, ProviderFailureKind, PutObjectRequest, StorageError,
 };
 
 const SHA256_METADATA_KEY: &str = "proofplane-sha256";
@@ -329,12 +329,7 @@ where
 
 fn client_initialization_error() -> StorageError {
     StorageError::Authentication {
-        source: SanitizedProviderError::new(
-            "client initialization",
-            None,
-            None,
-            "ADC initialization",
-        ),
+        source: ProviderFailure::new(ProviderFailureKind::AdcInitialization, None, None),
     }
 }
 
@@ -373,8 +368,6 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
 
     let http_status = error.http_status_code();
     let status_name = error.status().map(|status| status.code.name());
-    let sanitized = |category| sanitized_provider_error(category, &error);
-
     if matches!(http_status, Some(404)) || status_name == Some("NOT_FOUND") {
         StorageError::NotFound
     } else if error.is_authentication()
@@ -382,7 +375,7 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
         || matches!(status_name, Some("UNAUTHENTICATED" | "PERMISSION_DENIED"))
     {
         StorageError::Authentication {
-            source: sanitized("authentication"),
+            source: provider_failure(&error),
         }
     } else if error.is_timeout()
         || error.is_exhausted()
@@ -395,42 +388,38 @@ fn classify_provider_error(error: google_cloud_storage::Error) -> StorageError {
         )
     {
         StorageError::Unavailable {
-            source: sanitized("unavailable"),
+            source: provider_failure(&error),
         }
     } else {
         StorageError::Provider {
-            source: sanitized("provider"),
+            source: provider_failure(&error),
         }
     }
 }
 
-fn sanitized_provider_error(
-    category: &'static str,
-    error: &google_cloud_storage::Error,
-) -> SanitizedProviderError {
-    let cause = if error.is_authentication() {
-        "authentication"
+fn provider_failure(error: &google_cloud_storage::Error) -> ProviderFailure {
+    let kind = if error.is_authentication() {
+        ProviderFailureKind::Authentication
     } else if error.is_timeout() {
-        "timeout"
+        ProviderFailureKind::Timeout
     } else if error.is_exhausted() {
-        "retry exhaustion"
+        ProviderFailureKind::RetryExhaustion
     } else if error.is_connect() {
-        "connection"
+        ProviderFailureKind::Connection
     } else if error.is_io() {
-        "I/O"
+        ProviderFailureKind::Io
     } else if error.status().is_some() {
-        "RPC status"
+        ProviderFailureKind::RpcStatus
     } else if error.http_status_code().is_some() {
-        "HTTP response"
+        ProviderFailureKind::HttpResponse
     } else {
-        "provider"
+        ProviderFailureKind::Provider
     };
 
-    SanitizedProviderError::new(
-        category,
+    ProviderFailure::new(
+        kind,
         error.http_status_code(),
         error.status().map(|status| status.code.name().to_owned()),
-        cause,
     )
 }
 
@@ -542,10 +531,12 @@ mod tests {
         assert!(!classified.to_string().contains("ya29.secret-token"));
         assert!(!format!("{classified:?}").contains("ya29.secret-token"));
         let provider = classified.source().unwrap();
+        assert!(provider.downcast_ref::<ProviderFailure>().is_some());
         assert_eq!(
-            provider.source().unwrap().to_string(),
-            "sanitized provider cause (HTTP response)"
+            provider.to_string(),
+            "provider failure (HTTP response, HTTP status 403)"
         );
+        assert!(provider.source().is_none());
 
         for (status, expected) in [
             (404, "not_found"),
