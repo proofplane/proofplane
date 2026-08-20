@@ -27,12 +27,18 @@ make health
 make seed
 ```
 
-`make up` starts local Postgres, the Pub/Sub emulator, and ClamAV. `make health`
-checks that those services are reachable and creates the local filesystem
-storage directory when needed. `make seed` runs the database migrations and
-writes demo data (an owner user, a workspace, frameworks, controls, and an
-evidence). To apply migrations without any demo data — the same command
-production runs — use `make migrate`.
+`make up` starts local Postgres, the Pub/Sub emulator, and ClamAV, then creates
+the emulator topics and the worker push subscription. The emulator keeps no
+state between runs, and no runtime process provisions anything, so that step
+belongs to the stack rather than to the dequeuer. Run `make pubsub-init` again
+after you change `pubsub.subscriptions.worker_push_endpoint` in
+`.local/config.yaml`, such as when you point the worker at an ngrok tunnel.
+
+`make health` checks that those services are reachable and creates the local
+filesystem storage directory when needed. `make seed` runs the database
+migrations and writes demo data (an owner user, a workspace, frameworks,
+controls, and an evidence). To apply migrations without any demo data — the same
+command production runs — use `make migrate`.
 
 The local Docker services listen on:
 
@@ -100,6 +106,12 @@ embedded migration set changes, run `make migrate` or `make seed` before
 starting a process. A process refuses to start when the database history is
 behind its binary, or diverges from it, or runs ahead of it by any migration
 marked `breaking_`.
+
+Runtime processes never provision Pub/Sub resources either. The dequeuer
+publishes only. It reads `PUBSUB_EMULATOR_HOST` to choose between the emulator
+and Google application default credentials, and logs that choice at startup. If
+it then logs `outbox publish failed` with `NOT_FOUND`, the emulator lost its
+topics, such as after a restart of the container. Run `make pubsub-init`.
 
 Start a process with the Make target for that binary (they read
 `$PROOFPLANE_CONFIG`, defaulting to `.local/config.yaml`):

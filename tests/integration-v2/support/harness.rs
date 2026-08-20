@@ -35,7 +35,7 @@ use proofplane::{
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::RuntimeObjectStore,
     persistence::Postgres,
-    pubsub::{ensure_worker_subscription, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
+    pubsub::{emulator, ClientMode, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
     routes::authentication::AUTHORIZATION_HEADER,
     services::{
         agent_evidence_upload_grants::AGENT_EVIDENCE_UPLOAD_GRANT_AUDIENCE,
@@ -135,16 +135,17 @@ impl Harness {
             &app_config.pubsub.subscriptions.worker,
         )
         .await;
-        ensure_worker_subscription(
+        emulator::provision(
             &app_config.pubsub.project_id,
             &app_config.pubsub.subscriptions,
         )
         .await
         .expect("worker Pub/Sub subscription provisions");
 
-        let publisher = GoogleCloudPublisher::new(app_config.pubsub.project_id.clone())
-            .await
-            .expect("Pub/Sub publisher initializes");
+        let publisher =
+            GoogleCloudPublisher::new(&app_config.pubsub.project_id, &ClientMode::from_env())
+                .await
+                .expect("Pub/Sub publisher initializes");
         let dequeuer_postgres = postgres.clone();
         let dequeuer = tokio::spawn(async move {
             let dequeuer_config = OutboxDequeuerConfig {

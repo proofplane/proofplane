@@ -202,7 +202,9 @@ After a successful apply:
   accepted work.
 - Confirm API and MCP revisions use that digest, have min instances zero, and
   reject direct internet access to their default URLs.
-- Confirm the dequeuer worker pool has exactly one instance.
+- Confirm the dequeuer worker pool has exactly one instance, that its log
+  records `pubsub_mode=application-default-credentials`, and that no
+  `outbox publish failed` line follows it.
 - Confirm the worker has min zero/max one, concurrency four, clamd is ready,
   and an unsigned request to its `run.app` URL is rejected.
 - Publish a non-destructive test message and verify authenticated delivery,
@@ -214,6 +216,48 @@ After a successful apply:
 
 Do not add continuous public uptime probes; they defeat the accepted
 scale-to-zero behavior.
+
+## Pub/Sub Runtime
+
+Terraform owns every production topic, subscription, retry policy, dead-letter
+resource, and delivery permission. No Proofplane process creates or reconciles
+any of them.
+
+The dequeuer selects its client mode from `PUBSUB_EMULATOR_HOST`. Production
+sets no such variable, so the dequeuer uses Google application default
+credentials, which Cloud Run supplies from the attached service account. The
+startup line `pubsub client mode selected` records the mode and the project. It
+records no credential.
+
+The dequeuer holds `roles/pubsub.publisher` on the application topic and nothing
+else. That role carries `pubsub.topics.publish` alone, so the dequeuer can read
+no topic, and it needs no permission on the dead-letter topic, because Pub/Sub
+itself forwards a message there.
+
+Missing credentials stop the dequeuer before it claims an outbox row. A denied
+publish appears later, because the dequeuer cannot test the permission without
+publishing. Each attempt logs `outbox publish failed` with the status, the row
+keeps its place, and the retry delay grows to the configured maximum. No message
+is lost, so a wrong binding shows as a warning stream, not as silent loss.
+Correct the binding, and the retained rows publish on their next attempt.
+
+### Push Endpoint Protection
+
+The deployment protects the worker push endpoint. The application verifies no
+push token itself for the MVP. Four controls give that protection:
+
+- the worker Cloud Run service uses `internal` ingress, so the internet cannot
+  reach its URL;
+- the service requires Cloud Run IAM authentication;
+- only the dedicated push service account holds `roles/run.invoker` on it;
+- the worker subscription pushes with an OIDC token from that service account,
+  with the worker URI as the audience.
+
+`infra/gcp/production/03-release/pubsub.tf` and `run.tf` configure all four.
+After an apply, send an unsigned request to the worker URL and confirm the
+rejection. If a deployment cannot enforce all four controls, add
+application-level verification of the Google-signed push token before that
+deployment.
 
 ## DNS Delegation
 
@@ -244,6 +288,13 @@ later, separately verified change.
 - **ClamAV update fails:** the updater must leave the last-good pointer intact.
   After two failures, investigate CDN access, image version, validation logs,
   and bucket IAM. Workers fail closed after 24 hours of staleness.
+- **Dequeuer exits at startup with a credential error:** the service account or
+  its attachment is wrong. Correct it and apply. The outbox keeps every
+  unpublished message while the pool restarts.
+- **Dequeuer logs `outbox publish failed` repeatedly:** read the status. A
+  denial means the publisher binding is missing, and `NOT_FOUND` means the topic
+  is absent. Correct `02-foundation` and apply it; the release image needs no
+  rebuild. The rows wait, and they publish on the next attempt after the fix.
 - **Dead-letter message appears:** inspect the persistent 31-day pull
   subscription, preserve the message, correct the idempotent handler or data,
   and replay deliberately. Do not purge the subscription as diagnosis.

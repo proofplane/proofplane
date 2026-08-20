@@ -18,6 +18,10 @@ fi
 # nothing else.
 readonly commands=(api mcp worker dequeuer migrate)
 
+# Local development commands. seed writes demo data, and pubsub-init provisions
+# the local emulator. Neither may run against production.
+readonly local_only_commands=(seed pubsub-init)
+
 # Cloud Run runs linux/amd64. The operator's workstation is usually arm64.
 readonly expected_platform="linux/amd64"
 readonly expected_user="10001:10001"
@@ -94,20 +98,22 @@ else
   fail "/etc/ssl/certs/ca-certificates.crt is missing or unreadable"
 fi
 
-# The release gates reject a production plan that can execute seed, so the
-# command must not be in the image an operator deploys.
+# The release gates reject a production plan that can execute a local command,
+# so those commands must not be in the image an operator deploys.
 #
 # `test` reports 1 for an absent file, and docker reports 125 to 127 when it
 # cannot run the container at all. Require the 1, so a broken docker invocation
 # cannot report this as a pass.
-docker run --rm --platform "${expected_platform}" --entrypoint test "${image}" \
-  -e /usr/local/bin/seed && seed_status=0 || seed_status=$?
+for name in "${local_only_commands[@]}"; do
+  docker run --rm --platform "${expected_platform}" --entrypoint test "${image}" \
+    -e "/usr/local/bin/${name}" && absent_status=0 || absent_status=$?
 
-case "${seed_status}" in
-  0) fail "/usr/local/bin/seed is present, but seed must never ship to production" ;;
-  1) pass "seed is absent" ;;
-  *) fail "could not check for seed: docker exited ${seed_status}" ;;
-esac
+  case "${absent_status}" in
+    0) fail "/usr/local/bin/${name} is present, but ${name} must never ship to production" ;;
+    1) pass "${name} is absent" ;;
+    *) fail "could not check for ${name}: docker exited ${absent_status}" ;;
+  esac
+done
 
 for name in "${commands[@]}"; do
   path="/usr/local/bin/${name}"

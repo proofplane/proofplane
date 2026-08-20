@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check lint test check build up down health reset-local docker-clean migrate seed api worker dequeuer mcp image image-smoke image-push clamav-mirror
+.PHONY: help fmt fmt-check lint test check build up down health reset-local docker-clean pubsub-init migrate seed api worker dequeuer mcp image image-smoke image-push clamav-mirror
 
 PROOFPLANE_CONFIG ?= .local/config.yaml
 
@@ -27,6 +27,7 @@ help:
 		'  make health            Check local dependency readiness' \
 		'  make reset-local       Destroy and recreate local dependency state' \
 		'  make docker-clean      Remove leftover test containers and dangling volumes' \
+		'  make pubsub-init       Create the local Pub/Sub emulator topics and subscription' \
 		'  make migrate           Apply migrations, without seeding' \
 		'  make seed              Apply migrations and seed local data' \
 		'  make api               Run API binary' \
@@ -55,8 +56,11 @@ check: fmt-check lint test
 build:
 	cargo build
 
+# The emulator keeps no state between runs, and no runtime process provisions
+# anything, so the local topics and the worker subscription are created here.
 up:
 	docker compose up -d
+	@bash scripts/init-local-pubsub.sh
 
 down:
 	docker compose down
@@ -69,6 +73,7 @@ reset-local:
 	rm -rf .local/storage
 	mkdir -p .local/storage
 	docker compose up -d
+	@bash scripts/init-local-pubsub.sh
 
 # Each Postgres-backed test owns its container and `ContainerAsync`'s
 # remove-on-drop clears it, so a test run that finishes leaves nothing behind.
@@ -82,6 +87,10 @@ docker-clean:
 	fi
 	@echo 'Pruning dangling volumes (machine-wide, not only Proofplane).'
 	@docker volume prune --force
+
+# Run again after changing the worker push endpoint in the local configuration.
+pubsub-init:
+	@bash scripts/init-local-pubsub.sh
 
 migrate:
 	@PROOFPLANE_MIGRATION_DATABASE_URL=$(PROOFPLANE_MIGRATION_DATABASE_URL) cargo run --quiet --bin migrate
