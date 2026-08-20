@@ -11,7 +11,7 @@ use crate::{
         ExecutionMetadata,
     },
     domain::{DocumentId, DocumentIdentity, EvidenceSubmissionId, PolicyId},
-    object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore},
+    object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{Postgres, TypedDocumentUploadWork},
     worker::{RetryableWorkerError, WorkerMessage},
@@ -86,7 +86,7 @@ impl DocumentFinalizationHandler {
                     );
                 })
                 .ok();
-            return Err(retryable(crate::object_storage::StorageError::Integrity));
+            return Err(retryable(StorageError::Integrity));
         }
 
         tracing::debug!("object copied");
