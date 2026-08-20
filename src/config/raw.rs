@@ -8,10 +8,11 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        auditor_callback_path, auditor_connection, gcs_credentials_mode, nonzero_u16, nonzero_u64,
-        nonzero_usize, optional_url, parse_log_format, paseto_download_key, path_string,
-        postgres_connection_string, public_api_base_url as validate_public_api_base_url,
-        secret_value, string_url, string_value, ConfigValidationExt,
+        auditor_callback_path, auditor_connection, nonzero_u16, nonzero_u64, nonzero_usize,
+        object_key_prefix as validate_object_key_prefix, parse_log_format, paseto_download_key,
+        path_string, postgres_connection_string,
+        public_api_base_url as validate_public_api_base_url, secret_value, string_url,
+        string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
     DatabasePoolConfig, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
@@ -635,8 +636,6 @@ pub(super) enum RawObjectStorageConfig {
     },
     Gcs {
         bucket: String,
-        endpoint_override: Option<String>,
-        credentials_mode: String,
         object_key_prefix: String,
     },
 }
@@ -650,21 +649,13 @@ impl RawObjectStorageConfig {
                 .map(|root| ObjectStorageConfig::Filesystem { root }),
             Self::Gcs {
                 bucket: raw_bucket,
-                endpoint_override: raw_endpoint_override,
-                credentials_mode: raw_credentials_mode,
                 object_key_prefix: raw_object_key_prefix,
             } => validate! {
                 bucket <- string_value(raw_bucket).at("object_storage.bucket"),
-                endpoint_override <- optional_url(raw_endpoint_override)
-                    .at("object_storage.endpoint_override"),
-                credentials_mode <- gcs_credentials_mode(raw_credentials_mode)
-                    .at("object_storage.credentials_mode"),
-                object_key_prefix <- string_value(raw_object_key_prefix)
+                object_key_prefix <- validate_object_key_prefix(raw_object_key_prefix)
                     .at("object_storage.object_key_prefix"),
                 => ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
                     bucket,
-                    endpoint_override,
-                    credentials_mode,
                     object_key_prefix,
                 }),
             },

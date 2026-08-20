@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
+use std::path::Path;
 
-use crate::config::ObjectStorageConfig;
+use crate::config::{GcsObjectStorageConfig, ObjectStorageConfig};
 
 use super::{
-    FilesystemObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream, PutObjectRequest,
-    StorageError,
+    FilesystemObjectStore, GcsObjectStore, ObjectKey, ObjectMetadata, ObjectStore, ObjectStream,
+    PutObjectRequest, StorageError,
 };
 
 /// The object store that a process uses. The configuration selects it once at
@@ -17,16 +18,34 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum RuntimeObjectStore {
     Filesystem(FilesystemObjectStore),
+    Gcs(GcsObjectStore),
 }
 
 impl RuntimeObjectStore {
     pub async fn from_config(config: &ObjectStorageConfig) -> Result<Self, StorageError> {
-        match config {
-            ObjectStorageConfig::Filesystem { root } => {
+        match configured_backend(config) {
+            ConfiguredBackend::Filesystem(root) => {
                 FilesystemObjectStore::new(root).await.map(Self::Filesystem)
             }
-            ObjectStorageConfig::Gcs(_) => Err(StorageError::UnsupportedBackend { backend: "gcs" }),
+            ConfiguredBackend::Gcs(config) => {
+                GcsObjectStore::new(&config.bucket, &config.object_key_prefix)
+                    .await
+                    .map(Self::Gcs)
+            }
         }
+    }
+}
+
+#[derive(Debug)]
+enum ConfiguredBackend<'a> {
+    Filesystem(&'a Path),
+    Gcs(&'a GcsObjectStorageConfig),
+}
+
+fn configured_backend(config: &ObjectStorageConfig) -> ConfiguredBackend<'_> {
+    match config {
+        ObjectStorageConfig::Filesystem { root } => ConfiguredBackend::Filesystem(root),
+        ObjectStorageConfig::Gcs(config) => ConfiguredBackend::Gcs(config),
     }
 }
 
@@ -41,18 +60,21 @@ impl ObjectStore for RuntimeObjectStore {
     {
         match self {
             Self::Filesystem(store) => store.put_object(request).await,
+            Self::Gcs(store) => store.put_object(request).await,
         }
     }
 
     async fn get_object(&self, key: &ObjectKey) -> Result<ObjectStream, StorageError> {
         match self {
             Self::Filesystem(store) => store.get_object(key).await,
+            Self::Gcs(store) => store.get_object(key).await,
         }
     }
 
     async fn head_object(&self, key: &ObjectKey) -> Result<ObjectMetadata, StorageError> {
         match self {
             Self::Filesystem(store) => store.head_object(key).await,
+            Self::Gcs(store) => store.head_object(key).await,
         }
     }
 
@@ -63,12 +85,14 @@ impl ObjectStore for RuntimeObjectStore {
     ) -> Result<ObjectMetadata, StorageError> {
         match self {
             Self::Filesystem(store) => store.copy_object(source, destination).await,
+            Self::Gcs(store) => store.copy_object(source, destination).await,
         }
     }
 
     async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError> {
         match self {
             Self::Filesystem(store) => store.delete_object(key).await,
+            Self::Gcs(store) => store.delete_object(key).await,
         }
     }
 }
@@ -76,9 +100,7 @@ impl ObjectStore for RuntimeObjectStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{GcsCredentialsMode, GcsObjectStorageConfig};
     use std::path::PathBuf;
-    use url::Url;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -91,32 +113,25 @@ mod tests {
         .await
         .unwrap();
 
-        let RuntimeObjectStore::Filesystem(filesystem) = &store;
+        let RuntimeObjectStore::Filesystem(filesystem) = &store else {
+            panic!("filesystem configuration selected a different backend");
+        };
         assert_eq!(filesystem.root(), root);
         assert!(root.try_exists().unwrap());
     }
 
-    #[tokio::test]
-    async fn unsupported_configuration_fails_and_names_the_backend() {
-        let config = ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-            bucket: "bucket".to_owned(),
-            endpoint_override: Some(Url::parse("http://localhost:4443").unwrap()),
-            credentials_mode: GcsCredentialsMode::Anonymous,
-            object_key_prefix: "proofplane".to_owned(),
+    #[test]
+    fn gcs_configuration_selects_the_gcs_backend_before_client_initialization() {
+        let config = ObjectStorageConfig::Gcs(crate::config::GcsObjectStorageConfig {
+            bucket: "contract-bucket".to_owned(),
+            object_key_prefix: "contract/run".to_owned(),
         });
 
-        let error = RuntimeObjectStore::from_config(&config)
-            .await
-            .expect_err("an unsupported backend cannot start");
-
-        assert!(matches!(
-            error,
-            StorageError::UnsupportedBackend { backend: "gcs" }
-        ));
-        assert_eq!(
-            error.to_string(),
-            "object storage backend gcs is not supported"
-        );
+        let ConfiguredBackend::Gcs(selected) = configured_backend(&config) else {
+            panic!("GCS configuration selected a different backend");
+        };
+        assert_eq!(selected.bucket, "contract-bucket");
+        assert_eq!(selected.object_key_prefix, "contract/run");
     }
 
     fn temp_dir(name: &str) -> PathBuf {
