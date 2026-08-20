@@ -129,8 +129,6 @@ impl Harness {
             PushProxy::start(&worker, pipeline_events.clone(), pipeline_controls.clone()).await;
         app_config.pubsub.subscriptions.worker_push_endpoint = proxy.container_endpoint();
 
-        // Set before anything builds a Pub/Sub client: this variable selects the
-        // client mode and the endpoint the SDK connects to.
         std::env::set_var(PUBSUB_EMULATOR_HOST, local_stack::PUBSUB_EMULATOR_ADDRESS);
         reset_worker_subscription(
             &app_config.pubsub.project_id,

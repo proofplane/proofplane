@@ -140,10 +140,6 @@ pub struct GoogleCloudPublisher {
 }
 
 impl GoogleCloudPublisher {
-    /// Opens a client that publishes and nothing else. It reads no topic and
-    /// creates none: Terraform owns the production topics and grants the
-    /// dequeuer `pubsub.topics.publish` alone, and the local emulator is
-    /// provisioned by [`emulator::provision`].
     pub async fn new(project_id: &str, mode: &ClientMode) -> Result<Self, PubSubError> {
         Ok(Self {
             client: connect(project_id, mode).await?,
