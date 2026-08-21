@@ -342,7 +342,7 @@ mod tests {
                 filename: "evidence.pdf".to_owned(),
                 content_type: "application/pdf".to_owned(),
                 content_length: 1,
-                object_key: "quarantine/x".to_owned(),
+                object_key: "staged/x".to_owned(),
                 checksum_sha256: "sha".to_owned(),
                 checksum_crc32c: "crc".to_owned(),
             },

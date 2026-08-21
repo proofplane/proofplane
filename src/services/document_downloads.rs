@@ -13,7 +13,7 @@ use crate::{
         AgentConnectionId, Document, DocumentId, DocumentOwner, DocumentUploadStatus,
         EvidenceSubmissionId, PolicyId, UserId, WorkspaceId,
     },
-    object_storage::{ObjectKey, ObjectMetadata, ObjectStore, ObjectStream, RuntimeObjectStore},
+    object_storage::{EvidenceObjectStore, ObjectKey, ObjectMetadata, ObjectStream},
     persistence::Postgres,
     read_models::DocumentDownloadCandidate,
 };
@@ -101,7 +101,7 @@ pub struct WorkspaceDownloadAuditContext {
 #[derive(Clone)]
 pub struct DocumentDownloadService {
     repository: Arc<Postgres>,
-    object_store: Arc<RuntimeObjectStore>,
+    evidence_store: EvidenceObjectStore,
     public_api_base_url: Url,
     grant_encryptor: DownloadGrantEncryptor,
     grant_decryptor: DownloadGrantDecryptor,
@@ -110,14 +110,14 @@ pub struct DocumentDownloadService {
 impl DocumentDownloadService {
     pub fn new(
         repository: Arc<Postgres>,
-        object_store: Arc<RuntimeObjectStore>,
+        evidence_store: EvidenceObjectStore,
         public_api_base_url: Url,
         grant_encryptor: DownloadGrantEncryptor,
         grant_decryptor: DownloadGrantDecryptor,
     ) -> Self {
         Self {
             repository,
-            object_store,
+            evidence_store,
             public_api_base_url,
             grant_encryptor,
             grant_decryptor,
@@ -247,7 +247,7 @@ impl DocumentDownloadService {
 
         let key = finalized_object_key(&candidate)?;
         let object = self
-            .object_store
+            .evidence_store
             .get_object(&key)
             .await
             .map_err(storage_download_error)?;
@@ -293,7 +293,7 @@ impl DocumentDownloadService {
 
         let key = finalized_object_key(&candidate)?;
         let object = self
-            .object_store
+            .evidence_store
             .get_object(&key)
             .await
             .map_err(storage_download_error)?;
@@ -331,7 +331,7 @@ impl DocumentDownloadService {
 
         let key = finalized_object_key(&candidate)?;
         let object = self
-            .object_store
+            .evidence_store
             .get_object(&key)
             .await
             .map_err(storage_download_error)?;
@@ -349,7 +349,7 @@ impl DocumentDownloadService {
     ) -> Result<(), DownloadError> {
         let key = finalized_object_key(candidate)?;
         let metadata = self
-            .object_store
+            .evidence_store
             .head_object(&key)
             .await
             .map_err(storage_download_error)?;

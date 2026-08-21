@@ -63,7 +63,8 @@ Cloud Run dequeuer worker pool (exactly 1)
 Cloud Scheduler --> ClamAV update job --> private definitions bucket
 Terraform apply --> migration job --> serving workload revisions
 
-All durable document objects --> private evidence bucket
+Unscanned uploads --> private quarantine bucket
+All scanned document objects --> private evidence bucket
 All runtime database traffic --> Supavisor transaction pooler
 Migration traffic --> verified-TLS direct Supabase endpoint
 ```
@@ -209,10 +210,14 @@ Grant roles at the narrowest resource scope available:
   secret container. Cloud Run revisions mount only the Terraform-pinned
   version, but Secret Manager IAM cannot restrict access to one version inside
   that secret.
-- API and MCP receive only the evidence-bucket object permissions their routes
-  require.
-- Worker receives evidence-object access and read-only definition-snapshot
-  access.
+- API, MCP, and worker receive object read, write, and delete on the quarantine
+  bucket. API and MCP stage uploads and remove the ones nobody finished. The
+  worker reads an object to scan it, then removes it after finalization.
+- API receives read-only object access on the evidence bucket, because it
+  streams finalized bytes and never writes them. MCP receives no evidence-bucket
+  access at all, because it only mints grant URLs the API redeems.
+- Worker is the only identity that writes evidence objects, and it also receives
+  read-only definition-snapshot access.
 - Dequeuer receives Pub/Sub publisher access but no topic or subscription
   administration.
 - Migration receives no GCP data-plane roles beyond its secret.
@@ -319,13 +324,22 @@ reads that mark to decide whether an earlier release may keep serving. See
 
 ## Storage
 
+### Quarantine Bucket
+
+Hold every upload here until a scan clears it. Use regional Standard storage in
+`us-central1`, uniform bucket-level access, and public-access prevention.
+Delete objects at seven days and disable soft delete: a document a scan
+condemned must not linger, and nothing here is durable, because the worker
+copies a clean document into the evidence bucket and deletes the source. Do not
+enable Terraform deletion protection, because the contents are transient.
+
 ### Evidence Bucket
 
 Use regional Standard storage in `us-central1`, uniform bucket-level access,
 public-access prevention, and Terraform deletion protection. Enable 30-day
-soft delete. Do not enable object versioning or a retention lock. Retention
-locks remain deferred until Proofplane has an explicit legal retention and
-customer-deletion policy.
+soft delete. Do not enable object versioning, a retention lock, or any lifecycle
+rule. Retention locks remain deferred until Proofplane has an explicit legal
+retention and customer-deletion policy.
 
 ### ClamAV Definitions Bucket
 
@@ -337,7 +351,7 @@ Terraform deletion.
 ### Terraform State Bucket
 
 State protection is described separately because state requires versioning and
-restricted operator access, not application runtime access. Unlike the two
+restricted operator access, not application runtime access. Unlike the three
 buckets above, it is operator-created and not a Terraform resource — see
 [Terraform State](#terraform-state).
 

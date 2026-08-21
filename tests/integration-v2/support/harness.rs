@@ -33,7 +33,7 @@ use proofplane::{
     config::AppConfig,
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
-    object_storage::RuntimeObjectStore,
+    object_storage::{DocumentObjectStores, EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     pubsub::{emulator, ClientMode, GoogleCloudPublisher, PUBSUB_EMULATOR_HOST},
     routes::authentication::AUTHORIZATION_HEADER,
@@ -58,7 +58,8 @@ struct Harness {
     // The servers also retain these dependencies. Keeping them here makes the
     // suite runtime's ownership of all runtime-bound resources explicit.
     _postgres: Arc<Postgres>,
-    _object_store: Arc<RuntimeObjectStore>,
+    _quarantine_store: QuarantineObjectStore,
+    _evidence_store: EvidenceObjectStore,
     _worker: Arc<TestServer>,
     _proxy: PushProxy,
     _dequeuer: tokio::task::JoinHandle<()>,
@@ -112,17 +113,20 @@ impl Harness {
         let postgres = Arc::new(Postgres::new(pool));
         let reference_data = reference_data::seed(&postgres).await;
 
-        let object_store = Arc::new(
-            RuntimeObjectStore::from_config(&app_config.object_storage)
-                .await
-                .expect("configured object store initializes"),
-        );
+        let object_stores = DocumentObjectStores::from_config(&app_config.object_storage)
+            .await
+            .expect("configured object stores initialize");
         let auditor_identity_provider = Arc::new(FakeAuditorIdentityProvider::default());
         let clamd = FakeClamd::start().await;
         let clamd_controls = clamd.controls();
         app_config.scanner.clamd_address = clamd.address();
 
-        let worker = start_worker(&app_config, &postgres, &object_store);
+        let worker = start_worker(
+            &app_config,
+            &postgres,
+            &object_stores.quarantine,
+            &object_stores.evidence,
+        );
         let pipeline_events = PipelineEvents::new();
         let pipeline_controls = PipelineControls::new();
         let proxy =
@@ -161,7 +165,8 @@ impl Harness {
         Ok(Self {
             _clamd: clamd,
             _postgres: postgres.clone(),
-            _object_store: object_store.clone(),
+            _quarantine_store: object_stores.quarantine.clone(),
+            _evidence_store: object_stores.evidence.clone(),
             _worker: Arc::new(worker),
             _proxy: proxy,
             _dequeuer: dequeuer,
@@ -169,10 +174,15 @@ impl Harness {
                 app_server: Arc::new(build_app_server(
                     &app_config,
                     &postgres,
-                    &object_store,
+                    &object_stores.quarantine,
+                    &object_stores.evidence,
                     &auditor_identity_provider,
                 )),
-                mcp_server: Arc::new(build_mcp_server(&app_config, &postgres, &object_store)),
+                mcp_server: Arc::new(build_mcp_server(
+                    &app_config,
+                    &postgres,
+                    &object_stores.quarantine,
+                )),
                 auditor_identity_provider,
                 pipeline_events,
                 pipeline_controls,
@@ -257,14 +267,16 @@ impl TestApp {
 fn build_app_server(
     app_config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<RuntimeObjectStore>,
+    quarantine_store: &QuarantineObjectStore,
+    evidence_store: &EvidenceObjectStore,
     auditor_identity_provider: &Arc<FakeAuditorIdentityProvider>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
     let dependencies = AppDependencies {
         config: app_config.clone(),
         postgres: postgres.clone(),
-        object_store: object_store.clone(),
+        quarantine_store: quarantine_store.clone(),
+        evidence_store: evidence_store.clone(),
         metrics: recorder.handle(),
         user_authenticator: UserAuthenticator::new(Arc::new(FakeTokenVerifier), postgres.clone()),
         auditor_identity_provider: Some(auditor_identity_provider.clone()),
@@ -278,7 +290,7 @@ fn build_app_server(
 fn build_mcp_server(
     app_config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<RuntimeObjectStore>,
+    quarantine_store: &QuarantineObjectStore,
 ) -> TestServer {
     let issuer = app_config.server.public_api_base_url.clone();
     let resource = app_config.mcp.resource.clone();
@@ -307,7 +319,7 @@ fn build_mcp_server(
     let recorder = PrometheusBuilder::new().build_recorder();
     let app = create_mcp_app(McpAppDependencies {
         postgres: postgres.clone(),
-        object_store: object_store.clone(),
+        quarantine_store: quarantine_store.clone(),
         metrics: recorder.handle(),
         oauth_verifier: Arc::new(oauth_service),
         authorization_server: issuer.clone(),

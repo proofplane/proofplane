@@ -22,7 +22,7 @@ mod gcs;
 mod runtime;
 
 pub use gcs::GcsObjectStore;
-pub use runtime::RuntimeObjectStore;
+pub use runtime::{DocumentObjectStores, EvidenceObjectStore, QuarantineObjectStore};
 
 #[async_trait]
 pub trait ObjectStore {
@@ -37,13 +37,65 @@ pub trait ObjectStore {
 
     async fn head_object(&self, key: &ObjectKey) -> Result<ObjectMetadata, StorageError>;
 
+    /// Copies `source` out of this store into `destination` in
+    /// `destination_store`.
+    ///
+    /// The two stores are always the same backend, because
+    /// [`DocumentObjectStores::from_config`] builds both from one
+    /// configuration. `&Self` states that in the type system.
     async fn copy_object(
         &self,
         source: &ObjectKey,
+        destination_store: &Self,
         destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError>;
 
     async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError>;
+}
+
+/// Copies an object: read it from one store, then write it to another.
+///
+/// This is the fallback whenever the backend offers no server-side copy. It
+/// verifies the destination against the source and removes a mismatched
+/// destination, so every backend reports the same outcome for the same bytes.
+async fn stream_copy_object<Source, Destination>(
+    source_store: &Source,
+    source: &ObjectKey,
+    destination_store: &Destination,
+    destination: &ObjectKey,
+) -> Result<ObjectMetadata, StorageError>
+where
+    Source: ObjectStore + Sync,
+    Destination: ObjectStore + Sync,
+{
+    if !source.has_same_workspace(destination) {
+        return Err(StorageError::InvalidKey);
+    }
+
+    let ObjectStream { metadata, chunks } = source_store.get_object(source).await?;
+    let copied = destination_store
+        .put_object(PutObjectRequest {
+            key: destination.to_owned(),
+            content_type: metadata.content_type.clone(),
+            chunks,
+        })
+        .await?;
+
+    if copied.content_type != metadata.content_type
+        || copied.content_length != metadata.content_length
+        || copied.sha256 != metadata.sha256
+    {
+        if let Err(error) = destination_store.delete_object(destination).await {
+            crate::observability::record_cleanup_failure(
+                &error,
+                "object_storage_copy_integrity",
+                None,
+            );
+        }
+        return Err(StorageError::Integrity);
+    }
+
+    Ok(copied)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -405,20 +457,10 @@ impl ObjectStore for FilesystemObjectStore {
     async fn copy_object(
         &self,
         source: &ObjectKey,
+        destination_store: &Self,
         destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError> {
-        if !source.has_same_workspace(destination) {
-            return Err(StorageError::InvalidKey);
-        }
-
-        let ObjectStream { metadata, chunks } = self.get_object(source).await?;
-
-        self.put_object(PutObjectRequest {
-            key: destination.to_owned(),
-            content_type: metadata.content_type,
-            chunks,
-        })
-        .await
+        stream_copy_object(self, source, destination_store, destination).await
     }
 
     async fn delete_object(&self, key: &ObjectKey) -> Result<(), StorageError> {
@@ -525,7 +567,6 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{GcsObjectStorageConfig, ObjectStorageConfig};
     use bytes::Bytes;
     use futures_util::{stream, FutureExt};
     use std::{
@@ -542,54 +583,64 @@ mod tests {
 
     #[tokio::test]
     async fn filesystem_satisfies_the_shared_object_store_contract() {
-        let store = FilesystemObjectStore::new(temp_dir("contract-primary"))
+        let source_store = FilesystemObjectStore::new(temp_dir("contract-source"))
             .await
             .unwrap();
-        let isolated = FilesystemObjectStore::new(temp_dir("contract-isolated"))
+        let destination_store = FilesystemObjectStore::new(temp_dir("contract-destination"))
             .await
             .unwrap();
 
-        run_object_store_contract(&store, &isolated).await;
+        run_object_store_contract(&source_store, &destination_store).await;
     }
 
+    /// Runs the whole contract against real GCS.
+    ///
+    /// `PROOFPLANE_GCS_TEST_BUCKET` alone runs every case, with the two stores
+    /// separated by object-key prefix. A second bucket in
+    /// `PROOFPLANE_GCS_TEST_EVIDENCE_BUCKET` also proves the cross-bucket
+    /// rewrite that production finalization uses.
     #[tokio::test]
     #[ignore = "requires PROOFPLANE_GCS_TEST_BUCKET and application default credentials"]
     async fn gcs_satisfies_the_shared_object_store_contract() {
-        let bucket = std::env::var("PROOFPLANE_GCS_TEST_BUCKET")
+        let source_bucket = std::env::var("PROOFPLANE_GCS_TEST_BUCKET")
             .expect("PROOFPLANE_GCS_TEST_BUCKET names a disposable test bucket");
+        let destination_bucket = std::env::var("PROOFPLANE_GCS_TEST_EVIDENCE_BUCKET")
+            .unwrap_or_else(|_| source_bucket.clone());
         let run = Uuid::new_v4();
-        let store =
-            RuntimeObjectStore::from_config(&ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-                bucket: bucket.clone(),
-                object_key_prefix: format!("proofplane-contract/{run}/primary"),
-            }))
-            .await
-            .expect("ADC constructs the primary GCS object store");
-        let isolated =
-            RuntimeObjectStore::from_config(&ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-                bucket,
-                object_key_prefix: format!("proofplane-contract/{run}/isolated"),
-            }))
-            .await
-            .expect("ADC constructs the isolated GCS object store");
+        let source_store =
+            GcsObjectStore::new(source_bucket, format!("proofplane-contract/{run}/source"))
+                .await
+                .expect("ADC constructs the source GCS object store");
+        let destination_store = GcsObjectStore::new(
+            destination_bucket,
+            format!("proofplane-contract/{run}/destination"),
+        )
+        .await
+        .expect("ADC constructs the destination GCS object store");
 
-        let result = AssertUnwindSafe(run_object_store_contract(&store, &isolated))
+        let result = AssertUnwindSafe(run_object_store_contract(&source_store, &destination_store))
             .catch_unwind()
             .await;
-        cleanup_contract_objects(&store).await;
-        cleanup_contract_objects(&isolated).await;
+        cleanup_contract_objects(&source_store).await;
+        cleanup_contract_objects(&destination_store).await;
 
         if let Err(panic) = result {
             std::panic::resume_unwind(panic);
         }
     }
 
-    async fn run_object_store_contract<S>(store: &S, isolated: &S)
+    async fn run_object_store_contract<S>(source_store: &S, destination_store: &S)
     where
-        S: ObjectStore,
+        S: ObjectStore + Sync,
     {
-        let (source, destination, cross_workspace_destination) = contract_keys();
-        let written = store
+        let keys = contract_keys();
+        let ContractKeys {
+            source,
+            same_store_destination,
+            cross_store_destination,
+            cross_workspace_destination,
+        } = &keys;
+        let written = source_store
             .put_object(PutObjectRequest {
                 key: source.clone(),
                 content_type: "text/plain".to_owned(),
@@ -598,7 +649,7 @@ mod tests {
             .await
             .expect("multi-chunk upload succeeds");
 
-        assert_eq!(written.key, source);
+        assert_eq!(written.key, *source);
         assert_eq!(written.content_type, "text/plain");
         assert_eq!(written.content_length, 20);
         assert_eq!(
@@ -606,33 +657,71 @@ mod tests {
             "f5cc4171a2e81eaba9b21e188e0d087d2dd3a190512fcc37b356c6da77adad93"
         );
         assert_eq!(
-            store.head_object(&source).await.expect("head succeeds"),
+            source_store
+                .head_object(source)
+                .await
+                .expect("head succeeds"),
             written
         );
-        let object = store.get_object(&source).await.expect("get succeeds");
+        let object = source_store.get_object(source).await.expect("get succeeds");
         assert_eq!(object.metadata, written);
         assert_eq!(object_bytes(object).await, b"hello object storage");
         assert!(matches!(
-            isolated.head_object(&source).await,
+            destination_store.head_object(source).await,
             Err(StorageError::NotFound)
         ));
 
-        let copied = store
-            .copy_object(&source, &destination)
+        let copied = source_store
+            .copy_object(source, source_store, same_store_destination)
             .await
-            .expect("server-side copy succeeds");
-        assert_eq!(copied.key, destination);
+            .expect("same-store copy succeeds");
+        assert_eq!(copied.key, *same_store_destination);
         assert_eq!(copied.content_type, written.content_type);
         assert_eq!(copied.content_length, written.content_length);
         assert_eq!(copied.sha256, written.sha256);
         assert_eq!(
-            object_bytes(store.get_object(&destination).await.expect("copy reads")).await,
+            object_bytes(
+                source_store
+                    .get_object(same_store_destination)
+                    .await
+                    .expect("copy reads")
+            )
+            .await,
             b"hello object storage"
         );
 
+        // Finalization copies out of quarantine and into evidence. The copy has
+        // to land in the destination store and nowhere else.
+        let promoted = source_store
+            .copy_object(source, destination_store, cross_store_destination)
+            .await
+            .expect("cross-store copy succeeds");
+        assert_eq!(promoted.key, *cross_store_destination);
+        assert_eq!(promoted.content_type, written.content_type);
+        assert_eq!(promoted.content_length, written.content_length);
+        assert_eq!(promoted.sha256, written.sha256);
+        assert_eq!(
+            object_bytes(
+                destination_store
+                    .get_object(cross_store_destination)
+                    .await
+                    .expect("cross-store copy reads")
+            )
+            .await,
+            b"hello object storage"
+        );
         assert!(matches!(
-            store
-                .copy_object(&source, &cross_workspace_destination)
+            source_store.head_object(cross_store_destination).await,
+            Err(StorageError::NotFound)
+        ));
+        source_store
+            .head_object(source)
+            .await
+            .expect("a copy leaves the source in place");
+
+        assert!(matches!(
+            source_store
+                .copy_object(source, destination_store, cross_workspace_destination)
                 .await,
             Err(StorageError::InvalidKey)
         ));
@@ -648,24 +737,36 @@ mod tests {
             ));
         }
 
-        store.delete_object(&source).await.expect("delete succeeds");
-        store
-            .delete_object(&source)
+        source_store
+            .delete_object(source)
+            .await
+            .expect("delete succeeds");
+        source_store
+            .delete_object(source)
             .await
             .expect("delete is idempotent");
-        store
-            .delete_object(&destination)
+        source_store
+            .delete_object(same_store_destination)
             .await
             .expect("copied object deletes");
+        destination_store
+            .delete_object(cross_store_destination)
+            .await
+            .expect("cross-store copy deletes");
         assert!(matches!(
-            store.head_object(&source).await,
+            source_store.head_object(source).await,
             Err(StorageError::NotFound)
         ));
     }
 
-    async fn cleanup_contract_objects(store: &RuntimeObjectStore) {
-        let (source, destination, cross_workspace_destination) = contract_keys();
-        for key in [source, destination, cross_workspace_destination] {
+    async fn cleanup_contract_objects<S: ObjectStore + Sync>(store: &S) {
+        let keys = contract_keys();
+        for key in [
+            keys.source,
+            keys.same_store_destination,
+            keys.cross_store_destination,
+            keys.cross_workspace_destination,
+        ] {
             if let Err(error) = store.delete_object(&key).await {
                 crate::observability::record_cleanup_failure(
                     &error,
@@ -676,16 +777,31 @@ mod tests {
         }
     }
 
-    fn contract_keys() -> (ObjectKey, ObjectKey, ObjectKey) {
+    struct ContractKeys {
+        source: ObjectKey,
+        same_store_destination: ObjectKey,
+        cross_store_destination: ObjectKey,
+        cross_workspace_destination: ObjectKey,
+    }
+
+    fn contract_keys() -> ContractKeys {
         let workspace =
             WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap());
         let other_workspace =
             WorkspaceId::from(Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap());
-        (
-            ObjectKey::new(workspace, "contract/quarantine", "artifact.txt").unwrap(),
-            ObjectKey::new(workspace, "contract/final", "artifact.txt").unwrap(),
-            ObjectKey::new(other_workspace, "contract/final", "artifact.txt").unwrap(),
-        )
+        ContractKeys {
+            source: ObjectKey::new(workspace, "contract/staged", "artifact.txt").unwrap(),
+            same_store_destination: ObjectKey::new(workspace, "contract/same", "artifact.txt")
+                .unwrap(),
+            cross_store_destination: ObjectKey::new(workspace, "contract/final", "artifact.txt")
+                .unwrap(),
+            cross_workspace_destination: ObjectKey::new(
+                other_workspace,
+                "contract/final",
+                "artifact.txt",
+            )
+            .unwrap(),
+        }
     }
 
     #[test]
@@ -795,7 +911,7 @@ mod tests {
     #[tokio::test]
     async fn copy_preserves_bytes_and_metadata_at_destination() {
         let store = FilesystemObjectStore::new(temp_dir("copy")).await.unwrap();
-        let source = test_key("quarantine/artifact.txt");
+        let source = test_key("staged/artifact.txt");
         let destination = test_key("final/artifact.txt");
 
         let source_metadata = store
@@ -807,7 +923,10 @@ mod tests {
             .await
             .unwrap();
 
-        let copied = store.copy_object(&source, &destination).await.unwrap();
+        let copied = store
+            .copy_object(&source, &store, &destination)
+            .await
+            .unwrap();
 
         assert_eq!(copied.key, destination);
         assert_eq!(copied.content_type, source_metadata.content_type);
@@ -842,7 +961,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            store.copy_object(&source, &destination).await,
+            store.copy_object(&source, &store, &destination).await,
             Err(StorageError::InvalidKey)
         ));
     }

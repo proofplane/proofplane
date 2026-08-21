@@ -51,6 +51,6 @@ if [[ "${clamd_response}" != "PONG" ]]; then
   exit 1
 fi
 
-mkdir -p .local/storage
+mkdir -p .local/storage/quarantine .local/storage/evidence
 
 echo "local dependencies are ready"

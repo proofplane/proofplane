@@ -56,7 +56,8 @@ paseto:
 
 object_storage:
   backend: "filesystem"
-  root: ".local/storage"
+  quarantine_root: ".local/storage/quarantine"
+  evidence_root: ".local/storage/evidence"
 
 scanner:
   clamd_address: "127.0.0.1:3310"

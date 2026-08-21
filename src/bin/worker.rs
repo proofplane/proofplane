@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     config,
-    object_storage::{self, RuntimeObjectStore},
+    object_storage::{self, DocumentObjectStores},
     observability,
     persistence::{self, PoolBounds, PoolRuntime, Postgres},
     scanner::ClamAvMalwareScanner,
@@ -67,7 +67,7 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Arc::new(Postgres::new(pool));
-    let object_store = Arc::new(RuntimeObjectStore::from_config(&config.object_storage).await?);
+    let object_stores = DocumentObjectStores::from_config(&config.object_storage).await?;
     let scanner = Arc::new(ClamAvMalwareScanner::new(
         config.scanner.clamd_address,
         Duration::from_millis(config.scanner.connection_timeout_ms),
@@ -85,7 +85,8 @@ async fn run() -> Result<(), Error> {
 
     let app = create_worker_app(WorkerAppDependencies {
         postgres,
-        object_store,
+        quarantine_store: object_stores.quarantine,
+        evidence_store: object_stores.evidence,
         scanner,
         worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
         metrics,

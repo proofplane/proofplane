@@ -15,10 +15,11 @@ use super::{
         string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
-    DatabasePoolConfig, GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
-    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig, WorkerConfig,
+    DatabasePoolConfig, FilesystemObjectStorageConfig, GcsObjectStorageConfig, HealthConfig,
+    McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+    PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
+    PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig,
+    WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -632,10 +633,12 @@ fn validate_worker_max_delivery_attempts(value: u16) -> Result<u16, String> {
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub(super) enum RawObjectStorageConfig {
     Filesystem {
-        root: String,
+        quarantine_root: String,
+        evidence_root: String,
     },
     Gcs {
-        bucket: String,
+        quarantine_bucket: String,
+        evidence_bucket: String,
         object_key_prefix: String,
     },
 }
@@ -643,24 +646,65 @@ pub(super) enum RawObjectStorageConfig {
 impl RawObjectStorageConfig {
     pub(super) fn validate(self) -> Validation<ObjectStorageConfig, ConfigFieldError> {
         match self {
-            Self::Filesystem { root } => string_value(root)
-                .at("object_storage.root")
-                .map(PathBuf::from)
-                .map(|root| ObjectStorageConfig::Filesystem { root }),
+            Self::Filesystem {
+                quarantine_root: raw_quarantine_root,
+                evidence_root: raw_evidence_root,
+            } => validate! {
+                quarantine_root <- string_value(raw_quarantine_root)
+                    .at("object_storage.quarantine_root"),
+                evidence_root <- string_value(raw_evidence_root)
+                    .at("object_storage.evidence_root"),
+                => FilesystemObjectStorageConfig {
+                    quarantine_root: PathBuf::from(quarantine_root),
+                    evidence_root: PathBuf::from(evidence_root),
+                },
+            }
+            .and_then(|config| {
+                if config.quarantine_root == config.evidence_root {
+                    return separate_targets_error(
+                        "object_storage.evidence_root",
+                        "object_storage.quarantine_root",
+                    );
+                }
+                Validation::valid(ObjectStorageConfig::Filesystem(config))
+            }),
             Self::Gcs {
-                bucket: raw_bucket,
+                quarantine_bucket: raw_quarantine_bucket,
+                evidence_bucket: raw_evidence_bucket,
                 object_key_prefix: raw_object_key_prefix,
             } => validate! {
-                bucket <- string_value(raw_bucket).at("object_storage.bucket"),
+                quarantine_bucket <- string_value(raw_quarantine_bucket)
+                    .at("object_storage.quarantine_bucket"),
+                evidence_bucket <- string_value(raw_evidence_bucket)
+                    .at("object_storage.evidence_bucket"),
                 object_key_prefix <- validate_object_key_prefix(raw_object_key_prefix)
                     .at("object_storage.object_key_prefix"),
-                => ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-                    bucket,
+                => GcsObjectStorageConfig {
+                    quarantine_bucket,
+                    evidence_bucket,
                     object_key_prefix,
-                }),
-            },
+                },
+            }
+            .and_then(|config| {
+                if config.quarantine_bucket == config.evidence_bucket {
+                    return separate_targets_error(
+                        "object_storage.evidence_bucket",
+                        "object_storage.quarantine_bucket",
+                    );
+                }
+                Validation::valid(ObjectStorageConfig::Gcs(config))
+            }),
         }
     }
+}
+
+/// One target for both stores puts unscanned bytes where the evidence lives and
+/// exposes the evidence to the quarantine expiry rule. Refuse to start.
+fn separate_targets_error<T>(path: &str, other_path: &str) -> Validation<T, ConfigFieldError> {
+    Validation::invalid(ConfigFieldError::new(
+        path,
+        format!("must not name the same target as {other_path}"),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

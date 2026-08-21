@@ -17,7 +17,7 @@ use crate::{
         AgentPolicyDocumentUploadGrant, CreateDocumentPayload, Document, DocumentId,
         DocumentIdentity, DocumentOwner, PolicyId, WorkspaceId,
     },
-    object_storage::{RuntimeObjectStore, StorageError},
+    object_storage::{QuarantineObjectStore, StorageError},
     observability::audit::{AuditActor, AuditClientType, AuditEvent, AuditObject, AuditOutcome},
     persistence::{ArchiveDocumentResult, CreatePolicyDocumentResult, Postgres},
 };
@@ -32,7 +32,7 @@ use super::{
 #[derive(Clone)]
 pub struct PolicyDocumentService {
     repository: Arc<Postgres>,
-    object_store: Arc<RuntimeObjectStore>,
+    quarantine_store: QuarantineObjectStore,
     create_document: CreatePolicyDocumentHandler,
     archive_document: ArchiveDocumentHandler,
 }
@@ -49,12 +49,12 @@ pub struct UploadPolicyDocumentPayload {
 }
 
 impl PolicyDocumentService {
-    pub fn new(repository: Arc<Postgres>, object_store: Arc<RuntimeObjectStore>) -> Self {
+    pub fn new(repository: Arc<Postgres>, quarantine_store: QuarantineObjectStore) -> Self {
         Self {
             create_document: CreatePolicyDocumentHandler::new(repository.clone()),
             archive_document: ArchiveDocumentHandler::new(repository.clone()),
             repository,
-            object_store,
+            quarantine_store,
         }
     }
 
@@ -70,7 +70,7 @@ impl PolicyDocumentService {
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let staged = stage_document(
-            &self.object_store,
+            &self.quarantine_store,
             connection.workspace_id,
             DocumentOwner::Policy(policy_id),
             Uuid::new_v4(),
@@ -101,7 +101,7 @@ impl PolicyDocumentService {
         S: Stream<Item = Result<Bytes, StorageError>> + Send,
     {
         let staged = stage_bounded_document(
-            &self.object_store,
+            &self.quarantine_store,
             BoundedStagingRequest {
                 workspace_id: grant.workspace_id(),
                 owner: DocumentOwner::Policy(grant.policy_id()),
@@ -265,7 +265,7 @@ impl PolicyDocumentService {
     }
 
     pub async fn delete_staged_object(&self, object_key: &str) -> Result<(), Error> {
-        delete_staged_document(&self.object_store, object_key).await
+        delete_staged_document(&self.quarantine_store, object_key).await
     }
 }
 

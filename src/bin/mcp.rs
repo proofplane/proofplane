@@ -11,7 +11,7 @@ use proofplane::{
     },
     config,
     mcp::{self, McpAppDependencies},
-    object_storage::{self, RuntimeObjectStore},
+    object_storage::{self, DocumentObjectStores},
     observability,
     persistence::{self, PoolBounds, PoolRuntime, Postgres},
     services::{client_resolver::ClientResolver, oauth::OAuthService},
@@ -73,7 +73,7 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Arc::new(Postgres::new(pool));
-    let object_store = Arc::new(RuntimeObjectStore::from_config(&config.object_storage).await?);
+    let object_stores = DocumentObjectStores::from_config(&config.object_storage).await?;
     let download_grant_encryptor = DownloadGrantEncryptor::from_config(
         config.server.public_api_base_url.clone(),
         "proofplane-document-download",
@@ -138,7 +138,7 @@ async fn run() -> Result<(), Error> {
     let sessions = CancellationToken::new();
     let app = mcp::create_app(McpAppDependencies {
         postgres,
-        object_store,
+        quarantine_store: object_stores.quarantine,
         metrics,
         oauth_verifier: Arc::new(oauth_service),
         authorization_server: config.server.public_api_base_url.clone(),

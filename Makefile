@@ -71,7 +71,7 @@ health:
 reset-local:
 	docker compose down -v --remove-orphans
 	rm -rf .local/storage
-	mkdir -p .local/storage
+	mkdir -p .local/storage/quarantine .local/storage/evidence
 	docker compose up -d
 	@bash scripts/init-local-pubsub.sh
 

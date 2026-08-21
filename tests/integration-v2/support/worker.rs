@@ -12,7 +12,7 @@ use axum_test::TestServer;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     config::AppConfig,
-    object_storage::RuntimeObjectStore,
+    object_storage::{EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     scanner::ClamAvMalwareScanner,
     worker::{create_worker_app, decode_worker_message, WorkerAppDependencies},
@@ -580,7 +580,8 @@ async fn forward_message(State(state): State<ProxyState>, body: Bytes) -> Status
 pub fn start_worker(
     config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<RuntimeObjectStore>,
+    quarantine_store: &QuarantineObjectStore,
+    evidence_store: &EvidenceObjectStore,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
     let scanner = Arc::new(ClamAvMalwareScanner::new(
@@ -593,7 +594,8 @@ pub fn start_worker(
         .http_transport()
         .build(create_worker_app(WorkerAppDependencies {
             postgres: postgres.clone(),
-            object_store: object_store.clone(),
+            quarantine_store: quarantine_store.clone(),
+            evidence_store: evidence_store.clone(),
             scanner,
             worker_max_delivery_attempts: config.pubsub.subscriptions.worker_max_delivery_attempts,
             metrics: recorder.handle(),

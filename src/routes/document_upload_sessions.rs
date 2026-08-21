@@ -818,7 +818,7 @@ async fn document_upload_from_multipart(
             .map_err(multipart_error)?
             .is_some()
     {
-        maybe_delete_uploaded_file(service, uploaded_file.object_key).await;
+        maybe_delete_staged_file(service, uploaded_file.object_key).await;
         return Err(ApiError::BadRequest(vec![
             "browser upload requires exactly one file field".to_owned(),
         ]));
@@ -860,8 +860,8 @@ fn multipart_stream_error(error: MultipartError) -> crate::object_storage::Stora
     }
 }
 
-async fn maybe_delete_uploaded_file(service: &EvidenceSubmissionService, key: String) {
-    let _ = service.delete_uploaded_document_object(&key).await;
+async fn maybe_delete_staged_file(service: &EvidenceSubmissionService, key: String) {
+    let _ = service.delete_staged_object(&key).await;
 }
 
 fn upload_error_response(page: &UploadSessionPage, error: ApiError) -> Response {

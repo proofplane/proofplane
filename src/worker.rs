@@ -25,7 +25,7 @@ use crate::{
         IntegrationMessage, IntegrationMessageDecodeError, LEGACY_DOCUMENT_FINALIZATION_REQUESTED,
         LEGACY_DOCUMENT_SCAN_REQUESTED,
     },
-    object_storage::RuntimeObjectStore,
+    object_storage::{EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     routes::{
         error::not_found,
@@ -82,7 +82,8 @@ pub struct RetryableWorkerError(pub String);
 
 pub struct WorkerAppDependencies {
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<RuntimeObjectStore>,
+    pub quarantine_store: QuarantineObjectStore,
+    pub evidence_store: EvidenceObjectStore,
     pub scanner: Arc<ClamAvMalwareScanner>,
     pub worker_max_delivery_attempts: u16,
     pub metrics: PrometheusHandle,
@@ -100,18 +101,23 @@ pub struct WorkerState {
 impl WorkerState {
     pub fn new(
         postgres: Arc<Postgres>,
-        object_store: Arc<RuntimeObjectStore>,
+        quarantine_store: QuarantineObjectStore,
+        evidence_store: EvidenceObjectStore,
         scanner: Arc<ClamAvMalwareScanner>,
         worker_max_delivery_attempts: u16,
     ) -> Self {
         Self {
             document_scan_handler: DocumentScanHandler::new(
                 postgres.clone(),
-                object_store.clone(),
+                quarantine_store.clone(),
                 scanner,
                 worker_max_delivery_attempts,
             ),
-            document_finalization_handler: DocumentFinalizationHandler::new(postgres, object_store),
+            document_finalization_handler: DocumentFinalizationHandler::new(
+                postgres,
+                quarantine_store,
+                evidence_store,
+            ),
         }
     }
 }
@@ -119,7 +125,8 @@ impl WorkerState {
 pub fn create_worker_app(dependencies: WorkerAppDependencies) -> Router {
     let state = WorkerState::new(
         dependencies.postgres.clone(),
-        dependencies.object_store,
+        dependencies.quarantine_store,
+        dependencies.evidence_store,
         dependencies.scanner,
         dependencies.worker_max_delivery_attempts,
     );
@@ -447,7 +454,7 @@ mod tests {
             "causation_id": Uuid::from_u128(5),
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             }
         })))
         .expect("typed worker message decodes");
@@ -461,7 +468,7 @@ mod tests {
             message.payload,
             json!({
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             })
         );
         assert_eq!(message.delivery_attempt, Some(2));
@@ -479,7 +486,7 @@ mod tests {
             "causation_id": null,
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             },
             "event_type": DOCUMENT_FINALIZATION_REQUESTED,
             "aggregate_type": "evidence_document",
@@ -507,7 +514,7 @@ mod tests {
             "causation_id": null,
             "payload": {
                 "evidence_submission_id": Uuid::from_u128(6),
-                "object_key": "quarantine/document-1"
+                "object_key": "staged/document-1"
             }
         });
 

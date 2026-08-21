@@ -2,11 +2,11 @@ use std::str::FromStr;
 
 use proofplane::config::{
     AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
-    DatabasePoolConfig, HealthConfig, LogFormat, McpConfig, ObjectStorageConfig,
-    ObservabilityConfig, PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey,
-    PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig, PasetoUploadGrantKey,
-    PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig, UploadsConfig,
-    WorkerConfig,
+    DatabasePoolConfig, FilesystemObjectStorageConfig, HealthConfig, LogFormat, McpConfig,
+    ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
+    PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
+    PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig,
+    UploadsConfig, WorkerConfig,
 };
 use secrecy::SecretString;
 use uuid::Uuid;
@@ -103,7 +103,10 @@ pub fn config(
                 }],
             },
         },
-        object_storage: ObjectStorageConfig::Filesystem { root: storage_root },
+        object_storage: ObjectStorageConfig::Filesystem(FilesystemObjectStorageConfig {
+            quarantine_root: storage_root.join("quarantine"),
+            evidence_root: storage_root.join("evidence"),
+        }),
         scanner: ScannerConfig {
             clamd_address: socket_addr("127.0.0.1:3310"),
             connection_timeout_ms: 1000,

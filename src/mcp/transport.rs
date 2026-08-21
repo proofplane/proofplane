@@ -61,7 +61,7 @@ use crate::{
     authentication::auth0::{TokenVerifier, VerifiedMcpClaims},
     config::HealthConfig,
     domain::WorkspacePermission,
-    object_storage::RuntimeObjectStore,
+    object_storage::QuarantineObjectStore,
     persistence::Postgres,
     routes::{
         health::{self, ReadyState},
@@ -87,7 +87,7 @@ pub enum McpAppError {
 
 pub struct McpAppDependencies<V> {
     pub postgres: Arc<Postgres>,
-    pub object_store: Arc<RuntimeObjectStore>,
+    pub quarantine_store: QuarantineObjectStore,
     pub metrics: PrometheusHandle,
     pub oauth_verifier: Arc<V>,
     pub authorization_server: Url,
@@ -111,7 +111,7 @@ impl<V> Clone for McpAppDependencies<V> {
     fn clone(&self) -> Self {
         Self {
             postgres: self.postgres.clone(),
-            object_store: self.object_store.clone(),
+            quarantine_store: self.quarantine_store.clone(),
             metrics: self.metrics.clone(),
             oauth_verifier: self.oauth_verifier.clone(),
             authorization_server: self.authorization_server.clone(),
@@ -139,7 +139,7 @@ where
 {
     let evidence_submissions = EvidenceSubmissionService::new(
         dependencies.postgres.clone(),
-        dependencies.object_store.clone(),
+        dependencies.quarantine_store.clone(),
     );
     let issue_evidence_document_upload_grant = IssueEvidenceDocumentUploadGrantHandler::new(
         dependencies.postgres.clone(),

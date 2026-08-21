@@ -310,7 +310,7 @@ mod tests {
                     evidence_submission_id: EvidenceSubmissionId::from(Uuid::new_v4()),
                     document_id: DocumentId::from(Uuid::new_v4()),
                 },
-                "quarantine/document-1",
+                "staged/document-1",
                 correlation_id,
                 causation_id,
             ),

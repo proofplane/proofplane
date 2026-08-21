@@ -58,6 +58,19 @@ impl GcsObjectStore {
         })
     }
 
+    /// Another bucket reached through the same clients and the same key prefix.
+    ///
+    /// The quarantine store and the evidence store share one set of application
+    /// default credentials. This constructor avoids a second handshake and makes
+    /// the shared prefix structural.
+    pub fn for_bucket(&self, bucket: impl Into<String>) -> Self {
+        Self {
+            clients: self.clients.clone(),
+            bucket: bucket.into(),
+            object_key_prefix: self.object_key_prefix.clone(),
+        }
+    }
+
     fn bucket_resource(&self) -> String {
         format!("projects/_/buckets/{}", self.bucket)
     }
@@ -213,6 +226,7 @@ impl ObjectStore for GcsObjectStore {
     async fn copy_object(
         &self,
         source: &ObjectKey,
+        destination_store: &Self,
         destination: &ObjectKey,
     ) -> Result<ObjectMetadata, StorageError> {
         if !source.has_same_workspace(destination) {
@@ -221,8 +235,12 @@ impl ObjectStore for GcsObjectStore {
 
         let source_metadata = self.head_object(source).await?;
         let source_name = self.physical_name(source);
-        let destination_name = self.physical_name(destination);
-        let bucket = self.bucket_resource();
+        // The destination lives in the destination store's bucket. Every name
+        // and every cleanup below must be resolved through that store, not
+        // through `self`.
+        let destination_name = destination_store.physical_name(destination);
+        let source_bucket = self.bucket_resource();
+        let destination_bucket = destination_store.bucket_resource();
         let mut rewrite_token = None;
 
         let destination_object = loop {
@@ -230,9 +248,9 @@ impl ObjectStore for GcsObjectStore {
                 .clients
                 .control
                 .rewrite_object()
-                .set_source_bucket(bucket.clone())
+                .set_source_bucket(source_bucket.clone())
                 .set_source_object(source_name.clone())
-                .set_destination_bucket(bucket.clone())
+                .set_destination_bucket(destination_bucket.clone())
                 .set_destination_name(destination_name.clone());
             if let Some(token) = rewrite_token.take() {
                 request = request.set_rewrite_token(token);
@@ -252,7 +270,8 @@ impl ObjectStore for GcsObjectStore {
             match map_object_metadata(destination, &destination_name, &destination_object) {
                 Ok(metadata) => metadata,
                 Err(error) => {
-                    self.cleanup_failed_write(&destination_name, destination_generation)
+                    destination_store
+                        .cleanup_failed_write(&destination_name, destination_generation)
                         .await;
                     return Err(error);
                 }
@@ -261,7 +280,8 @@ impl ObjectStore for GcsObjectStore {
             || destination_metadata.content_length != source_metadata.content_length
             || destination_metadata.sha256 != source_metadata.sha256
         {
-            self.cleanup_failed_write(&destination_name, destination_generation)
+            destination_store
+                .cleanup_failed_write(&destination_name, destination_generation)
                 .await;
             return Err(StorageError::Integrity);
         }

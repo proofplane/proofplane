@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 
 use crate::{
     domain::{DocumentOwner, EvidenceSubmissionId, WorkspaceId},
-    object_storage::{ObjectKey, ObjectStore, PutObjectRequest, RuntimeObjectStore, StorageError},
+    object_storage::{ObjectKey, PutObjectRequest, QuarantineObjectStore, StorageError},
 };
 
 use super::Error;
@@ -35,7 +35,7 @@ pub(crate) struct BoundedStagingRequest {
 }
 
 pub(crate) async fn stage_document<S>(
-    object_store: &RuntimeObjectStore,
+    quarantine_store: &QuarantineObjectStore,
     workspace_id: WorkspaceId,
     owner: DocumentOwner,
     upload_id: uuid::Uuid,
@@ -46,16 +46,19 @@ pub(crate) async fn stage_document<S>(
 where
     S: Stream<Item = Result<Bytes, StorageError>> + Send,
 {
+    // The quarantine store is a separate store, so the key does not name the
+    // lifecycle stage. A staged key ends in the upload id and the finalized key
+    // ends in the document id, so the two never collide.
     let prefix = match owner {
         DocumentOwner::EvidenceSubmission(id) => {
-            format!("quarantine/evidence-submissions/{id}/documents/{upload_id}")
+            format!("evidence-submissions/{id}/documents/{upload_id}")
         }
         DocumentOwner::Policy(id) => {
-            format!("quarantine/policies/{id}/documents/{upload_id}")
+            format!("policies/{id}/documents/{upload_id}")
         }
     };
     let key = ObjectKey::new(workspace_id, prefix, &filename)?;
-    let metadata = object_store
+    let metadata = quarantine_store
         .put_object(PutObjectRequest {
             key,
             content_type,
@@ -80,7 +83,7 @@ where
 }
 
 pub(crate) async fn stage_evidence_document<S>(
-    object_store: &RuntimeObjectStore,
+    quarantine_store: &QuarantineObjectStore,
     workspace_id: WorkspaceId,
     evidence_submission_id: EvidenceSubmissionId,
     filename: String,
@@ -92,7 +95,7 @@ where
     S: Stream<Item = Result<Bytes, StorageError>> + Send,
 {
     stage_bounded_document(
-        object_store,
+        quarantine_store,
         BoundedStagingRequest {
             workspace_id,
             owner: DocumentOwner::EvidenceSubmission(evidence_submission_id),
@@ -108,7 +111,7 @@ where
 }
 
 pub(crate) async fn stage_bounded_document<S>(
-    object_store: &RuntimeObjectStore,
+    quarantine_store: &QuarantineObjectStore,
     request: BoundedStagingRequest,
     chunks: S,
 ) -> Result<StagedDocument, Error>
@@ -141,7 +144,7 @@ where
     });
 
     let mut staged = stage_document(
-        object_store,
+        quarantine_store,
         request.workspace_id,
         request.owner,
         request.upload_id,
@@ -152,7 +155,7 @@ where
     .await?;
     let actual_content_length = content_length.load(Ordering::Relaxed);
     if u64::try_from(staged.content_length) != Ok(actual_content_length) {
-        if let Err(error) = delete_staged_document(object_store, &staged.object_key).await {
+        if let Err(error) = delete_staged_document(quarantine_store, &staged.object_key).await {
             crate::observability::record_cleanup_failure(&error, request.cleanup_operation, None);
         }
         return Err(Error::Storage(StorageError::StreamRead {
@@ -173,10 +176,10 @@ fn stream_too_large() -> StorageError {
 }
 
 pub(crate) async fn delete_staged_document(
-    object_store: &RuntimeObjectStore,
+    quarantine_store: &QuarantineObjectStore,
     object_key: &str,
 ) -> Result<(), Error> {
-    object_store
+    quarantine_store
         .delete_object(&ObjectKey::parse(object_key.to_owned())?)
         .await?;
     Ok(())
@@ -193,21 +196,21 @@ mod tests {
 
     use super::stage_evidence_document;
     use crate::{
-        config::ObjectStorageConfig,
+        config::{FilesystemObjectStorageConfig, ObjectStorageConfig},
         domain::{EvidenceSubmissionId, WorkspaceId},
-        object_storage::{ObjectKey, ObjectStore, RuntimeObjectStore},
+        object_storage::{DocumentObjectStores, ObjectKey, StorageError},
         services::Error,
     };
 
     #[tokio::test]
     async fn evidence_stream_stages_bytes_and_computes_all_metadata() {
         let root = temp_dir("metadata");
-        let store = object_store(&root).await;
+        let stores = document_stores(&root).await;
         let workspace_id = WorkspaceId::from(Uuid::new_v4());
         let submission_id = EvidenceSubmissionId::from(Uuid::new_v4());
 
         let staged = stage_evidence_document(
-            &store,
+            &stores.quarantine,
             workspace_id,
             submission_id,
             "report.txt".to_owned(),
@@ -233,10 +236,11 @@ mod tests {
             BASE64_STANDARD.encode(crc32c::crc32c(b"hello world").to_be_bytes())
         );
 
-        let object = store
-            .get_object(
-                &ObjectKey::parse(staged.object_key).expect("staged object key remains valid"),
-            )
+        let staged_key =
+            ObjectKey::parse(staged.object_key).expect("staged object key remains valid");
+        let object = stores
+            .quarantine
+            .get_object(&staged_key)
             .await
             .expect("staged object reads");
         let bytes = object
@@ -255,10 +259,10 @@ mod tests {
     #[tokio::test]
     async fn evidence_stream_rejects_bytes_over_limit_and_removes_partial_object() {
         let root = temp_dir("over-limit");
-        let store = object_store(&root).await;
+        let stores = document_stores(&root).await;
 
         let result = stage_evidence_document(
-            &store,
+            &stores.quarantine,
             WorkspaceId::from(Uuid::new_v4()),
             EvidenceSubmissionId::from(Uuid::new_v4()),
             "report.txt".to_owned(),
@@ -273,12 +277,10 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(Error::Storage(
-                crate::object_storage::StorageError::StreamRead {
-                    payload_too_large: true,
-                    ..
-                }
-            ))
+            Err(Error::Storage(StorageError::StreamRead {
+                payload_too_large: true,
+                ..
+            }))
         ));
         assert!(files_under(&root).is_empty());
 
@@ -290,10 +292,10 @@ mod tests {
     #[tokio::test]
     async fn evidence_stream_failure_removes_partial_object() {
         let root = temp_dir("stream-failure");
-        let store = object_store(&root).await;
+        let stores = document_stores(&root).await;
 
         let result = stage_evidence_document(
-            &store,
+            &stores.quarantine,
             WorkspaceId::from(Uuid::new_v4()),
             EvidenceSubmissionId::from(Uuid::new_v4()),
             "report.txt".to_owned(),
@@ -301,7 +303,7 @@ mod tests {
             10,
             stream::iter([
                 Ok(Bytes::from_static(b"partial")),
-                Err(crate::object_storage::StorageError::StreamRead {
+                Err(StorageError::StreamRead {
                     message: "connection interrupted".to_owned(),
                     payload_too_large: false,
                 }),
@@ -311,12 +313,10 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(Error::Storage(
-                crate::object_storage::StorageError::StreamRead {
-                    payload_too_large: false,
-                    ..
-                }
-            ))
+            Err(Error::Storage(StorageError::StreamRead {
+                payload_too_large: false,
+                ..
+            }))
         ));
         assert!(files_under(&root).is_empty());
 
@@ -325,12 +325,15 @@ mod tests {
             .expect("test storage cleans up");
     }
 
-    async fn object_store(root: &std::path::Path) -> RuntimeObjectStore {
-        RuntimeObjectStore::from_config(&ObjectStorageConfig::Filesystem {
-            root: root.to_path_buf(),
-        })
+    async fn document_stores(root: &std::path::Path) -> DocumentObjectStores {
+        DocumentObjectStores::from_config(&ObjectStorageConfig::Filesystem(
+            FilesystemObjectStorageConfig {
+                quarantine_root: root.join("quarantine"),
+                evidence_root: root.join("evidence"),
+            },
+        ))
         .await
-        .expect("object store initializes")
+        .expect("object stores initialize")
     }
 
     fn temp_dir(name: &str) -> PathBuf {

@@ -142,15 +142,30 @@ pub struct PasetoMcpOAuthKey {
     pub secret: SecretString,
 }
 
+/// Where the two document object stores live.
+///
+/// Uploaded bytes land in the quarantine store and stay there until the worker
+/// scans them. Only the worker moves a clean document into the evidence store.
+/// One backend serves both targets, so the pair can never disagree about which
+/// backend is in use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectStorageConfig {
-    Filesystem { root: PathBuf },
+    Filesystem(FilesystemObjectStorageConfig),
     Gcs(GcsObjectStorageConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemObjectStorageConfig {
+    pub quarantine_root: PathBuf,
+    pub evidence_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcsObjectStorageConfig {
-    pub bucket: String,
+    pub quarantine_bucket: String,
+    pub evidence_bucket: String,
+    /// Prepended to every physical object name in both buckets. It names the
+    /// environment, not the role, so both stores share it.
     pub object_key_prefix: String,
 }
 
@@ -338,10 +353,13 @@ mod tests {
             "http://host.docker.internal:3001/pubsub/messages"
         );
         assert_eq!(config.pubsub.subscriptions.worker_max_delivery_attempts, 5);
-        assert!(matches!(
+        assert_eq!(
             config.object_storage,
-            ObjectStorageConfig::Filesystem { .. }
-        ));
+            ObjectStorageConfig::Filesystem(FilesystemObjectStorageConfig {
+                quarantine_root: PathBuf::from(".local/storage/quarantine"),
+                evidence_root: PathBuf::from(".local/storage/evidence"),
+            })
+        );
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
         assert_eq!(config.database.pool.api, 10);
         assert_eq!(config.database.pool.mcp, 10);
@@ -402,11 +420,11 @@ mod tests {
     }
 
     #[test]
-    fn gcs_configuration_uses_bucket_and_canonical_object_key_prefix_only() {
+    fn gcs_configuration_names_separate_quarantine_and_evidence_buckets() {
         let base = fs::read_to_string("config/local.yaml").expect("local config readable");
         let gcs = base.replace(
-            "object_storage:\n  backend: \"filesystem\"\n  root: \".local/storage\"",
-            "object_storage:\n  backend: \"gcs\"\n  bucket: \"proofplane-test\"\n  object_key_prefix: \"environments/test\"",
+            "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
+            "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test-quarantine\"\n  evidence_bucket: \"proofplane-test-evidence\"\n  object_key_prefix: \"environments/test\"",
         );
         assert_ne!(base, gcs, "object storage replacement anchor matched");
 
@@ -416,7 +434,8 @@ mod tests {
         assert_eq!(
             config.object_storage,
             ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
-                bucket: "proofplane-test".to_owned(),
+                quarantine_bucket: "proofplane-test-quarantine".to_owned(),
+                evidence_bucket: "proofplane-test-evidence".to_owned(),
                 object_key_prefix: "environments/test".to_owned(),
             })
         );
@@ -435,9 +454,9 @@ mod tests {
             "proofplane/../test",
         ] {
             let gcs = base.replace(
-                "object_storage:\n  backend: \"filesystem\"\n  root: \".local/storage\"",
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
                 &format!(
-                    "object_storage:\n  backend: \"gcs\"\n  bucket: \"proofplane-test\"\n  object_key_prefix: \"{prefix}\""
+                    "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test-quarantine\"\n  evidence_bucket: \"proofplane-test-evidence\"\n  object_key_prefix: \"{prefix}\""
                 ),
             );
             let path = write_temp_config(&gcs);
@@ -448,6 +467,45 @@ mod tests {
                 ConfigError::Validation(ref errors)
                     if errors.iter().any(|error| error.path == "object_storage.object_key_prefix")
             ));
+
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// One target for both stores would put unscanned bytes where the evidence
+    /// lives, and would expose the evidence to the quarantine expiry rule.
+    #[test]
+    fn object_storage_rejects_one_target_used_for_both_stores() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let cases = [
+            (
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage\"\n  evidence_root: \".local/storage\"",
+                "object_storage.evidence_root",
+            ),
+            (
+                "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test\"\n  evidence_bucket: \"proofplane-test\"\n  object_key_prefix: \"environments/test\"",
+                "object_storage.evidence_bucket",
+            ),
+        ];
+
+        for (object_storage, expected_path) in cases {
+            let shared = base.replace(
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
+                object_storage,
+            );
+            assert_ne!(base, shared, "object storage replacement anchor matched");
+
+            let path = write_temp_config(&shared);
+            let error = load_from_path(&path).expect_err("one shared target is rejected");
+
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Validation(ref errors)
+                        if errors.iter().any(|error| error.path == expected_path)
+                ),
+                "expected {expected_path} to be rejected"
+            );
 
             let _ = fs::remove_file(path);
         }
@@ -565,7 +623,8 @@ paseto:
         secret: "not-a-paserk"
 object_storage:
   backend: "gcs"
-  bucket: "proofplane"
+  quarantine_bucket: "proofplane"
+  evidence_bucket: "proofplane"
   object_key_prefix: "../evidence"
 scanner:
   clamd_address: "not-a-socket"

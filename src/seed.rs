@@ -463,12 +463,14 @@ async fn seed_demo_evidence_submission(
     object_storage: &ObjectStorageConfig,
     created_by_user_id: UserId,
 ) -> Result<DemoDocumentSeedStatus, Error> {
-    let ObjectStorageConfig::Filesystem { root } = object_storage else {
+    // The demo document is seeded already finalized, so it belongs in the
+    // evidence store and never passes through quarantine.
+    let ObjectStorageConfig::Filesystem(config) = object_storage else {
         seed_demo_submission_row(repository).await?;
         return Ok(DemoDocumentSeedStatus::SkippedNonFilesystemStorage);
     };
 
-    let object_store = FilesystemObjectStore::new(root).await?;
+    let object_store = FilesystemObjectStore::new(&config.evidence_root).await?;
     let object_key = demo_document_object_key()?;
     let metadata = object_store
         .put_object(PutObjectRequest {

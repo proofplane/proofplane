@@ -6,7 +6,7 @@ use proofplane::{
     app::{create_app, AppDependencies, CreateAppError},
     authentication::{auth0::Auth0TokenVerifier, UserAuthenticator},
     config,
-    object_storage::{self, RuntimeObjectStore},
+    object_storage::{self, DocumentObjectStores},
     observability, persistence,
 };
 use secrecy::ExposeSecret;
@@ -68,7 +68,7 @@ async fn run() -> Result<(), Error> {
     persistence::check_schema_revision(&client).await?;
     drop(client);
     let postgres = Arc::new(persistence::Postgres::new(pool));
-    let object_store = Arc::new(RuntimeObjectStore::from_config(&config.object_storage).await?);
+    let object_stores = DocumentObjectStores::from_config(&config.object_storage).await?;
 
     let metrics = PrometheusBuilder::new().install_recorder()?;
 
@@ -83,7 +83,8 @@ async fn run() -> Result<(), Error> {
     let deps = AppDependencies {
         config,
         postgres,
-        object_store,
+        quarantine_store: object_stores.quarantine,
+        evidence_store: object_stores.evidence,
         metrics,
         user_authenticator,
         auditor_identity_provider: None,

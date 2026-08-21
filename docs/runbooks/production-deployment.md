@@ -39,7 +39,10 @@ needs, so the order is not a suggestion.
    intended registrar delegation.
 7. Upload the complete production YAML and migration database URL as separate
    Secret Manager versions, into the containers step 6 created. Record numeric
-   versions, not aliases.
+   versions, not aliases. The YAML names both storage targets under
+   `object_storage`: `quarantine_bucket`, `evidence_bucket`, and one shared
+   `object_key_prefix`. The two bucket names must differ, or the runtime refuses
+   to start.
 8. Apply `03-release`, following [Build And Plan](#build-and-plan).
 
 Confirm the following before the release apply. None of them depend on the
@@ -298,9 +301,25 @@ later, separately verified change.
 - **Dead-letter message appears:** inspect the persistent 31-day pull
   subscription, preserve the message, correct the idempotent handler or data,
   and replay deliberately. Do not purge the subscription as diagnosis.
-- **Evidence deleted accidentally:** recover it from the bucket's 30-day soft
-  delete window. Database daily backup recovery is separate and may lose up to
-  roughly 24 hours.
+- **Evidence deleted accidentally:** recover it from the evidence bucket's
+  30-day soft delete window. Database daily backup recovery is separate and may
+  lose up to roughly 24 hours.
+- **Upload stuck in quarantine:** the quarantine bucket has no soft delete and
+  deletes every object at seven days, so there is nothing to recover. Ask the
+  uploader to send the file again.
+- **Moving an existing environment to a quarantine bucket:** keep
+  `evidence_bucket` and `object_key_prefix` at their current values, or every
+  finalized document stops resolving. Apply `02-foundation` first. New IAM on an
+  unused bucket changes nothing. Then drain the pipeline before the cutover:
+  wait until
+  `SELECT count(*) FROM documents WHERE upload_status IN ('pending', 'finalizing')`
+  reaches zero. An object staged by the old revision lives in the evidence
+  bucket. The new revision looks for it in the quarantine bucket, so an
+  in-flight document would fail its scan and land in `failed`. Rollback carries
+  the same requirement in reverse. After the cutover, remove the orphaned
+  `{prefix}/workspaces/*/quarantine/**` objects with a one-off
+  `gcloud storage rm`. Do not add a lifecycle rule to the evidence bucket to do
+  it.
 - **Secret rotation:** add a new secret version outside Terraform, update its
   numeric version input, review the new revisions, and apply. Disable old
   versions only after rollback no longer depends on them.

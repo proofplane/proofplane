@@ -36,6 +36,22 @@ variable "evidence_bucket_name" {
   type        = string
 }
 
+variable "quarantine_bucket_name" {
+  description = "Globally unique bucket name for unscanned quarantined uploads."
+  type        = string
+}
+
+variable "quarantine_retention_days" {
+  description = "Age in days after which a quarantined object is deleted, even one a scan condemned."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.quarantine_retention_days >= 1 && var.quarantine_retention_days <= 30
+    error_message = "Quarantine retention must be between 1 and 30 days."
+  }
+}
+
 variable "clamav_definitions_bucket_name" {
   description = "Globally unique bucket name for validated ClamAV snapshots."
   type        = string
