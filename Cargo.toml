@@ -89,5 +89,11 @@ anyhow = { version = "1.0.104", features = ["std", "backtrace"] }
 
 [dev-dependencies]
 axum-test = "20"
-testcontainers = "0.27"
-testcontainers-modules = { version = "0.15", features = ["postgres"] }
+# Both default to the rustls `ring` provider, while every non-test dependency
+# that speaks TLS (gcloud-auth, gcloud-pubsub, google-cloud-storage, reqwest)
+# uses `aws-lc-rs`. Cargo unifies features across normal and dev dependencies,
+# so the defaults turn on both providers in a test build. rustls then refuses to
+# choose one and panics on the first TLS handshake. Pin these to the provider
+# the rest of the graph already uses.
+testcontainers = { version = "0.27", default-features = false, features = ["aws-lc-rs"] }
+testcontainers-modules = { version = "0.15", default-features = false, features = ["postgres", "aws-lc-rs"] }
