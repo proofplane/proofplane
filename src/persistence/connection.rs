@@ -168,12 +168,17 @@ mod tests {
         row.get(0)
     }
 
+    /// One second, not one tenth of it. The bound covers connection creation as
+    /// well as the wait. Every database test in this module starts a container
+    /// of its own, so a tighter bound reports a busy machine as a pool timeout.
+    const WAIT_ALLOWANCE: Duration = Duration::from_secs(1);
+
     #[tokio::test]
     async fn waiting_past_the_acquire_timeout_fails_instead_of_blocking() {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
-            PoolBounds::new(1, Duration::from_millis(100), Duration::from_secs(60)),
+            PoolBounds::new(1, WAIT_ALLOWANCE, Duration::from_secs(60)),
         )
         .await
         .expect("pool builds");
