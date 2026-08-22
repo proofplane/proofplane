@@ -12,7 +12,7 @@ use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
 use crate::{
-    config::{self, ConfigError, PROOFPLANE_CONFIG},
+    config::{self, ConfigError, DatabaseTls, PROOFPLANE_CONFIG},
     persistence,
 };
 
@@ -23,11 +23,17 @@ pub const DATABASE_URL_FILE: &str = "PROOFPLANE_MIGRATION_DATABASE_URL_FILE";
 
 pub const DATABASE_URL: &str = "PROOFPLANE_MIGRATION_DATABASE_URL";
 
+/// Selects the transport for a local run. The command reads no application
+/// configuration in production. A verified connection is therefore the default,
+/// and only this variable changes it.
+pub const DATABASE_TLS: &str = "PROOFPLANE_MIGRATION_DATABASE_TLS";
+
 #[derive(Debug, Default)]
 struct CredentialSources {
     url_file: Option<PathBuf>,
     inline_url: Option<String>,
     config_path: Option<PathBuf>,
+    tls: Option<String>,
 }
 
 impl CredentialSources {
@@ -40,8 +46,16 @@ impl CredentialSources {
             url_file: lookup(DATABASE_URL_FILE).map(PathBuf::from),
             inline_url: lookup(DATABASE_URL).and_then(|url| url.into_string().ok()),
             config_path: lookup(PROOFPLANE_CONFIG).map(PathBuf::from),
+            tls: lookup(DATABASE_TLS).and_then(|mode| mode.into_string().ok()),
         }
     }
+}
+
+/// A database URL and the transport that reaches it.
+#[derive(Debug)]
+struct Credential {
+    url: SecretString,
+    tls: DatabaseTls,
 }
 
 #[derive(Debug, Error)]
@@ -64,6 +78,9 @@ pub enum CredentialError {
 
     #[error("{DATABASE_URL} is not a database URL: {message}")]
     MalformedInline { message: String },
+
+    #[error("{DATABASE_TLS} is not a TLS mode: {message}")]
+    MalformedTls { message: String },
 
     #[error("{PROOFPLANE_CONFIG} names {path}, which did not load")]
     Configuration {
@@ -90,12 +107,14 @@ pub enum Error {
 
 /// Applies every pending migration and reports what it applied.
 pub async fn run() -> Result<Report, Error> {
-    apply(&resolve(CredentialSources::from_env())?).await
+    let credential = resolve(CredentialSources::from_env())?;
+
+    apply(&credential.url, credential.tls).await
 }
 
 /// This only uses one postgres connection with a lock timeout set.
-async fn apply(url: &SecretString) -> Result<Report, Error> {
-    let mut client = persistence::conn(url.expose_secret()).await?;
+async fn apply(url: &SecretString, tls: DatabaseTls) -> Result<Report, Error> {
+    let mut client = persistence::conn(url.expose_secret(), tls).await?;
 
     persistence::set_migration_lock_timeout(&client)
         .await
@@ -109,20 +128,48 @@ async fn apply(url: &SecretString) -> Result<Report, Error> {
 ///
 /// A source that is set but broken fails here rather than falling through to
 /// the next one.
-fn resolve(sources: CredentialSources) -> Result<SecretString, CredentialError> {
+///
+/// The transport is verified unless [`DATABASE_TLS`] lowers it. The application
+/// configuration is the one source that carries a mode of its own, so it
+/// decides when the variable is absent.
+fn resolve(sources: CredentialSources) -> Result<Credential, CredentialError> {
+    let requested = requested_tls(sources.tls.as_deref())?;
+    // Neither of the first two sources carries a mode, so both take this one.
+    let unstated = requested.unwrap_or(DatabaseTls::VerifyFull);
+
     if let Some(path) = sources.url_file {
-        return from_file(&path);
+        return Ok(Credential {
+            url: from_file(&path)?,
+            tls: unstated,
+        });
     }
 
     if let Some(url) = sources.inline_url {
-        return database_url(&url).map_err(|message| CredentialError::MalformedInline { message });
+        let url =
+            database_url(&url).map_err(|message| CredentialError::MalformedInline { message })?;
+
+        return Ok(Credential { url, tls: unstated });
     }
 
     if let Some(path) = sources.config_path {
-        return from_configuration(&path);
+        let configured = from_configuration(&path)?;
+
+        return Ok(Credential {
+            tls: requested.unwrap_or(configured.tls),
+            url: configured.url,
+        });
     }
 
     Err(CredentialError::NoSource)
+}
+
+fn requested_tls(value: Option<&str>) -> Result<Option<DatabaseTls>, CredentialError> {
+    value
+        .map(|mode| {
+            config::database_tls(mode.to_owned())
+                .map_err(|message| CredentialError::MalformedTls { message })
+        })
+        .transpose()
 }
 
 fn from_file(path: &Path) -> Result<SecretString, CredentialError> {
@@ -137,9 +184,12 @@ fn from_file(path: &Path) -> Result<SecretString, CredentialError> {
     })
 }
 
-fn from_configuration(path: &Path) -> Result<SecretString, CredentialError> {
+fn from_configuration(path: &Path) -> Result<Credential, CredentialError> {
     config::load_from_path(path)
-        .map(|config| config.database.url)
+        .map(|config| Credential {
+            url: config.database.url,
+            tls: config.database.tls,
+        })
         .map_err(|source| CredentialError::Configuration {
             path: path.to_path_buf(),
             source: Box::new(source),
@@ -166,8 +216,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        apply, resolve, CredentialError, CredentialSources, Report, DATABASE_URL,
-        DATABASE_URL_FILE, PROOFPLANE_CONFIG,
+        apply, resolve, CredentialError, CredentialSources, DatabaseTls, Report, DATABASE_TLS,
+        DATABASE_URL, DATABASE_URL_FILE, PROOFPLANE_CONFIG,
     };
     use crate::persistence::{self, test_support};
 
@@ -210,8 +260,13 @@ mod tests {
     fn resolved(sources: CredentialSources) -> String {
         resolve(sources)
             .expect("the credential resolves")
+            .url
             .expose_secret()
             .to_owned()
+    }
+
+    fn resolved_tls(sources: CredentialSources) -> DatabaseTls {
+        resolve(sources).expect("the credential resolves").tls
     }
 
     fn rejection(sources: CredentialSources) -> String {
@@ -226,6 +281,7 @@ mod tests {
             DATABASE_URL_FILE => Some("/run/secrets/database-url".into()),
             DATABASE_URL => Some(INLINE_URL.into()),
             PROOFPLANE_CONFIG => Some(LOCAL_CONFIG.into()),
+            DATABASE_TLS => Some("disable".into()),
             _ => None,
         });
 
@@ -235,6 +291,7 @@ mod tests {
         );
         assert_eq!(sources.inline_url, Some(INLINE_URL.to_owned()));
         assert_eq!(sources.config_path, Some(PathBuf::from(LOCAL_CONFIG)));
+        assert_eq!(sources.tls, Some("disable".to_owned()));
     }
 
     #[test]
@@ -245,6 +302,7 @@ mod tests {
             url_file: Some(file.path.clone()),
             inline_url: Some(INLINE_URL.to_owned()),
             config_path: Some(LOCAL_CONFIG.into()),
+            ..Default::default()
         });
 
         assert_eq!(url, FILE_URL);
@@ -271,6 +329,93 @@ mod tests {
         assert_eq!(url, CONFIGURED_URL);
     }
 
+    /// The deployment sets one variable, and it names the file. Nothing else
+    /// tells the command what the transport should be, so a verified one is
+    /// what it must choose.
+    #[test]
+    fn the_secret_file_verifies_the_transport_by_default() {
+        let file = TempFile::holding(FILE_URL);
+
+        let tls = resolved_tls(CredentialSources {
+            url_file: Some(file.path.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(tls, DatabaseTls::VerifyFull);
+    }
+
+    #[test]
+    fn the_inline_url_verifies_the_transport_by_default() {
+        let tls = resolved_tls(CredentialSources {
+            inline_url: Some(INLINE_URL.to_owned()),
+            ..Default::default()
+        });
+
+        assert_eq!(tls, DatabaseTls::VerifyFull);
+    }
+
+    /// The one source that carries a mode of its own. A migration that reads an
+    /// application configuration matches the runtimes that configuration will
+    /// start.
+    #[test]
+    fn the_application_configuration_supplies_its_own_transport() {
+        let tls = resolved_tls(CredentialSources {
+            config_path: Some(LOCAL_CONFIG.into()),
+            ..Default::default()
+        });
+
+        assert_eq!(tls, DatabaseTls::Disable);
+    }
+
+    /// What `make migrate` sets. The local stack serves no certificate, so the
+    /// default has to be lowered from outside the command.
+    #[test]
+    fn the_tls_variable_lowers_every_source() {
+        let file = TempFile::holding(FILE_URL);
+
+        for sources in [
+            CredentialSources {
+                url_file: Some(file.path.clone()),
+                tls: Some("disable".to_owned()),
+                ..Default::default()
+            },
+            CredentialSources {
+                inline_url: Some(INLINE_URL.to_owned()),
+                tls: Some("disable".to_owned()),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(resolved_tls(sources), DatabaseTls::Disable);
+        }
+    }
+
+    /// The variable also names the verifying mode. An operator can therefore
+    /// state the transport, and not only lower it.
+    #[test]
+    fn the_tls_variable_also_raises_the_configuration() {
+        let tls = resolved_tls(CredentialSources {
+            config_path: Some(LOCAL_CONFIG.into()),
+            tls: Some("verify-full".to_owned()),
+            ..Default::default()
+        });
+
+        assert_eq!(tls, DatabaseTls::VerifyFull);
+    }
+
+    #[test]
+    fn an_unrecognised_tls_mode_names_its_variable() {
+        let message = rejection(CredentialSources {
+            inline_url: Some(INLINE_URL.to_owned()),
+            tls: Some("require".to_owned()),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            message,
+            format!("{DATABASE_TLS} is not a TLS mode: must be `disable` or `verify-full`")
+        );
+    }
+
     #[test]
     fn a_secret_file_may_end_with_the_newline_an_editor_left_behind() {
         let file = TempFile::holding(&format!("{FILE_URL}\n"));
@@ -291,6 +436,7 @@ mod tests {
             url_file: Some(file.path.clone()),
             inline_url: Some(INLINE_URL.to_owned()),
             config_path: Some(LOCAL_CONFIG.into()),
+            ..Default::default()
         })
         .expect_err("a broken higher-precedence source fails the run");
 
@@ -446,7 +592,7 @@ mod tests {
     /// from nothing rather than from the fixture's already-migrated state.
     async fn empty_database(fixture: &test_support::TestDatabase) -> SecretString {
         let name = format!("migrate_{}", Uuid::new_v4().simple());
-        persistence::conn(&fixture.url)
+        persistence::conn(&fixture.url, DatabaseTls::Disable)
             .await
             .expect("the fixture container connection opens")
             .batch_execute(&format!("CREATE DATABASE {name}"))
@@ -471,7 +617,7 @@ mod tests {
     async fn a_run_against_an_empty_database_applies_every_embedded_migration() {
         let fixture = test_support::database().await;
 
-        let report = apply(&empty_database(&fixture).await)
+        let report = apply(&empty_database(&fixture).await, DatabaseTls::Disable)
             .await
             .expect("migrations apply");
 
@@ -490,9 +636,12 @@ mod tests {
         // The fixture arrives migrated, so this is the second run.
         let fixture = test_support::database().await;
 
-        let report = apply(&SecretString::from(fixture.url.clone()))
-            .await
-            .expect("the repeat run succeeds");
+        let report = apply(
+            &SecretString::from(fixture.url.clone()),
+            DatabaseTls::Disable,
+        )
+        .await
+        .expect("the repeat run succeeds");
 
         assert_eq!(applied(&report), Vec::<String>::new());
     }
@@ -502,9 +651,11 @@ mod tests {
         let fixture = test_support::database().await;
         let url = empty_database(&fixture).await;
 
-        apply(&url).await.expect("migrations apply");
+        apply(&url, DatabaseTls::Disable)
+            .await
+            .expect("migrations apply");
 
-        let client = persistence::conn(url.expose_secret())
+        let client = persistence::conn(url.expose_secret(), DatabaseTls::Disable)
             .await
             .expect("the connection opens");
         // Derived from the schema rather than listed here, so a table added
@@ -537,7 +688,7 @@ mod tests {
     async fn a_run_blocked_on_its_lock_gives_up_within_the_timeout() {
         let fixture = test_support::database().await;
 
-        let blocker = persistence::conn(&fixture.url)
+        let blocker = persistence::conn(&fixture.url, DatabaseTls::Disable)
             .await
             .expect("the competing session connects");
         blocker
@@ -549,7 +700,10 @@ mod tests {
 
         let error = tokio::time::timeout(
             BLOCKED_RUN_ALLOWANCE,
-            apply(&SecretString::from(fixture.url.clone())),
+            apply(
+                &SecretString::from(fixture.url.clone()),
+                DatabaseTls::Disable,
+            ),
         )
         .await
         .expect("the blocked run gives up instead of waiting for the lock")

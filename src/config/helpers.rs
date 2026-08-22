@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::validation::{is_canonical_relative_path, Validation};
 
-use super::{ConfigFieldError, LogFormat};
+use super::{ConfigFieldError, DatabaseTls, LogFormat};
 
 pub(super) fn string_value(value: String) -> Result<String, String> {
     trim_required(value)
@@ -30,6 +30,18 @@ pub fn postgres_connection_string(value: SecretString) -> Result<SecretString, S
         .parse::<tokio_postgres::Config>()
         .map(|_| value)
         .map_err(|_| "must be a valid Postgres connection string".into())
+}
+
+/// `tokio_postgres` cannot express full verification in a connection string: its
+/// `SslMode` has only `disable`, `prefer`, and `require`, and it rejects
+/// `sslmode=verify-full` when it parses the string. The mode therefore lives
+/// here rather than in the URL.
+pub fn database_tls(value: String) -> Result<DatabaseTls, String> {
+    match trim_required(value)?.as_str() {
+        "disable" => Ok(DatabaseTls::Disable),
+        "verify-full" => Ok(DatabaseTls::VerifyFull),
+        _ => Err("must be `disable` or `verify-full`".into()),
+    }
 }
 
 pub(super) fn nonzero_u16(value: u16) -> Result<u16, String> {

@@ -58,10 +58,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 FROM --platform=linux/amd64 debian:bookworm-slim AS runtime
 
-# ca-certificates: reqwest verifies TLS through the platform certificate store,
-# so Auth0 JWKS retrieval, GCP token minting, and Pub/Sub publishing all fail
-# without it. libssl3: the openssl-sys link above is dynamic, which is also why
-# a scratch or distroless-static runtime is not available here.
+# ca-certificates: reqwest and the database connector both verify TLS through
+# the platform certificate store. Without it the image cannot read the Auth0
+# JWKS, cannot mint a GCP token, cannot publish to Pub/Sub, and cannot open a
+# verified database connection. libssl3: the openssl-sys link above is dynamic,
+# which is also why a scratch or distroless-static runtime is not available here.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/* \

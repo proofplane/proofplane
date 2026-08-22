@@ -30,7 +30,7 @@ must not be enabled until all are verified:
 | --- | --- |
 | Native GCS | The runtime object-store adapter streams all required operations through GCS using ADC. |
 | Native Pub/Sub | The dequeuer publishes through Google Pub/Sub without requiring `PUBSUB_EMULATOR_HOST` and does not provision topics or subscriptions. |
-| Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. |
+| Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. Met by the `database.tls` configuration field and the migration command's verified default. |
 | Transaction pooling | Runtime queries issue unnamed statements and pass integration tests against a transaction pooler. Met locally against PgBouncer in transaction mode; still unverified against Supavisor on 6543. |
 | Dedicated migrations | A `proofplane-migrate` command runs migrations only, uses a separate direct credential, and never seeds data. |
 | Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup and accept work only when database history matches the migrations embedded in the binary, or runs ahead of it by migrations that are not marked `breaking_`. |
@@ -234,6 +234,18 @@ use port 6543 and verified TLS. The database adapter must issue unnamed queries
 or otherwise disable named prepared statements, because transaction mode does
 not support them.
 
+The transport is a configuration field, `database.tls`, and not part of the
+connection string. It accepts `disable` and `verify-full` and nothing else, so
+no configuration can ask for a connection that is encrypted but unverified.
+`tokio_postgres` cannot express full verification in a connection string. Its
+`SslMode` has only `disable`, `prefer`, and `require`. It rejects
+`sslmode=verify-full` when it parses the string. The configured mode replaces
+whatever `sslmode` the string carried, so a string cannot lower the transport or
+raise it. `verify-full` pairs a mandatory handshake with a `native-tls`
+connector, which checks the certificate chain and the hostname against the
+system certificate store. The release image already carries that store as
+`ca-certificates`.
+
 The adapter satisfies the first clause literally. Every parameterized statement
 uses `query_typed`/`execute_typed`, which parse into the **unnamed** statement
 and send `Parse`, `Bind`, `Describe`, and `Execute` under a single `Sync` — one
@@ -301,6 +313,14 @@ falling through to a lower one:
 | 1 | `PROOFPLANE_MIGRATION_DATABASE_URL_FILE`, a path to a file holding the URL | production, the only variable the job sets |
 | 2 | `PROOFPLANE_MIGRATION_DATABASE_URL`, the URL itself | `make migrate` and one-off runs |
 | 3 | `PROOFPLANE_CONFIG`, whose `database.url` is used | a run that must match an application configuration |
+
+A credential carries no transport, so the command chooses one. Sources 1 and 2
+verify the certificate chain and the hostname. Source 3 takes the `database.tls`
+of the configuration it loaded. `PROOFPLANE_MIGRATION_DATABASE_TLS` overrides all
+three and accepts the same two values the configuration field accepts. The
+production job does not set that variable, so it gets the verified default.
+`make migrate` sets it to `disable`, because the local stack serves no
+certificate.
 
 No application configuration is mounted for the job, so nothing else about the
 command may depend on it. The command sets a five-second `lock_timeout` on its

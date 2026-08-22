@@ -13,6 +13,11 @@ IMAGE_REF_FILE ?= .local/image-ref
 # 5432 rather than at PgBouncer on 6432.
 PROOFPLANE_MIGRATION_DATABASE_URL ?= postgres://proofplane:proofplane@127.0.0.1:5432/proofplane
 
+# The local stack serves no certificate. The migration command verifies the
+# certificate chain and the hostname by default, so a local run has to lower it
+# here. Production sets nothing and gets the verified default.
+PROOFPLANE_MIGRATION_DATABASE_TLS ?= disable
+
 help:
 	@printf '%s\n' \
 		'Targets:' \
@@ -93,7 +98,9 @@ pubsub-init:
 	@bash scripts/init-local-pubsub.sh
 
 migrate:
-	@PROOFPLANE_MIGRATION_DATABASE_URL=$(PROOFPLANE_MIGRATION_DATABASE_URL) cargo run --quiet --bin migrate
+	@PROOFPLANE_MIGRATION_DATABASE_URL=$(PROOFPLANE_MIGRATION_DATABASE_URL) \
+	 PROOFPLANE_MIGRATION_DATABASE_TLS=$(PROOFPLANE_MIGRATION_DATABASE_TLS) \
+	 cargo run --quiet --bin migrate
 
 seed:
 	@PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --quiet --bin seed

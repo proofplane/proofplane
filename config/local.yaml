@@ -8,6 +8,8 @@ server:
 
 database:
   url: "postgres://proofplane:proofplane@127.0.0.1:6432/proofplane"
+  # The compose stack serves no certificate. Production sets `verify-full`.
+  tls: "disable"
   pool:
     api: 10
     mcp: 10

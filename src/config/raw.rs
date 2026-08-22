@@ -8,9 +8,9 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        auditor_callback_path, auditor_connection, nonzero_u16, nonzero_u64, nonzero_usize,
-        object_key_prefix as validate_object_key_prefix, parse_log_format, paseto_download_key,
-        path_string, postgres_connection_string,
+        auditor_callback_path, auditor_connection, database_tls, nonzero_u16, nonzero_u64,
+        nonzero_usize, object_key_prefix as validate_object_key_prefix, parse_log_format,
+        paseto_download_key, path_string, postgres_connection_string,
         public_api_base_url as validate_public_api_base_url, secret_value, string_url,
         string_value, ConfigValidationExt,
     },
@@ -67,6 +67,7 @@ impl RawAppConfig {}
 #[derive(Debug, Deserialize)]
 pub(super) struct RawDatabaseConfig {
     url: SecretString,
+    tls: String,
     pool: RawDatabasePoolConfig,
 }
 
@@ -74,8 +75,9 @@ impl RawDatabaseConfig {
     pub(super) fn validate(self) -> Validation<DatabaseConfig, ConfigFieldError> {
         validate! {
             url <- postgres_connection_string(self.url).at("database.url"),
+            tls <- database_tls(self.tls).at("database.tls"),
             pool <- self.pool.validate(),
-            => DatabaseConfig { url, pool },
+            => DatabaseConfig { url, tls, pool },
         }
     }
 }

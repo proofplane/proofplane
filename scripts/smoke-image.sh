@@ -90,8 +90,10 @@ else
   pass "container runs as uid ${observed_uid}"
 fi
 
-# reqwest verifies TLS through the platform certificate store here, so without
-# this bundle Auth0 JWKS retrieval, GCP token minting, and Pub/Sub all fail.
+# reqwest and the database connector both verify TLS through the platform
+# certificate store here. Without this bundle, the image cannot read the Auth0
+# JWKS, cannot mint a GCP token, cannot publish to Pub/Sub, and cannot open a
+# verified database connection.
 if docker run --rm --platform "${expected_platform}" --entrypoint test "${image}" -r /etc/ssl/certs/ca-certificates.crt; then
   pass "CA certificate bundle is readable"
 else

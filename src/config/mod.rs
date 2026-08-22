@@ -1,7 +1,7 @@
 use crate::{validate, validation::Validation};
 use secrecy::SecretString;
 use std::{
-    env, fs, io,
+    env, fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -13,9 +13,9 @@ use raw::RawAppConfig;
 mod helpers;
 mod raw;
 
-/// Shared with the migration command, which validates a database URL that never
-/// passes through an application configuration file.
-pub use helpers::postgres_connection_string;
+/// Shared with the migration command, which validates a database URL and a TLS
+/// mode that never pass through an application configuration file.
+pub use helpers::{database_tls, postgres_connection_string};
 
 pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 
@@ -46,7 +46,33 @@ pub struct ServerConfig {
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub url: SecretString,
+    pub tls: DatabaseTls,
     pub pool: DatabasePoolConfig,
+}
+
+/// How a database connection is encrypted.
+///
+/// There is no mode that encrypts without verification. Such a mode would let a
+/// release claim a guarantee that it does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseTls {
+    /// Plaintext. The local stack serves no certificate.
+    Disable,
+    /// Encrypted, with the certificate chain and the hostname verified against
+    /// the system certificate store.
+    VerifyFull,
+}
+
+impl fmt::Display for DatabaseTls {
+    /// The spelling the configuration file and the migration command accept.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Disable => "disable",
+            Self::VerifyFull => "verify-full",
+        };
+
+        f.write_str(name)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,6 +387,7 @@ mod tests {
             })
         );
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
+        assert_eq!(config.database.tls, DatabaseTls::Disable);
         assert_eq!(config.database.pool.api, 10);
         assert_eq!(config.database.pool.mcp, 10);
         assert_eq!(config.database.pool.worker, 6);
@@ -414,6 +441,40 @@ mod tests {
                 "mcp.example.ngrok.app".to_owned(),
                 "127.0.0.1:3002".to_owned()
             ]
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_verifying_tls_mode_loads() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let verified = base.replace("tls: \"disable\"", "tls: \"verify-full\"");
+        assert_ne!(base, verified, "tls replacement anchor matched");
+
+        let path = write_temp_config(&verified);
+        let config = load_from_path(&path).expect("a verifying configuration loads");
+
+        assert_eq!(config.database.tls, DatabaseTls::VerifyFull);
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// The operator sees this message and nothing else, so it has to say which
+    /// field is absent.
+    #[test]
+    fn a_missing_tls_mode_names_the_field() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let without = base.replace("  tls: \"disable\"\n", "");
+        assert_ne!(base, without, "tls removal anchor matched");
+
+        let path = write_temp_config(&without);
+        let error = load_from_path(&path).expect_err("a configuration without a mode is invalid");
+
+        let reason = format!("{:#}", anyhow::Error::new(error));
+        assert!(
+            reason.contains("database.tls"),
+            "expected the missing field to be named, got: {reason}"
         );
 
         let _ = fs::remove_file(path);
@@ -579,6 +640,7 @@ server:
   public_api_base_url: "http://example.com/api"
 database:
   url: ""
+  tls: "require"
   pool:
     api: 0
     mcp: 0
@@ -663,6 +725,7 @@ health:
                 // Every bad database field is reported in one pass rather than
                 // the validator stopping at the first.
                 assert!(paths.contains(&"database.url"));
+                assert!(paths.contains(&"database.tls"));
                 assert!(paths.contains(&"database.pool.api"));
                 assert!(paths.contains(&"database.pool.mcp"));
                 assert!(paths.contains(&"database.pool.worker"));

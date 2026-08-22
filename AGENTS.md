@@ -177,6 +177,12 @@ suite proves pooler compatibility on every run; only the suite's own
 neither can run through a transaction pooler. `config/local.yaml` points at 6432
 too, so `make api` and friends exercise the same path.
 
+Neither Postgres nor PgBouncer serves a certificate locally. `database.tls` is
+therefore `disable` in `config/local.yaml`, and `make migrate` passes
+`PROOFPLANE_MIGRATION_DATABASE_TLS=disable`. Production sets `verify-full`. The
+migration command verifies by default. An older `.local/config.yaml` fails to
+load until you add the field to it.
+
 Because of that pooler, **never call `query`, `query_one`, `query_opt`, or
 `execute`.** Those name the prepared statement they create, and a transaction
 pooler reassigns the server connection between the `Parse` and the `Bind`, so

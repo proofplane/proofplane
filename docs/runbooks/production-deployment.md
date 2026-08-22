@@ -42,7 +42,9 @@ needs, so the order is not a suggestion.
    versions, not aliases. The YAML names both storage targets under
    `object_storage`: `quarantine_bucket`, `evidence_bucket`, and one shared
    `object_key_prefix`. The two bucket names must differ, or the runtime refuses
-   to start.
+   to start. The YAML must also set `database.tls` to `verify-full`, which is
+   the only place the production transport is chosen. Do not put `sslmode` in
+   the URL: `database.tls` decides, and `sslmode=verify-full` fails to parse.
 8. Apply `03-release`, following [Build And Plan](#build-and-plan).
 
 Confirm the following before the release apply. None of them depend on the
@@ -54,7 +56,15 @@ phase order:
 - Confirm Supabase SSL enforcement and daily backups are active. The accepted
   launch database RPO is approximately 24 hours. PITR is deferred.
 - Verify runtime traffic uses the Supavisor transaction pooler on port 6543 and
-  migrations use the separate direct verified-TLS credential.
+  migrations use the separate direct verified-TLS credential. The migration job
+  must not set `PROOFPLANE_MIGRATION_DATABASE_TLS`. The command verifies by
+  default, so on this job that variable can only select a weaker transport.
+- Confirm that both Supabase endpoints present a certificate that chains to a
+  root in the release image's certificate store. Check from a
+  `debian:bookworm-slim` container with `ca-certificates` installed, so the
+  store matches the image:
+  `openssl s_client -starttls postgres -connect <host>:<port> -verify_return_error`.
+  A private root would fail every runtime and the migration job on first deploy.
 - Confirm the latest validated ClamAV snapshot is less than 24 hours old.
 
 ## Credentials

@@ -30,7 +30,7 @@ use proofplane::{
         },
         UserAuthenticator,
     },
-    config::AppConfig,
+    config::{AppConfig, DatabaseTls},
     dequeuer::{OutboxDequeuer, OutboxDequeuerConfig},
     mcp::{create_app as create_mcp_app, McpAppDependencies},
     object_storage::{DocumentObjectStores, EvidenceObjectStore, QuarantineObjectStore},
@@ -88,7 +88,7 @@ impl Harness {
         local_stack::wait_for_pubsub().await?;
         let database_url = local_stack::reset_suite_database().await?;
 
-        let mut database = persistence::conn(&database_url)
+        let mut database = persistence::conn(&database_url, DatabaseTls::Disable)
             .await
             .expect("fixture database connection opens");
         persistence::apply_migrations(&mut database)
@@ -103,6 +103,7 @@ impl Harness {
 
         let pool = persistence::conn_pool(
             &database_url,
+            DatabaseTls::Disable,
             persistence::PoolBounds::from_config(
                 &app_config.database.pool,
                 persistence::PoolRuntime::Api,

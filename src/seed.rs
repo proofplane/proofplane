@@ -73,7 +73,8 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let config = load_from_env().map_err(|error| Error::Config(Box::new(error)))?;
     observability::init_cli_tracing(&config.observability)?;
 
-    let mut client = persistence::conn(config.database.url.expose_secret()).await?;
+    let mut client =
+        persistence::conn(config.database.url.expose_secret(), config.database.tls).await?;
 
     debug!("running migrations");
     persistence::apply_migrations(&mut client).await?;
@@ -81,6 +82,7 @@ pub async fn run() -> Result<SeedSummary, Error> {
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
+        config.database.tls,
         PoolBounds::from_config(&config.database.pool, PoolRuntime::Utility),
     )
     .await?;

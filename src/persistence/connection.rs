@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use deadpool_postgres::{Hook, HookError, Pool, Runtime, Timeouts};
+use postgres_native_tls::MakeTlsConnector;
 use thiserror::Error;
-use tokio_postgres::{connect, Client, NoTls};
-use tracing::{debug, error};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_postgres::{config::SslMode, Client, Connection, NoTls};
+use tracing::{debug, error, info};
 
-use crate::config::DatabasePoolConfig;
+use crate::config::{DatabasePoolConfig, DatabaseTls};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -14,19 +16,115 @@ pub enum Error {
 
     #[error("failed to build postgres pool")]
     Deadpool(#[from] deadpool_postgres::BuildError),
+
+    #[error(
+        "failed to build the verifying TLS connector: the system certificate store must be \
+         readable"
+    )]
+    Tls(#[source] native_tls::Error),
+
+    /// The mode belongs in the message. A refused handshake and a refused
+    /// password look alike in the logs otherwise.
+    #[error("failed to open a database connection with TLS mode `{tls}`")]
+    Connect {
+        tls: DatabaseTls,
+        #[source]
+        source: tokio_postgres::Error,
+    },
 }
 
-pub async fn conn(conn_str: &str) -> Result<Client, Error> {
-    let (client, connection) = connect(conn_str, NoTls).await?;
+/// What a connection puts on the wire.
+///
+/// This is the one place that turns the configured mode into a transport. Every
+/// other decision below reads this type rather than the mode.
+enum Transport {
+    Plaintext,
+    /// A connector that verifies the certificate chain and the hostname against
+    /// the system certificate store, which is what `native_tls` does by
+    /// default.
+    Verified(MakeTlsConnector),
+}
 
-    debug!("connected to postgres");
+impl Transport {
+    fn build(tls: DatabaseTls) -> Result<Self, Error> {
+        match tls {
+            DatabaseTls::Disable => Ok(Self::Plaintext),
+            DatabaseTls::VerifyFull => native_tls::TlsConnector::new()
+                .map(MakeTlsConnector::new)
+                .map(Self::Verified)
+                .map_err(Error::Tls),
+        }
+    }
 
+    /// The mode this transport puts on the parsed configuration.
+    ///
+    /// `SslMode::Require` together with a verifying connector is `verify-full`.
+    /// The handshake is mandatory, and the connector checks the certificate
+    /// chain and the hostname during it. `tokio_postgres` has no single
+    /// `SslMode` that says the same thing.
+    fn ssl_mode(&self) -> SslMode {
+        match self {
+            Self::Plaintext => SslMode::Disable,
+            Self::Verified(_) => SslMode::Require,
+        }
+    }
+}
+
+/// Parses the connection string and applies the transport to it.
+///
+/// The configured mode decides. A connection string may carry `sslmode`, but it
+/// cannot lower the transport below what the configuration asks for, and it
+/// cannot raise it either.
+fn prepared_config(conn_str: &str, transport: &Transport) -> Result<tokio_postgres::Config, Error> {
+    let mut config: tokio_postgres::Config = conn_str.parse()?;
+
+    config.ssl_mode(transport.ssl_mode());
+
+    Ok(config)
+}
+
+/// The connection drives the protocol. It must run for the client to work.
+/// Each transport gives it a different stream type, so both transports pass it
+/// to this function.
+fn spawn_connection<S, T>(connection: Connection<S, T>)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     tokio::spawn(async move {
         debug!("running connection");
         if let Err(e) = connection.await {
             error!("running connection returned error: {}", e);
         }
     });
+}
+
+pub async fn conn(conn_str: &str, tls: DatabaseTls) -> Result<Client, Error> {
+    let transport = Transport::build(tls)?;
+    let config = prepared_config(conn_str, &transport)?;
+
+    // The two arms differ only by connector type, which is a generic parameter,
+    // so they cannot be one arm.
+    let client = match transport {
+        Transport::Plaintext => {
+            let (client, connection) = config
+                .connect(NoTls)
+                .await
+                .map_err(|source| Error::Connect { tls, source })?;
+            spawn_connection(connection);
+            client
+        }
+        Transport::Verified(connector) => {
+            let (client, connection) = config
+                .connect(connector)
+                .await
+                .map_err(|source| Error::Connect { tls, source })?;
+            spawn_connection(connection);
+            client
+        }
+    };
+
+    debug!("connected to postgres");
 
     Ok(client)
 }
@@ -79,9 +177,24 @@ impl PoolBounds {
     }
 }
 
-pub async fn conn_pool(conn_str: &str, bounds: PoolBounds) -> Result<Pool, Error> {
-    let config: tokio_postgres::Config = conn_str.parse()?;
-    let mgr = deadpool_postgres::Manager::new(config, NoTls);
+pub async fn conn_pool(
+    conn_str: &str,
+    tls: DatabaseTls,
+    bounds: PoolBounds,
+) -> Result<Pool, Error> {
+    let transport = Transport::build(tls)?;
+    let config = prepared_config(conn_str, &transport)?;
+    // `Manager` boxes its connector, so both transports give the same type.
+    let mgr = match transport {
+        Transport::Plaintext => deadpool_postgres::Manager::new(config, NoTls),
+        Transport::Verified(connector) => deadpool_postgres::Manager::new(config, connector),
+    };
+
+    // A pool opens no connection here. A refused handshake therefore surfaces at
+    // the first `get`, as a `deadpool` error this module cannot wrap, and that
+    // error does not name the mode. This line does, and it is the line before
+    // the failure: every caller takes a connection as soon as the pool is built.
+    info!(tls = %tls, "opened postgres pool");
 
     Pool::builder(mgr)
         .max_size(bounds.max_size)
@@ -115,8 +228,8 @@ mod tests {
 
     use deadpool_postgres::{PoolError, TimeoutType};
 
-    use super::{conn_pool, PoolBounds, PoolRuntime, UTILITY_POOL_SIZE};
-    use crate::config::DatabasePoolConfig;
+    use super::{conn, conn_pool, PoolBounds, PoolRuntime, UTILITY_POOL_SIZE};
+    use crate::config::{DatabasePoolConfig, DatabaseTls};
     use crate::persistence::test_support;
 
     /// Deliberately all-different, so a selector that reads the wrong field
@@ -157,6 +270,83 @@ mod tests {
         }
     }
 
+    /// Generous next to what these tests do, which is either fail the handshake
+    /// or run one statement.
+    const REJECTION_BOUNDS: PoolBounds =
+        PoolBounds::new(1, Duration::from_secs(10), Duration::from_secs(60));
+
+    /// The whole error chain. Each layer states its own part, and the reason a
+    /// transport was refused is at the bottom of it.
+    fn chain(error: impl std::error::Error + Send + Sync + 'static) -> String {
+        format!("{:#}", anyhow::Error::new(error))
+    }
+
+    /// The container serves no certificate, so a verified connection cannot be
+    /// made against it. That makes it the control for both directions below.
+    ///
+    /// `sslmode=disable` in the string would connect in plaintext if the string
+    /// decided. The configured mode decides instead, and `Require` rather than
+    /// `Prefer`, so the refusal is reported rather than quietly downgraded.
+    #[tokio::test]
+    async fn a_connection_string_cannot_lower_the_configured_tls() {
+        let database = test_support::database().await;
+
+        let error = conn(
+            &format!("{}?sslmode=disable", database.url),
+            DatabaseTls::VerifyFull,
+        )
+        .await
+        .expect_err("a server without TLS cannot serve a verified connection");
+
+        let reason = chain(error);
+        assert!(
+            reason.contains("verify-full") && reason.contains("server does not support TLS"),
+            "expected the refused transport to be named, got: {reason}"
+        );
+    }
+
+    /// The other direction, and the control for the test above: a string that
+    /// asks for TLS does not get it either.
+    #[tokio::test]
+    async fn a_connection_string_cannot_raise_the_configured_tls() {
+        let database = test_support::database().await;
+
+        let client = conn(
+            &format!("{}?sslmode=require", database.url),
+            DatabaseTls::Disable,
+        )
+        .await
+        .expect("the configured mode keeps the connection plaintext");
+
+        let row = client
+            .query_typed_one("SELECT 1", &[])
+            .await
+            .expect("the plaintext connection serves a query");
+
+        assert_eq!(row.get::<_, i32>(0), 1);
+    }
+
+    /// The runtimes take their connections from a pool, so the pool has to
+    /// refuse the same server the single connection above refuses.
+    #[tokio::test]
+    async fn a_pool_refuses_a_server_that_serves_no_tls() {
+        let database = test_support::database().await;
+        let pool = conn_pool(&database.url, DatabaseTls::VerifyFull, REJECTION_BOUNDS)
+            .await
+            .expect("pool builds");
+
+        let error = pool
+            .get()
+            .await
+            .expect_err("a server without TLS cannot serve a verified pool");
+
+        let reason = chain(error);
+        assert!(
+            reason.contains("server does not support TLS"),
+            "expected the refused transport to be the reason, got: {reason}"
+        );
+    }
+
     /// The backend process serving a pooled connection. A different value means
     /// the pool handed out a different physical connection.
     async fn backend_pid(pool: &deadpool_postgres::Pool) -> i32 {
@@ -178,6 +368,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
+            DatabaseTls::Disable,
             PoolBounds::new(1, WAIT_ALLOWANCE, Duration::from_secs(60)),
         )
         .await
@@ -197,6 +388,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
+            DatabaseTls::Disable,
             PoolBounds::new(1, Duration::from_secs(5), Duration::from_millis(50)),
         )
         .await
@@ -219,6 +411,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
+            DatabaseTls::Disable,
             PoolBounds::new(1, Duration::from_secs(5), Duration::from_secs(60)),
         )
         .await
