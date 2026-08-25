@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use openssl::x509::X509;
 use pasetors::{keys::SymmetricKey, version4::V4};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
@@ -41,6 +42,29 @@ pub fn database_tls(value: String) -> Result<DatabaseTls, String> {
         "disable" => Ok(DatabaseTls::Disable),
         "verify-full" => Ok(DatabaseTls::VerifyFull),
         _ => Err("must be `disable` or `verify-full`".into()),
+    }
+}
+
+/// One or more PEM certificates to trust in addition to the system certificate
+/// store.
+///
+/// Validated by parsing, like `postgres_connection_string` above.
+///
+/// It parses through `openssl` rather than through `native_tls`, which the
+/// connector uses. On Linux these are the same code, because that is the backend
+/// `native_tls` has there. On macOS `native_tls` reads a certificate through
+/// Security.framework, which takes tens of seconds for one certificate, and
+/// configuration must load quickly on every platform.
+///
+/// The empty case needs its own arm. OpenSSL reads a buffer with no `BEGIN` line
+/// as the end of the list and returns no certificates rather than an error.
+/// Without that arm a garbage value would pass here and fail at connect time.
+pub fn database_root_certificate(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+
+    match X509::stack_from_pem(value.as_bytes()) {
+        Ok(certificates) if !certificates.is_empty() => Ok(value),
+        _ => Err("must be one or more PEM certificates".into()),
     }
 }
 

@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use deadpool_postgres::{Hook, HookError, Pool, Runtime, Timeouts};
+use openssl::x509::X509;
 use postgres_native_tls::MakeTlsConnector;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_postgres::{config::SslMode, Client, Connection, NoTls};
 use tracing::{debug, error, info};
 
-use crate::config::{DatabasePoolConfig, DatabaseTls};
+use crate::config::{DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -22,6 +23,14 @@ pub enum Error {
          readable"
     )]
     Tls(#[source] native_tls::Error),
+
+    /// Separate from the message above, which would send an operator to the
+    /// system store when the fault is in the configured value.
+    #[error("failed to read the configured database root certificate")]
+    RootCertificatePem(#[source] openssl::error::ErrorStack),
+
+    #[error("failed to trust the configured database root certificate")]
+    RootCertificate(#[source] native_tls::Error),
 
     /// The mode belongs in the message. A refused handshake and a refused
     /// password look alike in the logs otherwise.
@@ -39,20 +48,35 @@ pub enum Error {
 /// other decision below reads this type rather than the mode.
 enum Transport {
     Plaintext,
-    /// A connector that verifies the certificate chain and the hostname against
-    /// the system certificate store, which is what `native_tls` does by
-    /// default.
+    /// A connector that verifies the certificate chain and the hostname. It
+    /// checks them against the system certificate store, which is what
+    /// `native_tls` does by default, and against any root the configuration
+    /// adds.
     Verified(MakeTlsConnector),
 }
 
 impl Transport {
-    fn build(tls: DatabaseTls) -> Result<Self, Error> {
-        match tls {
+    fn build(tls: &DatabaseTlsConfig) -> Result<Self, Error> {
+        match tls.mode {
             DatabaseTls::Disable => Ok(Self::Plaintext),
-            DatabaseTls::VerifyFull => native_tls::TlsConnector::new()
-                .map(MakeTlsConnector::new)
-                .map(Self::Verified)
-                .map_err(Error::Tls),
+            DatabaseTls::VerifyFull => {
+                let mut builder = native_tls::TlsConnector::builder();
+
+                if let Some(pem) = &tls.root_certificate {
+                    // Added to the system store rather than replacing it. An
+                    // endpoint whose certificate already chains to a public root
+                    // keeps working, so one deployment may hold both kinds.
+                    for certificate in root_certificates(pem)? {
+                        builder.add_root_certificate(certificate);
+                    }
+                }
+
+                builder
+                    .build()
+                    .map(MakeTlsConnector::new)
+                    .map(Self::Verified)
+                    .map_err(Error::Tls)
+            }
         }
     }
 
@@ -68,6 +92,25 @@ impl Transport {
             Self::Verified(_) => SslMode::Require,
         }
     }
+}
+
+/// The configured roots, ready for the connector.
+///
+/// The PEM is read by `openssl` and handed to `native_tls` as DER, because
+/// `native_tls` reads PEM through Security.framework on macOS, which takes tens
+/// of seconds for one certificate. `openssl` is also the backend `native_tls`
+/// itself uses on Linux, so this parses through the same code the release image
+/// runs. Configuration validates the same way before a connection is opened.
+fn root_certificates(pem: &str) -> Result<Vec<native_tls::Certificate>, Error> {
+    X509::stack_from_pem(pem.as_bytes())
+        .map_err(Error::RootCertificatePem)?
+        .into_iter()
+        .map(|certificate| {
+            let der = certificate.to_der().map_err(Error::RootCertificatePem)?;
+
+            native_tls::Certificate::from_der(&der).map_err(Error::RootCertificate)
+        })
+        .collect()
 }
 
 /// Parses the connection string and applies the transport to it.
@@ -99,9 +142,10 @@ where
     });
 }
 
-pub async fn conn(conn_str: &str, tls: DatabaseTls) -> Result<Client, Error> {
+pub async fn conn(conn_str: &str, tls: &DatabaseTlsConfig) -> Result<Client, Error> {
     let transport = Transport::build(tls)?;
     let config = prepared_config(conn_str, &transport)?;
+    let mode = tls.mode;
 
     // The two arms differ only by connector type, which is a generic parameter,
     // so they cannot be one arm.
@@ -110,7 +154,7 @@ pub async fn conn(conn_str: &str, tls: DatabaseTls) -> Result<Client, Error> {
             let (client, connection) = config
                 .connect(NoTls)
                 .await
-                .map_err(|source| Error::Connect { tls, source })?;
+                .map_err(|source| Error::Connect { tls: mode, source })?;
             spawn_connection(connection);
             client
         }
@@ -118,7 +162,7 @@ pub async fn conn(conn_str: &str, tls: DatabaseTls) -> Result<Client, Error> {
             let (client, connection) = config
                 .connect(connector)
                 .await
-                .map_err(|source| Error::Connect { tls, source })?;
+                .map_err(|source| Error::Connect { tls: mode, source })?;
             spawn_connection(connection);
             client
         }
@@ -179,7 +223,7 @@ impl PoolBounds {
 
 pub async fn conn_pool(
     conn_str: &str,
-    tls: DatabaseTls,
+    tls: &DatabaseTlsConfig,
     bounds: PoolBounds,
 ) -> Result<Pool, Error> {
     let transport = Transport::build(tls)?;
@@ -194,7 +238,13 @@ pub async fn conn_pool(
     // the first `get`, as a `deadpool` error this module cannot wrap, and that
     // error does not name the mode. This line does, and it is the line before
     // the failure: every caller takes a connection as soon as the pool is built.
-    info!(tls = %tls, "opened postgres pool");
+    info!(
+        tls = %tls.mode,
+        // A boolean, not the certificate. Whether a deployment added a private
+        // root is the first thing to check when a handshake is refused.
+        private_root = tls.root_certificate.is_some(),
+        "opened postgres pool"
+    );
 
     Pool::builder(mgr)
         .max_size(bounds.max_size)
@@ -229,7 +279,7 @@ mod tests {
     use deadpool_postgres::{PoolError, TimeoutType};
 
     use super::{conn, conn_pool, PoolBounds, PoolRuntime, UTILITY_POOL_SIZE};
-    use crate::config::{DatabasePoolConfig, DatabaseTls};
+    use crate::config::{DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig};
     use crate::persistence::test_support;
 
     /// Deliberately all-different, so a selector that reads the wrong field
@@ -270,6 +320,15 @@ mod tests {
         }
     }
 
+    /// Verification against the system certificate store. No server in these
+    /// tests presents a certificate that store carries.
+    fn system_roots_only() -> DatabaseTlsConfig {
+        DatabaseTlsConfig {
+            mode: DatabaseTls::VerifyFull,
+            root_certificate: None,
+        }
+    }
+
     /// Generous next to what these tests do, which is either fail the handshake
     /// or run one statement.
     const REJECTION_BOUNDS: PoolBounds =
@@ -293,7 +352,7 @@ mod tests {
 
         let error = conn(
             &format!("{}?sslmode=disable", database.url),
-            DatabaseTls::VerifyFull,
+            &system_roots_only(),
         )
         .await
         .expect_err("a server without TLS cannot serve a verified connection");
@@ -313,7 +372,7 @@ mod tests {
 
         let client = conn(
             &format!("{}?sslmode=require", database.url),
-            DatabaseTls::Disable,
+            &DatabaseTlsConfig::DISABLED,
         )
         .await
         .expect("the configured mode keeps the connection plaintext");
@@ -331,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn a_pool_refuses_a_server_that_serves_no_tls() {
         let database = test_support::database().await;
-        let pool = conn_pool(&database.url, DatabaseTls::VerifyFull, REJECTION_BOUNDS)
+        let pool = conn_pool(&database.url, &system_roots_only(), REJECTION_BOUNDS)
             .await
             .expect("pool builds");
 
@@ -368,7 +427,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
-            DatabaseTls::Disable,
+            &DatabaseTlsConfig::DISABLED,
             PoolBounds::new(1, WAIT_ALLOWANCE, Duration::from_secs(60)),
         )
         .await
@@ -388,7 +447,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
-            DatabaseTls::Disable,
+            &DatabaseTlsConfig::DISABLED,
             PoolBounds::new(1, Duration::from_secs(5), Duration::from_millis(50)),
         )
         .await
@@ -411,7 +470,7 @@ mod tests {
         let database = test_support::database().await;
         let pool = conn_pool(
             &database.url,
-            DatabaseTls::Disable,
+            &DatabaseTlsConfig::DISABLED,
             PoolBounds::new(1, Duration::from_secs(5), Duration::from_secs(60)),
         )
         .await

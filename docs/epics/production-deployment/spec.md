@@ -30,7 +30,7 @@ must not be enabled until all are verified:
 | --- | --- |
 | Native GCS | The runtime object-store adapter streams all required operations through GCS using ADC. |
 | Native Pub/Sub | The dequeuer publishes through Google Pub/Sub without requiring `PUBSUB_EMULATOR_HOST` and does not provision topics or subscriptions. |
-| Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. Met by the `database.tls` configuration field and the migration command's verified default. |
+| Database TLS | Runtime and migration connections verify the server certificate and hostname; Supabase SSL enforcement remains enabled. Met by the `database.tls` configuration field, the optional `database.tls_root_certificate` beside it, and the migration command's verified default. |
 | Transaction pooling | Runtime queries issue unnamed statements and pass integration tests against a transaction pooler. Met locally against PgBouncer in transaction mode; still unverified against Supavisor on 6543. |
 | Dedicated migrations | A `proofplane-migrate` command runs migrations only, uses a separate direct credential, and never seeds data. |
 | Startup behavior | API, MCP, worker, and dequeuer never run migrations during startup and accept work only when database history matches the migrations embedded in the binary, or runs ahead of it by migrations that are not marked `breaking_`. |
@@ -198,6 +198,12 @@ credential to the migration job. Secret aliases such as `latest` are forbidden
 in revisions; rotation uploads a version and changes the pinned Terraform
 variable.
 
+A private database root certificate travels inside that same YAML, so the four
+runtimes need no further mount. The migration job mounts no YAML, so its copy
+arrives as an environment variable that Terraform reads from a file in the
+release root. A certificate authority certificate is public, so neither copy
+needs a Secret Manager secret of its own.
+
 ## Service Identities And IAM
 
 Use dedicated service accounts for API, MCP, worker, dequeuer, migration,
@@ -245,6 +251,15 @@ raise it. `verify-full` pairs a mandatory handshake with a `native-tls`
 connector, which checks the certificate chain and the hostname against the
 system certificate store. The release image already carries that store as
 `ca-certificates`.
+
+The store is not the whole set of trusted roots. `database.tls_root_certificate`
+holds one or more PEM certificates, which the connector adds to the store
+through `native_tls::TlsConnectorBuilder::add_root_certificate`. The built-in
+roots are never disabled, so one deployment may hold an endpoint on a public
+root and an endpoint on a private one. Supabase issues a private root, which is
+why the field exists. A root certificate combined with `disable` is refused when
+the configuration loads, naming the field, because no connection would consult
+it.
 
 The adapter satisfies the first clause literally. Every parameterized statement
 uses `query_typed`/`execute_typed`, which parse into the **unnamed** statement
@@ -321,6 +336,13 @@ three and accepts the same two values the configuration field accepts. The
 production job does not set that variable, so it gets the verified default.
 `make migrate` sets it to `disable`, because the local stack serves no
 certificate.
+
+`PROOFPLANE_MIGRATION_DATABASE_TLS_ROOT_CERTIFICATE` carries the root for all
+three sources, and replaces the configuration's own when both are present. It
+cannot remove one: a root is removed by editing the configuration, not by
+emptying a variable, and an empty value is refused as malformed. It is also
+refused when the resolved transport is `disable`. The certificate needs no
+`_FILE` twin, because unlike the URL it is public.
 
 No application configuration is mounted for the job, so nothing else about the
 command may depend on it. The command sets a five-second `lock_timeout` on its

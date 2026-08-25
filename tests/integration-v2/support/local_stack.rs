@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use proofplane::config::DatabaseTls;
+use proofplane::config::DatabaseTlsConfig;
 use proofplane::persistence;
 use tokio::net::TcpStream;
 use tokio_postgres::Client;
@@ -84,7 +84,7 @@ async fn wait_for_postgres() -> Result<Client, String> {
 }
 
 async fn open_admin_connection() -> Result<Client, String> {
-    let client = persistence::conn(POSTGRES_ADMIN_URL, DatabaseTls::Disable)
+    let client = persistence::conn(POSTGRES_ADMIN_URL, &DatabaseTlsConfig::DISABLED)
         .await
         .map_err(|error| error.to_string())?;
     client

@@ -74,6 +74,18 @@ variable "migration_database_secret_version" {
   }
 }
 
+# Empty when the database endpoint chains to a root the release image already
+# carries, which needs nothing here. A private root does not fail the
+# deployment: name its PEM file and the migration job trusts it in addition to
+# the system store. Not sensitive: a certificate authority certificate is
+# public, and a certificate kept out of the plan is a wrong certificate nobody
+# sees.
+variable "migration_database_root_certificate_file" {
+  description = "Optional path to a PEM root certificate the migration job trusts in addition to the system store."
+  type        = string
+  default     = ""
+}
+
 variable "labels" {
   description = "Additional labels merged into managed resources that support labels."
   type        = map(string)

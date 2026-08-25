@@ -26,6 +26,22 @@ resource "google_cloud_run_v2_job" "migration" {
           value = "${local.migration_secret_path}/database-url"
         }
 
+        # Absent unless a certificate is configured. A plain `env` block with an
+        # empty value would set the variable, and the command rejects an empty
+        # one rather than treating it as absent.
+        dynamic "env" {
+          for_each = (
+            local.migration_database_root_certificate == ""
+            ? []
+            : [local.migration_database_root_certificate]
+          )
+
+          content {
+            name  = "PROOFPLANE_MIGRATION_DATABASE_TLS_ROOT_CERTIFICATE"
+            value = env.value
+          }
+        }
+
         resources {
           limits = {
             cpu    = "1"

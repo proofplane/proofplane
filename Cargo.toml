@@ -64,6 +64,11 @@ mime = "0.3"
 # image already links `libssl3`. It already carries the `ca-certificates` bundle
 # that the connector reads.
 native-tls = "0.2"
+# Already in the graph through `jwtk` and `native-tls`, so a direct dependency
+# adds no compile unit. Configuration parses a root certificate through this
+# rather than through `native-tls`, which needs tens of seconds for one
+# certificate on macOS.
+openssl = "0.10"
 postgres-native-tls = "0.5"
 rmcp = { version = "1.7.0", features = ["client", "server", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 prost-types = "0.14"

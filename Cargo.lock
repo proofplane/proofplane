@@ -2671,6 +2671,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "mime",
  "native-tls",
+ "openssl",
  "pasetors",
  "postgres-native-tls",
  "prost-types",

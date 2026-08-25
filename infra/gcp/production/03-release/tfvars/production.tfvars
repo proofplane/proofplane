@@ -9,3 +9,8 @@ clamav_updater_image_digest = "us-central1-docker.pkg.dev/PROJECT/proofplane/cla
 
 runtime_config_secret_version     = "1"
 migration_database_secret_version = "1"
+
+# This value is optional, and it is the only optional value in this file. Set it
+# only when the database endpoint chains to a private root. See the certificate
+# check in docs/runbooks/production-deployment.md.
+# migration_database_root_certificate_file = "supabase-root.crt"

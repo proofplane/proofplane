@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use proofplane::config::{
     AppConfig, Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
-    DatabasePoolConfig, DatabaseTls, FilesystemObjectStorageConfig, HealthConfig, LogFormat,
+    DatabasePoolConfig, DatabaseTlsConfig, FilesystemObjectStorageConfig, HealthConfig, LogFormat,
     McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
     PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
     PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, ServerConfig,
@@ -28,7 +28,7 @@ pub fn config(
         },
         database: DatabaseConfig {
             url: SecretString::from(database_url),
-            tls: DatabaseTls::Disable,
+            tls: DatabaseTlsConfig::DISABLED,
             pool: DatabasePoolConfig {
                 api: 8,
                 mcp: 8,

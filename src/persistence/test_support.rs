@@ -10,7 +10,7 @@ use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 use testcontainers_modules::postgres;
 use uuid::Uuid;
 
-use crate::config::DatabaseTls;
+use crate::config::DatabaseTlsConfig;
 use crate::domain::{AgentConnectionId, EvidenceId, PolicyId, UserId, WorkspaceId};
 
 use super::params::param;
@@ -57,7 +57,7 @@ pub async fn database() -> TestDatabase {
         .expect("Postgres test container exposes Postgres");
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-    let mut client = persistence::conn(&url, DatabaseTls::Disable)
+    let mut client = persistence::conn(&url, &DatabaseTlsConfig::DISABLED)
         .await
         .expect("test database connection opens");
     persistence::apply_migrations(&mut client)
@@ -65,7 +65,7 @@ pub async fn database() -> TestDatabase {
         .expect("migrations apply to the test database");
     drop(client);
 
-    let pool = persistence::conn_pool(&url, DatabaseTls::Disable, TEST_POOL_BOUNDS)
+    let pool = persistence::conn_pool(&url, &DatabaseTlsConfig::DISABLED, TEST_POOL_BOUNDS)
         .await
         .expect("test database pool opens");
 

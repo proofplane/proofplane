@@ -54,7 +54,7 @@ async fn run() -> Result<(), Error> {
 
     let pool = persistence::conn_pool(
         config.database.url.expose_secret(),
-        config.database.tls,
+        &config.database.tls,
         PoolBounds::from_config(&config.database.pool, PoolRuntime::Dequeuer),
     )
     .await?;

@@ -8,18 +8,18 @@ use crate::{validate, validation::Validation};
 use super::{helpers::socket_addr, ConfigFieldError, ServerConfig};
 use super::{
     helpers::{
-        auditor_callback_path, auditor_connection, database_tls, nonzero_u16, nonzero_u64,
-        nonzero_usize, object_key_prefix as validate_object_key_prefix, parse_log_format,
-        paseto_download_key, path_string, postgres_connection_string,
+        auditor_callback_path, auditor_connection, database_root_certificate, database_tls,
+        nonzero_u16, nonzero_u64, nonzero_usize, object_key_prefix as validate_object_key_prefix,
+        parse_log_format, paseto_download_key, path_string, postgres_connection_string,
         public_api_base_url as validate_public_api_base_url, secret_value, string_url,
         string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
-    DatabasePoolConfig, FilesystemObjectStorageConfig, GcsObjectStorageConfig, HealthConfig,
-    McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig, PasetoDownloadConfig,
-    PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey, PasetoUploadGrantConfig,
-    PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig, ScannerConfig, UploadsConfig,
-    WorkerConfig,
+    DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig, FilesystemObjectStorageConfig,
+    GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
+    PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+    PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
+    ScannerConfig, UploadsConfig, WorkerConfig,
 };
 
 #[derive(Debug, Deserialize)]
@@ -68,17 +68,49 @@ impl RawAppConfig {}
 pub(super) struct RawDatabaseConfig {
     url: SecretString,
     tls: String,
+    /// Absent for a plaintext connection, and for a server whose certificate
+    /// already chains to a root in the system store.
+    #[serde(default)]
+    tls_root_certificate: Option<String>,
     pool: RawDatabasePoolConfig,
 }
 
 impl RawDatabaseConfig {
     pub(super) fn validate(self) -> Validation<DatabaseConfig, ConfigFieldError> {
+        // Named apart from the binding below: `validate!` declares the binding
+        // before it evaluates the expression, so a shared name resolves to the
+        // empty binding rather than to this.
+        let validated_certificate = match self.tls_root_certificate {
+            Some(value) => database_root_certificate(value)
+                .at("database.tls_root_certificate")
+                .map(Some),
+            None => Validation::valid(None),
+        };
+
         validate! {
             url <- postgres_connection_string(self.url).at("database.url"),
-            tls <- database_tls(self.tls).at("database.tls"),
+            mode <- database_tls(self.tls).at("database.tls"),
+            root_certificate <- validated_certificate,
             pool <- self.pool.validate(),
-            => DatabaseConfig { url, tls, pool },
+            => DatabaseConfig {
+                url,
+                tls: DatabaseTlsConfig { mode, root_certificate },
+                pool,
+            },
         }
+        .and_then(|config| {
+            // A certificate no connection can use is a configuration the
+            // operator did not mean to write. Encryption that silently does not
+            // happen is the failure this section exists to prevent.
+            if config.tls.mode == DatabaseTls::Disable && config.tls.root_certificate.is_some() {
+                return Validation::invalid(ConfigFieldError::new(
+                    "database.tls_root_certificate",
+                    "must not be set when database.tls is `disable`",
+                ));
+            }
+
+            Validation::valid(config)
+        })
     }
 }
 

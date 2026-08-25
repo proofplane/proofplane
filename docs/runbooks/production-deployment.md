@@ -45,6 +45,8 @@ needs, so the order is not a suggestion.
    to start. The YAML must also set `database.tls` to `verify-full`, which is
    the only place the production transport is chosen. Do not put `sslmode` in
    the URL: `database.tls` decides, and `sslmode=verify-full` fails to parse.
+   When the check below finds a private root, put its PEM beside the mode as
+   `database.tls_root_certificate`.
 8. Apply `03-release`, following [Build And Plan](#build-and-plan).
 
 Confirm the following before the release apply. None of them depend on the
@@ -59,12 +61,28 @@ phase order:
   migrations use the separate direct verified-TLS credential. The migration job
   must not set `PROOFPLANE_MIGRATION_DATABASE_TLS`. The command verifies by
   default, so on this job that variable can only select a weaker transport.
-- Confirm that both Supabase endpoints present a certificate that chains to a
-  root in the release image's certificate store. Check from a
+  `PROOFPLANE_MIGRATION_DATABASE_TLS_ROOT_CERTIFICATE` is a different variable
+  and the job may set it. It adds trust rather than removing it.
+- Confirm what root each Supabase endpoint chains to. Check from a
   `debian:bookworm-slim` container with `ca-certificates` installed, so the
   store matches the image:
   `openssl s_client -starttls postgres -connect <host>:<port> -verify_return_error`.
-  A private root would fail every runtime and the migration job on first deploy.
+  An endpoint that chains to a root in that store needs nothing more. A private
+  root does not fail the deployment. The runtimes and the migration job each
+  need the PEM, and they take it in different ways:
+
+  - The runtimes read it from the YAML. Paste the PEM into
+    `database.tls_root_certificate`, as a block scalar beside `database.tls`.
+  - The migration job reads it from an environment variable Terraform fills.
+    Save the PEM as a file under `infra/gcp/production/03-release/`, and name
+    that file in `migration_database_root_certificate_file`. The path is
+    relative to that directory, which is where the release root runs. Commit
+    the file: a certificate authority certificate is public, and a committed
+    one can be reviewed against `openssl x509 -text`.
+
+  A supplied root is added to the system store and never replaces it, so one
+  deployment may hold an endpoint on a public root and an endpoint on a private
+  one.
 - Confirm the latest validated ClamAV snapshot is less than 24 hours old.
 
 ## Credentials

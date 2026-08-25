@@ -235,7 +235,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{check_schema_revision, embedded_schema_history, Client, SchemaRevisionError};
-    use crate::config::DatabaseTls;
+    use crate::config::DatabaseTlsConfig;
     use crate::persistence::{self, param, test_support};
 
     /// The version directly after the last migration this binary embeds.
@@ -296,7 +296,7 @@ mod tests {
 
     async fn empty_database(fixture: &test_support::TestDatabase) -> SecretString {
         let name = format!("schema_revision_{}", Uuid::new_v4().simple());
-        persistence::conn(&fixture.url, DatabaseTls::Disable)
+        persistence::conn(&fixture.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("fixture database connection opens")
             .batch_execute(&format!("CREATE DATABASE {name}"))
@@ -311,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn exact_migrated_history_passes() {
         let database = test_support::database().await;
-        let client = persistence::conn(&database.url, DatabaseTls::Disable)
+        let client = persistence::conn(&database.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("database connection opens");
 
@@ -324,7 +324,7 @@ mod tests {
     async fn empty_database_is_behind_and_remains_unmodified() {
         let fixture = test_support::database().await;
         let url = empty_database(&fixture).await;
-        let client = persistence::conn(url.expose_secret(), DatabaseTls::Disable)
+        let client = persistence::conn(url.expose_secret(), &DatabaseTlsConfig::DISABLED)
             .await
             .expect("empty database connection opens");
 
@@ -351,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn ahead_by_unmarked_migrations_is_compatible() {
         let database = test_support::database().await;
-        let client = persistence::conn(&database.url, DatabaseTls::Disable)
+        let client = persistence::conn(&database.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("database connection opens");
         let version = next_version();
@@ -380,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn ahead_by_a_breaking_migration_is_refused() {
         let database = test_support::database().await;
-        let client = persistence::conn(&database.url, DatabaseTls::Disable)
+        let client = persistence::conn(&database.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("database connection opens");
         let version = next_version();
@@ -399,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn a_breaking_migration_behind_an_unmarked_one_still_refuses() {
         let database = test_support::database().await;
-        let client = persistence::conn(&database.url, DatabaseTls::Disable)
+        let client = persistence::conn(&database.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("database connection opens");
         let version = next_version();
@@ -421,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn divergent_name_and_checksum_are_unknown() {
         let database = test_support::database().await;
-        let client = persistence::conn(&database.url, DatabaseTls::Disable)
+        let client = persistence::conn(&database.url, &DatabaseTlsConfig::DISABLED)
             .await
             .expect("database connection opens");
         let expected = embedded_schema_history()

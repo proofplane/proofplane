@@ -183,6 +183,11 @@ therefore `disable` in `config/local.yaml`, and `make migrate` passes
 migration command verifies by default. An older `.local/config.yaml` fails to
 load until you add the field to it.
 
+An endpoint whose certificate chains to a private root needs
+`database.tls_root_certificate` beside the mode, holding that root as PEM. It is
+added to the system certificate store and never replaces it. A certificate set
+beside `disable` is refused, because no connection would consult it.
+
 Because of that pooler, **never call `query`, `query_one`, `query_opt`, or
 `execute`.** Those name the prepared statement they create, and a transaction
 pooler reassigns the server connection between the `Parse` and the `Bind`, so

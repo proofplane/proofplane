@@ -12,10 +12,13 @@ use raw::RawAppConfig;
 
 mod helpers;
 mod raw;
+#[cfg(test)]
+pub(crate) mod test_support;
 
-/// Shared with the migration command, which validates a database URL and a TLS
-/// mode that never pass through an application configuration file.
-pub use helpers::{database_tls, postgres_connection_string};
+/// Shared with the migration command, which validates a database URL, a TLS
+/// mode, and a root certificate that never pass through an application
+/// configuration file.
+pub use helpers::{database_root_certificate, database_tls, postgres_connection_string};
 
 pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 
@@ -46,8 +49,31 @@ pub struct ServerConfig {
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub url: SecretString,
-    pub tls: DatabaseTls,
+    pub tls: DatabaseTlsConfig,
     pub pool: DatabasePoolConfig,
+}
+
+/// The transport for a database connection.
+///
+/// The mode is separate from the certificate so that the mode alone can go into
+/// a log line or an error message. A certificate is public, but it is long, and
+/// neither a log nor an error is the place for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseTlsConfig {
+    pub mode: DatabaseTls,
+    /// One or more PEM certificates to trust in addition to the system
+    /// certificate store. Supabase issues a root of its own, which no system
+    /// store carries.
+    pub root_certificate: Option<String>,
+}
+
+impl DatabaseTlsConfig {
+    /// Plaintext, with no extra trust anchor. The local stack serves no
+    /// certificate, so every fixture uses this.
+    pub const DISABLED: Self = Self {
+        mode: DatabaseTls::Disable,
+        root_certificate: None,
+    };
 }
 
 /// How a database connection is encrypted.
@@ -349,6 +375,7 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::*;
+    use crate::config::test_support::ROOT_CERTIFICATE;
     use std::{
         fs,
         sync::{
@@ -387,7 +414,7 @@ mod tests {
             })
         );
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
-        assert_eq!(config.database.tls, DatabaseTls::Disable);
+        assert_eq!(config.database.tls, DatabaseTlsConfig::DISABLED);
         assert_eq!(config.database.pool.api, 10);
         assert_eq!(config.database.pool.mcp, 10);
         assert_eq!(config.database.pool.worker, 6);
@@ -455,7 +482,87 @@ mod tests {
         let path = write_temp_config(&verified);
         let config = load_from_path(&path).expect("a verifying configuration loads");
 
-        assert_eq!(config.database.tls, DatabaseTls::VerifyFull);
+        assert_eq!(config.database.tls.mode, DatabaseTls::VerifyFull);
+        assert_eq!(config.database.tls.root_certificate, None);
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// The YAML block scalar an operator writes, indented under the key.
+    fn with_root_certificate(base: &str, pem: &str) -> String {
+        let indented: String = pem.lines().map(|line| format!("    {line}\n")).collect();
+
+        base.replace(
+            "  tls: \"disable\"",
+            &format!("  tls: \"verify-full\"\n  tls_root_certificate: |\n{indented}"),
+        )
+    }
+
+    #[test]
+    fn a_root_certificate_loads_beside_the_verifying_mode() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let verified = with_root_certificate(&base, ROOT_CERTIFICATE);
+        assert_ne!(base, verified, "tls replacement anchor matched");
+
+        let path = write_temp_config(&verified);
+        let config = load_from_path(&path).expect("a configuration with a root certificate loads");
+
+        assert_eq!(config.database.tls.mode, DatabaseTls::VerifyFull);
+        assert_eq!(
+            config.database.tls.root_certificate.as_deref(),
+            Some(ROOT_CERTIFICATE.trim())
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_root_certificate_that_is_not_a_certificate_names_the_field() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let broken = base.replace(
+            "  tls: \"disable\"",
+            "  tls: \"verify-full\"\n  tls_root_certificate: \"not-a-certificate\"",
+        );
+        assert_ne!(base, broken, "tls replacement anchor matched");
+
+        let path = write_temp_config(&broken);
+        let error =
+            load_from_path(&path).expect_err("a value that is not a certificate is invalid");
+
+        assert!(matches!(
+            error,
+            ConfigError::Validation(ref errors)
+                if errors.iter().any(|error| error.path == "database.tls_root_certificate"
+                    && error.message == "must be one or more PEM certificates")
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// A certificate no connection can consult is a configuration the operator
+    /// did not mean to write, so it is refused rather than ignored.
+    #[test]
+    fn a_root_certificate_is_refused_when_the_transport_is_disabled() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let indented: String = ROOT_CERTIFICATE
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect();
+        let mismatched = base.replace(
+            "  tls: \"disable\"",
+            &format!("  tls: \"disable\"\n  tls_root_certificate: |\n{indented}"),
+        );
+        assert_ne!(base, mismatched, "tls replacement anchor matched");
+
+        let path = write_temp_config(&mismatched);
+        let error = load_from_path(&path).expect_err("a certificate without TLS is invalid");
+
+        assert!(matches!(
+            error,
+            ConfigError::Validation(ref errors)
+                if errors.iter().any(|error| error.path == "database.tls_root_certificate"
+                    && error.message == "must not be set when database.tls is `disable`")
+        ));
 
         let _ = fs::remove_file(path);
     }
