@@ -1,11 +1,10 @@
-use std::time::Duration;
+use std::{future::Future, pin::Pin, time::Duration};
 
 use deadpool_postgres::{Hook, HookError, Pool, Runtime, Timeouts};
 use openssl::x509::X509;
 use postgres_native_tls::MakeTlsConnector;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_postgres::{config::SslMode, Client, Connection, NoTls};
+use tokio_postgres::{config::SslMode, Client, NoTls};
 use tracing::{debug, error, info};
 
 use crate::config::{DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig};
@@ -108,44 +107,40 @@ fn prepared_config(conn_str: &str, transport: &Transport) -> Result<tokio_postgr
     Ok(config)
 }
 
-fn spawn_connection<S, T>(connection: Connection<S, T>)
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        debug!("running connection");
-        if let Err(e) = connection.await {
-            error!("running connection returned error: {}", e);
-        }
-    });
-}
+/// A connection future with the connector type erased. The two transports give
+/// two `Connection` types, and a box gives them one type to spawn.
+type BoxedConnection = Pin<Box<dyn Future<Output = Result<(), tokio_postgres::Error>> + Send>>;
 
 pub async fn conn(conn_str: &str, tls: &DatabaseTlsConfig) -> Result<Client, Error> {
     let transport = Transport::build(tls)?;
     let config = prepared_config(conn_str, &transport)?;
     let mode = tls.mode;
 
-    // The two arms differ only by connector type, which is a generic parameter,
-    // so they cannot be one arm.
-    let client = match transport {
+    let (client, connection): (Client, BoxedConnection) = match transport {
         Transport::Plaintext => {
             let (client, connection) = config
                 .connect(NoTls)
                 .await
                 .map_err(|source| Error::Connect { tls: mode, source })?;
-            spawn_connection(connection);
-            client
+
+            (client, Box::pin(connection))
         }
         Transport::Verified(connector) => {
             let (client, connection) = config
                 .connect(connector)
                 .await
                 .map_err(|source| Error::Connect { tls: mode, source })?;
-            spawn_connection(connection);
-            client
+
+            (client, Box::pin(connection))
         }
     };
+
+    tokio::spawn(async move {
+        debug!("running connection");
+        if let Err(e) = connection.await {
+            error!("running connection returned error: {}", e);
+        }
+    });
 
     debug!("connected to postgres");
 
