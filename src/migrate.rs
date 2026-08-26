@@ -87,19 +87,6 @@ pub enum CredentialError {
     #[error("{DATABASE_ROOT_CERTIFICATE} is not a certificate: {message}")]
     MalformedRootCertificate { message: String },
 
-    /// A separate variant from the one above. The certificate is fine and the
-    /// situation is not, so "is not a certificate" would be false here.
-    ///
-    /// Both variables are named because either one may be the mistake. The
-    /// certificate can come from the configuration while [`DATABASE_TLS`]
-    /// lowers the transport, in which case the certificate variable is not even
-    /// set.
-    #[error(
-        "the transport is `disable`, which consults no certificate, but a root \
-         certificate is set. Check {DATABASE_TLS} and {DATABASE_ROOT_CERTIFICATE}."
-    )]
-    UnusedRootCertificate,
-
     #[error("{PROOFPLANE_CONFIG} names {path}, which did not load")]
     Configuration {
         path: PathBuf,
@@ -147,17 +134,6 @@ async fn apply(url: &SecretString, tls: &DatabaseTlsConfig) -> Result<Report, Er
 /// A source that is set but broken fails here rather than falling through to
 /// the next one.
 fn resolve(sources: CredentialSources) -> Result<Credential, CredentialError> {
-    let credential = select(sources)?;
-
-    if credential.tls.mode == DatabaseTls::Disable && credential.tls.root_certificate.is_some() {
-        return Err(CredentialError::UnusedRootCertificate);
-    }
-
-    Ok(credential)
-}
-
-/// Takes the first source that is present, and the transport that goes with it.
-fn select(sources: CredentialSources) -> Result<Credential, CredentialError> {
     let requested_mode = requested_tls(sources.tls.as_deref())?;
     let requested_certificate = requested_root_certificate(sources.root_certificate)?;
     let unstated = DatabaseTlsConfig {
@@ -513,51 +489,6 @@ mod tests {
                  must be one or more PEM certificates"
             )
         );
-    }
-
-    /// What a local run would hit if it kept a certificate beside the `disable`
-    /// that `make migrate` sets.
-    #[test]
-    fn a_root_certificate_is_refused_when_the_transport_is_disabled() {
-        let message = rejection(CredentialSources {
-            inline_url: Some(INLINE_URL.to_owned()),
-            tls: Some("disable".to_owned()),
-            root_certificate: Some(ROOT_CERTIFICATE.to_owned()),
-            ..Default::default()
-        });
-
-        assert_eq!(message, unused_root_certificate_message());
-    }
-
-    /// The certificate comes from the configuration and the variable lowers the
-    /// transport, so the certificate variable is not set at all. A message that
-    /// blamed it would send the operator to an empty variable.
-    #[test]
-    fn a_configured_root_certificate_is_refused_when_the_variable_disables_the_transport() {
-        let base = fs::read_to_string(LOCAL_CONFIG).expect("local config readable");
-        let indented: String = ROOT_CERTIFICATE
-            .lines()
-            .map(|line| format!("    {line}\n"))
-            .collect();
-        let verified = TempFile::holding(&base.replace(
-            "  tls: \"disable\"",
-            &format!("  tls: \"verify-full\"\n  tls_root_certificate: |\n{indented}"),
-        ));
-
-        let message = rejection(CredentialSources {
-            config_path: Some(verified.path.clone()),
-            tls: Some("disable".to_owned()),
-            ..Default::default()
-        });
-
-        assert_eq!(message, unused_root_certificate_message());
-    }
-
-    fn unused_root_certificate_message() -> String {
-        format!(
-            "the transport is `disable`, which consults no certificate, but a root \
-             certificate is set. Check {DATABASE_TLS} and {DATABASE_ROOT_CERTIFICATE}."
-        )
     }
 
     #[test]

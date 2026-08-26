@@ -539,34 +539,6 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
-    /// A certificate no connection can consult is a configuration the operator
-    /// did not mean to write, so it is refused rather than ignored.
-    #[test]
-    fn a_root_certificate_is_refused_when_the_transport_is_disabled() {
-        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
-        let indented: String = ROOT_CERTIFICATE
-            .lines()
-            .map(|line| format!("    {line}\n"))
-            .collect();
-        let mismatched = base.replace(
-            "  tls: \"disable\"",
-            &format!("  tls: \"disable\"\n  tls_root_certificate: |\n{indented}"),
-        );
-        assert_ne!(base, mismatched, "tls replacement anchor matched");
-
-        let path = write_temp_config(&mismatched);
-        let error = load_from_path(&path).expect_err("a certificate without TLS is invalid");
-
-        assert!(matches!(
-            error,
-            ConfigError::Validation(ref errors)
-                if errors.iter().any(|error| error.path == "database.tls_root_certificate"
-                    && error.message == "must not be set when database.tls is `disable`")
-        ));
-
-        let _ = fs::remove_file(path);
-    }
-
     /// The operator sees this message and nothing else, so it has to say which
     /// field is absent.
     #[test]

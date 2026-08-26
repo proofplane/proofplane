@@ -15,9 +15,9 @@ use super::{
         string_value, ConfigValidationExt,
     },
     Auth0AuditorPortalConfig, Auth0Config, Auth0UpstreamOAuthConfig, DatabaseConfig,
-    DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig, FilesystemObjectStorageConfig,
-    GcsObjectStorageConfig, HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig,
-    PasetoConfig, PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
+    DatabasePoolConfig, DatabaseTlsConfig, FilesystemObjectStorageConfig, GcsObjectStorageConfig,
+    HealthConfig, McpConfig, ObjectStorageConfig, ObservabilityConfig, PasetoConfig,
+    PasetoDownloadConfig, PasetoDownloadKey, PasetoMcpOAuthConfig, PasetoMcpOAuthKey,
     PasetoUploadGrantConfig, PasetoUploadGrantKey, PubSubConfig, PubSubSubscriptionsConfig,
     ScannerConfig, UploadsConfig, WorkerConfig,
 };
@@ -98,19 +98,6 @@ impl RawDatabaseConfig {
                 pool,
             },
         }
-        .and_then(|config| {
-            // A certificate no connection can use is a configuration the
-            // operator did not mean to write. Encryption that silently does not
-            // happen is the failure this section exists to prevent.
-            if config.tls.mode == DatabaseTls::Disable && config.tls.root_certificate.is_some() {
-                return Validation::invalid(ConfigFieldError::new(
-                    "database.tls_root_certificate",
-                    "must not be set when database.tls is `disable`",
-                ));
-            }
-
-            Validation::valid(config)
-        })
     }
 }
 
