@@ -13,9 +13,6 @@ IMAGE_REF_FILE ?= .local/image-ref
 # 5432 rather than at PgBouncer on 6432.
 PROOFPLANE_MIGRATION_DATABASE_URL ?= postgres://proofplane:proofplane@127.0.0.1:5432/proofplane
 
-# The local stack serves no certificate. The migration command verifies the
-# certificate chain and the hostname by default, so a local run has to lower it
-# here. Production sets nothing and gets the verified default.
 PROOFPLANE_MIGRATION_DATABASE_TLS ?= disable
 
 help:

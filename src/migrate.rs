@@ -23,18 +23,8 @@ pub const DATABASE_URL_FILE: &str = "PROOFPLANE_MIGRATION_DATABASE_URL_FILE";
 
 pub const DATABASE_URL: &str = "PROOFPLANE_MIGRATION_DATABASE_URL";
 
-/// Selects the transport for a local run. The command reads no application
-/// configuration in production. A verified connection is therefore the default,
-/// and only this variable changes it.
 pub const DATABASE_TLS: &str = "PROOFPLANE_MIGRATION_DATABASE_TLS";
 
-/// One or more PEM certificates to trust in addition to the system certificate
-/// store. Supabase issues a root of its own, and the command reads no
-/// application configuration in production, so the certificate arrives here.
-///
-/// This needs no `_FILE` twin. [`DATABASE_URL_FILE`] exists because a URL is a
-/// secret that must stay out of the process environment. A certificate is
-/// public, so that reason does not apply.
 pub const DATABASE_ROOT_CERTIFICATE: &str = "PROOFPLANE_MIGRATION_DATABASE_TLS_ROOT_CERTIFICATE";
 
 #[derive(Debug, Default)]
@@ -156,16 +146,9 @@ async fn apply(url: &SecretString, tls: &DatabaseTlsConfig) -> Result<Report, Er
 ///
 /// A source that is set but broken fails here rather than falling through to
 /// the next one.
-///
-/// The transport is verified unless [`DATABASE_TLS`] lowers it. The application
-/// configuration is the one source that carries a mode of its own, so it
-/// decides when the variable is absent.
 fn resolve(sources: CredentialSources) -> Result<Credential, CredentialError> {
     let credential = select(sources)?;
 
-    // A configuration that carries this pair already failed to load, so it
-    // arrives only when a variable made it. Either variable may be the one at
-    // fault, which is why the message names both.
     if credential.tls.mode == DatabaseTls::Disable && credential.tls.root_certificate.is_some() {
         return Err(CredentialError::UnusedRootCertificate);
     }
@@ -177,8 +160,6 @@ fn resolve(sources: CredentialSources) -> Result<Credential, CredentialError> {
 fn select(sources: CredentialSources) -> Result<Credential, CredentialError> {
     let requested_mode = requested_tls(sources.tls.as_deref())?;
     let requested_certificate = requested_root_certificate(sources.root_certificate)?;
-    // Neither of the first two sources carries a transport of its own, so both
-    // take this one. Only one branch below runs, so both may take it by value.
     let unstated = DatabaseTlsConfig {
         mode: requested_mode.unwrap_or(DatabaseTls::VerifyFull),
         root_certificate: requested_certificate.clone(),

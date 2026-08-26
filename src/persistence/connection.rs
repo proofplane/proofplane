@@ -80,12 +80,6 @@ impl Transport {
         }
     }
 
-    /// The mode this transport puts on the parsed configuration.
-    ///
-    /// `SslMode::Require` together with a verifying connector is `verify-full`.
-    /// The handshake is mandatory, and the connector checks the certificate
-    /// chain and the hostname during it. `tokio_postgres` has no single
-    /// `SslMode` that says the same thing.
     fn ssl_mode(&self) -> SslMode {
         match self {
             Self::Plaintext => SslMode::Disable,
@@ -94,13 +88,6 @@ impl Transport {
     }
 }
 
-/// The configured roots, ready for the connector.
-///
-/// The PEM is read by `openssl` and handed to `native_tls` as DER, because
-/// `native_tls` reads PEM through Security.framework on macOS, which takes tens
-/// of seconds for one certificate. `openssl` is also the backend `native_tls`
-/// itself uses on Linux, so this parses through the same code the release image
-/// runs. Configuration validates the same way before a connection is opened.
 fn root_certificates(pem: &str) -> Result<Vec<native_tls::Certificate>, Error> {
     X509::stack_from_pem(pem.as_bytes())
         .map_err(Error::RootCertificatePem)?
@@ -113,11 +100,6 @@ fn root_certificates(pem: &str) -> Result<Vec<native_tls::Certificate>, Error> {
         .collect()
 }
 
-/// Parses the connection string and applies the transport to it.
-///
-/// The configured mode decides. A connection string may carry `sslmode`, but it
-/// cannot lower the transport below what the configuration asks for, and it
-/// cannot raise it either.
 fn prepared_config(conn_str: &str, transport: &Transport) -> Result<tokio_postgres::Config, Error> {
     let mut config: tokio_postgres::Config = conn_str.parse()?;
 
@@ -126,9 +108,6 @@ fn prepared_config(conn_str: &str, transport: &Transport) -> Result<tokio_postgr
     Ok(config)
 }
 
-/// The connection drives the protocol. It must run for the client to work.
-/// Each transport gives it a different stream type, so both transports pass it
-/// to this function.
 fn spawn_connection<S, T>(connection: Connection<S, T>)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,

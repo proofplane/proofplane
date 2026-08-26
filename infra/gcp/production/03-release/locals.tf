@@ -20,10 +20,6 @@ locals {
   runtime_config_file       = "${local.runtime_config_mount_path}/config.yaml"
   migration_secret_path     = "/var/run/secrets/proofplane-migrate"
 
-  # `file()` takes a variable rather than a literal, so Terraform evaluates it
-  # only on the branch that runs. There is deliberately no `fileexists()` guard.
-  # A named file that is missing must fail the plan. It must not deploy a job
-  # that trusts nothing.
   migration_database_root_certificate = (
     var.migration_database_root_certificate_file == ""
     ? ""
