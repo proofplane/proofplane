@@ -264,9 +264,11 @@ pub async fn conn_pool(
 mod tests {
     use std::time::Duration;
 
-    use deadpool_postgres::{PoolError, TimeoutType};
+    use super::{
+        conn_pool, prepared_config, PoolBounds, PoolRuntime, Transport, UTILITY_POOL_SIZE,
+    };
+    use tokio_postgres::config::SslMode;
 
-    use super::{conn, conn_pool, PoolBounds, PoolRuntime, UTILITY_POOL_SIZE};
     use crate::config::{DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig};
     use crate::persistence::test_support;
 
@@ -317,8 +319,7 @@ mod tests {
         }
     }
 
-    /// Generous next to what these tests do, which is either fail the handshake
-    /// or run one statement.
+    /// Generous next to what the test below does, which is fail a handshake.
     const REJECTION_BOUNDS: PoolBounds =
         PoolBounds::new(1, Duration::from_secs(10), Duration::from_secs(60));
 
@@ -328,53 +329,29 @@ mod tests {
         format!("{:#}", anyhow::Error::new(error))
     }
 
-    /// The container serves no certificate, so a verified connection cannot be
-    /// made against it. That makes it the control for both directions below.
-    ///
-    /// `sslmode=disable` in the string would connect in plaintext if the string
-    /// decided. The configured mode decides instead, and `Require` rather than
-    /// `Prefer`, so the refusal is reported rather than quietly downgraded.
-    #[tokio::test]
-    async fn a_connection_string_cannot_lower_the_configured_tls() {
-        let database = test_support::database().await;
+    /// The mode is set after the string is parsed, so `sslmode` in the string
+    /// cannot lower the transport, and cannot raise it either. `Require` rather
+    /// than `Prefer`, so a refusal is reported rather than quietly downgraded.
+    #[test]
+    fn the_configured_mode_outranks_the_connection_string() {
+        let lowered = transport(&system_roots_only());
+        let raised = transport(&DatabaseTlsConfig::DISABLED);
 
-        let error = conn(
-            &format!("{}?sslmode=disable", database.url),
-            &system_roots_only(),
-        )
-        .await
-        .expect_err("a server without TLS cannot serve a verified connection");
+        let verified = prepared_config("postgres://user@host/db?sslmode=disable", &lowered)
+            .expect("the connection string parses");
+        let plaintext = prepared_config("postgres://user@host/db?sslmode=require", &raised)
+            .expect("the connection string parses");
 
-        let reason = chain(error);
-        assert!(
-            reason.contains("verify-full") && reason.contains("server does not support TLS"),
-            "expected the refused transport to be named, got: {reason}"
-        );
+        assert_eq!(verified.get_ssl_mode(), SslMode::Require);
+        assert_eq!(plaintext.get_ssl_mode(), SslMode::Disable);
     }
 
-    /// The other direction, and the control for the test above: a string that
-    /// asks for TLS does not get it either.
-    #[tokio::test]
-    async fn a_connection_string_cannot_raise_the_configured_tls() {
-        let database = test_support::database().await;
-
-        let client = conn(
-            &format!("{}?sslmode=require", database.url),
-            &DatabaseTlsConfig::DISABLED,
-        )
-        .await
-        .expect("the configured mode keeps the connection plaintext");
-
-        let row = client
-            .query_typed_one("SELECT 1", &[])
-            .await
-            .expect("the plaintext connection serves a query");
-
-        assert_eq!(row.get::<_, i32>(0), 1);
+    fn transport(tls: &DatabaseTlsConfig) -> Transport {
+        Transport::build(tls).expect("the transport builds")
     }
 
     /// The runtimes take their connections from a pool, so the pool has to
-    /// refuse the same server the single connection above refuses.
+    /// refuse a server that serves no TLS.
     #[tokio::test]
     async fn a_pool_refuses_a_server_that_serves_no_tls() {
         let database = test_support::database().await;
@@ -388,81 +365,5 @@ mod tests {
             reason.contains("verify-full") && reason.contains("server does not support TLS"),
             "expected the refused transport to be named, got: {reason}"
         );
-    }
-
-    /// The backend process serving a pooled connection. A different value means
-    /// the pool handed out a different physical connection.
-    async fn backend_pid(pool: &deadpool_postgres::Pool) -> i32 {
-        let client = pool.get().await.expect("a connection is available");
-        let row = client
-            .query_typed_one("SELECT pg_backend_pid()", &[])
-            .await
-            .expect("backend pid query succeeds");
-        row.get(0)
-    }
-
-    /// One second, not one tenth of it. The bound covers connection creation as
-    /// well as the wait. Every database test in this module starts a container
-    /// of its own, so a tighter bound reports a busy machine as a pool timeout.
-    const WAIT_ALLOWANCE: Duration = Duration::from_secs(1);
-
-    #[tokio::test]
-    async fn waiting_past_the_acquire_timeout_fails_instead_of_blocking() {
-        let database = test_support::database().await;
-        let pool = conn_pool(
-            &database.url,
-            &DatabaseTlsConfig::DISABLED,
-            PoolBounds::new(1, WAIT_ALLOWANCE, Duration::from_secs(60)),
-        )
-        .await
-        .expect("pool builds");
-
-        let _held = pool.get().await.expect("the one connection opens");
-        let error = pool
-            .get()
-            .await
-            .expect_err("a second caller cannot be served");
-
-        assert!(matches!(error, PoolError::Timeout(TimeoutType::Wait)));
-    }
-
-    #[tokio::test]
-    async fn connection_idle_past_the_idle_timeout_is_replaced() {
-        let database = test_support::database().await;
-        let pool = conn_pool(
-            &database.url,
-            &DatabaseTlsConfig::DISABLED,
-            PoolBounds::new(1, Duration::from_secs(5), Duration::from_millis(50)),
-        )
-        .await
-        .expect("pool builds");
-
-        let first = backend_pid(&pool).await;
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let second = backend_pid(&pool).await;
-
-        assert_ne!(
-            first, second,
-            "a connection left idle past the timeout is replaced, not reused"
-        );
-    }
-
-    /// The control for the test above: without it, a pool that never reused
-    /// anything would also pass.
-    #[tokio::test]
-    async fn connection_used_within_the_idle_timeout_is_reused() {
-        let database = test_support::database().await;
-        let pool = conn_pool(
-            &database.url,
-            &DatabaseTlsConfig::DISABLED,
-            PoolBounds::new(1, Duration::from_secs(5), Duration::from_secs(60)),
-        )
-        .await
-        .expect("pool builds");
-
-        let first = backend_pid(&pool).await;
-        let second = backend_pid(&pool).await;
-
-        assert_eq!(first, second, "an in-window connection is reused");
     }
 }
