@@ -1,11 +1,11 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
-use deadpool_postgres::{Hook, HookError, Pool, Runtime, Timeouts};
+use deadpool_postgres::{Hook, HookError, Pool, PoolError, Runtime, Timeouts};
 use openssl::x509::X509;
 use postgres_native_tls::MakeTlsConnector;
 use thiserror::Error;
 use tokio_postgres::{config::SslMode, Client, NoTls};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::config::{DatabasePoolConfig, DatabaseTls, DatabaseTlsConfig};
 
@@ -38,6 +38,15 @@ pub enum Error {
         tls: DatabaseTls,
         #[source]
         source: tokio_postgres::Error,
+    },
+
+    /// A timeout or a closed pool rather than a refused handshake. The mode
+    /// stays in the message, because the operator asks the same question.
+    #[error("failed to take a database connection with TLS mode `{tls}`")]
+    PoolConnect {
+        tls: DatabaseTls,
+        #[source]
+        source: PoolError,
     },
 }
 
@@ -208,19 +217,7 @@ pub async fn conn_pool(
         Transport::Verified(connector) => deadpool_postgres::Manager::new(config, connector),
     };
 
-    // A pool opens no connection here. A refused handshake therefore surfaces at
-    // the first `get`, as a `deadpool` error this module cannot wrap, and that
-    // error does not name the mode. This line does, and it is the line before
-    // the failure: every caller takes a connection as soon as the pool is built.
-    info!(
-        tls = %tls.mode,
-        // A boolean, not the certificate. Whether a deployment added a private
-        // root is the first thing to check when a handshake is refused.
-        private_root = tls.root_certificate.is_some(),
-        "opened postgres pool"
-    );
-
-    Pool::builder(mgr)
+    let pool = Pool::builder(mgr)
         .max_size(bounds.max_size)
         // Apply the timeout bound to each phase to be more forgiving.
         .timeouts(Timeouts {
@@ -243,7 +240,24 @@ pub async fn conn_pool(
         }))
         .runtime(Runtime::Tokio1)
         .build()
-        .map_err(Error::Deadpool)
+        .map_err(Error::Deadpool)?;
+
+    // A pool opens no connection when it is built. Take one here, so a refused
+    // handshake fails under the mode that refused it. A `deadpool` error at the
+    // first caller names neither the mode nor the certificate.
+    let connection = pool.get().await.map_err(|error| match error {
+        PoolError::Backend(source) => Error::Connect {
+            tls: tls.mode,
+            source,
+        },
+        source => Error::PoolConnect {
+            tls: tls.mode,
+            source,
+        },
+    })?;
+    drop(connection);
+
+    Ok(pool)
 }
 
 #[cfg(test)]
@@ -364,19 +378,15 @@ mod tests {
     #[tokio::test]
     async fn a_pool_refuses_a_server_that_serves_no_tls() {
         let database = test_support::database().await;
-        let pool = conn_pool(&database.url, &system_roots_only(), REJECTION_BOUNDS)
-            .await
-            .expect("pool builds");
 
-        let error = pool
-            .get()
+        let error = conn_pool(&database.url, &system_roots_only(), REJECTION_BOUNDS)
             .await
             .expect_err("a server without TLS cannot serve a verified pool");
 
         let reason = chain(error);
         assert!(
-            reason.contains("server does not support TLS"),
-            "expected the refused transport to be the reason, got: {reason}"
+            reason.contains("verify-full") && reason.contains("server does not support TLS"),
+            "expected the refused transport to be named, got: {reason}"
         );
     }
 
