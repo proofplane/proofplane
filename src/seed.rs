@@ -17,7 +17,7 @@ use crate::{
         FilesystemObjectStore, ObjectKey, ObjectStore, PutObjectRequest, StorageError,
     },
     observability,
-    persistence::{self, NewWorkspaceMembership, Postgres},
+    persistence::{self, param, NewWorkspaceMembership, PoolBounds, PoolRuntime, Postgres},
 };
 use thiserror::Error;
 use tracing::debug;
@@ -27,7 +27,7 @@ pub enum Error {
     #[error("postgres connection error")]
     DatabaseConnection(#[from] persistence::connection::Error),
 
-    #[error("configuration error: {0}")]
+    #[error("configuration error")]
     Config(#[source] Box<ConfigError>),
 
     #[error("observability initialization error")]
@@ -73,13 +73,19 @@ pub async fn run() -> Result<SeedSummary, Error> {
     let config = load_from_env().map_err(|error| Error::Config(Box::new(error)))?;
     observability::init_cli_tracing(&config.observability)?;
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
+    let mut client =
+        persistence::conn(config.database.url.expose_secret(), &config.database.tls).await?;
 
     debug!("running migrations");
-    persistence::migrate(&mut client).await?;
+    persistence::apply_migrations(&mut client).await?;
     debug!("done running migrations");
 
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), 4).await?;
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        &config.database.tls,
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Utility),
+    )
+    .await?;
     let postgres = Postgres::new(pool);
 
     seed_local_data(&postgres, &config.object_storage).await
@@ -107,7 +113,8 @@ pub async fn seed_local_data(
 }
 
 async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
-    let client = repository.get().await?;
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
     for (id, slug, name) in [
         (
             local_authorized_workspace_id(),
@@ -120,15 +127,16 @@ async fn seed_workspace(repository: &Postgres) -> Result<(), Error> {
             "Local Unauthorized Workspace".to_owned(),
         ),
     ] {
-        client
-            .execute(
+        transaction
+            .execute_typed(
                 r#"INSERT INTO workspaces (id, slug, name)
 VALUES ($1, $2, $3)
 ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, name = EXCLUDED.name"#,
-                &[&Uuid::from(id), &slug, &name],
+                &[param(&Uuid::from(id)), param(&slug), param(&name)],
             )
             .await?;
     }
+    transaction.commit().await?;
 
     Ok(())
 }
@@ -174,9 +182,10 @@ async fn seed_agent_connection(
     let connection_id = local_agent_connection_id();
     let permissions = WorkspacePermission::ALL.to_vec();
 
-    let client = repository.get().await?;
-    client
-        .execute(
+    let mut client = repository.get().await?;
+    let transaction = client.transaction().await?;
+    transaction
+        .execute_typed(
             r#"
 INSERT INTO agent_connections (
     id,
@@ -203,29 +212,24 @@ SET user_id = EXCLUDED.user_id,
     activated_at = EXCLUDED.activated_at,
     revoked_at = NULL
 "#,
-            &[
-                &Uuid::from(connection_id),
-                &Uuid::from(user_id),
-                &Uuid::from(workspace_id),
-                &LOCAL_OWNER_AUTH0_SUB,
-                &timestamp("2036-01-01T00:00:00Z")?,
-            ],
+            &[param(&Uuid::from(connection_id)), param(&Uuid::from(user_id)), param(&Uuid::from(workspace_id)), param(&LOCAL_OWNER_AUTH0_SUB), param(&timestamp("2036-01-01T00:00:00Z")?)],
         )
         .await?;
-    client
-        .execute(
+    transaction
+        .execute_typed(
             "DELETE FROM agent_connection_permissions WHERE agent_connection_id = $1",
-            &[&Uuid::from(connection_id)],
+            &[param(&Uuid::from(connection_id))],
         )
         .await?;
     for permission in permissions {
-        client
-            .execute(
+        transaction
+            .execute_typed(
                 "INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)",
-                &[&Uuid::from(connection_id), &permission.as_str()],
+                &[param(&Uuid::from(connection_id)), param(&permission.as_str())],
             )
             .await?;
     }
+    transaction.commit().await?;
 
     Ok(AgentConnectionContext {
         user_id,
@@ -263,21 +267,19 @@ async fn seed_evidence(
                 )
                 .into_result()
                 .map_err(|_| {
-                    crate::persistence::Error::InvariantViolation(
-                        "seed evidence definition must be valid",
-                    )
+                    persistence::Error::InvariantViolation("seed evidence definition must be valid")
                 })?;
                 let evidence_repository = workspace.aggregates().evidence();
                 if let Some(existing_id) = existing_id {
                     let mut aggregate = evidence_repository.get(existing_id).await?.ok_or(
-                        crate::persistence::Error::InvariantViolation(
+                        persistence::Error::InvariantViolation(
                             "listed seed evidence must be readable as an aggregate",
                         ),
                     )?;
                     aggregate
                         .replace(definition, seed.status, Utc::now())
                         .map_err(|_| {
-                            crate::persistence::Error::InvariantViolation(
+                            persistence::Error::InvariantViolation(
                                 "seed evidence replacement must be valid",
                             )
                         })?;
@@ -306,7 +308,7 @@ async fn seed_frameworks_and_controls(repository: &Postgres) -> Result<(), Error
     let transaction = client.transaction().await?;
 
     transaction
-        .execute(
+        .execute_typed(
             r#"
 INSERT INTO frameworks (id, code, name, description)
 VALUES ($1, 'soc2', 'SOC 2', 'AICPA Trust Services Criteria for service organizations.')
@@ -314,13 +316,13 @@ ON CONFLICT (code) DO UPDATE
 SET name = EXCLUDED.name,
     description = EXCLUDED.description
 "#,
-            &[&soc2_framework_id()],
+            &[param(&soc2_framework_id())],
         )
         .await?;
 
     for requirement in demo_soc2_requirements() {
         transaction
-            .execute(
+            .execute_typed(
                 r#"
 INSERT INTO framework_requirements (id, framework_id, code, title, description)
 VALUES ($1, $2, $3, $4, $5)
@@ -329,11 +331,11 @@ SET title = EXCLUDED.title,
     description = EXCLUDED.description
 "#,
                 &[
-                    &requirement.id,
-                    &soc2_framework_id(),
-                    &requirement.code,
-                    &requirement.title,
-                    &requirement.description,
+                    param(&requirement.id),
+                    param(&soc2_framework_id()),
+                    param(&requirement.code),
+                    param(&requirement.title),
+                    param(&requirement.description),
                 ],
             )
             .await?;
@@ -345,7 +347,7 @@ SET title = EXCLUDED.title,
     ] {
         for control in demo_controls(workspace_id) {
             transaction
-                .execute(
+                .execute_typed(
                     r#"
 INSERT INTO controls (id, workspace_id, code, title, description)
 VALUES ($1, $2, $3, $4, $5)
@@ -355,29 +357,29 @@ SET title = EXCLUDED.title,
     updated_at = now()
 "#,
                     &[
-                        &control.id,
-                        &Uuid::from(workspace_id),
-                        &control.code,
-                        &control.title,
-                        &control.description,
+                        param(&control.id),
+                        param(&Uuid::from(workspace_id)),
+                        param(&control.code),
+                        param(&control.title),
+                        param(&control.description),
                     ],
                 )
                 .await?;
             transaction
-                .execute(
+                .execute_typed(
                     "DELETE FROM control_framework_requirement_mappings WHERE control_id = $1",
-                    &[&control.id],
+                    &[param(&control.id)],
                 )
                 .await?;
             for requirement_id in control.requirement_ids {
                 transaction
-                    .execute(
+                    .execute_typed(
                         r#"
 INSERT INTO control_framework_requirement_mappings (control_id, framework_requirement_id)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING
 "#,
-                        &[&control.id, &requirement_id],
+                        &[param(&control.id), param(&requirement_id)],
                     )
                     .await?;
             }
@@ -398,7 +400,7 @@ async fn seed_policies(repository: &Postgres) -> Result<(), Error> {
         let policy_id = policy.id;
         let description = policy.description;
         transaction
-            .execute(
+            .execute_typed(
                 r#"
 INSERT INTO policies (id, workspace_id, name, description)
 VALUES ($1, $2, $3, $4)
@@ -416,10 +418,10 @@ SET workspace_id = EXCLUDED.workspace_id,
     END
 "#,
                 &[
-                    &policy_id,
-                    &Uuid::from(workspace_id),
-                    &policy.name,
-                    &description,
+                    param(&policy_id),
+                    param(&Uuid::from(workspace_id)),
+                    param(&policy.name),
+                    param(&description),
                 ],
             )
             .await?;
@@ -430,24 +432,24 @@ SET workspace_id = EXCLUDED.workspace_id,
             .map(|code| control_id(workspace_id, code))
             .collect::<Vec<_>>();
         transaction
-            .execute(
+            .execute_typed(
                 r#"
 DELETE FROM policy_control_mappings
 WHERE policy_id = $1
   AND NOT (control_id = ANY($2::uuid[]))
 "#,
-                &[&policy_id, &control_ids],
+                &[param(&policy_id), param(&control_ids)],
             )
             .await?;
         for control_id in control_ids {
             transaction
-                .execute(
+                .execute_typed(
                     r#"
 INSERT INTO policy_control_mappings (policy_id, control_id)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING
 "#,
-                    &[&policy_id, &control_id],
+                    &[param(&policy_id), param(&control_id)],
                 )
                 .await?;
         }
@@ -463,12 +465,14 @@ async fn seed_demo_evidence_submission(
     object_storage: &ObjectStorageConfig,
     created_by_user_id: UserId,
 ) -> Result<DemoDocumentSeedStatus, Error> {
-    let ObjectStorageConfig::Filesystem { root } = object_storage else {
+    // The demo document is seeded already finalized, so it belongs in the
+    // evidence store and never passes through quarantine.
+    let ObjectStorageConfig::Filesystem(config) = object_storage else {
         seed_demo_submission_row(repository).await?;
         return Ok(DemoDocumentSeedStatus::SkippedNonFilesystemStorage);
     };
 
-    let object_store = FilesystemObjectStore::new(root).await?;
+    let object_store = FilesystemObjectStore::new(&config.evidence_root).await?;
     let object_key = demo_document_object_key()?;
     let metadata = object_store
         .put_object(PutObjectRequest {
@@ -509,7 +513,7 @@ async fn upsert_demo_submission_and_document(
     let content_length = DEMO_SUBMISSION_BYTES.len() as i64;
 
     transaction
-        .execute(
+        .execute_typed(
             r#"
 INSERT INTO documents (
     id,
@@ -540,16 +544,16 @@ SET workspace_id = EXCLUDED.workspace_id,
     upload_status = EXCLUDED.upload_status
 "#,
             &[
-                &document_id,
-                &Uuid::from(local_authorized_workspace_id()),
-                &demo_submission_id(),
-                &Uuid::from(created_by_user_id),
-                &DEMO_SUBMISSION_FILENAME,
-                &DEMO_SUBMISSION_CONTENT_TYPE,
-                &content_length,
-                &document_object_key,
-                &checksum_sha256,
-                &checksum_crc32c,
+                param(&document_id),
+                param(&Uuid::from(local_authorized_workspace_id())),
+                param(&demo_submission_id()),
+                param(&Uuid::from(created_by_user_id)),
+                param(&DEMO_SUBMISSION_FILENAME),
+                param(&DEMO_SUBMISSION_CONTENT_TYPE),
+                param(&content_length),
+                param(&document_object_key),
+                param(&checksum_sha256),
+                param(&checksum_crc32c),
             ],
         )
         .await?;
@@ -561,14 +565,14 @@ SET workspace_id = EXCLUDED.workspace_id,
 
 async fn demo_evidence_id(transaction: &tokio_postgres::Transaction<'_>) -> Result<Uuid, Error> {
     let row = transaction
-        .query_one(
+        .query_typed_one(
             r#"
 SELECT id
 FROM evidence
 WHERE workspace_id = $1
   AND title = 'Quarterly access review'
 "#,
-            &[&Uuid::from(local_authorized_workspace_id())],
+            &[param(&Uuid::from(local_authorized_workspace_id()))],
         )
         .await?;
 
@@ -580,7 +584,7 @@ async fn upsert_demo_submission(
     evidence_id: Uuid,
 ) -> Result<(), Error> {
     transaction
-        .execute(
+        .execute_typed(
             r#"
 INSERT INTO evidence_submissions (
     id,
@@ -599,12 +603,12 @@ SET evidence_id = EXCLUDED.evidence_id,
     valid_until = EXCLUDED.valid_until
 "#,
             &[
-                &demo_submission_id(),
-                &evidence_id,
-                &Uuid::from(local_agent_connection_id()),
-                &timestamp("2026-06-14T16:30:00Z")?,
-                &timestamp("2026-04-01T00:00:00Z")?,
-                &timestamp("2026-06-30T23:59:59Z")?,
+                param(&demo_submission_id()),
+                param(&evidence_id),
+                param(&Uuid::from(local_agent_connection_id())),
+                param(&timestamp("2026-06-14T16:30:00Z")?),
+                param(&timestamp("2026-04-01T00:00:00Z")?),
+                param(&timestamp("2026-06-30T23:59:59Z")?),
             ],
         )
         .await?;
@@ -842,12 +846,14 @@ fn timestamp(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 mod tests {
     use super::{ConfigError, Error};
 
+    /// The cause belongs to the source chain, not to the wrapper's own message,
+    /// so the command prints it once.
     #[test]
-    fn configuration_error_includes_its_cause() {
+    fn a_printed_configuration_error_states_its_cause_once() {
         let error = Error::Config(Box::new(ConfigError::MissingEnv("PROOFPLANE_CONFIG")));
 
         assert_eq!(
-            error.to_string(),
+            format!("{:#}", anyhow::Error::new(error)),
             "configuration error: environment variable PROOFPLANE_CONFIG is required"
         );
     }

@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct WorkspacePeopleReads<'a, E> {
     executor: &'a E,
@@ -32,7 +32,7 @@ impl<E: ReadExecutor> WorkspacePeopleReads<'_, E> {
     ) -> Result<Option<UserId>, Error> {
         self.executor.query_opt(
             "SELECT m.user_id FROM workspace_memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 AND lower(trim(u.email)) = $2",
-            &[&Uuid::from(workspace_id), &email],
+            &[param(&Uuid::from(workspace_id)), param(&email)],
         ).await?.map(|row| row.try_get::<_, Uuid>("user_id").map(UserId::from)).transpose().map_err(Into::into)
     }
 
@@ -45,7 +45,7 @@ impl<E: ReadExecutor> WorkspacePeopleReads<'_, E> {
     ) -> Result<WorkspacePeople, Error> {
         let members = self.executor.query(
             "SELECT m.user_id, u.name, u.email, m.role, m.created_at FROM workspace_memberships m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 ORDER BY m.created_at, m.user_id",
-            &[&Uuid::from(workspace_id)],
+            &[param(&Uuid::from(workspace_id))],
         ).await?.into_iter().map(|row| Ok(WorkspacePerson {
             user_id: row.try_get::<_, Uuid>("user_id")?.into(),
             display_name: row.try_get("name")?, email: row.try_get("email")?,
@@ -53,7 +53,7 @@ impl<E: ReadExecutor> WorkspacePeopleReads<'_, E> {
         })).collect::<Result<Vec<_>, Error>>()?;
         let pending_invitations = self.executor.query(
             "SELECT id, invited_email, role, generation, expires_at, queued_generation, queued_at, delivered_generation, delivered_at, last_delivery_failure, delivery_failed_at FROM workspace_invitations WHERE workspace_id = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $2 ORDER BY created_at, id",
-            &[&Uuid::from(workspace_id), &now],
+            &[param(&Uuid::from(workspace_id)), param(&now)],
         ).await?.into_iter().map(pending_invitation_from_row).collect::<Result<Vec<_>, Error>>()?;
         Ok(WorkspacePeople {
             workspace_id,
@@ -75,7 +75,7 @@ impl<E: ReadExecutor> WorkspacePeopleReads<'_, E> {
                 &format!(
                     "SELECT {CURRENT_COLUMNS} FROM workspace_invitations WHERE id = $1 AND workspace_id = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $3"
                 ),
-                &[&Uuid::from(id), &Uuid::from(workspace_id), &now],
+                &[param(&Uuid::from(id)), param(&Uuid::from(workspace_id)), param(&now)],
             )
             .await?
             .map(current_invitation_from_row)
@@ -88,7 +88,7 @@ impl<E: ReadExecutor> WorkspacePeopleReads<'_, E> {
     ) -> Result<Option<WorkspaceInvitationPreviewSource>, Error> {
         self.executor.query_opt(
             "SELECT i.id, i.workspace_id, w.name AS workspace_name, i.invited_email, i.role, i.generation, i.expires_at, i.accepted_at, i.revoked_at FROM workspace_invitations i JOIN workspaces w ON w.id = i.workspace_id WHERE i.id = $1",
-            &[&Uuid::from(id)],
+            &[param(&Uuid::from(id))],
         ).await?.map(|row| Ok(WorkspaceInvitationPreviewSource {
             invitation_id: row.try_get::<_, Uuid>("id")?.into(), workspace_id: row.try_get::<_, Uuid>("workspace_id")?.into(),
             workspace_name: row.try_get("workspace_name")?, invited_email: row.try_get("invited_email")?,
@@ -109,7 +109,7 @@ impl WorkspacePeopleReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_one(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                &[&invitation_key],
+                &[param(&invitation_key)],
             )
             .await?;
         self.executor
@@ -117,7 +117,7 @@ impl WorkspacePeopleReads<'_, TransactionalReadExecutor<'_>> {
                 &format!(
                     "SELECT {CURRENT_COLUMNS} FROM workspace_invitations WHERE workspace_id = $1 AND invited_email = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $3 ORDER BY created_at DESC LIMIT 1"
                 ),
-                &[&Uuid::from(workspace_id), &email, &now],
+                &[param(&Uuid::from(workspace_id)), param(&email), param(&now)],
             )
             .await?
             .map(current_invitation_from_row)

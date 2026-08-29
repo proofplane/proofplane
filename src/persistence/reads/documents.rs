@@ -6,7 +6,7 @@ use crate::{
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use super::ReadExecutor;
+use super::{param, ReadExecutor};
 
 pub(crate) struct DocumentReads<'a, E> {
     executor: &'a E,
@@ -44,11 +44,11 @@ impl<E: ReadExecutor> DocumentReads<'_, E> {
             .query_opt(
                 SQL,
                 &[
-                    &identity.document_uuid(),
-                    &owner.owner_type(),
-                    &owner.owner_uuid(),
-                    &object_key,
-                    &status.as_str(),
+                    param(&identity.document_uuid()),
+                    param(&owner.owner_type()),
+                    param(&owner.owner_uuid()),
+                    param(&object_key),
+                    param(&status.as_str()),
                 ],
             )
             .await?

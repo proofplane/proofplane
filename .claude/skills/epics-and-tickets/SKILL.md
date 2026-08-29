@@ -128,9 +128,10 @@ Valuable, Estimable, Small, Testable).
 
 Implementation status is the issue's open/closed state:
 
-- **Open** — not yet delivered. Unstarted and in-progress both look like this;
-  the checkbox lists show which.
-- **Closed as completed** — work complete, acceptance criteria met.
+- **Open** — not yet delivered. An open ticket whose work has started also
+  carries the `doing` label, and its checkbox lists show how far it has got.
+- **Closed as completed** — work complete, acceptance criteria met. Remove
+  `doing` when closing.
 
 Triage is a separate axis, carried by the labels in
 `docs/agents/triage-labels.md` (`needs-triage`, `needs-info`, `ready-for-agent`,

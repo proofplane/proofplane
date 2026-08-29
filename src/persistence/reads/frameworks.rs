@@ -8,7 +8,7 @@ use crate::{
     read_models::{FrameworkDetail, FrameworkRequirementDetail},
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct FrameworkReads<'a, E> {
     executor: &'a E,
@@ -54,7 +54,7 @@ JOIN frameworks f ON f.id = fr.framework_id
 WHERE fr.framework_id = $1
 ORDER BY fr.code
 "#,
-                &[&Uuid::from(framework_id)],
+                &[param(&Uuid::from(framework_id))],
             )
             .await?
             .into_iter()
@@ -83,7 +83,7 @@ impl FrameworkReads<'_, TransactionalReadExecutor<'_>> {
             .executor
             .query_one(
                 "SELECT count(DISTINCT id) AS found FROM framework_requirements WHERE id = ANY($1)",
-                &[&requested.iter().copied().collect::<Vec<_>>()],
+                &[param(&requested.iter().copied().collect::<Vec<_>>())],
             )
             .await?
             .try_get::<_, i64>("found")?;

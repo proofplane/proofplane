@@ -13,7 +13,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use proofplane::{
     config::AppConfig,
     mail::MailAdapter,
-    object_storage::FilesystemObjectStore,
+    object_storage::{EvidenceObjectStore, QuarantineObjectStore},
     persistence::Postgres,
     scanner::ClamAvMalwareScanner,
     services::workspace_invitation_authority::WorkspaceInvitationAuthority,
@@ -582,7 +582,8 @@ async fn forward_message(State(state): State<ProxyState>, body: Bytes) -> Status
 pub fn start_worker(
     config: &AppConfig,
     postgres: &Arc<Postgres>,
-    object_store: &Arc<FilesystemObjectStore>,
+    quarantine_store: &QuarantineObjectStore,
+    evidence_store: &EvidenceObjectStore,
     mail: Arc<dyn MailAdapter>,
 ) -> TestServer {
     let recorder = PrometheusBuilder::new().build_recorder();
@@ -596,7 +597,8 @@ pub fn start_worker(
         .http_transport()
         .build(create_worker_app(WorkerAppDependencies {
             postgres: postgres.clone(),
-            object_store: object_store.clone(),
+            quarantine_store: quarantine_store.clone(),
+            evidence_store: evidence_store.clone(),
             scanner,
             mail,
             workspace_invitation_authority: WorkspaceInvitationAuthority::from_config(

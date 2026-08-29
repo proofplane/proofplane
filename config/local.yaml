@@ -6,7 +6,18 @@ server:
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://127.0.0.1:3000"
 
-postgres: "postgres://proofplane:proofplane@127.0.0.1:5432/proofplane"
+database:
+  url: "postgres://proofplane:proofplane@127.0.0.1:6432/proofplane"
+  # The compose stack serves no certificate. Production sets `verify-full`, and
+  # adds `tls_root_certificate` when its endpoint chains to a private root.
+  tls: "disable"
+  pool:
+    api: 10
+    mcp: 10
+    worker: 6
+    dequeuer: 2
+    acquire_timeout_ms: 5000
+    idle_timeout_ms: 300000
 
 pubsub:
   project_id: "proofplane-local"
@@ -58,7 +69,8 @@ mail:
 
 object_storage:
   backend: "filesystem"
-  root: ".local/storage"
+  quarantine_root: ".local/storage/quarantine"
+  evidence_root: ".local/storage/evidence"
 
 scanner:
   clamd_address: "127.0.0.1:3310"

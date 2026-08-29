@@ -19,7 +19,8 @@ they are versioned alongside the code they describe. Tickets do not.
   restates them in a `## Blocked by` section for readers.
 - Implementation progress is the issue's open/closed state: open means not yet
   delivered, closed as completed means done. Acceptance-criteria and task
-  checkboxes track progress within a ticket.
+  checkboxes track progress within a ticket. An open ticket whose work has
+  started also carries the `doing` label; drop it when the issue closes.
 - Triage uses the labels in [`triage-labels.md`](./triage-labels.md).
 - The epic issue body carries the ticket index and sequencing notes.
 

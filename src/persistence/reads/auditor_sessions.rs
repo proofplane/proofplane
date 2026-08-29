@@ -5,7 +5,7 @@ use crate::{
     persistence::Error,
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct AuditorSessionReads<'a, E> {
     executor: &'a E,
@@ -25,7 +25,7 @@ impl AuditorSessionReads<'_, TransactionalReadExecutor<'_>> {
         self.executor
             .query_opt(
                 "SELECT id FROM auditor_sessions WHERE session_digest = $1",
-                &[&digest],
+                &[param(&digest)],
             )
             .await?
             .map(|row| row.try_get::<_, Uuid>("id").map(AuditorSessionId::from))

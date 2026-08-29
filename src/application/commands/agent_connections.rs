@@ -7,7 +7,7 @@ use crate::{
         AgentConnectionUse, Sha256Digest, UserId, WorkspaceId, WorkspacePermission,
         WorkspacePermissions,
     },
-    persistence::{ConflictKind, Error as RepositoryError, Postgres},
+    persistence::{param, ConflictKind, Error as RepositoryError, Postgres},
 };
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -220,30 +220,31 @@ async fn continuation_connection(
     continuation: Sha256Digest,
     nonce: Option<Sha256Digest>,
 ) -> Result<Option<AgentConnectionId>, RepositoryError> {
-    let client = repository.get().await?;
     let sql = if nonce.is_some() {
         "SELECT agent_connection_id FROM agent_authorization_transactions WHERE continuation_digest = $1 AND nonce_digest = $2"
     } else {
         "SELECT agent_connection_id FROM agent_authorization_transactions WHERE continuation_digest = $1"
     };
+    let client = repository.get().await?;
     let row = match nonce {
         Some(nonce) => {
             client
-                .query_opt(
+                .query_typed_opt(
                     sql,
                     &[
-                        &continuation.as_bytes().as_slice(),
-                        &nonce.as_bytes().as_slice(),
+                        param(&continuation.as_bytes().as_slice()),
+                        param(&nonce.as_bytes().as_slice()),
                     ],
                 )
                 .await?
         }
         None => {
             client
-                .query_opt(sql, &[&continuation.as_bytes().as_slice()])
+                .query_typed_opt(sql, &[param(&continuation.as_bytes().as_slice())])
                 .await?
         }
     };
+
     Ok(row.map(|row| AgentConnectionId::from(row.get::<_, Uuid>("agent_connection_id"))))
 }
 impl DenyAgentConnectionHandler {

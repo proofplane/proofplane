@@ -741,7 +741,7 @@ mod tests {
                         filename: "statement.pdf".to_owned(),
                         content_type: "application/pdf".to_owned(),
                         content_length: 1,
-                        object_key: format!("quarantine/{}", uuid::Uuid::new_v4()),
+                        object_key: format!("staged/{}", uuid::Uuid::new_v4()),
                         checksum_sha256: "sha".to_owned(),
                         checksum_crc32c: "crc".to_owned(),
                     },

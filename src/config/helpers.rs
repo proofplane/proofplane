@@ -2,13 +2,14 @@
 
 use std::net::SocketAddr;
 
+use openssl::x509::X509;
 use pasetors::{keys::SymmetricKey, version4::V4};
 use secrecy::{ExposeSecret, SecretString};
 use url::Url;
 
-use crate::validation::Validation;
+use crate::validation::{is_canonical_relative_path, Validation};
 
-use super::{ConfigFieldError, GcsCredentialsMode, LogFormat};
+use super::{ConfigFieldError, DatabaseTls, LogFormat};
 
 pub(super) fn string_value(value: String) -> Result<String, String> {
     trim_required(value)
@@ -22,7 +23,7 @@ pub(super) fn secret_value(value: SecretString) -> Result<SecretString, String> 
     }
 }
 
-pub(super) fn postgres_connection_string(value: SecretString) -> Result<SecretString, String> {
+pub fn postgres_connection_string(value: SecretString) -> Result<SecretString, String> {
     let value = secret_value(value)?;
 
     value
@@ -30,6 +31,35 @@ pub(super) fn postgres_connection_string(value: SecretString) -> Result<SecretSt
         .parse::<tokio_postgres::Config>()
         .map(|_| value)
         .map_err(|_| "must be a valid Postgres connection string".into())
+}
+
+/// `tokio_postgres` cannot express full verification in a connection string: its
+/// `SslMode` has only `disable`, `prefer`, and `require`, and it rejects
+/// `sslmode=verify-full` when it parses the string. The mode therefore lives
+/// here rather than in the URL.
+pub fn database_tls(value: String) -> Result<DatabaseTls, String> {
+    match trim_required(value)?.as_str() {
+        "disable" => Ok(DatabaseTls::Disable),
+        "verify-full" => Ok(DatabaseTls::VerifyFull),
+        _ => Err("must be `disable` or `verify-full`".into()),
+    }
+}
+
+/// One or more PEM certificates to trust in addition to the system certificate
+/// store.
+///
+/// Validated by parsing, like `postgres_connection_string` above.
+///
+/// The empty case needs its own arm. OpenSSL reads a buffer with no `BEGIN` line
+/// as the end of the list and returns no certificates rather than an error.
+/// Without that arm a garbage value would pass here and fail at connect time.
+pub fn database_root_certificate(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+
+    match X509::stack_from_pem(value.as_bytes()) {
+        Ok(certificates) if !certificates.is_empty() => Ok(value),
+        _ => Err("must be one or more PEM certificates".into()),
+    }
 }
 
 pub(super) fn nonzero_u16(value: u16) -> Result<u16, String> {
@@ -68,18 +98,18 @@ pub(super) fn socket_addr(value: String) -> Result<SocketAddr, String> {
         .map_err(|_| "must be a socket address".into())
 }
 
-pub(super) fn optional_url(value: Option<String>) -> Result<Option<Url>, String> {
-    match value {
-        Some(value) if value.trim().is_empty() => Err("must not be empty when set".into()),
-        Some(value) => Url::parse(value.trim())
-            .map(Some)
-            .map_err(|_| "must be a valid URL".into()),
-        None => Ok(None),
-    }
-}
-
 pub(super) fn string_url(value: String) -> Result<Url, String> {
     Url::parse(trim_required(value)?.as_str()).map_err(|_| "must be a valid URL".into())
+}
+
+pub(super) fn object_key_prefix(value: String) -> Result<String, String> {
+    let value = trim_required(value)?;
+
+    if is_canonical_relative_path(&value) {
+        Ok(value)
+    } else {
+        Err("must be a canonical relative object-key prefix".to_owned())
+    }
 }
 
 pub(super) fn public_api_base_url(value: String) -> Result<Url, String> {
@@ -119,14 +149,6 @@ pub(super) fn parse_log_format(value: String) -> Result<LogFormat, String> {
         "json" => Ok(LogFormat::Json),
         "pretty" => Ok(LogFormat::Pretty),
         _ => Err("must be `json` or `pretty`".into()),
-    }
-}
-
-pub(super) fn gcs_credentials_mode(value: String) -> Result<GcsCredentialsMode, String> {
-    match trim_required(value)?.as_str() {
-        "application_default" => Ok(GcsCredentialsMode::ApplicationDefault),
-        "anonymous" => Ok(GcsCredentialsMode::Anonymous),
-        _ => Err("must be `application_default` or `anonymous`".into()),
     }
 }
 

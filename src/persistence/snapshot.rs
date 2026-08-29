@@ -1,6 +1,6 @@
-use deadpool_postgres::GenericClient;
+use deadpool_postgres::Transaction;
 use std::collections::HashSet;
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{ToSql, Type};
 
 use super::Error;
 
@@ -13,18 +13,20 @@ pub(super) struct SnapshotMetadata {
 /// A borrowed database representation of one aggregate's complete state.
 ///
 /// `snapshot_record!` builds this from a private persistence record,
-/// keeping the ordered SQL columns and their parameter values together. The
-/// values are type-erased only at this Postgres boundary; the domain aggregate
-/// and its record mapper remain strongly typed.
+/// keeping the ordered SQL columns and their parameter values together. Each
+/// value carries its Postgres type, recovered from the record's declared field
+/// type, because `execute_typed` states parameter types rather than letting the
+/// server infer them. The values are type-erased only at this Postgres
+/// boundary; the domain aggregate and its record mapper remain strongly typed.
 pub(super) struct SnapshotRecord<'record> {
     metadata: SnapshotMetadata,
-    values: Vec<&'record (dyn ToSql + Sync)>,
+    values: Vec<(&'record (dyn ToSql + Sync + 'record), Type)>,
 }
 
 impl<'record> SnapshotRecord<'record> {
     pub(super) fn new(
         metadata: SnapshotMetadata,
-        values: Vec<&'record (dyn ToSql + Sync)>,
+        values: Vec<(&'record (dyn ToSql + Sync + 'record), Type)>,
     ) -> Self {
         Self { metadata, values }
     }
@@ -32,12 +34,12 @@ impl<'record> SnapshotRecord<'record> {
 
 /// Atomically inserts or replaces an aggregate's complete snapshot.
 pub(super) async fn save_snapshot(
-    client: &impl GenericClient,
+    transaction: &Transaction<'_>,
     snapshot: SnapshotRecord<'_>,
 ) -> Result<(), Error> {
     let sql = build_upsert_sql(snapshot.metadata)?;
-    let affected = client
-        .execute(sql.as_str(), snapshot.values.as_slice())
+    let affected = transaction
+        .execute_typed(sql.as_str(), snapshot.values.as_slice())
         .await
         .map_err(super::constraints::classify_db_error)?;
     ensure_one_affected(affected)
@@ -123,7 +125,10 @@ macro_rules! snapshot_record {
                     conflict_column: stringify!($conflict),
                     columns: &[$(stringify!($column)),+],
                 };
-                let values = vec![$(&self.$column as &(dyn tokio_postgres::types::ToSql + Sync)),+];
+                let values = vec![$((
+                    &self.$column as &(dyn tokio_postgres::types::ToSql + Sync),
+                    <$column_type as super::params::PgParam>::pg_type(),
+                )),+];
                 super::snapshot::SnapshotRecord::new(metadata, values)
             }
         }

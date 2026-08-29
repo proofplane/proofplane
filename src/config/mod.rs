@@ -1,7 +1,7 @@
 use crate::{validate, validation::Validation};
 use secrecy::SecretString;
 use std::{
-    env, fs, io,
+    env, fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -12,13 +12,20 @@ use raw::RawAppConfig;
 
 mod helpers;
 mod raw;
+#[cfg(test)]
+pub(crate) mod test_support;
+
+/// Shared with the migration command, which validates a database URL, a TLS
+/// mode, and a root certificate that never pass through an application
+/// configuration file.
+pub use helpers::{database_root_certificate, database_tls, postgres_connection_string};
 
 pub const PROOFPLANE_CONFIG: &str = "PROOFPLANE_CONFIG";
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
-    pub postgres: SecretString,
+    pub database: DatabaseConfig,
     pub pubsub: PubSubConfig,
     pub auth0: Auth0Config,
     pub paseto: PasetoConfig,
@@ -39,6 +46,71 @@ pub struct ServerConfig {
     pub worker_bind: SocketAddr,
     pub mcp_bind: SocketAddr,
     pub public_api_base_url: Url,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    pub url: SecretString,
+    pub tls: DatabaseTlsConfig,
+    pub pool: DatabasePoolConfig,
+}
+
+/// The transport for a database connection.
+///
+/// The mode is separate from the certificate so that the mode alone can go into
+/// a log line or an error message. A certificate is public, but it is long, and
+/// neither a log nor an error is the place for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseTlsConfig {
+    pub mode: DatabaseTls,
+    /// One or more PEM certificates to trust in addition to the system
+    /// certificate store. Supabase issues a root of its own, which no system
+    /// store carries.
+    pub root_certificate: Option<String>,
+}
+
+impl DatabaseTlsConfig {
+    /// Plaintext, with no extra trust anchor. The local stack serves no
+    /// certificate, so every fixture uses this.
+    pub const DISABLED: Self = Self {
+        mode: DatabaseTls::Disable,
+        root_certificate: None,
+    };
+}
+
+/// How a database connection is encrypted.
+///
+/// There is no mode that encrypts without verification. Such a mode would let a
+/// release claim a guarantee that it does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseTls {
+    /// Plaintext. The local stack serves no certificate.
+    Disable,
+    /// Encrypted, with the certificate chain and the hostname verified against
+    /// the system certificate store.
+    VerifyFull,
+}
+
+impl fmt::Display for DatabaseTls {
+    /// The spelling the configuration file and the migration command accept.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Disable => "disable",
+            Self::VerifyFull => "verify-full",
+        };
+
+        f.write_str(name)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatabasePoolConfig {
+    pub api: usize,
+    pub mcp: usize,
+    pub worker: usize,
+    pub dequeuer: usize,
+    pub acquire_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,17 +220,30 @@ pub enum MailAdapterConfig {
     Resend { api_key: SecretString, from: String },
 }
 
+/// Where the two document object stores live.
+///
+/// Uploaded bytes land in the quarantine store and stay there until the worker
+/// scans them. Only the worker moves a clean document into the evidence store.
+/// One backend serves both targets, so the pair can never disagree about which
+/// backend is in use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectStorageConfig {
-    Filesystem { root: PathBuf },
+    Filesystem(FilesystemObjectStorageConfig),
     Gcs(GcsObjectStorageConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemObjectStorageConfig {
+    pub quarantine_root: PathBuf,
+    pub evidence_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcsObjectStorageConfig {
-    pub bucket: String,
-    pub endpoint_override: Option<Url>,
-    pub credentials_mode: GcsCredentialsMode,
+    pub quarantine_bucket: String,
+    pub evidence_bucket: String,
+    /// Prepended to every physical object name in both buckets. It names the
+    /// environment, not the role, so both stores share it.
     pub object_key_prefix: String,
 }
 
@@ -172,12 +257,6 @@ pub struct ScannerConfig {
     pub clamd_address: SocketAddr,
     pub connection_timeout_ms: u64,
     pub scan_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GcsCredentialsMode {
-    ApplicationDefault,
-    Anonymous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,13 +312,13 @@ impl ConfigFieldError {
 pub enum ConfigError {
     #[error("environment variable {0} is required")]
     MissingEnv(&'static str),
-    #[error("failed to read config file {path}: {source}")]
+    #[error("failed to read config file {path}")]
     Read {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("failed to load config file {path}: {source}")]
+    #[error("failed to load config file {path}")]
     Load {
         path: PathBuf,
         #[source]
@@ -286,7 +365,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Result<AppConfig, ConfigError> 
 fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldError> {
     validate! {
         server <- raw.server.validate(),
-        postgres <- raw::validate_postgres_connection_string(raw.postgres),
+        database <- raw.database.validate(),
         pubsub <- raw.pubsub.validate(),
         auth0 <- raw.auth0.validate(),
         paseto <- raw.paseto.validate(),
@@ -303,7 +382,7 @@ fn validate_raw_config(raw: RawAppConfig) -> Validation<AppConfig, ConfigFieldEr
             let auth0 = auth0.resolve(&server.public_api_base_url);
             AppConfig {
                 server,
-                postgres,
+                database,
                 pubsub,
                 auth0,
                 paseto,
@@ -326,6 +405,7 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::*;
+    use crate::config::test_support::ROOT_CERTIFICATE;
     use std::{
         fs,
         sync::{
@@ -356,11 +436,21 @@ mod tests {
             "http://host.docker.internal:3001/pubsub/messages"
         );
         assert_eq!(config.pubsub.subscriptions.worker_max_delivery_attempts, 5);
-        assert!(matches!(
+        assert_eq!(
             config.object_storage,
-            ObjectStorageConfig::Filesystem { .. }
-        ));
+            ObjectStorageConfig::Filesystem(FilesystemObjectStorageConfig {
+                quarantine_root: PathBuf::from(".local/storage/quarantine"),
+                evidence_root: PathBuf::from(".local/storage/evidence"),
+            })
+        );
         assert_eq!(config.uploads.max_document_bytes, 25 * 1024 * 1024);
+        assert_eq!(config.database.tls, DatabaseTlsConfig::DISABLED);
+        assert_eq!(config.database.pool.api, 10);
+        assert_eq!(config.database.pool.mcp, 10);
+        assert_eq!(config.database.pool.worker, 6);
+        assert_eq!(config.database.pool.dequeuer, 2);
+        assert_eq!(config.database.pool.acquire_timeout_ms, 5_000);
+        assert_eq!(config.database.pool.idle_timeout_ms, 300_000);
         assert_eq!(config.scanner.clamd_address.to_string(), "127.0.0.1:3310");
         assert_eq!(config.scanner.connection_timeout_ms, 1000);
         assert_eq!(config.scanner.scan_timeout_ms, 30000);
@@ -452,6 +542,184 @@ mod tests {
     }
 
     #[test]
+    fn the_verifying_tls_mode_loads() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let verified = base.replace("tls: \"disable\"", "tls: \"verify-full\"");
+        assert_ne!(base, verified, "tls replacement anchor matched");
+
+        let path = write_temp_config(&verified);
+        let config = load_from_path(&path).expect("a verifying configuration loads");
+
+        assert_eq!(config.database.tls.mode, DatabaseTls::VerifyFull);
+        assert_eq!(config.database.tls.root_certificate, None);
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// The YAML block scalar an operator writes, indented under the key.
+    fn with_root_certificate(base: &str, pem: &str) -> String {
+        let indented: String = pem.lines().map(|line| format!("    {line}\n")).collect();
+
+        base.replace(
+            "  tls: \"disable\"",
+            &format!("  tls: \"verify-full\"\n  tls_root_certificate: |\n{indented}"),
+        )
+    }
+
+    #[test]
+    fn a_root_certificate_loads_beside_the_verifying_mode() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let verified = with_root_certificate(&base, ROOT_CERTIFICATE);
+        assert_ne!(base, verified, "tls replacement anchor matched");
+
+        let path = write_temp_config(&verified);
+        let config = load_from_path(&path).expect("a configuration with a root certificate loads");
+
+        assert_eq!(config.database.tls.mode, DatabaseTls::VerifyFull);
+        assert_eq!(
+            config.database.tls.root_certificate.as_deref(),
+            Some(ROOT_CERTIFICATE.trim())
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_root_certificate_that_is_not_a_certificate_names_the_field() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let broken = base.replace(
+            "  tls: \"disable\"",
+            "  tls: \"verify-full\"\n  tls_root_certificate: \"not-a-certificate\"",
+        );
+        assert_ne!(base, broken, "tls replacement anchor matched");
+
+        let path = write_temp_config(&broken);
+        let error =
+            load_from_path(&path).expect_err("a value that is not a certificate is invalid");
+
+        assert!(matches!(
+            error,
+            ConfigError::Validation(ref errors)
+                if errors.iter().any(|error| error.path == "database.tls_root_certificate"
+                    && error.message == "must be one or more PEM certificates")
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// The operator sees this message and nothing else, so it has to say which
+    /// field is absent.
+    #[test]
+    fn a_missing_tls_mode_names_the_field() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let without = base.replace("  tls: \"disable\"\n", "");
+        assert_ne!(base, without, "tls removal anchor matched");
+
+        let path = write_temp_config(&without);
+        let error = load_from_path(&path).expect_err("a configuration without a mode is invalid");
+
+        let reason = format!("{:#}", anyhow::Error::new(error));
+        assert!(
+            reason.contains("database.tls"),
+            "expected the missing field to be named, got: {reason}"
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn gcs_configuration_names_separate_quarantine_and_evidence_buckets() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let gcs = base.replace(
+            "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
+            "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test-quarantine\"\n  evidence_bucket: \"proofplane-test-evidence\"\n  object_key_prefix: \"environments/test\"",
+        );
+        assert_ne!(base, gcs, "object storage replacement anchor matched");
+
+        let path = write_temp_config(&gcs);
+        let config = load_from_path(&path).expect("GCS config loads");
+
+        assert_eq!(
+            config.object_storage,
+            ObjectStorageConfig::Gcs(GcsObjectStorageConfig {
+                quarantine_bucket: "proofplane-test-quarantine".to_owned(),
+                evidence_bucket: "proofplane-test-evidence".to_owned(),
+                object_key_prefix: "environments/test".to_owned(),
+            })
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn gcs_object_key_prefix_must_be_a_canonical_relative_path() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+
+        for prefix in [
+            "/proofplane",
+            "proofplane/",
+            "proofplane//test",
+            "proofplane/../test",
+        ] {
+            let gcs = base.replace(
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
+                &format!(
+                    "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test-quarantine\"\n  evidence_bucket: \"proofplane-test-evidence\"\n  object_key_prefix: \"{prefix}\""
+                ),
+            );
+            let path = write_temp_config(&gcs);
+            let error = load_from_path(&path).expect_err("non-canonical prefix is rejected");
+
+            assert!(matches!(
+                error,
+                ConfigError::Validation(ref errors)
+                    if errors.iter().any(|error| error.path == "object_storage.object_key_prefix")
+            ));
+
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// One target for both stores would put unscanned bytes where the evidence
+    /// lives, and would expose the evidence to the quarantine expiry rule.
+    #[test]
+    fn object_storage_rejects_one_target_used_for_both_stores() {
+        let base = fs::read_to_string("config/local.yaml").expect("local config readable");
+        let cases = [
+            (
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage\"\n  evidence_root: \".local/storage\"",
+                "object_storage.evidence_root",
+            ),
+            (
+                "object_storage:\n  backend: \"gcs\"\n  quarantine_bucket: \"proofplane-test\"\n  evidence_bucket: \"proofplane-test\"\n  object_key_prefix: \"environments/test\"",
+                "object_storage.evidence_bucket",
+            ),
+        ];
+
+        for (object_storage, expected_path) in cases {
+            let shared = base.replace(
+                "object_storage:\n  backend: \"filesystem\"\n  quarantine_root: \".local/storage/quarantine\"\n  evidence_root: \".local/storage/evidence\"",
+                object_storage,
+            );
+            assert_ne!(base, shared, "object storage replacement anchor matched");
+
+            let path = write_temp_config(&shared);
+            let error = load_from_path(&path).expect_err("one shared target is rejected");
+
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Validation(ref errors)
+                        if errors.iter().any(|error| error.path == expected_path)
+                ),
+                "expected {expected_path} to be rejected"
+            );
+
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn missing_env_var_returns_error() {
         let _lock = ENV_LOCK.lock().expect("env lock is available");
         let previous = env::var(PROOFPLANE_CONFIG).ok();
@@ -490,7 +758,7 @@ mod tests {
             r#"
 environment: ""
 server: {}
-postgres: {}
+database: {}
 pubsub: {}
 object_storage: {}
 scanner: {}
@@ -517,7 +785,16 @@ server:
   worker_bind: "127.0.0.1:3001"
   mcp_bind: "127.0.0.1:3002"
   public_api_base_url: "http://example.com/api"
-postgres: ""
+database:
+  url: ""
+  tls: "require"
+  pool:
+    api: 0
+    mcp: 0
+    worker: 0
+    dequeuer: 0
+    acquire_timeout_ms: 0
+    idle_timeout_ms: 0
 pubsub:
   project_id: "proofplane-local"
   subscriptions:
@@ -563,10 +840,9 @@ mail:
   adapter: "local_stdout"
 object_storage:
   backend: "gcs"
-  bucket: "proofplane"
-  endpoint_override: "not-a-url"
-  credentials_mode: "unknown"
-  object_key_prefix: "evidence"
+  quarantine_bucket: "proofplane"
+  evidence_bucket: "proofplane"
+  object_key_prefix: "../evidence"
 scanner:
   clamd_address: "not-a-socket"
   connection_timeout_ms: 0
@@ -601,7 +877,16 @@ health:
 
                 assert!(paths.contains(&"server.api_bind"));
                 assert!(paths.contains(&"server.public_api_base_url"));
-                assert!(paths.contains(&"postgres"));
+                // Every bad database field is reported in one pass rather than
+                // the validator stopping at the first.
+                assert!(paths.contains(&"database.url"));
+                assert!(paths.contains(&"database.tls"));
+                assert!(paths.contains(&"database.pool.api"));
+                assert!(paths.contains(&"database.pool.mcp"));
+                assert!(paths.contains(&"database.pool.worker"));
+                assert!(paths.contains(&"database.pool.dequeuer"));
+                assert!(paths.contains(&"database.pool.acquire_timeout_ms"));
+                assert!(paths.contains(&"database.pool.idle_timeout_ms"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_push_endpoint"));
                 assert!(paths.contains(&"pubsub.subscriptions.worker_max_delivery_attempts"));
                 assert!(paths.contains(&"auth0.issuer"));
@@ -627,8 +912,7 @@ health:
                 assert!(paths.contains(&"workspace_invitations.active_key_id"));
                 assert!(paths.contains(&"workspace_invitations.keys[0].id"));
                 assert!(paths.contains(&"workspace_invitations.keys[0].secret"));
-                assert!(paths.contains(&"object_storage.endpoint_override"));
-                assert!(paths.contains(&"object_storage.credentials_mode"));
+                assert!(paths.contains(&"object_storage.object_key_prefix"));
                 assert!(paths.contains(&"scanner.clamd_address"));
                 assert!(paths.contains(&"scanner.connection_timeout_ms"));
                 assert!(paths.contains(&"scanner.scan_timeout_ms"));

@@ -335,7 +335,7 @@ mod tests {
             metadata: metadata(),
             payload: IntegrationPayload::Document(DocumentWork::Evidence(EvidenceDocumentWork {
                 evidence_submission_id: uuid(2),
-                object_key: "quarantine/document-1".to_owned(),
+                object_key: "staged/document-1".to_owned(),
             })),
         };
 
@@ -351,7 +351,7 @@ mod tests {
                 "causation_id": uuid(5),
                 "payload": {
                     "evidence_submission_id": uuid(2),
-                    "object_key": "quarantine/document-1"
+                    "object_key": "staged/document-1"
                 }
             })
         );
@@ -363,7 +363,7 @@ mod tests {
             metadata: metadata(),
             payload: IntegrationPayload::Document(DocumentWork::Policy(PolicyDocumentWork {
                 policy_id: uuid(6),
-                object_key: "quarantine/policy-1".to_owned(),
+                object_key: "staged/policy-1".to_owned(),
             })),
         };
 
@@ -408,7 +408,7 @@ mod tests {
             metadata: metadata(),
             payload: IntegrationPayload::Document(DocumentWork::Evidence(EvidenceDocumentWork {
                 evidence_submission_id: uuid(2),
-                object_key: "quarantine/document-1".to_owned(),
+                object_key: "staged/document-1".to_owned(),
             })),
         }
         .to_envelope()
@@ -459,7 +459,7 @@ mod tests {
                 evidence_submission_id: submission_id,
                 document_id,
             },
-            "quarantine/document-1",
+            "staged/document-1",
             Some(uuid(4)),
             None,
         );

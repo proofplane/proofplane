@@ -4,7 +4,9 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder};
 use proofplane::{
     config::{self, MailAdapterConfig},
     mail::{LocalMailAdapter, MailAdapter, ResendMailAdapter},
-    object_storage, observability, persistence,
+    object_storage::{self, DocumentObjectStores},
+    observability,
+    persistence::{self, PoolBounds, PoolRuntime, Postgres},
     scanner::ClamAvMalwareScanner,
     services::workspace_invitation_authority::{
         WorkspaceInvitationAuthority, WorkspaceInvitationAuthorityError,
@@ -15,14 +17,12 @@ use proofplane::{
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
-
-const POSTGRES_POOL_SIZE: usize = 20;
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{}", e);
+        error!("{:#}", anyhow::Error::from(e));
         std::process::exit(1);
     }
 }
@@ -32,8 +32,11 @@ enum Error {
     #[error("postgres connection error")]
     DatabaseConnection(#[from] persistence::connection::Error),
 
-    #[error("database migration error")]
-    Migrations(#[from] refinery::Error),
+    #[error("database pool error")]
+    DatabasePool(#[from] deadpool_postgres::PoolError),
+
+    #[error("database schema revision error")]
+    SchemaRevision(#[from] persistence::SchemaRevisionError),
 
     #[error("prometheus initialization error")]
     PrometheusInit(#[from] BuildError),
@@ -52,26 +55,27 @@ async fn run() -> Result<(), Error> {
     let config = match config::load_from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{:#}", anyhow::Error::from(error));
             std::process::exit(1);
         }
     };
 
     if let Err(error) = observability::init_tracing(&config.observability) {
-        eprintln!("{error}");
+        eprintln!("{:#}", anyhow::Error::from(error));
         std::process::exit(1);
     }
 
-    let mut client = persistence::conn(config.postgres.expose_secret()).await?;
-
-    debug!("running migrations");
-    persistence::migrate(&mut client).await?;
-    debug!("done running migrations");
+    let pool = persistence::conn_pool(
+        config.database.url.expose_secret(),
+        &config.database.tls,
+        PoolBounds::from_config(&config.database.pool, PoolRuntime::Worker),
+    )
+    .await?;
+    let client = pool.get().await?;
+    persistence::check_schema_revision(&client).await?;
     drop(client);
-
-    let pool = persistence::conn_pool(config.postgres.expose_secret(), POSTGRES_POOL_SIZE).await?;
-    let postgres = Arc::new(persistence::Postgres::new(pool));
-    let object_store = Arc::new(object_storage::from_config(&config.object_storage).await?);
+    let postgres = Arc::new(Postgres::new(pool));
+    let object_stores = DocumentObjectStores::from_config(&config.object_storage).await?;
     let scanner = Arc::new(ClamAvMalwareScanner::new(
         config.scanner.clamd_address,
         Duration::from_millis(config.scanner.connection_timeout_ms),
@@ -97,7 +101,8 @@ async fn run() -> Result<(), Error> {
 
     let app = create_worker_app(WorkerAppDependencies {
         postgres,
-        object_store,
+        quarantine_store: object_stores.quarantine,
+        evidence_store: object_stores.evidence,
         scanner,
         mail,
         workspace_invitation_authority,

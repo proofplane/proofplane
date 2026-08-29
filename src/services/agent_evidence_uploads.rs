@@ -305,11 +305,7 @@ impl AgentEvidenceUploadService {
     }
 
     async fn delete_staged(&self, object_key: &str, request_id: Uuid) {
-        if let Err(error) = self
-            .submissions
-            .delete_uploaded_document_object(object_key)
-            .await
-        {
+        if let Err(error) = self.submissions.delete_staged_object(object_key).await {
             crate::observability::record_cleanup_failure(
                 &error,
                 "agent_evidence_upload_cleanup",

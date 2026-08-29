@@ -7,7 +7,7 @@ use crate::{
     read_models::AuditorAccessGrantSummary,
 };
 
-use super::{ReadExecutor, TransactionalReadExecutor};
+use super::{param, ReadExecutor, TransactionalReadExecutor};
 
 pub(crate) struct AuditorAccessGrantReads<'a, E> {
     executor: &'a E,
@@ -27,7 +27,7 @@ impl<E: ReadExecutor> AuditorAccessGrantReads<'_, E> {
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<Vec<AuditorAccessGrantSummary>, Error> {
-        self.executor.query("SELECT id, auditor_email, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC", &[&Uuid::from(workspace_id)]).await?.into_iter().map(summary_from_row).collect()
+        self.executor.query("SELECT id, auditor_email, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC", &[param(&Uuid::from(workspace_id))]).await?.into_iter().map(summary_from_row).collect()
     }
 }
 
@@ -40,7 +40,7 @@ impl AuditorAccessGrantReads<'_, TransactionalReadExecutor<'_>> {
         let workspace_id = self.workspace_id.ok_or(Error::InvariantViolation(
             "auditor grant read requires workspace scope",
         ))?;
-        self.executor.query_opt("SELECT id, auditor_email, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL AND expires_at > $3 FOR KEY SHARE", &[&Uuid::from(id), &Uuid::from(workspace_id), &now]).await?.map(summary_from_row).transpose()
+        self.executor.query_opt("SELECT id, auditor_email, created_at, expires_at, period_start, period_end, revoked_at FROM auditor_access_grants WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL AND expires_at > $3 FOR KEY SHARE", &[param(&Uuid::from(id)), param(&Uuid::from(workspace_id)), param(&now)]).await?.map(summary_from_row).transpose()
     }
 }
 

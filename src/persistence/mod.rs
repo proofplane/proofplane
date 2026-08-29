@@ -14,6 +14,7 @@ pub mod constraints;
 pub mod error;
 mod migrate;
 mod outbox;
+mod params;
 mod reads;
 mod snapshot;
 #[cfg(test)]
@@ -29,11 +30,15 @@ pub use aggregates::{
     PolicyDocumentUploadGrantRepository, UserRepository, WorkspaceDocumentRepository,
     WorkspaceInvitationRepository, WorkspaceRepository,
 };
-pub use connection::{conn, conn_pool};
+pub use connection::{conn, conn_pool, PoolBounds, PoolRuntime};
 pub use constraints::ConflictKind;
 pub use error::{BatchMapRejection, BatchUnmapRejection, Error};
-pub use migrate::{migrate, migration_runner};
+pub use migrate::{
+    apply_migrations, check_schema_revision, migration_runner, set_migration_lock_timeout,
+    SchemaRevisionError, MIGRATION_LOCK_TIMEOUT,
+};
 pub use outbox::{NewOutboxMessage, OutboxMessage};
+pub(crate) use params::param;
 
 pub struct Postgres {
     pool: Pool,

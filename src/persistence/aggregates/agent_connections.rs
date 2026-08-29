@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
-use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::params::param;
 use super::{
     snapshot::{save_snapshot, snapshot_record},
     Error, Postgres, UnitOfWork,
@@ -41,15 +41,15 @@ impl AgentConnectionRepository<'_> {
                 postgres
                     .get()
                     .await?
-                    .query(GET_SQL, &[&Uuid::from(id)])
+                    .query_typed(GET_SQL, &[param(&Uuid::from(id))])
                     .await?
             }
             RepositoryConnection::Transaction(unit_of_work) => {
                 unit_of_work
                     .transaction
-                    .query(
+                    .query_typed(
                         &format!("{GET_SQL} {GET_FOR_UPDATE_SQL}"),
-                        &[&Uuid::from(id)],
+                        &[param(&Uuid::from(id))],
                     )
                     .await?
             }
@@ -74,9 +74,9 @@ impl AgentConnectionRepository<'_> {
         save_snapshot(&unit_of_work.transaction, record.as_snapshot()).await?;
         unit_of_work
             .transaction
-            .execute(
+            .execute_typed(
                 "DELETE FROM agent_connection_permissions WHERE agent_connection_id = $1",
-                &[&record.id],
+                &[param(&record.id)],
             )
             .await?;
         for permission in connection
@@ -84,7 +84,7 @@ impl AgentConnectionRepository<'_> {
             .iter()
             .map(|permission| AgentConnectionPermissionRecord::from_domain(record.id, *permission))
         {
-            unit_of_work.transaction.execute("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[&permission.agent_connection_id, &permission.permission]).await?;
+            unit_of_work.transaction.execute_typed("INSERT INTO agent_connection_permissions (agent_connection_id, permission) VALUES ($1, $2)", &[param(&permission.agent_connection_id), param(&permission.permission)]).await?;
         }
         let authorization = AgentAuthorizationTransactionRecord::from_domain(connection)?;
         save_snapshot(&unit_of_work.transaction, authorization.as_snapshot()).await
