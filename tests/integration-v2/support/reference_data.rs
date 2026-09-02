@@ -3,12 +3,12 @@ use uuid::Uuid;
 
 use super::scenario::types::{TestFramework, TestFrameworkRequirement};
 
-const SOC2_ID: &str = "30000000-0000-4000-8000-000000000000";
-const CC61_ID: &str = "30000000-0000-4000-8000-000000000001";
-const CC71_ID: &str = "30000000-0000-4000-8000-000000000002";
+const EXAMPLE_FRAMEWORK_ID: &str = "30000000-0000-4000-8000-000000000000";
+const REQ1_ID: &str = "30000000-0000-4000-8000-000000000001";
+const REQ3_ID: &str = "30000000-0000-4000-8000-000000000002";
 
 pub(super) async fn seed(postgres: &Postgres) -> Vec<TestFramework> {
-    let framework = soc2();
+    let framework = example_framework();
     let mut client = postgres
         .get()
         .await
@@ -32,7 +32,7 @@ VALUES ($1, $2, $3, $4)
             ],
         )
         .await
-        .expect("SOC 2 framework fixture inserts");
+        .expect("example framework fixture inserts");
 
     for requirement in &framework.requirements {
         transaction
@@ -50,7 +50,7 @@ VALUES ($1, $2, $3, $4, $5)
                 ],
             )
             .await
-            .expect("SOC 2 requirement fixture inserts");
+            .expect("example requirement fixture inserts");
     }
 
     transaction
@@ -61,28 +61,28 @@ VALUES ($1, $2, $3, $4, $5)
     vec![framework]
 }
 
-fn soc2() -> TestFramework {
-    let framework_id = fixture_id(SOC2_ID);
+fn example_framework() -> TestFramework {
+    let framework_id = fixture_id(EXAMPLE_FRAMEWORK_ID);
 
     TestFramework {
         id: framework_id,
-        code: "soc2".to_owned(),
-        name: "SOC 2".to_owned(),
-        description: "SOC 2 Trust Services Criteria.".to_owned(),
+        code: "example".to_owned(),
+        name: "Example Framework".to_owned(),
+        description: "Example framework for tests.".to_owned(),
         requirements: vec![
             TestFrameworkRequirement {
-                id: fixture_id(CC61_ID),
+                id: fixture_id(REQ1_ID),
                 framework_id,
-                code: "CC6.1".to_owned(),
+                code: "REQ-1".to_owned(),
                 title: "Logical access security".to_owned(),
-                description: "Seeded SOC 2 requirement.".to_owned(),
+                description: "Seeded example requirement.".to_owned(),
             },
             TestFrameworkRequirement {
-                id: fixture_id(CC71_ID),
+                id: fixture_id(REQ3_ID),
                 framework_id,
-                code: "CC7.1".to_owned(),
+                code: "REQ-3".to_owned(),
                 title: "System monitoring".to_owned(),
-                description: "Seeded SOC 2 requirement.".to_owned(),
+                description: "Seeded example requirement.".to_owned(),
             },
         ],
     }

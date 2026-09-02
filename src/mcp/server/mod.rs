@@ -64,7 +64,7 @@ use url::Url;
 // The lead should be 512 characters max. OpenAI specifically documents that ChatGPT pays special
 // attention to these first 512 characters, even though that behavior isn't part of the MCP spec.
 const SERVER_INSTRUCTION_LEAD: &str = concat!(
-    "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence with ",
+    "Proofplane manages compliance evidence. Core workflow: first, find evidence with ",
     "list_evidence and read its collection_instructions; second, call manage_evidence_submissions ",
     "with the evidence ID and the coverage window the proof covers to get a short-lived human ",
     "browser flow; third, a human uploads files there and each file becomes one submission for ",
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(
             SERVER_INSTRUCTION_LEAD,
             concat!(
-                "Proofplane manages SOC 2 and compliance evidence. Core workflow: first, find evidence with ",
+                "Proofplane manages compliance evidence. Core workflow: first, find evidence with ",
                 "list_evidence and read its collection_instructions; second, call manage_evidence_submissions ",
                 "with the evidence ID and the coverage window the proof covers to get a short-lived human ",
                 "browser flow; third, a human uploads files there and each file becomes one submission for ",
@@ -430,7 +430,6 @@ mod tests {
         );
 
         for expected in [
-            "SOC 2",
             "compliance evidence",
             "find evidence with list_evidence",
             "read its collection_instructions",

@@ -26,7 +26,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
             PERIOD_END,
         )
         .with_control(workspace_name, "PP-ESC-01", control_title)
-        .with_control_framework_requirement(workspace_name, "PP-ESC-01", "soc2", "CC6.1")
+        .with_control_framework_requirement(workspace_name, "PP-ESC-01", "example", "REQ-1")
         .with_evidence_control_mapping(
             workspace_name,
             evidence_title,
@@ -40,7 +40,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
     let control = workspace.control("PP-ESC-01");
     let evidence = workspace.evidence(evidence_title);
     let evidence_document = evidence.submission(evidence_filename);
-    let cc61 = scenario.framework("soc2").requirement("CC6.1");
+    let req1 = scenario.framework("example").requirement("REQ-1");
 
     let owner_token = authorize_agent_connection(
         &app,
@@ -159,7 +159,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
     let escaped_evidence_description = escape_html(&format!("Collect {evidence_title}."));
     let control_path = format!(
         "/auditor-access/portal/framework-requirements/{}/controls/{}",
-        cc61.id, control.id
+        req1.id, control.id
     );
 
     let catalog = app
@@ -228,7 +228,7 @@ async fn browser_bodies_escape_client_fields_and_pin_validated_portable_filename
         control_body(
             workspace_name,
             auditor_email,
-            Some((cc61.id, "CC6.1")),
+            Some((req1.id, "REQ-1")),
             control.id,
             "PP-ESC-01",
             &escaped_control_title,

@@ -25,7 +25,7 @@ async fn framework_tools_return_the_complete_seeded_catalog_and_conceal_unavaila
         .with_workspace(subject, "MCP Framework Catalog")
         .build()
         .await;
-    let soc2 = scenario.framework("soc2");
+    let framework = scenario.framework("example");
 
     let reader_token = authorize_agent_connection(
         &app,
@@ -46,21 +46,21 @@ async fn framework_tools_return_the_complete_seeded_catalog_and_conceal_unavaila
     let frameworks = reader.call_tool("list_frameworks", json!({})).await;
     assert_eq!(
         frameworks,
-        json!({ "frameworks": [framework_read_model(soc2)] })
+        json!({ "frameworks": [framework_read_model(framework)] })
     );
 
     let requirements = reader
         .call_tool(
             "list_framework_requirements",
-            json!({ "framework_id": soc2.id }),
+            json!({ "framework_id": framework.id }),
         )
         .await;
     assert_eq!(
         requirements,
         json!({
             "requirements": [
-                requirement_read_model(soc2.requirement("CC6.1")),
-                requirement_read_model(soc2.requirement("CC7.1")),
+                requirement_read_model(framework.requirement("REQ-1")),
+                requirement_read_model(framework.requirement("REQ-3")),
             ]
         })
     );
@@ -79,7 +79,7 @@ async fn framework_tools_return_the_complete_seeded_catalog_and_conceal_unavaila
     let denied_requirements = limited
         .call_tool_error(
             "list_framework_requirements",
-            json!({ "framework_id": soc2.id }),
+            json!({ "framework_id": framework.id }),
         )
         .await;
     assert_not_found(&denied_requirements);
@@ -97,9 +97,9 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
         .await;
     let user_id = scenario.user(subject).id;
     let workspace_id = scenario.workspace("MCP Control Lifecycle").id;
-    let soc2 = scenario.framework("soc2");
-    let cc61 = soc2.requirement("CC6.1");
-    let cc71 = soc2.requirement("CC7.1");
+    let framework = scenario.framework("example");
+    let req1 = framework.requirement("REQ-1");
+    let req3 = framework.requirement("REQ-3");
 
     let token = authorize_agent_connection(
         &app,
@@ -124,7 +124,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
                         "code": "PP-CC-01",
                         "title": "Identity and monitoring review",
                         "description": "Review logical access and monitoring safeguards.",
-                        "framework_requirement_ids": [cc71.id, cc61.id],
+                        "framework_requirement_ids": [req3.id, req1.id],
                     }),
                 )
                 .await
@@ -139,7 +139,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
         "PP-CC-01",
         "Identity and monitoring review",
         "Review logical access and monitoring safeguards.",
-        &[cc61, cc71],
+        &[req1, req3],
     );
     assert_eq!(created["updated_at"], created["created_at"]);
     assert_eq!(create_logs.len(), 1);
@@ -173,7 +173,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
                         "code": "PP-CC-02",
                         "title": "Monitoring review",
                         "description": "Review monitoring safeguards.",
-                        "framework_requirement_ids": [cc71.id],
+                        "framework_requirement_ids": [req3.id],
                     }),
                 )
                 .await
@@ -186,7 +186,7 @@ async fn control_create_list_get_and_replace_round_trip_complete_requirement_lin
         "PP-CC-02",
         "Monitoring review",
         "Review monitoring safeguards.",
-        &[cc71],
+        &[req3],
     );
     assert_eq!(replaced["created_at"], created_at);
     assert_rfc3339(&replaced["updated_at"]);
@@ -216,9 +216,9 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
         .build()
         .await;
     let workspace_id = scenario.workspace("MCP Control Rejections").id;
-    let soc2 = scenario.framework("soc2");
-    let cc61 = soc2.requirement("CC6.1");
-    let cc71 = soc2.requirement("CC7.1");
+    let framework = scenario.framework("example");
+    let req1 = framework.requirement("REQ-1");
+    let req3 = framework.requirement("REQ-3");
 
     let manager_token = authorize_agent_connection(
         &app,
@@ -246,7 +246,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                 "code": "PP-BASELINE",
                 "title": "Baseline control",
                 "description": "The unchanged baseline control.",
-                "framework_requirement_ids": [cc61.id, cc71.id],
+                "framework_requirement_ids": [req1.id, req3.id],
             }),
         )
         .await;
@@ -259,7 +259,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
         "PP-BASELINE",
         "Baseline control",
         "The unchanged baseline control.",
-        &[cc61, cc71],
+        &[req1, req3],
     );
     let unknown_requirement_id = Uuid::new_v4();
     let unknown_get_id = Uuid::new_v4();
@@ -293,7 +293,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                         "code": "PP-BASELINE",
                         "title": "Duplicate code",
                         "description": "This code is already used.",
-                        "framework_requirement_ids": [cc61.id],
+                        "framework_requirement_ids": [req1.id],
                     }),
                 )
                 .await;
@@ -305,7 +305,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                         "code": "PP-DUPLICATE-REQUIREMENTS",
                         "title": "Duplicate requirements",
                         "description": "This request repeats one requirement.",
-                        "framework_requirement_ids": [cc71.id, cc71.id],
+                        "framework_requirement_ids": [req3.id, req3.id],
                     }),
                 )
                 .await;
@@ -332,7 +332,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                         "code": "PP-UNKNOWN-CONTROL",
                         "title": "Unknown control",
                         "description": "This control does not exist.",
-                        "framework_requirement_ids": [cc61.id],
+                        "framework_requirement_ids": [req1.id],
                     }),
                 )
                 .await;
@@ -343,7 +343,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                         "code": "PP-DENIED",
                         "title": "Denied control",
                         "description": "The reader cannot create controls.",
-                        "framework_requirement_ids": [cc61.id],
+                        "framework_requirement_ids": [req1.id],
                     }),
                 )
                 .await;
@@ -355,7 +355,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
                         "code": "PP-DENIED",
                         "title": "Denied replacement",
                         "description": "The reader cannot replace controls.",
-                        "framework_requirement_ids": [cc71.id],
+                        "framework_requirement_ids": [req3.id],
                     }),
                 )
                 .await;
@@ -379,7 +379,7 @@ async fn control_rejections_are_exact_unaudited_and_leave_the_complete_listing_u
         &duplicate_requirements,
         json!([{
             "field": "framework_requirement_ids",
-            "message": format!("must not contain duplicate ids: {}", cc71.id),
+            "message": format!("must not contain duplicate ids: {}", req3.id),
         }]),
     );
     assert_validation_error(

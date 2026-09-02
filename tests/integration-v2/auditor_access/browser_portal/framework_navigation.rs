@@ -3,11 +3,11 @@ use super::{assertions::*, *};
 const EVIDENCE_UPLOAD_PATH: &str = "/evidence-document-uploads/files";
 
 #[tokio::test]
-async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_actions() {
+async fn framework_pages_render_ordered_counts_coverage_breadcrumbs_and_document_actions() {
     let app = harness::app().await;
-    let subject = "auth0|auditor-browser-soc2";
-    let workspace_name = "Auditor Browser SOC 2";
-    let auditor_email = "auditor-browser-soc2@example.com";
+    let subject = "auth0|auditor-browser-framework";
+    let workspace_name = "Auditor Browser Framework";
+    let auditor_email = "auditor-browser-framework@example.com";
 
     let scenario = ScenarioBuilder::new(&app)
         .with_user(subject)
@@ -23,11 +23,11 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         )
         .with_evidence(workspace_name, "Monitoring evidence")
         .with_control(workspace_name, "PP-BR-01", "Access reviews")
-        .with_control_framework_requirement(workspace_name, "PP-BR-01", "soc2", "CC6.1")
+        .with_control_framework_requirement(workspace_name, "PP-BR-01", "example", "REQ-1")
         .with_control(workspace_name, "PP-BR-02", "Access approvals")
-        .with_control_framework_requirement(workspace_name, "PP-BR-02", "soc2", "CC6.1")
+        .with_control_framework_requirement(workspace_name, "PP-BR-02", "example", "REQ-1")
         .with_control(workspace_name, "PP-BR-03", "Security monitoring")
-        .with_control_framework_requirement(workspace_name, "PP-BR-03", "soc2", "CC7.1")
+        .with_control_framework_requirement(workspace_name, "PP-BR-03", "example", "REQ-3")
         .with_evidence_control_mapping(
             workspace_name,
             "Access review evidence",
@@ -49,14 +49,14 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
     let access_control = workspace.control("PP-BR-01");
     let approval_control = workspace.control("PP-BR-02");
     let monitoring_control = workspace.control("PP-BR-03");
-    let soc2 = scenario.framework("soc2");
-    let cc61 = soc2.requirement("CC6.1");
-    let cc71 = soc2.requirement("CC7.1");
+    let framework = scenario.framework("example");
+    let req1 = framework.requirement("REQ-1");
+    let req3 = framework.requirement("REQ-3");
 
     let owner_token = authorize_agent_connection(
         &app,
         subject,
-        "Auditor Browser SOC 2 Owner",
+        "Auditor Browser Framework Owner",
         &WorkspacePermission::ALL,
     )
     .await;
@@ -124,7 +124,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
     let access_token = authorize_agent_connection(
         &app,
         subject,
-        "Auditor Browser SOC 2 Access",
+        "Auditor Browser Framework Access",
         &[WorkspacePermission::ManageAuditorAccess],
     )
     .await;
@@ -151,7 +151,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         &app,
         workspace_id,
         &invite_token,
-        "auth0|auditor-browser-soc2-identity",
+        "auth0|auditor-browser-framework-identity",
         auditor_email,
     )
     .await;
@@ -163,8 +163,8 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         .await;
     portal.assert_status_ok();
     let portal_rows = [
-        requirement_row(cc61, 2, 1, 2, "available", "Evidence on file"),
-        requirement_row(cc71, 1, 1, 0, "gap", "Awaiting submission"),
+        requirement_row(req1, 2, 1, 2, "available", "Evidence on file"),
+        requirement_row(req3, 1, 1, 0, "gap", "Awaiting submission"),
     ]
     .join("");
     assert_eq!(
@@ -172,18 +172,18 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         portal_body(workspace_name, auditor_email, 2, 3, &portal_rows)
     );
 
-    let cc61_response = app
+    let req1_response = app
         .app_server()
         .get(&format!(
             "/auditor-access/portal/framework-requirements/{}",
-            cc61.id
+            req1.id
         ))
         .add_header("cookie", auditor_cookie.clone())
         .await;
-    cc61_response.assert_status_ok();
-    let cc61_rows = [
+    req1_response.assert_status_ok();
+    let req1_rows = [
         control_row(
-            cc61.id,
+            req1.id,
             access_control.id,
             "PP-BR-01",
             "Access reviews",
@@ -193,7 +193,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
             "Evidence on file",
         ),
         control_row(
-            cc61.id,
+            req1.id,
             approval_control.id,
             "PP-BR-02",
             "Access approvals",
@@ -205,21 +205,21 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
     ]
     .join("");
     assert_eq!(
-        body_read_model(&cc61_response.text()),
-        requirement_body(workspace_name, auditor_email, cc61, 2, &cc61_rows)
+        body_read_model(&req1_response.text()),
+        requirement_body(workspace_name, auditor_email, req1, 2, &req1_rows)
     );
 
-    let cc71_response = app
+    let req3_response = app
         .app_server()
         .get(&format!(
             "/auditor-access/portal/framework-requirements/{}",
-            cc71.id
+            req3.id
         ))
         .add_header("cookie", auditor_cookie.clone())
         .await;
-    cc71_response.assert_status_ok();
-    let cc71_rows = control_row(
-        cc71.id,
+    req3_response.assert_status_ok();
+    let req3_rows = control_row(
+        req3.id,
         monitoring_control.id,
         "PP-BR-03",
         "Security monitoring",
@@ -229,15 +229,15 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         "Awaiting submission",
     );
     assert_eq!(
-        body_read_model(&cc71_response.text()),
-        requirement_body(workspace_name, auditor_email, cc71, 1, &cc71_rows)
+        body_read_model(&req3_response.text()),
+        requirement_body(workspace_name, auditor_email, req3, 1, &req3_rows)
     );
 
     let control_response = app
         .app_server()
         .get(&format!(
             "/auditor-access/portal/framework-requirements/{}/controls/{}",
-            cc61.id, access_control.id
+            req1.id, access_control.id
         ))
         .add_header("cookie", auditor_cookie)
         .await;
@@ -258,7 +258,7 @@ async fn soc2_pages_render_ordered_counts_coverage_breadcrumbs_and_document_acti
         control_body(
             workspace_name,
             auditor_email,
-            Some((cc61.id, "CC6.1")),
+            Some((req1.id, "REQ-1")),
             access_control.id,
             "PP-BR-01",
             "Access reviews",

@@ -1049,7 +1049,7 @@ mod tests {
                     archivable: true,
                 }],
                 controls: vec![UploadSessionControlResponse {
-                    code: "CC6.1".to_owned(),
+                    code: "PP-AC-01".to_owned(),
                     title: "Logical access controls".to_owned(),
                 }],
             },
@@ -1058,7 +1058,7 @@ mod tests {
 
         for expected in [
             "PROVIDING EVIDENCE FOR",
-            "CC6.1",
+            "PP-AC-01",
             "Logical access controls",
             "Upload evidence",
             "Coverage window",

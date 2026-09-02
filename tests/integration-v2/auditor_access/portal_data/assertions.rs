@@ -37,10 +37,10 @@ pub(super) fn assert_framework_catalog(body: &Value, scenario: &Scenario) {
     let requirements = body["framework_requirements"]
         .as_array()
         .expect("framework requirements is an array");
-    let soc2 = scenario.framework("soc2");
+    let framework = scenario.framework("example");
     assert_eq!(requirements.len(), 2);
-    assert_requirement_read_model(&requirements[0], soc2.requirement("CC6.1"), soc2);
-    assert_requirement_read_model(&requirements[1], soc2.requirement("CC7.1"), soc2);
+    assert_requirement_read_model(&requirements[0], framework.requirement("REQ-1"), framework);
+    assert_requirement_read_model(&requirements[1], framework.requirement("REQ-3"), framework);
 }
 
 #[track_caller]

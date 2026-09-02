@@ -13,7 +13,7 @@ async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requir
         .build()
         .await;
     let workspace_id = scenario.workspace(workspace_name).id;
-    let soc2 = scenario.framework("soc2");
+    let framework = scenario.framework("example");
 
     let token = authorize_agent_connection(
         &app,
@@ -62,7 +62,7 @@ async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requir
     portal.assert_status_ok();
     let rows = [
         requirement_row(
-            soc2.requirement("CC6.1"),
+            framework.requirement("REQ-1"),
             0,
             0,
             0,
@@ -70,7 +70,7 @@ async fn initial_invite_enters_hosted_login_and_empty_portal_lists_seeded_requir
             "No controls mapped",
         ),
         requirement_row(
-            soc2.requirement("CC7.1"),
+            framework.requirement("REQ-3"),
             0,
             0,
             0,

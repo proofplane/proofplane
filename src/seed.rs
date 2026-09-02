@@ -311,16 +311,16 @@ async fn seed_frameworks_and_controls(repository: &Postgres) -> Result<(), Error
         .execute_typed(
             r#"
 INSERT INTO frameworks (id, code, name, description)
-VALUES ($1, 'soc2', 'SOC 2', 'AICPA Trust Services Criteria for service organizations.')
+VALUES ($1, 'example', 'Example Framework', 'Example framework for local development and tests.')
 ON CONFLICT (code) DO UPDATE
 SET name = EXCLUDED.name,
     description = EXCLUDED.description
 "#,
-            &[param(&soc2_framework_id())],
+            &[param(&example_framework_id())],
         )
         .await?;
 
-    for requirement in demo_soc2_requirements() {
+    for requirement in demo_framework_requirements() {
         transaction
             .execute_typed(
                 r#"
@@ -332,7 +332,7 @@ SET title = EXCLUDED.title,
 "#,
                 &[
                     param(&requirement.id),
-                    param(&soc2_framework_id()),
+                    param(&example_framework_id()),
                     param(&requirement.code),
                     param(&requirement.title),
                     param(&requirement.description),
@@ -678,35 +678,34 @@ fn demo_evidence() -> Result<Vec<SeedEvidence>, Error> {
     ])
 }
 
-fn demo_soc2_requirements() -> Vec<SeedFrameworkRequirement> {
+fn demo_framework_requirements() -> Vec<SeedFrameworkRequirement> {
     vec![
         SeedFrameworkRequirement {
-            id: soc2_requirement_id("CC6.1"),
-            code: "CC6.1",
+            id: framework_requirement_id("REQ-1"),
+            code: "REQ-1",
             title: "Logical access security",
             description:
-                "Logical access security software, infrastructure, and architectures protect information assets.",
+                "The organization limits access to its systems and data to approved people.",
         },
         SeedFrameworkRequirement {
-            id: soc2_requirement_id("CC6.2"),
-            code: "CC6.2",
+            id: framework_requirement_id("REQ-2"),
+            code: "REQ-2",
             title: "Access credentials",
-            description:
-                "New internal and external users are registered and authorized before credentials are issued.",
+            description: "The organization approves each new account before it issues credentials.",
         },
         SeedFrameworkRequirement {
-            id: soc2_requirement_id("CC7.1"),
-            code: "CC7.1",
+            id: framework_requirement_id("REQ-3"),
+            code: "REQ-3",
             title: "System monitoring",
             description:
-                "Detection and monitoring procedures identify changes that could impair system objectives.",
+                "The organization monitors its systems and reviews the alerts that it receives.",
         },
         SeedFrameworkRequirement {
-            id: soc2_requirement_id("CC7.4"),
-            code: "CC7.4",
+            id: framework_requirement_id("REQ-4"),
+            code: "REQ-4",
             title: "Incident response",
             description:
-                "Security incidents are responded to, mitigated, and resolved according to response procedures.",
+                "The organization contains, investigates, and closes each security incident.",
         },
     ]
 }
@@ -720,8 +719,8 @@ fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
             description:
                 "Review production system access quarterly and retain reviewer sign-off.",
             requirement_ids: vec![
-                soc2_requirement_id("CC6.1"),
-                soc2_requirement_id("CC6.2"),
+                framework_requirement_id("REQ-1"),
+                framework_requirement_id("REQ-2"),
             ],
         },
         SeedControl {
@@ -730,7 +729,7 @@ fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
             title: "Monthly vulnerability scanning",
             description:
                 "Run vulnerability scans for production assets and track remediation of critical findings.",
-            requirement_ids: vec![soc2_requirement_id("CC7.1")],
+            requirement_ids: vec![framework_requirement_id("REQ-3")],
         },
         SeedControl {
             id: control_id(workspace_id, "PP-IR-01"),
@@ -738,7 +737,7 @@ fn demo_controls(workspace_id: WorkspaceId) -> Vec<SeedControl> {
             title: "Incident response tabletop",
             description:
                 "Exercise the incident response plan annually and track remediation actions.",
-            requirement_ids: vec![soc2_requirement_id("CC7.4")],
+            requirement_ids: vec![framework_requirement_id("REQ-4")],
         },
     ]
 }
@@ -770,12 +769,12 @@ fn demo_policies(workspace_id: WorkspaceId) -> Vec<SeedPolicy> {
     ]
 }
 
-fn soc2_framework_id() -> Uuid {
-    seed_uuid("framework:soc2")
+fn example_framework_id() -> Uuid {
+    seed_uuid("framework:example")
 }
 
-fn soc2_requirement_id(code: &str) -> Uuid {
-    seed_uuid(&format!("soc2:{code}"))
+fn framework_requirement_id(code: &str) -> Uuid {
+    seed_uuid(&format!("example:{code}"))
 }
 
 fn control_id(workspace_id: WorkspaceId, code: &str) -> Uuid {

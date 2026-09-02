@@ -41,7 +41,7 @@ async fn initialize_advertises_server_identity_and_capabilities() {
         result["instructions"]
             .as_str()
             .expect("instructions are a string")
-            .starts_with("Proofplane manages SOC 2 and compliance evidence."),
+            .starts_with("Proofplane manages compliance evidence."),
         "initialization returns the real server instructions"
     );
     assert_eq!(result["capabilities"]["tools"], json!({}));

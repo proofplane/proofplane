@@ -1,6 +1,6 @@
 # Proofplane Glossary
 
-- **Framework**: a global compliance standard, such as SOC 2, that groups requirements.
+- **Framework**: a global compliance standard that groups requirements.
 - **Requirement**: a framework statement with a stable ID. Use that ID when linking the requirement to a control.
 - **Control**: the organization-specific safeguard that defines what must be proven.
 - **Control mapping**: a link from a control to a piece of evidence. Its rationale explains why that proof supports the control.

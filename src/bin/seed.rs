@@ -13,7 +13,7 @@ async fn main() {
 
     println!("Proofplane {VERSION} local seed complete");
     println!(
-        "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence, SOC 2 controls, demo policies, and demo evidence submission"
+        "Seeded fresh local workspaces, owner membership, local agent connection permissions, demo evidence, demo controls, demo policies, and demo evidence submission"
     );
     match summary.demo_document {
         seed::DemoDocumentSeedStatus::Seeded => {

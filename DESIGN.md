@@ -1,6 +1,6 @@
 ---
 name: Proofplane
-description: SOC 2 compliance infrastructure for AI-native startups.
+description: Compliance evidence infrastructure for AI-native startups.
 colors:
   ink: "#edf3ec"
   ink-muted: "#aeb9b3"

@@ -265,7 +265,7 @@
       "kind": "custom",
       "refersTo": "landing-scroll-section",
       "description": "Full-height landing section with short copy and a sticky product artifact.",
-      "html": "<section class=\"ds-landing-section\"><div><p>STEP 01</p><h2>Create the workspace.</h2><span>Turn SOC 2 setup into the first visible action.</span></div><aside>Workspace artifact</aside></section>",
+      "html": "<section class=\"ds-landing-section\"><div><p>STEP 01</p><h2>Create the workspace.</h2><span>Turn compliance setup into the first visible action.</span></div><aside>Workspace artifact</aside></section>",
       "css": ".ds-landing-section { min-height: 100svh; display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1fr); gap: 64px; align-items: center; background: #101715; color: #edf3ec; } .ds-landing-section p { color: #7bd0bb; font: 620 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-landing-section h2 { margin: 0 0 16px; max-width: 12ch; font: 650 clamp(2.5rem, 6vw, 5rem)/0.98 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; } .ds-landing-section span { color: #aeb9b3; font: 400 18px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; } .ds-landing-section aside { position: sticky; top: 104px; padding: 32px; border: 1px solid #3b4842; border-radius: 8px; background: #19211f; color: #edf3ec; }"
     }
   ],

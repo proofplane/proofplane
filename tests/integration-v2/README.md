@@ -18,7 +18,7 @@ of its own, `proofplane_integration_v2`, on every run.
 
 The suite owns one application topology for the lifetime of the test binary. A
 dedicated OS thread runs a long-lived multi-thread Tokio runtime containing one
-Postgres pool, one transactionally seeded SOC 2 reference catalog, one
+Postgres pool, one transactionally seeded example reference catalog, one
 filesystem object store, a fake clamd server,
 one worker, one observable push proxy, one deltio Pub/Sub project, one dequeuer,
 one controlled auditor identity-provider boundary, and one API and MCP server.
@@ -47,10 +47,11 @@ That means:
   from walking the OAuth flow, not from inserting an `agent_connections` row.
 
 The fixed reference catalog is suite topology, not test arrangement. After migrations,
-the harness inserts exactly the v1 SOC 2, CC6.1, and CC7.1 definitions before the servers
-start. Test bodies never invoke the seeder or see its raw IDs; every completed `Scenario`
-exposes the same read models through `scenario.framework("soc2")` and chained requirement
-lookup. This does not relax the prohibition on per-test database setup.
+the harness inserts exactly the v1 Example Framework, REQ-1, and REQ-3 definitions before
+the servers start. The catalog holds two of the framework's four requirements, so the gap
+between REQ-1 and REQ-3 is deliberate. Test bodies never invoke the seeder or see its raw
+IDs; every completed `Scenario` exposes the same read models through
+`scenario.framework("example")` and chained requirement lookup. This does not relax the prohibition on per-test database setup.
 
 When behavior genuinely isn't reachable this way, cover it at the appropriate
 lower-level test boundary and say so. Reaching for the database to close a gap
@@ -151,8 +152,8 @@ Every completed scenario also carries the suite's immutable framework metadata. 
 it without involving the builder or database:
 
 ```rust
-let soc2 = scenario.framework("soc2");
-let cc61_id = soc2.requirement("CC6.1").id;
+let framework = scenario.framework("example");
+let req1_id = framework.requirement("REQ-1").id;
 ```
 
 `TestFramework` and `TestFrameworkRequirement` expose their IDs and complete read-model
@@ -266,7 +267,7 @@ only repeated protocol mechanics and complete assertion helpers are shared.
 | `worker` | Real worker server plus the `0.0.0.0` push proxy, post-response pipeline event stream, request-ID-reserved holds, and one-shot redelivery injection. |
 | `oauth` | Walks the real authorize → consent → token flow and returns an access token. |
 | `mcp` | `McpClient` — a real `rmcp` client over the streamable HTTP transport. |
-| `reference_data` | One support-only transaction that inserts only SOC 2, CC6.1, and CC7.1 before server startup; raw IDs stay private. |
+| `reference_data` | One support-only transaction that inserts only the Example Framework, REQ-1, and REQ-3 before server startup; raw IDs stay private. |
 | `scenario` | `ScenarioBuilder` for users, workspaces, and OAuth/MCP/browser/worker-backed prerequisite evidence, controls, control-requirement links resolved through the seeded catalog, minimal policies, clean terminal documents, evidence-control mappings, and policy-control mappings; every result also carries typed chained lookups and the fixed reference-catalog read models. |
 | `audit_log` | The tracing sink behind `capture_audit_logs`. |
 

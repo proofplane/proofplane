@@ -54,7 +54,7 @@ pub(super) fn portal_body(
 <dl class="page-stats"><div><dt>Requirements</dt><dd>{requirement_count}</dd></div><div><dt>Controls</dt><dd>{control_count}</dd></div></dl>
 </header>
 
-<section class="framework-section" id="framework-soc2" aria-labelledby="framework-title-soc2"><div class="section-heading"><p class="eyebrow">Framework</p><h2 id="framework-title-soc2">SOC 2</h2><p>soc2</p></div><table class="ledger"><thead><tr><th>Requirement</th><th class="numeric">Mapped controls</th><th class="numeric">Evidence</th><th class="numeric">Evidence submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{rows}</tbody></table></section>
+<section class="framework-section" id="framework-example" aria-labelledby="framework-title-example"><div class="section-heading"><p class="eyebrow">Framework</p><h2 id="framework-title-example">Example Framework</h2><p>example</p></div><table class="ledger"><thead><tr><th>Requirement</th><th class="numeric">Mapped controls</th><th class="numeric">Evidence</th><th class="numeric">Evidence submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{rows}</tbody></table></section>
 </main>"#,
         portal_bar(workspace_name, auditor_email, false),
     )
@@ -83,10 +83,10 @@ pub(super) fn requirement_body(
 ) -> String {
     format!(
         r#"{}<main class="portal" id="main-content">
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><span>SOC 2</span><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/auditor-access/portal">Framework requirements</a><span aria-hidden="true">›</span><span>Example Framework</span><span aria-hidden="true">›</span><span aria-current="page">{}</span></nav>
 <header class="detail-header"><p class="eyebrow">Framework requirement</p><h1><span class="detail-code">{}</span>{}</h1><p class="lede">{}</p></header>
 <div class="requirement-layout">
-<aside class="context-panel" aria-labelledby="context-title"><h2 id="context-title">Requirement context</h2><dl><div><dt>Framework</dt><dd>SOC 2</dd></div><div><dt>Framework code</dt><dd>soc2</dd></div><div><dt>Requirement</dt><dd>{}</dd></div></dl></aside>
+<aside class="context-panel" aria-labelledby="context-title"><h2 id="context-title">Requirement context</h2><dl><div><dt>Framework</dt><dd>Example Framework</dd></div><div><dt>Framework code</dt><dd>example</dd></div><div><dt>Requirement</dt><dd>{}</dd></div></dl></aside>
 <section class="detail-ledger" aria-labelledby="controls-title"><div class="section-heading"><p class="eyebrow">Mapped controls</p><h2 id="controls-title">Controls ({control_count})</h2></div><table class="ledger control-ledger"><thead><tr><th>Control</th><th class="numeric">Evidence</th><th class="numeric">Submissions</th><th>Coverage</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>{rows}</tbody></table></section>
 </div></main>"#,
         portal_bar(workspace_name, auditor_email, false),

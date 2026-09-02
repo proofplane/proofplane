@@ -1,8 +1,8 @@
 mod assertions;
 mod escaping;
+mod framework_navigation;
 mod initial_invite;
 mod policy_pages;
-mod soc2_navigation;
 mod unavailable_states;
 
 use chrono::{DateTime, FixedOffset};

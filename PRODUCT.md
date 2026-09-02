@@ -8,7 +8,7 @@ product
 
 Proofplane is for founders, CTOs, engineering leaders, and operations leads at
 5-50 person B2B SaaS and AI startups. They are usually responding to a customer
-security request, starting SOC 2 readiness, or trying to turn scattered
+security request, preparing for an audit, or trying to turn scattered
 compliance work into something reviewable without buying a heavy enterprise GRC
 suite.
 
@@ -22,7 +22,7 @@ packets rather than living inside Proofplane.
 
 ## Product Purpose
 
-Proofplane is SOC 2 compliance infrastructure for AI-native startups. It gives
+Proofplane is compliance evidence infrastructure for AI-native startups. It gives
 startups a self-serve workspace where humans manage the account and scoped
 programmatic actors do data-plane work through APIs and MCP.
 
@@ -30,7 +30,7 @@ The product exists to make compliance data structured, permissioned, and
 auditable enough for customer-owned agents to inspect evidence, create
 submissions, map controls, and prepare auditor-ready packets. Success means a
 founder can create a workspace, issue a scoped token, connect an agent, and see a
-real SOC 2 evidence workflow take shape within minutes.
+real evidence workflow take shape within minutes.
 
 The first-run experience should produce a real artifact: a starter workspace,
 starter controls, a scoped API token, MCP setup guidance, suggested prompts, and
@@ -56,7 +56,7 @@ compliance tasks feel simpler by showing a sequence of reduced actions:
 - prepare an auditor packet.
 
 The visitor should not feel like they are reading a compliance brochure. They
-should feel the product turning a vague SOC 2 burden into visible steps.
+should feel the product turning a vague compliance burden into visible steps.
 
 ## Brand Personality
 
@@ -67,8 +67,8 @@ system clearly: direct, specific, low drama, and allergic to procurement theater
 It should create confidence without sounding like an enterprise compliance
 platform or a generic AI wrapper.
 
-The emotional target is controlled momentum. Users should feel that SOC 2 is
-serious, but that the system has made the next step legible.
+The emotional target is controlled momentum. Users should feel that compliance
+is serious, but that the system has made the next step legible.
 
 ## Anti-references
 
