@@ -4,7 +4,7 @@ set -euo pipefail
 # Creates the topics and the worker push subscription in the local Pub/Sub
 # emulator. `make up` runs this because the emulator keeps no state between
 # runs, and because no runtime process provisions anything any more: Terraform
-# owns the production resources. See docs/epics/production-runtime-adapters.
+# owns the production resources.
 
 pubsub_host="${PUBSUB_EMULATOR_HOST:-127.0.0.1:8086}"
 host="${pubsub_host%:*}"

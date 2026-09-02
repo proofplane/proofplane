@@ -115,8 +115,7 @@ mcp:
 	RUST_LOG='info,proofplane=debug' PROOFPLANE_CONFIG=$(PROOFPLANE_CONFIG) cargo run --bin mcp
 
 # Release image targets. These build and publish from a workstation because
-# there is no CI and Terraform builds nothing. See
-# docs/runbooks/production-deployment.md.
+# there is no CI and Terraform builds nothing.
 image:
 	@mkdir -p $(dir $(IMAGE_REF_FILE))
 	@bash scripts/build-image.sh > $(IMAGE_REF_FILE).tmp

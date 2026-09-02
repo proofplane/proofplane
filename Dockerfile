@@ -8,7 +8,7 @@
 # One image carries every production command. Each Cloud Run resource in
 # infra/gcp/production/run.tf overrides the command instead of selecting a
 # process-specific image, so the binary paths below are a deployment contract
-# rather than a convention. See docs/epics/production-deployment/spec.md.
+# rather than a convention.
 
 # Cloud Run runs linux/amd64. An operator builds a release on a workstation that
 # is usually arm64. The platform stays in the file rather than in a --platform

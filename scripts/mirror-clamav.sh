@@ -10,7 +10,8 @@ set -euo pipefail
 # neither is stock upstream: the worker sidecar has to
 # copy the last-good definition snapshot out of GCS and run with freshclam
 # disabled, and the update job needs an image of its own. Both derived images
-# belong to #121. This script provides the pinned base they start from.
+# are built outside this script. This script provides the pinned base they
+# start from.
 
 # Matches the clamav service in docker-compose.yml. The digest is the
 # multi-platform index, resolved from Docker Hub. The tag travels with it only

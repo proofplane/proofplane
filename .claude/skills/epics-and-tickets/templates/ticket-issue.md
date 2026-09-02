@@ -27,9 +27,10 @@ perspective — not a layer-by-layer implementation list. Optionally: _As a
 
 ## Notes
 
-- Key decision or gotcha, pointing at the spec for detail. Don't restate the spec.
+- Key decision or gotcha, pointing at the epic issue for detail. Don't restate it.
 - (Only if a reader might assume otherwise) "X is deferred to #NN".
 
 ## Spec
 
-[<Section>](https://github.com/proofplane/proofplane/blob/main/docs/epics/<epic-slug>/spec.md#section)
+#NN — the `<Section>` section of the epic issue. Link a comment permalink instead
+when the decision lives in a revision comment.

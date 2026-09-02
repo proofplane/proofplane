@@ -20,7 +20,7 @@ A triage label is at most one per issue. Epic issues are containers and normally
 carry no triage label; triage applies to the ticket issues beneath them.
 
 ```bash
-gh issue edit 98 --add-label ready-for-agent --remove-label needs-triage
+gh issue edit <number> --add-label ready-for-agent --remove-label needs-triage
 ```
 
 ## The `doing` label

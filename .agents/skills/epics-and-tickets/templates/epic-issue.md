@@ -1,11 +1,23 @@
-One paragraph describing what this project delivers and the core principle that
-shapes it.
+One paragraph: what this project delivers and any core principle that shapes it.
 
 ## Spec
 
-Full rationale, schema, and decisions live in [`docs/epics/<epic-slug>/spec.md`](https://github.com/proofplane/proofplane/blob/main/docs/epics/<epic-slug>/spec.md), the source of technical depth.
+The rationale, schema, and decisions for this epic. This section is the source
+of technical depth — tickets link here instead of repeating it. Use `###`
+headings so a ticket can link to one part.
 
-Key sections: [<Section>](https://github.com/proofplane/proofplane/blob/main/docs/epics/<epic-slug>/spec.md#section) · [<Section>](https://github.com/proofplane/proofplane/blob/main/docs/epics/<epic-slug>/spec.md#section)
+### <Decision or component>
+
+The depth: rationale, schema, type sketches, trade-offs.
+
+### <Decision or component>
+
+The depth: rationale, schema, type sketches, trade-offs.
+
+## UX
+
+(Only for epics with UI work. Delete this section otherwise.) How the interface
+looks and behaves.
 
 ## Tickets and sequencing
 
@@ -14,6 +26,11 @@ Key sections: [<Section>](https://github.com/proofplane/proofplane/blob/main/doc
 | #NN    | Todo   | One-line scope summary. |
 | #NN    | Todo   | One-line scope summary. |
 
-- **#NN** is foundational because ...
-- **#NN** depends on #NN because ...
-- Work that can proceed in parallel.
+- **#NN** is foundational because …
+- **#NN** depends on #NN because …
+- What can be developed in parallel.
+
+---
+
+Record a decision revision as a **comment on this issue**, then correct the Spec
+section above so the two agree.

@@ -5,7 +5,7 @@ set -euo pipefail
 # selects a binary by absolute path and supplies no arguments, so a renamed
 # binary, a missing runtime library, or a host-architecture build all produce an
 # image that only fails once it is deployed. These checks move that failure to
-# the workstation. See docs/epics/production-deployment/spec.md.
+# the workstation.
 
 image="${1:-}"
 

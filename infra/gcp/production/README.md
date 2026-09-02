@@ -1,7 +1,6 @@
 # Proofplane Production Infrastructure
 
-This directory implements the accepted first-production architecture in
-[`docs/epics/production-deployment/spec.md`](../../../docs/epics/production-deployment/spec.md).
+This directory implements the accepted first-production architecture.
 It does not create the GCP project, attach billing, manage Supabase, store secret
 payloads, build images, or change registrar nameservers.
 
@@ -55,8 +54,9 @@ uses the latter, Terraform uses the former, and having one does not give you the
 other. A plan that fails on "could not find default credentials" needs this
 command, not a `gcloud` login.
 
-Pushing images needs its own setup. See
-[Release Images](../../../docs/runbooks/production-deployment.md#release-images).
+Pushing images needs its own setup: `PROOFPLANE_PROJECT_ID` and a configured
+Docker credential helper. See the release image commands in
+[`AGENTS.md`](../../../AGENTS.md).
 
 ## Initialize
 
@@ -141,8 +141,8 @@ those scripts.
 
 ### 2. Images
 
-Build, smoke, and push from the repository root. See
-[Release Images](../../../docs/runbooks/production-deployment.md#release-images).
+Build, smoke, and push from the repository root with `make image`,
+`make image-smoke`, and `make image-push`.
 Record each immutable `@sha256` reference for `03-release`.
 
 ### 3. Foundation

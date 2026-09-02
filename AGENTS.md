@@ -44,8 +44,7 @@ notes live in `docs/`.
   `make image-push` and `make clamav-mirror` publish to Artifact Registry and
   need `PROOFPLANE_PROJECT_ID`, a configured Docker credential helper, and a
   current `gcloud auth login`. Terraform needs a separate
-  `gcloud auth application-default login`. See
-  [`docs/runbooks/production-deployment.md`](./docs/runbooks/production-deployment.md).
+  `gcloud auth application-default login`.
 
 ## Architecture: Snapshot CQRS
 
@@ -241,8 +240,9 @@ reach for this only after a run was killed partway through.
 ### Issue tracker
 
 Work is tracked as GitHub issues in `proofplane/proofplane`: one `Epic: <Name>`
-issue per effort, with its tickets attached as sub-issues. Epic specs stay in the
-repository under `docs/epics/<epic>/spec.md`. See `docs/agents/issue-tracker.md`.
+issue per effort, with its tickets attached as sub-issues. The epic issue body
+carries the technical depth; the repository holds no epic files. See
+`docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

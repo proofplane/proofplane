@@ -3,8 +3,7 @@
 Issues for this repository live on GitHub in
 [proofplane/proofplane](https://github.com/proofplane/proofplane/issues).
 
-Epic specs stay in the repository under `docs/epics/<epic-slug>/spec.md`, because
-they are versioned alongside the code they describe. Tickets do not.
+Epics and tickets live on GitHub in full. The repository holds no epic files.
 
 ## Conventions
 
@@ -12,9 +11,11 @@ they are versioned alongside the code they describe. Tickets do not.
   `epic` and `epic:<epic-slug>`.
 - Each implementation ticket is its own GitHub issue, labeled `ticket` and
   `epic:<epic-slug>`, and attached to its epic issue as a **sub-issue**.
-- Detailed requirements and decisions live in `docs/epics/<epic-slug>/spec.md`.
-  Interface appearance and behavior live in a sibling `ux.md`. Tickets link into
-  the relevant spec section instead of duplicating it.
+- Detailed requirements and decisions live in the epic issue body, under a `Spec`
+  section. Interface appearance and behavior live in a `UX` section of the same
+  body. Tickets link to the relevant section instead of duplicating it.
+- A decision that changes during implementation is recorded as a comment on the
+  epic issue, and the body is corrected to agree with it.
 - Dependencies use GitHub's native **blocked by** relationship. Each ticket also
   restates them in a `## Blocked by` section for readers.
 - Implementation progress is the issue's open/closed state: open means not yet
@@ -37,29 +38,29 @@ For each ticket issue:
 - Set native `blocked by` dependencies for each blocking ticket.
 - Apply the appropriate triage label.
 
-Update the epic issue body's ticket index and sequencing to match. Add or update
-`docs/epics/<epic-slug>/spec.md` in the same change when the work introduces or
-revises technical depth.
+Update the epic issue body's ticket index and sequencing to match. Update its
+`Spec` section in the same change when the work introduces or revises technical
+depth.
 
-Do not create ticket files under `docs/epics/<epic-slug>/tickets/` or under
-`.scratch/`. That layout was migrated to GitHub and is no longer used.
+Do not create epic or ticket files under `docs/epics/`, `docs/epics/<epic-slug>/tickets/`,
+or `.scratch/`. Those layouts were migrated to GitHub and are no longer used.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the GitHub issue. A bare number such as `#98` or a shorthand such as
-`reliability-observability/002` resolves to the issue carrying that title under
-that epic label; `gh issue view <number>` is the direct path.
+Read the GitHub issue. A bare number such as `#42` or a shorthand such as
+`<epic-slug>/002` resolves to the issue carrying that title under that epic
+label; `gh issue view <number>` is the direct path.
 
-Read the parent epic issue and the relevant `spec.md` section for surrounding
-context.
+Read the parent epic issue, its `Spec` section, and any revision comments for
+surrounding context.
 
 ## Useful commands
 
 ```bash
-gh issue list --label epic                          # all epics
-gh issue list --label epic:reliability-observability # one epic's tickets
+gh issue list --label epic                     # all epics
+gh issue list --label epic:<epic-slug>         # one epic's tickets
 gh issue list --label ready-for-agent --state open  # grabbable work
-gh issue view 98 --comments                          # a single ticket
+gh issue view <number> --comments              # a single ticket
 ```
 
 ## Triage notes and agent briefs

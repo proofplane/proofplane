@@ -95,9 +95,8 @@ export PROOFPLANE_CONFIG=path/to/config.yaml
 ```
 
 Object storage is not run in Docker Compose for the MVP; local config reserves
-`.local/storage` for the filesystem-backed adapter. Production GCS work is
-tracked in the
-[Production Runtime Adapters epic](docs/epics/production-runtime-adapters/README.md).
+`.local/storage` for the filesystem-backed adapter. The GCS adapter in
+`src/object_storage/gcs.rs` serves production.
 
 ## Running Processes
 
@@ -281,8 +280,9 @@ cargo test --test integration-v2 mcp::evidence
   the expand-then-contract rule every schema change follows.
 - Application code lives under `src/`, grouped by route, service, repository,
   domain, and external adapter responsibility.
-- Epic specs live in [`docs/epics/`](docs/epics/); tickets are
-  [GitHub issues](https://github.com/proofplane/proofplane/issues).
+- Work is tracked as [GitHub issues](https://github.com/proofplane/proofplane/issues).
+  The epic issue body carries the technical depth. The repository holds no epic
+  files.
 - The compliance data plane is exposed only through MCP; there is no REST data
   plane and no API tokens.
 - MCP authenticates with the Proofplane OAuth facade (PASETO access tokens);

@@ -2,8 +2,7 @@
 set -euo pipefail
 
 # Builds the production release image. An operator builds a release on a
-# workstation. There is no CI, and Terraform runs no build of its own. See
-# docs/epics/production-deployment/spec.md.
+# workstation. There is no CI, and Terraform runs no build of its own.
 #
 # Prints the built image reference on stdout, so a caller can pass it to the
 # smoke and push steps.

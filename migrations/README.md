@@ -144,6 +144,3 @@ refinery runs each migration file inside a transaction, so statements that
 cannot run in a transaction block — `CREATE INDEX CONCURRENTLY` above all — are
 not available here. An index large enough to need a concurrent build has to be
 created deliberately outside this command.
-
-See [Database And Migrations](../docs/epics/production-deployment/spec.md#database-and-migrations)
-for the production deployment contract.
