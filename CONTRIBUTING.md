@@ -292,3 +292,9 @@ cargo test --test integration-v2 mcp::evidence
 Do not commit credentials or production configuration. Keep private overrides and
 secrets in the gitignored `.local/` directory; `ngrok.yaml` stays committed
 because it holds no secret (the authtoken comes from `NGROK_AUTHTOKEN`).
+
+## License
+
+Proofplane is released under the MIT License. The complete text is in
+[`LICENSE`](LICENSE). When you contribute to this repository, you agree to
+release your contribution under that license.
